@@ -32,6 +32,8 @@
 		100000000000000000000023 /* DocumentLifecycleRaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000026 /* DocumentLifecycleRaceTests.swift */; };
 		100000000000000000000024 /* FileAccessBoundary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000027 /* FileAccessBoundary.swift */; };
 		100000000000000000000025 /* FileAccessBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000030 /* FileAccessBoundaryTests.swift */; };
+		100000000000000000000026 /* WorkspaceSceneComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000031 /* WorkspaceSceneComposition.swift */; };
+		100000000000000000000027 /* ArchitectureBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000032 /* ArchitectureBoundaryTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -82,6 +84,8 @@
 		200000000000000000000028 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		200000000000000000000029 /* SiteForge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SiteForge.entitlements; sourceTree = "<group>"; };
 		200000000000000000000030 /* FileAccessBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessBoundaryTests.swift; sourceTree = "<group>"; };
+		200000000000000000000031 /* WorkspaceSceneComposition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSceneComposition.swift; sourceTree = "<group>"; };
+		200000000000000000000032 /* ArchitectureBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchitectureBoundaryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -104,6 +108,7 @@
 			isa = PBXGroup;
 			children = (
 				200000000000000000000001 /* SiteForgeApp.swift */,
+				200000000000000000000031 /* WorkspaceSceneComposition.swift */,
 				200000000000000000000002 /* ContentView.swift */,
 				200000000000000000000008 /* WorkspaceShellModel.swift */,
 				200000000000000000000009 /* WorkspaceShellView.swift */,
@@ -145,6 +150,7 @@
 				200000000000000000000025 /* IdentityBoundFileSystemTests.swift */,
 				200000000000000000000026 /* DocumentLifecycleRaceTests.swift */,
 				200000000000000000000030 /* FileAccessBoundaryTests.swift */,
+				200000000000000000000032 /* ArchitectureBoundaryTests.swift */,
 			);
 			path = SiteForgeTests;
 			sourceTree = "<group>";
@@ -236,8 +242,8 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		600000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001 /* SiteForgeApp.swift in Sources */, 100000000000000000000002 /* ContentView.swift in Sources */, 100000000000000000000005 /* WorkspaceShellModel.swift in Sources */, 100000000000000000000006 /* WorkspaceShellView.swift in Sources */, 100000000000000000000019 /* WorkspaceMaterialPolicy.swift in Sources */, 100000000000000000000007 /* DocumentModel.swift in Sources */, 100000000000000000000008 /* CommandKernel.swift in Sources */, 100000000000000000000010 /* ProjectPackage.swift in Sources */, 100000000000000000000021 /* IdentityBoundFileSystem.swift in Sources */, 100000000000000000000024 /* FileAccessBoundary.swift in Sources */, 100000000000000000000012 /* DocumentLifecycle.swift in Sources */, 100000000000000000000014 /* PersistedHistory.swift in Sources */, 100000000000000000000017 /* LaunchExperience.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
-		600000000000000000000002 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000003 /* AppMetadataTests.swift in Sources */, 100000000000000000000009 /* CommandKernelTests.swift in Sources */, 100000000000000000000011 /* ProjectPackageTests.swift in Sources */, 100000000000000000000013 /* DocumentLifecycleTests.swift in Sources */, 100000000000000000000023 /* DocumentLifecycleRaceTests.swift in Sources */, 100000000000000000000025 /* FileAccessBoundaryTests.swift in Sources */, 100000000000000000000015 /* PersistedHistoryTests.swift in Sources */, 100000000000000000000016 /* BlankProjectTests.swift in Sources */, 100000000000000000000018 /* LaunchExperienceTests.swift in Sources */, 100000000000000000000020 /* WorkspaceMaterialPolicyTests.swift in Sources */, 100000000000000000000022 /* IdentityBoundFileSystemTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001 /* SiteForgeApp.swift in Sources */, 100000000000000000000026 /* WorkspaceSceneComposition.swift in Sources */, 100000000000000000000002 /* ContentView.swift in Sources */, 100000000000000000000005 /* WorkspaceShellModel.swift in Sources */, 100000000000000000000006 /* WorkspaceShellView.swift in Sources */, 100000000000000000000019 /* WorkspaceMaterialPolicy.swift in Sources */, 100000000000000000000007 /* DocumentModel.swift in Sources */, 100000000000000000000008 /* CommandKernel.swift in Sources */, 100000000000000000000010 /* ProjectPackage.swift in Sources */, 100000000000000000000021 /* IdentityBoundFileSystem.swift in Sources */, 100000000000000000000024 /* FileAccessBoundary.swift in Sources */, 100000000000000000000012 /* DocumentLifecycle.swift in Sources */, 100000000000000000000014 /* PersistedHistory.swift in Sources */, 100000000000000000000017 /* LaunchExperience.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000002 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000003 /* AppMetadataTests.swift in Sources */, 100000000000000000000027 /* ArchitectureBoundaryTests.swift in Sources */, 100000000000000000000009 /* CommandKernelTests.swift in Sources */, 100000000000000000000011 /* ProjectPackageTests.swift in Sources */, 100000000000000000000013 /* DocumentLifecycleTests.swift in Sources */, 100000000000000000000023 /* DocumentLifecycleRaceTests.swift in Sources */, 100000000000000000000025 /* FileAccessBoundaryTests.swift in Sources */, 100000000000000000000015 /* PersistedHistoryTests.swift in Sources */, 100000000000000000000016 /* BlankProjectTests.swift in Sources */, 100000000000000000000018 /* LaunchExperienceTests.swift in Sources */, 100000000000000000000020 /* WorkspaceMaterialPolicyTests.swift in Sources */, 100000000000000000000022 /* IdentityBoundFileSystemTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 		600000000000000000000003 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000004 /* SiteForgeLaunchTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 

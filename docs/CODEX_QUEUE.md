@@ -4,13 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-CORRECTION-007` Establish enforceable core, command, persistence, and application test seams before authoring growth.
-  - Severity: necessary `P2` architecture correction (`M0-P2-06` and `M0-P2-07`).
-  - Requirements: `SF-1801-001`, `SF-1801-002`, `SF-1801-003`, `SF-1801-004`, `SF-1801-008`, and `SF-1802-008`.
-  - Acceptance: headless canonical model/command and persistence boundaries build without SwiftUI/AppKit; dependency direction is checked; each document window owns its own lifecycle/session state; test scenarios, large fixtures, and appearance overrides are injected only through an explicit Debug/test composition seam and are ignored by Release builds.
-  - Evidence and tests required: independent core/persistence builds, forbidden-import/dependency-cycle checks, two-window isolation tests, Release argument rejection, Debug/UI-test fixture injection, and app integration smoke coverage.
-  - Dependencies: complete before the first production Milestone 1 authoring slice.
-
 - [ ] `SF-CORRECTION-008` Close the residual accessibility, stable-row identity, repository scanning, asset-capacity, and fixture-hygiene findings.
   - Severity: residual `P2`/`P3` work (`M0-P2-03`, `M0-P2-08`, `M0-P2-11`, `M0-P2-12`, `M0-P3-01`, and `M0-P3-02`).
   - Requirements: `SF-0201-006`, `SF-0202-006`, `SF-0202-008`, `SF-0303-001`, `SF-0303-006`, `SF-0303-008`, `SF-1505-006`, `SF-1602-006`, `SF-1605-006`, `SF-1702-008`, and `SF-2002-008`.
@@ -34,6 +27,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-CORRECTION-007` Establish enforceable core, command, persistence, and application test seams before authoring growth.
+  - Severity: necessary `P2` architecture correction (`M0-P2-06` and `M0-P2-07`).
+  - Requirements: `SF-1801-001`, `SF-1801-002`, `SF-1801-003`, `SF-1801-004`, `SF-1801-008`, and `SF-1802-008`.
+  - Acceptance: headless canonical model/command and persistence boundaries build without SwiftUI/AppKit; dependency direction is checked; each document window owns its own lifecycle/session state; test scenarios, large fixtures, and appearance overrides are injected only through an explicit Debug/test composition seam and are ignored by Release builds.
+  - Plan: replace the app-global shell/lifecycle objects with one scene-owned `WorkspaceDocumentContext` per native window and route menu commands through the focused window; centralize fixture, preview, recovery, appearance, window-size, and modified-document arguments behind a Debug-only composition policy whose Release resolution is always production-default; define explicit Core and Persistence source slices that typecheck headlessly without SwiftUI/AppKit and add repository checks for allowed imports, dependency direction, cycles, scene ownership, and Release isolation; add two-context behavioral isolation plus Debug/Release composition tests; retain the production loader and native UI smoke journeys; then update bounded SF-1801/SF-1802 evidence and record the lasting ownership/dependency decision in an ADR.
+  - Evidence: `./sf verify` passed on 2026-07-19 with 136 unit tests and 16 UI tests, zero failures. Three focused tests prove independent scene canonical/lifecycle identity and convenience state, enabled Debug injection, and disabled/Release override rejection. Repository verification independently type-checks the canonical model and command/persistence engine without UI frameworks, rejects forbidden imports and direct argument bypasses, and checks scene ownership/Xcode membership. Retained UI journeys exercise the same centralized Debug composition. ADR-0011 records the ownership and source-slice boundary.
+  - Dependencies: completed before the first production Milestone 1 authoring slice.
 
 - [x] `SF-CORRECTION-006` Reconcile requirement/decision traceability and replace overstated evidence with reproducible proof.
   - Severity: `P1` (`M0-P1-08` through `M0-P1-10`) plus necessary evidence corrections (`M0-P2-01` through `M0-P2-03`, `M0-P2-05`, `M0-P2-09`, and `M0-P2-13`).

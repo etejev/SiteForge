@@ -701,17 +701,16 @@ final class DocumentLifecycleController: ObservableObject {
     var currentLifecycleEpoch: LifecycleEpoch { lifecycleEpoch }
     var hasPendingAutosaveWork: Bool { autosaveTask != nil || autosaveOperation != nil }
 
-    static var defaultRecoveryDirectory: URL {
-#if DEBUG
-        let arguments = ProcessInfo.processInfo.arguments
-        if let index = arguments.firstIndex(of: "-SiteForgeRecoveryDirectory"),
-           arguments.indices.contains(index + 1) {
-            return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
-        }
-#endif
+    static var productionRecoveryDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return base.appendingPathComponent("SiteForge/Recovery", isDirectory: true)
+    }
+
+    static var defaultRecoveryDirectory: URL {
+        DebugTestComposition.current().value(after: "-SiteForgeRecoveryDirectory")
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? productionRecoveryDirectory
     }
 
     static func nativeSaveDestination(suggestedFilename: String) -> URL? {

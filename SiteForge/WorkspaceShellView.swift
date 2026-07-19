@@ -536,47 +536,53 @@ private struct PreviewPlaceholderView: View {
 }
 
 struct SiteForgeCommands: Commands {
-    @ObservedObject var state: WorkspaceShellState
-    @ObservedObject var launchExperience: LaunchExperienceController
+    @FocusedObject private var state: WorkspaceShellState?
+    @FocusedObject private var launchExperience: LaunchExperienceController?
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New") { launchExperience.createBlankProject() }
+            Button("New") { launchExperience?.createBlankProject() }
                 .keyboardShortcut("n", modifiers: .command)
-            Button("Open…") { launchExperience.presentOpenPanel() }
+                .disabled(launchExperience == nil)
+            Button("Open…") { launchExperience?.presentOpenPanel() }
                 .keyboardShortcut("o", modifiers: .command)
+                .disabled(launchExperience == nil)
         }
 
         CommandGroup(replacing: .saveItem) {
             Button("Save") {
+                guard let state else { return }
                 if state.lifecycle.fileURL == nil { state.lifecycle.presentSavePanel() }
                 else { Task { _ = await state.lifecycle.save() } }
             }
             .keyboardShortcut("s", modifiers: .command)
-            .disabled(!launchExperience.isWorkspaceVisible || !state.lifecycle.canSave)
-            Button("Save As…") { state.lifecycle.presentSavePanel() }
+            .disabled(launchExperience?.isWorkspaceVisible != true || state?.lifecycle.canSave != true)
+            Button("Save As…") { state?.lifecycle.presentSavePanel() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
-                .disabled(!launchExperience.isWorkspaceVisible)
-            Button("Revert to Saved") { Task { _ = await state.lifecycle.requestRevert() } }
-                .disabled(!launchExperience.isWorkspaceVisible || !state.lifecycle.canRevert)
+                .disabled(launchExperience?.isWorkspaceVisible != true || state == nil)
+            Button("Revert to Saved") {
+                guard let state else { return }
+                Task { _ = await state.lifecycle.requestRevert() }
+            }
+                .disabled(launchExperience?.isWorkspaceVisible != true || state?.lifecycle.canRevert != true)
         }
         CommandGroup(replacing: .undoRedo) {
             Button("Undo") {
-                state.undo()
+                state?.undo()
             }
                 .keyboardShortcut("z", modifiers: .command)
-                .disabled(!launchExperience.isWorkspaceVisible || !state.canUndo)
+                .disabled(launchExperience?.isWorkspaceVisible != true || state?.canUndo != true)
             Button("Redo") {
-                state.redo()
+                state?.redo()
             }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!launchExperience.isWorkspaceVisible || !state.canRedo)
+                .disabled(launchExperience?.isWorkspaceVisible != true || state?.canRedo != true)
         }
 
         CommandMenu("Tools") {
             ForEach(CanvasTool.allCases) { tool in
                 Button {
-                    state.selectTool(tool)
+                    state?.selectTool(tool)
                 } label: {
                     Label(tool.title, systemImage: tool.systemImage)
                 }
@@ -586,9 +592,10 @@ struct SiteForgeCommands: Commands {
 
         CommandMenu("Preview") {
             Button("Open Preview") {
-                state.isPreviewPresented = true
+                state?.isPreviewPresented = true
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
+            .disabled(state == nil)
         }
     }
 }

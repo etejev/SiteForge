@@ -294,18 +294,15 @@ final class FileAccessBoundaryTests: XCTestCase {
     // SF-1504-001, SF-1504-006, SF-1504-008
     func testDistributionCandidateDeclaresExactSandboxAndProjectTypePolicy() throws {
         let root = repositoryRoot
-        let entitlements = try XCTUnwrap(
-            NSDictionary(contentsOf: root.appendingPathComponent("SiteForge/SiteForge.entitlements"))
-                as? [String: Any]
+        let entitlements = try loadPropertyList(
+            root.appendingPathComponent("SiteForge/SiteForge.entitlements")
         )
         XCTAssertEqual(entitlements["com.apple.security.app-sandbox"] as? Bool, true)
         XCTAssertEqual(entitlements["com.apple.security.files.user-selected.read-write"] as? Bool, true)
         XCTAssertEqual(entitlements["com.apple.security.files.bookmarks.app-scope"] as? Bool, true)
         XCTAssertEqual(entitlements.count, 3)
 
-        let info = try XCTUnwrap(
-            NSDictionary(contentsOf: root.appendingPathComponent("SiteForge/Info.plist")) as? [String: Any]
-        )
+        let info = try loadPropertyList(root.appendingPathComponent("SiteForge/Info.plist"))
         let exported = try XCTUnwrap(info["UTExportedTypeDeclarations"] as? [[String: Any]])
         XCTAssertEqual(exported.first?["UTTypeIdentifier"] as? String, "app.siteforge.project-package")
     }
@@ -313,6 +310,20 @@ final class FileAccessBoundaryTests: XCTestCase {
     private var repositoryRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    private func loadPropertyList(_ url: URL) throws -> [String: Any] {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/plutil")
+        process.arguments = ["-convert", "json", "-o", "-", url.path]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        XCTAssertEqual(process.terminationStatus, 0, String(decoding: data, as: UTF8.self))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     private func fixtureDirectory() -> URL {

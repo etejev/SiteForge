@@ -7,9 +7,9 @@ This is the live disposition ledger for every actionable finding in `MILESTONE-0
 ## Verification baseline
 
 - Branch: `fix/milestone-0-audit-corrections`
-- Completed checkpoints: `SF-CORRECTION-001` through `SF-CORRECTION-005`
+- Completed checkpoints: `SF-CORRECTION-001` through `SF-CORRECTION-007`
 - Command: `./sf verify`
-- Result: passed on 2026-07-19 with 129 unit tests and 14 UI tests, zero failures
+- Result: passed on 2026-07-19 with 136 unit tests and 16 UI tests, zero failures
 - Release/publication actions: none
 
 ## Finding disposition
@@ -35,8 +35,8 @@ This is the live disposition ledger for every actionable finding in `MILESTONE-0
 | M0-P2-03 | P2 | Partial | Production state transitions now call an injectable native announcement poster; real recovery proves Return/default action; retained inspection records environment/settings/fixtures and limitations. | `testEveryInteractiveTransitionPostsItsSpecificAccessibilityAnnouncement`; production-loader/recovery UI tests; retained manifest. | `SF-CORRECTION-006 reconcile traceability and evidence` | Complete reverse traversal and retained OS-level VoiceOver speech/actual accessibility-setting exercise remain queued in `SF-CORRECTION-008`. |
 | M0-P2-04 | P2 | Fixed | Autosave debounce is injected; a burst produces exactly one recovery write for its latest committed revision and a later edit produces exactly one later write in revision order. Retained lifecycle/history/recovery tests use the same controllable seam instead of wall-clock sleeps. | `testAutosaveBurstCoalescesOnceAndSeparatedEditWritesNextRevisionExactly`; complete race suite; `./sf verify` with 115 unit + 14 UI tests. | `SF-CORRECTION-003 scope lifecycle work by epoch and intent` | None for this finding. |
 | M0-P2-05 | P2 | Fixed | Two encoder-independent package-v1/schema-v1 Base64 fixtures retain decoded-package SHA-256 checksums and provenance. The explicit adapter deterministically migrates empty and rootless inputs, preserves legacy identity, adds exact stable minimum identities, rejects malformed legacy variants, reopens deterministic schema-v2 saves, and isolates missing history to a clean baseline. | `testImmutableSchemaOneEmptyGoldenMigratesDeterministicallyAndWithoutHistory`; `testImmutableSchemaOneRootlessGoldenPreservesIdentityAndAddsOnlyMinimumRoot`; `testInvalidSchemaOneGoldenVariantsAreRejectedWithoutCompatibilityDefaults`; fixture README/checksums; `./sf verify` with 119 unit + 14 UI tests. | `SF-CORRECTION-004 enforce strict schemas and migration goldens` | None for this finding. |
-| M0-P2-06 | P2 | Pending | None yet. | Assigned to `SF-CORRECTION-007`. | — | Independent lifecycle/session state per window remains required. |
-| M0-P2-07 | P2 | Partial | UI scenario injection is compiled only into the app Debug configuration. | Release project configuration has no `DEBUG` compilation condition. | `SF-CORRECTION-001 guard destructive transitions and recover untitled work` | Enforceable headless modules and complete composition checks remain in `SF-CORRECTION-007`. |
+| M0-P2-06 | P2 | Fixed | Every `WindowGroup` scene constructs one independently owned document context; focused commands resolve only the active scene. | Three behavioral architecture tests prove distinct document/lifecycle identity and isolated canonical/tool/zoom state; retained app smoke covers composition. | `SF-CORRECTION-007 establish module and document ownership boundaries` | None for this finding. |
+| M0-P2-07 | P2 | Fixed | Canonical model and command/persistence source slices type-check without UI frameworks; repository verification enforces imports, ownership, and one Debug-only composition seam whose disabled/Release behavior ignores every override. | `scripts/check-architecture-boundaries.py`; enabled/disabled composition tests; retained Debug UI journeys and Release configuration check. | `SF-CORRECTION-007 establish module and document ownership boundaries` | Binary framework extraction remains reversible architecture hygiene, not an unresolved audit requirement. |
 | M0-P2-08 | P2 | Pending | None yet. | Assigned after `SF-CORRECTION-007`. | — | Stable PageID-derived accessibility identifiers remain required. |
 | M0-P2-09 | P2 | Fixed | Revert, Restore, and Discard now emit lifecycle records with typed operation identity and redacted destination/document tokens on success, failure, or cancellation paths. | `testDiagnosticsCoverRevertRestoreAndDiscardRecoveryWithRedactedIdentity`; retained cancellation/failure lifecycle tests. | `SF-CORRECTION-006 reconcile traceability and evidence` | None for this finding. |
 | M0-P2-10 | P2 | Fixed | Fingerprinting is performed incrementally in 64-KiB chunks only after descriptor size validation against the unchanged 8-MiB package limit; before/after descriptor versions must match. | Oversized sparse input is rejected before allocation/hash work; swap and same-inode tests prove identity binding and exact preservation. | `SF-CORRECTION-002 bind package and recovery I/O to file identity` | None for this finding. |
@@ -93,6 +93,12 @@ Package-container parsing, canonical graph validation, and persisted-history val
 
 Two Debug-only composition journeys use immutable repository fixtures but execute the production loader: one covers valid open, malformed failure, path redaction, and Retry; one covers real recovery discovery, keyboard Restore, and Discard. Release builds do not compile the integration seam. Accessibility state changes call an injectable native announcement poster, and a retained visual-inspection manifest names the host, settings, fixtures, observations, automation companions, and limitations. Performance claims are corrected rather than fabricated: current page/policy tests remain smoke checks, while renderer/object/asset percentile, memory, stall, and frame evidence stays required by the authoring runway. Full verification passes with 133 unit tests and 16 UI tests.
 
+## SF-CORRECTION-007 proof summary
+
+ADR-0011 establishes one document context per native scene. The context owns the canonical session, lifecycle/recovery controller, launch coordinator, and shell convenience state; menu commands use focused-scene objects so another window cannot become an accidental mutation target. Behavioral tests prove distinct canonical/document identity and independent edits, tool choice, and zoom state.
+
+Repository verification now independently type-checks the canonical model and the complete command/persistence engine with Swift 6, rejects SwiftUI/AppKit/Metal/WebKit imports in headless slices, checks Xcode membership and scene ownership, and prohibits direct process-argument reads outside one composition owner. That owner accepts fixtures only in Debug; disabled/Release semantics discard every override. Full verification passes with 136 unit and 16 UI tests.
+
 ## Continuation gate
 
-Milestone 1 feature work must not begin. Continue with `SF-CORRECTION-007`: establish enforceable headless module boundaries and independently owned per-window document sessions. Then complete residual `SF-CORRECTION-008` before `SF-AUTHORING-000` becomes first READY.
+Milestone 1 feature work must not begin. Complete residual `SF-CORRECTION-008` before `SF-AUTHORING-000` becomes first READY.

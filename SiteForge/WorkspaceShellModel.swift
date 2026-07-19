@@ -101,10 +101,13 @@ enum WorkspaceMetrics {
             && navigatorWidth.lowerBound + minimumCanvasWidth + inspectorWidth.lowerBound < size.width
     }
 
-    static func requestedWindowSize(arguments: [String]) -> CGSize? {
-        guard let index = arguments.firstIndex(of: "-SiteForgeWindowSize"),
-              arguments.indices.contains(index + 1), arguments[index + 1] == "minimum" else { return nil }
+    static func requestedWindowSize(composition: DebugTestComposition = .current()) -> CGSize? {
+        guard composition.value(after: "-SiteForgeWindowSize") == "minimum" else { return nil }
         return minimumWindowSize
+    }
+
+    static func requestedWindowSize(arguments: [String]) -> CGSize? {
+        requestedWindowSize(composition: .current(arguments: arguments))
     }
 }
 
@@ -112,10 +115,8 @@ enum WorkspaceFixtureScale: String {
     case standard
     case large
 
-    static func from(arguments: [String]) -> Self? {
-        guard let index = arguments.firstIndex(of: "-SiteForgeWorkspaceFixture"),
-              arguments.indices.contains(index + 1) else { return nil }
-        return Self(rawValue: arguments[index + 1])
+    static func from(composition: DebugTestComposition = .current()) -> Self? {
+        composition.value(after: "-SiteForgeWorkspaceFixture").flatMap(Self.init)
     }
 
     var pageCount: Int { self == .standard ? 100 : 10_000 }
@@ -160,10 +161,15 @@ final class WorkspaceShellState: ObservableObject {
     let lifecycle: DocumentLifecycleController
     private var documentSessionObservation: AnyCancellable?
 
-    init(documentSession: DocumentSession = DocumentSession()) {
+    init(
+        documentSession: DocumentSession = DocumentSession(),
+        lifecycle: DocumentLifecycleController? = nil
+    ) {
         self.documentSession = documentSession
         selectedPageID = documentSession.document.pages.first?.id
-        lifecycle = DocumentLifecycleController(session: documentSession)
+        let lifecycle = lifecycle ?? DocumentLifecycleController(session: documentSession)
+        precondition(lifecycle.session === documentSession, "Workspace state and lifecycle must own the same session")
+        self.lifecycle = lifecycle
         documentSessionObservation = documentSession.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }

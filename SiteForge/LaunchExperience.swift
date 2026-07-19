@@ -160,10 +160,8 @@ enum LaunchPreviewScenario: String {
     case recovery
     case workspace
 
-    static func from(arguments: [String]) -> LaunchPreviewScenario? {
-        guard let index = arguments.firstIndex(of: "-SiteForgeLaunchScenario"),
-              arguments.indices.contains(index + 1) else { return nil }
-        return LaunchPreviewScenario(rawValue: arguments[index + 1])
+    static func from(composition: DebugTestComposition = .current()) -> LaunchPreviewScenario? {
+        composition.value(after: "-SiteForgeLaunchScenario").flatMap(Self.init)
     }
 }
 
@@ -195,7 +193,7 @@ final class LaunchExperienceController: ObservableObject {
     init(
         lifecycle: DocumentLifecycleController,
         diagnostics: LaunchExperienceDiagnostics = LaunchExperienceDiagnostics(),
-        previewScenario: LaunchPreviewScenario? = LaunchPreviewScenario.from(arguments: ProcessInfo.processInfo.arguments),
+        previewScenario: LaunchPreviewScenario? = LaunchPreviewScenario.from(),
         announcementPoster: AccessibilityAnnouncementPoster = .native
     ) {
         self.lifecycle = lifecycle
@@ -205,7 +203,7 @@ final class LaunchExperienceController: ObservableObject {
         state = initial
         transitionHistory = [initial.kind]
         isPreviewScenario = previewScenario != nil
-        forcesReducedMotionForTesting = ProcessInfo.processInfo.arguments.contains("-SiteForgeReduceMotion")
+        forcesReducedMotionForTesting = DebugTestComposition.current().contains("-SiteForgeReduceMotion")
     }
 
     var isWorkspaceVisible: Bool { state == .workspace }
@@ -216,7 +214,9 @@ final class LaunchExperienceController: ObservableObject {
 
 #if DEBUG
     /// Exercises the production package loader from UI automation without teaching Release builds a test path.
-    func startIntegrationOpenIfConfigured(arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
+    func startIntegrationOpenIfConfigured(composition: DebugTestComposition = .current()) -> Bool {
+        let arguments = composition.arguments
+        guard composition.enabled else { return false }
         guard !didStartIntegrationOpen,
               let index = arguments.firstIndex(of: "-SiteForgeIntegrationOpenProject"),
               arguments.indices.contains(index + 1) else { return false }
@@ -231,7 +231,9 @@ final class LaunchExperienceController: ObservableObject {
         return true
     }
 
-    func prepareIntegrationRecoveryIfConfigured(arguments: [String] = ProcessInfo.processInfo.arguments) {
+    func prepareIntegrationRecoveryIfConfigured(composition: DebugTestComposition = .current()) {
+        let arguments = composition.arguments
+        guard composition.enabled else { return }
         guard let source = Self.argumentURL("-SiteForgeIntegrationRecoveryBase64", in: arguments),
               let destination = Self.argumentURL("-SiteForgeIntegrationRecoveryDestination", in: arguments) else { return }
         try? Self.writeIntegrationPackage(from: source, to: destination, malformed: false)

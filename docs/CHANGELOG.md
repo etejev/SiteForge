@@ -38,6 +38,8 @@ This file records user-visible behavior during development. It is not a substitu
 - Cooperative cancellation checkpoints inside package container parsing, canonical graph validation, and persisted-history validation, preserving cancellation as distinct from corruption or isolation.
 - A canonical decision namespace, machine-checked bounded requirement-evidence index, and retained visual/performance methodology records with explicit authoring and 500-asset limitations.
 - Real production-loader UI regression journeys for valid and malformed packages, Retry, recovery discovery, keyboard Restore, and Discard, plus an injectable native accessibility-announcement boundary.
+- Scene-owned workspace document contexts with independent canonical sessions, lifecycle/recovery state, history, and convenience state for every native window.
+- Verification-enforced headless canonical-model and command/persistence source slices, plus one Debug-only composition seam for automation fixtures and appearance overrides.
 
 ### Changed
 
@@ -59,6 +61,7 @@ This file records user-visible behavior during development. It is not a substitu
 - Manual Save now deterministically cancels or drains pending autosave work. An edit made during Save leaves the captured revision durable while the newer active revision remains modified and recoverable.
 - Current canonical schema v2 now requires every document and page field and never applies legacy defaults; schema-v1 compatibility uses a separate explicit migration adapter.
 - Project open, revert, Save, and Save As now pass through one balanced security-scope and file-coordination owner; bookmarks remain machine-local app state rather than portable package content.
+- File and Edit commands now resolve the focused window's document context instead of application-global state; Release builds ignore all automation-only process arguments.
 
 ### Fixed
 

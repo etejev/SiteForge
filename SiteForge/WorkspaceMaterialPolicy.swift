@@ -90,12 +90,16 @@ enum WorkspaceMaterialPolicy {
         )
     }
 
-    static func preferredColorScheme(arguments: [String] = ProcessInfo.processInfo.arguments) -> ColorScheme? {
-        switch WorkspaceMaterialOverrides.current(arguments: arguments).appearance {
+    static func preferredColorScheme(composition: DebugTestComposition = .current()) -> ColorScheme? {
+        switch WorkspaceMaterialOverrides.current(composition: composition).appearance {
         case .light: .light
         case .dark: .dark
         case nil: nil
         }
+    }
+
+    static func preferredColorScheme(arguments: [String]) -> ColorScheme? {
+        preferredColorScheme(composition: .current(arguments: arguments))
     }
 }
 
@@ -105,25 +109,13 @@ private struct WorkspaceMaterialOverrides {
     let appearance: WorkspaceAppearanceMode?
     let activity: WorkspaceWindowActivity?
 
-    static func current(arguments: [String] = ProcessInfo.processInfo.arguments) -> Self {
+    static func current(composition: DebugTestComposition = .current()) -> Self {
         Self(
-            reduceTransparency: boolValue(after: "-SiteForgeReduceTransparency", in: arguments),
-            increasedContrast: boolValue(after: "-SiteForgeIncreaseContrast", in: arguments),
-            appearance: value(after: "-SiteForgeAppearance", in: arguments).flatMap(WorkspaceAppearanceMode.init),
-            activity: boolValue(after: "-SiteForgeWindowInactive", in: arguments).map { $0 ? .inactive : .active }
+            reduceTransparency: composition.boolValue(after: "-SiteForgeReduceTransparency"),
+            increasedContrast: composition.boolValue(after: "-SiteForgeIncreaseContrast"),
+            appearance: composition.value(after: "-SiteForgeAppearance").flatMap(WorkspaceAppearanceMode.init),
+            activity: composition.boolValue(after: "-SiteForgeWindowInactive").map { $0 ? .inactive : .active }
         )
-    }
-
-    private static func value(after flag: String, in arguments: [String]) -> String? {
-        guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
-        return arguments[index + 1]
-    }
-
-    private static func boolValue(after flag: String, in arguments: [String]) -> Bool? {
-        guard let value = value(after: flag, in: arguments)?.lowercased() else { return nil }
-        if ["yes", "true", "1"].contains(value) { return true }
-        if ["no", "false", "0"].contains(value) { return false }
-        return nil
     }
 }
 
@@ -218,7 +210,7 @@ struct WorkspaceWindowConfigurator: NSViewRepresentable {
         window.titlebarSeparatorStyle = .automatic
         window.backgroundColor = .windowBackgroundColor
         window.isOpaque = true
-        if let requestedSize = WorkspaceMetrics.requestedWindowSize(arguments: ProcessInfo.processInfo.arguments),
+        if let requestedSize = WorkspaceMetrics.requestedWindowSize(),
            window.contentLayoutRect.size != requestedSize {
             window.setContentSize(requestedSize)
         }
