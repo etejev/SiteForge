@@ -38,7 +38,13 @@ struct WorkspaceShellView: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workspace.shell")
-        .background(WindowCloseGuard(controller: state.lifecycle).frame(width: 0, height: 0))
+        .background {
+            ZStack {
+                Color(nsColor: .underPageBackgroundColor)
+                WindowCloseGuard(controller: state.lifecycle).frame(width: 0, height: 0)
+                WorkspaceWindowConfigurator().frame(width: 0, height: 0)
+            }
+        }
         .navigationTitle(state.lifecycle.title)
         .toolbar {
             WorkspaceToolbar(state: state)
@@ -96,7 +102,9 @@ private struct RecoveryCandidateBar: View {
                 .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("recovery.restore")
         }
-        .padding(.horizontal, 12).frame(height: 38).background(.yellow.opacity(0.14))
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .workspaceChrome(.recoveryBar)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("recovery.candidate")
     }
@@ -269,7 +277,7 @@ private struct NavigatorView: View {
             }
         }
         .padding(10)
-        .background(.bar)
+        .workspaceChrome(.navigator)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.navigator.rawValue)
     }
@@ -335,23 +343,36 @@ private struct CanvasPlaceholderView: View {
             ViewportControlsView(state: state, focus: focus)
             Divider()
 
-            ScrollView([.horizontal, .vertical]) {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(.background)
-                    .stroke(.separator, lineWidth: 1)
-                    .frame(width: 680, height: 440)
-                    .overlay {
-                        ContentUnavailableView(
-                            "Canvas Ready",
-                            systemImage: "rectangle.dashed",
-                            description: Text("The rendering engine will connect here in a later milestone.")
-                        )
-                        .accessibilityIdentifier("canvas.empty")
-                    }
-                    .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
-                    .padding(48)
+            GeometryReader { geometry in
+                ScrollView([.horizontal, .vertical]) {
+                    let availableWidth = max(360, geometry.size.width - 96)
+                    let availableHeight = max(300, geometry.size.height - 96)
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(.background)
+                        .stroke(.separator, lineWidth: 1)
+                        .frame(width: min(680, availableWidth), height: min(440, availableHeight))
+                        .overlay {
+                            ContentUnavailableView(
+                                "Canvas Ready",
+                                systemImage: "rectangle.dashed",
+                                description: Text("The rendering engine will connect here in a later milestone.")
+                            )
+                            .padding(20)
+                            .accessibilityIdentifier("canvas.empty")
+                        }
+                        .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+                        .padding(48)
+                        .contentShape(Rectangle())
+                        .onTapGesture { state.noteCanvasInteraction() }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Canvas interaction area")
+                        .accessibilityValue("Interactions: \(state.canvasInteractionCount)")
+                        .accessibilityAction { state.noteCanvasInteraction() }
+                        .accessibilityIdentifier("canvas.interaction")
+                }
+                .accessibilityIdentifier("canvas.scroll")
+                .background(Color(nsColor: .underPageBackgroundColor))
             }
-            .background(Color(nsColor: .underPageBackgroundColor))
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.canvas.rawValue)
@@ -407,7 +428,7 @@ private struct ViewportControlsView: View {
         .controlSize(.small)
         .padding(.horizontal, 12)
         .frame(height: 42)
-        .background(.bar)
+        .workspaceChrome(.viewportControls)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("canvas.viewport.controls")
     }
@@ -444,7 +465,7 @@ private struct InspectorView: View {
             .accessibilityIdentifier("inspector.empty")
         }
         .padding(10)
-        .background(.bar)
+        .workspaceChrome(.inspector)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.inspector.rawValue)
     }
@@ -488,7 +509,7 @@ private struct StatusBarView: View {
         .lineLimit(1)
         .padding(.horizontal, 10)
         .frame(height: 28)
-        .background(.bar)
+        .workspaceChrome(.statusBar)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.statusBar.rawValue)
     }

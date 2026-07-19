@@ -28,6 +28,8 @@ This file records user-visible behavior during development. It is not a substitu
 - Real-operation loading presentation for package reads, canonical validation, history validation, atomic workspace adoption, and recovery checks, including determinate and indeterminate progress without decorative timing.
 - Explicit cancelable and non-cancelable stages, actionable malformed/incompatible/access failures, Retry and Choose Another Project actions, and recovery Restore, Discard, and Inspect Recovery choices.
 - Privacy-preserving launch diagnostics, VoiceOver state announcements, deterministic focus targets, a static Reduce Motion progress alternative, and native opaque fallbacks for Reduce Transparency and increased contrast.
+- Centralized native macOS material policy for navigator, inspector, unified toolbar/title bar, viewport controls, status, recovery, and launch surfaces, rendered with pass-through `NSVisualEffectView` instances rather than simulated glass.
+- Retained visual-regression fixtures for light, dark, Reduce Transparency, Increased Contrast, inactive-window policy, default/minimum sizing, and 10,000-page scrolling.
 
 ### Changed
 
@@ -41,6 +43,8 @@ This file records user-visible behavior during development. It is not a substitu
 - New-project creation now establishes the complete approved blank structure as one clean history baseline; it does not record default seeding as user edits.
 - File-menu New and Open now enter the same launch coordinator as the initial experience, while package I/O and validation remain in the actor-isolated lifecycle backend.
 - Opening a project publishes actual loading stages and checks cancellation before the single validated adoption boundary; the prior canonical document remains active after cancellation or failure.
+- Chrome appearance now resolves native material, opaque accessibility fallback, separator strength, and active-window emphasis from one shared policy while leaving canonical document state and canvas hit testing unchanged.
+- The bounded canvas placeholder now adapts to the available viewport so its empty-state copy remains readable at the supported minimum window size.
 
 ### Fixed
 
@@ -50,5 +54,4 @@ This file records user-visible behavior during development. It is not a substitu
 
 - History schema v1 is intentionally bounded to the current command kernel; future command types, checkpoints, coalescing metadata, and migrations require explicit schema support.
 - The canvas editing interface and Preview behavior remain bounded placeholders for later work items.
-- Workspace translucent/glass materials remain intentionally deferred to `SF-FOUNDATION-009`; the launch experience uses native opaque surfaces and accessibility fallbacks in this slice.
 - Local alpha packaging is unsigned and not notarized.

@@ -6,7 +6,9 @@ struct SiteForgeApp: App {
     @StateObject private var launchExperience: LaunchExperienceController
 
     init() {
-        let shellState = WorkspaceShellState()
+        let fixture = WorkspaceFixtureScale.from(arguments: ProcessInfo.processInfo.arguments)
+        let session = fixture.map { DocumentSession(document: $0.document()) } ?? DocumentSession()
+        let shellState = WorkspaceShellState(documentSession: session)
         _shellState = StateObject(wrappedValue: shellState)
         _launchExperience = StateObject(wrappedValue: LaunchExperienceController(lifecycle: shellState.lifecycle))
     }

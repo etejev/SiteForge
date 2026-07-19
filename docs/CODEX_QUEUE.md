@@ -4,12 +4,7 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-FOUNDATION-009` Replace opaque workspace chrome with native translucent materials.
-  - Requirements: `SF-0201-002`, `SF-0201-003`, `SF-0201-006`, `SF-0201-007`, `SF-0201-008`; `SF-1505-006`, `SF-1505-007`, `SF-1505-008`; `SF-1605-002`, `SF-1605-006`, `SF-1605-007`, and `SF-1605-008`.
-  - Acceptance: the navigator, inspector, toolbar/title-bar, and status surfaces use native macOS translucent/glass materials that visibly reveal appropriate canvas content behind them while preserving region boundaries and native window behavior; Reduce Transparency selects an intentional opaque fallback, increased-contrast and appearance modes retain legible text/icons and non-color-only state, keyboard focus and VoiceOver semantics remain intact, minimum-window layouts do not clip, and standard/large fixtures demonstrate responsive scrolling, resizing, and canvas interaction without material-rendering regressions.
-  - Dependencies: `SF-FOUNDATION-008`, so the finalized launch/loading surfaces and existing shell share one verified material, fallback, accessibility, and performance policy.
-  - Plan: pending.
-  - Evidence: pending.
+None.
 
 ## IN PROGRESS
 
@@ -20,6 +15,13 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-FOUNDATION-009` Replace opaque workspace chrome with native translucent materials.
+  - Requirements: `SF-0201-002`, `SF-0201-003`, `SF-0201-006`, `SF-0201-007`, `SF-0201-008`; `SF-1505-006`, `SF-1505-007`, `SF-1505-008`; `SF-1605-002`, `SF-1605-006`, `SF-1605-007`, and `SF-1605-008`.
+  - Acceptance: the navigator, inspector, toolbar/title-bar, and status surfaces use native macOS translucent/glass materials that visibly reveal appropriate canvas content behind them while preserving region boundaries and native window behavior; Reduce Transparency selects an intentional opaque fallback, increased-contrast and appearance modes retain legible text/icons and non-color-only state, keyboard focus and VoiceOver semantics remain intact, minimum-window layouts do not clip, and standard/large fixtures demonstrate responsive scrolling, resizing, and canvas interaction without material-rendering regressions.
+  - Dependencies: `SF-FOUNDATION-008` is verified; launch/loading and workspace surfaces now share the same resolved appearance and fallback policy.
+  - Plan: define one semantic material policy for title bar, navigator, inspector, viewport, status, recovery, and launch regions; render it through pass-through native `NSVisualEffectView` surfaces and the unified macOS toolbar; resolve Reduce Transparency, increased contrast, appearance, and active-window state centrally; keep canvas interaction independent; add responsive minimum-size layout plus standard/10,000-page fixtures; and verify policy, accessibility, focus, hit testing, scrolling, appearance, performance, and launch/loading regressions.
+  - Evidence: `./sf verify` passed on 2026-07-19 with 88 unit tests and 13 UI tests, all with zero failures. Nine focused material tests verify exact requirement mapping, deterministic region/material selection, opaque fallback, stronger increased-contrast boundaries, native light/dark appearance behavior, inactive-window de-emphasis, valid resized/minimum layouts, UI-only canvas interaction, and 10,000-resolution/10,000-page performance budgets (0.011 seconds in the verification run). UI coverage verifies default and minimum layouts, keyboard and VoiceOver semantics, material pass-through canvas hit testing, navigator switching, scrolling a 10,000-page fixture, light/dark/Reduce Transparency/increased-contrast/inactive states, and every launch/loading state under the opaque fallback. Retained screenshots and the launched app were inspected for default/minimum sizing, all appearance/accessibility states, and standard/large fixtures; an initially bright dark-mode toolbar backing and clipped minimum-size canvas copy were found and corrected. Diff review found no generated products, machine paths, credentials, signing changes, publication actions, or unrelated canvas/publishing/plugin scope.
 
 - [x] `SF-FOUNDATION-008` Implement the approved SiteForge launch and project-loading experience.
   - Requirements: `SF-0201-004`, `SF-0201-006`, `SF-0201-007`, `SF-0201-008`; `SF-0301-002`, `SF-0301-004`, `SF-0301-006`, `SF-0301-007`, `SF-0301-008`; `SF-1602-004`, `SF-1602-006`, `SF-1602-007`, and `SF-1602-008`.

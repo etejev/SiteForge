@@ -14,7 +14,7 @@ A main-actor launch coordinator owns presentation state only. Package reads, can
 
 Reading and validation stages are safely cancelable because no incoming canonical state has been installed. The short final preparation/adoption boundary and subsequent recovery check are explicitly non-cancelable. Task cancellation is checked before adoption; failure or cancellation returns to the prior launch/workspace presentation and leaves the current session untouched. Only a completely validated candidate is established as the new session baseline.
 
-Determinate progress represents completed validation milestones, while unbounded file reads and recovery lookup use indeterminate presentation. No timer advances progress. Each state provides a non-path status message, deterministic preferred keyboard focus, a VoiceOver announcement, and a specific next action. Reduce Motion replaces animated indeterminate presentation with a static status symbol; Reduce Transparency and increased contrast use native opaque colors and stronger boundaries. Translucent workspace materials remain owned by SF-FOUNDATION-009.
+Determinate progress represents completed validation milestones, while unbounded file reads and recovery lookup use indeterminate presentation. No timer advances progress. Each state provides a non-path status message, deterministic preferred keyboard focus, a VoiceOver announcement, and a specific next action. Reduce Motion replaces animated indeterminate presentation with a static status symbol; Reduce Transparency and increased contrast use native opaque colors and stronger boundaries. ADR-0006 now supplies the shared launch/workspace material policy originally reserved for SF-FOUNDATION-009.
 
 ## Consequences
 

@@ -94,6 +94,43 @@ enum WorkspaceMetrics {
     static let navigatorWidth: ClosedRange<CGFloat> = 210...300
     static let inspectorWidth: ClosedRange<CGFloat> = 280...360
     static let minimumCanvasWidth: CGFloat = 500
+
+    static func supportsLayout(at size: CGSize) -> Bool {
+        size.width >= minimumWindowSize.width
+            && size.height >= minimumWindowSize.height
+            && navigatorWidth.lowerBound + minimumCanvasWidth + inspectorWidth.lowerBound < size.width
+    }
+
+    static func requestedWindowSize(arguments: [String]) -> CGSize? {
+        guard let index = arguments.firstIndex(of: "-SiteForgeWindowSize"),
+              arguments.indices.contains(index + 1), arguments[index + 1] == "minimum" else { return nil }
+        return minimumWindowSize
+    }
+}
+
+enum WorkspaceFixtureScale: String {
+    case standard
+    case large
+
+    static func from(arguments: [String]) -> Self? {
+        guard let index = arguments.firstIndex(of: "-SiteForgeWorkspaceFixture"),
+              arguments.indices.contains(index + 1) else { return nil }
+        return Self(rawValue: arguments[index + 1])
+    }
+
+    var pageCount: Int { self == .standard ? 100 : 10_000 }
+
+    func document() -> CanonicalDocument {
+        var document = ProjectCreation.blank()
+        guard pageCount > document.pages.count else { return document }
+        for index in document.pages.count..<pageCount {
+            document.pages.append(DocumentPage(
+                name: "Fixture Page \(index + 1)",
+                route: PageRoute(rawValue: "/fixture-\(index + 1)")
+            ))
+        }
+        return document
+    }
 }
 
 @MainActor
@@ -117,6 +154,7 @@ final class WorkspaceShellState: ObservableObject {
     @Published var inspectorTab: InspectorTab = .layout
     @Published var viewportPreset: ViewportPreset = .desktop
     @Published private(set) var zoomPercent = 100
+    @Published private(set) var canvasInteractionCount = 0
     @Published var isPreviewPresented = false
     let documentSession: DocumentSession
     let lifecycle: DocumentLifecycleController
@@ -164,6 +202,10 @@ final class WorkspaceShellState: ObservableObject {
 
     func adjustZoom(by delta: Int) {
         zoomPercent = min(200, max(25, zoomPercent + delta))
+    }
+
+    func noteCanvasInteraction() {
+        canvasInteractionCount += 1
     }
 
     func undo() {

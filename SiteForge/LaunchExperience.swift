@@ -149,6 +149,7 @@ enum LaunchPreviewScenario: String {
     case loadingNonCancelable
     case failure
     case recovery
+    case workspace
 
     static func from(arguments: [String]) -> LaunchPreviewScenario? {
         guard let index = arguments.firstIndex(of: "-SiteForgeLaunchScenario"),
@@ -421,6 +422,7 @@ final class LaunchExperienceController: ObservableObject {
             message: "A validated recovery candidate is newer than the last durable save.",
             revisionSummary: "Revision 4, newer than the durable revision."
         ))
+        case .workspace: .workspace
         }
     }
 }
@@ -479,17 +481,13 @@ struct LaunchExperienceView: View {
             }
         }
         .padding(36)
-        .background(cardBackground)
+        .workspaceChrome(.launchCard)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(.primary.opacity(contrast == .increased ? 0.45 : 0.13))
         }
         .shadow(color: .black.opacity(reduceTransparency ? 0.08 : 0.14), radius: 24, y: 10)
-    }
-
-    private var cardBackground: some ShapeStyle {
-        Color(nsColor: reduceTransparency ? .controlBackgroundColor : .underPageBackgroundColor)
     }
 
     private var brand: some View {

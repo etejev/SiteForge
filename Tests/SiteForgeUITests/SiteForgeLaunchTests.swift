@@ -21,7 +21,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         return application
     }
 
-    private func launchScenario(_ scenario: String, reduceMotion: Bool = false) -> XCUIApplication {
+    private func launchScenario(
+        _ scenario: String,
+        reduceMotion: Bool = false,
+        extraArguments: [String] = []
+    ) -> XCUIApplication {
         continueAfterFailure = false
         let application = XCUIApplication()
         application.launchArguments += [
@@ -31,6 +35,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         if reduceMotion {
             application.launchArguments += ["-SiteForgeReduceMotion", "YES"]
         }
+        application.launchArguments += extraArguments
         application.launch()
         application.activate()
         XCTAssertTrue(application.windows.firstMatch.waitForExistence(timeout: 5))
@@ -39,6 +44,13 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     private func hasKeyboardFocus(_ element: XCUIElement) -> Bool {
         (element.value(forKey: "hasKeyboardFocus") as? Bool) == true
+    }
+
+    private func attachScreenshot(named name: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     // SF-0201-002, SF-0201-004, SF-0201-008
@@ -202,5 +214,88 @@ final class SiteForgeLaunchTests: XCTestCase {
         let application = launchScenario("loadingIndeterminate", reduceMotion: true)
         XCTAssertFalse(application.descendants(matching: .any)["launch.progress.indeterminate"].exists)
         XCTAssertTrue(application.staticTexts["Opening project…"].exists)
+    }
+
+    // SF-0201-003, SF-0201-006, SF-1505-006, SF-1605-006
+    @MainActor
+    func testWorkspaceChromeUsesNativeMaterialWithoutInterceptingCanvasInput() throws {
+        let application = launchScenario("workspace")
+        for identifier in ["shell.navigator", "shell.inspector", "canvas.viewport.controls", "shell.status"] {
+            let surface = application.descendants(matching: .any)[identifier]
+            XCTAssertTrue(surface.exists, identifier)
+        }
+        attachScreenshot(named: "workspace-default-native-material")
+
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(canvas.exists)
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertEqual(canvas.value as? String, "Interactions: 1")
+
+        application.buttons["navigator.tab.layers"].click()
+        XCTAssertTrue(application.descendants(matching: .any)["navigator.empty"].exists)
+        application.buttons["navigator.tab.pages"].click()
+        XCTAssertTrue(application.descendants(matching: .any)["navigator.pages.list"].exists)
+    }
+
+    // SF-0201-003, SF-0201-006, SF-0201-008
+    @MainActor
+    func testOpaqueHighContrastDarkAndInactiveMaterialStatesRemainOperable() throws {
+        let variants: [(String, [String])] = [
+            ("light", ["-SiteForgeAppearance", "light"]),
+            ("dark", ["-SiteForgeAppearance", "dark"]),
+            ("reduce-transparency", ["-SiteForgeReduceTransparency", "YES"]),
+            ("increased-contrast", ["-SiteForgeIncreaseContrast", "YES"]),
+            ("inactive", ["-SiteForgeWindowInactive", "YES"]),
+        ]
+        for (name, arguments) in variants {
+            let application = launchScenario("workspace", extraArguments: arguments)
+            XCTAssertTrue(application.descendants(matching: .any)["shell.navigator"].exists)
+            XCTAssertTrue(application.buttons["navigator.tab.pages"].isHittable)
+            XCTAssertTrue(application.buttons["toolbar.preview"].isHittable)
+            application.typeKey("\t", modifierFlags: [])
+            XCTAssertTrue(application.descendants(matching: .any)["workspace.shell"].exists)
+            attachScreenshot(named: "workspace-\(name)")
+            application.terminate()
+        }
+    }
+
+    // SF-0201-002, SF-0201-007, SF-1505-007, SF-1605-007
+    @MainActor
+    func testLargeFixtureScrollsAndRetainsMinimumLayoutResponsiveness() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeWorkspaceFixture", "large",
+            "-SiteForgeWindowSize", "minimum",
+        ])
+        let window = application.windows.firstMatch
+        XCTAssertGreaterThanOrEqual(window.frame.width, 1_100)
+        XCTAssertGreaterThanOrEqual(window.frame.height, 700)
+        let pageList = application.descendants(matching: .any)["navigator.pages.list"]
+        XCTAssertTrue(pageList.exists)
+        pageList.scroll(byDeltaX: 0, deltaY: 600)
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].exists)
+        XCTAssertTrue(application.descendants(matching: .any)["shell.inspector"].exists)
+        XCTAssertTrue(application.buttons["toolbar.tool.select"].isHittable)
+        attachScreenshot(named: "workspace-large-minimum")
+    }
+
+    // SF-0201-008, SF-1505-008, SF-1605-008
+    @MainActor
+    func testLaunchAndLoadingStatesRegressUnderOpaqueMaterialFallback() throws {
+        for scenario in ["welcome", "loadingIndeterminate", "loadingDeterminate", "loadingNonCancelable", "failure", "recovery"] {
+            let application = launchScenario(scenario, extraArguments: [
+                "-SiteForgeReduceTransparency", "YES",
+            ])
+            XCTAssertTrue(application.descendants(matching: .any)["launch.experience"].exists, scenario)
+            let expectedIdentifier = switch scenario {
+            case "welcome": "launch.newBlankProject"
+            case "loadingIndeterminate": "launch.progress.indeterminate"
+            case "loadingDeterminate": "launch.progress.determinate"
+            case "loadingNonCancelable": "launch.nonCancelable"
+            case "failure": "launch.retry"
+            default: "launch.recovery.restore"
+            }
+            XCTAssertTrue(application.descendants(matching: .any)[expectedIdentifier].exists, scenario)
+            application.terminate()
+        }
     }
 }

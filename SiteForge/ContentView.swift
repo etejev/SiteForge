@@ -23,5 +23,6 @@ struct ContentView: View {
                 LaunchExperienceView(controller: launchExperience)
             }
         }
+        .preferredColorScheme(WorkspaceMaterialPolicy.preferredColorScheme())
     }
 }
