@@ -4,7 +4,61 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-None.
+- [ ] `SF-CORRECTION-001` Guard every destructive document transition and recover untitled work.
+  - Severity: `P0` (`M0-P0-01`) with the related untitled-recovery gap (`M0-P1-03`).
+  - Requirements: `SF-0203-004`, `SF-0203-005`, `SF-0203-006`; `SF-0301-004`, `SF-0301-005`, `SF-0301-006`; `SF-0306-004`, `SF-0306-005`, `SF-0306-006`; `SF-1902-004`, `SF-1902-005`, and `SF-1902-006`.
+  - Acceptance: New, Open, Revert, Close, and any future document replacement share one native Save/Discard/Cancel decision boundary; cancel or failed save preserves the exact active document, history, project identity, URL, and lifecycle phase; untitled modified documents receive a valid app-owned recovery candidate; keyboard and VoiceOver paths are equivalent.
+  - Evidence and tests required: deterministic unit and UI coverage for every Save/Discard/Cancel branch, save-panel cancellation/failure, untitled recovery after relaunch, recovery cleanup, and unchanged state after cancellation or failure. See `docs/reviews/MILESTONE-0-AND-AUTHORING-RUNWAY-AUDIT.md`.
+  - Dependencies: none. Complete before other production work.
+
+- [ ] `SF-CORRECTION-002` Make package reads, conditional replacement, and recovery artifacts one identity-bound filesystem boundary.
+  - Severity: `P0` (`M0-P0-02` through `M0-P0-04`) plus security hardening in `M0-P1-06` and recovery-state correction `M0-P2-14`.
+  - Requirements: `SF-0301-004`, `SF-0301-005`, `SF-0306-003`, `SF-0306-004`, `SF-1504-003`, `SF-1504-004`, `SF-1603-004`, `SF-1604-004`, and `SF-1702-004`.
+  - Acceptance: an opened package and its durable fingerprint come from the same validated file object; expected-fingerprint validation and replacement are coordinated at commit; path and symlink swaps cannot redirect I/O; replacement preserves an intentional ownership/permission/ACL policy; recovery storage is app-owned or cryptographically/structurally ownership-validated and never overwrites or deletes an unrelated file.
+  - Evidence and tests required: barrier-controlled source/destination/ancestor swaps, concurrent external replacement/deletion/recreation, inode identity, permission/ACL preservation, recovery-name collision and mismatched-sidecar preservation, interruption, and byte-for-byte preservation after every rejected operation.
+  - Dependencies: none. Complete before another lifecycle or persistence feature.
+
+- [ ] `SF-CORRECTION-003` Scope asynchronous lifecycle work by document epoch, destination, revision, and intent.
+  - Severity: `P1` (`M0-P1-01` and `M0-P1-02`).
+  - Requirements: `SF-0301-002`, `SF-0301-004`, `SF-0301-005`; `SF-0306-003`, `SF-0306-004`, `SF-0306-005`; `SF-1504-004`; and `SF-1902-004`.
+  - Acceptance: New, Open, Revert, Restore, and Close invalidate or safely drain all prior work; a completion may update UI or metadata only when its epoch, document/project identity, revision, destination, and operation intent still match; autosave cannot supersede an explicit durable Save; manual Save deterministically drains or cancels pending autosave.
+  - Evidence and tests required: save/autosave crossed with New, Open, Revert, Restore, Close, and each other using deterministic barriers and a controllable clock; assert canonical state, project identity, URL, history boundary, phase, fingerprint, and disk bytes.
+  - Dependencies: `SF-CORRECTION-002` defines the commit boundary.
+
+- [ ] `SF-CORRECTION-004` Harden current-schema decoding, revision bounds, and historical migration evidence.
+  - Severity: `P1` (`M0-P1-04`) with necessary migration evidence from `M0-P2-05`.
+  - Requirements: `SF-0301-004`, `SF-0301-005`, `SF-0303-005`, `SF-0303-008`, `SF-0307-004`, `SF-1702-004`, `SF-1702-008`, `SF-1902-004`, and `SF-1902-008`.
+  - Acceptance: schema v2 rejects missing current fields instead of silently applying legacy migration; schema-specific DTOs perform only explicit supported migrations; revisions that cannot accept a transaction are rejected with a typed error rather than trapping; immutable schema-v1 golden packages cover empty and rootless documents.
+  - Evidence and tests required: maximum/overflow revisions, missing v2 metadata/pages/roots, schema-v1 empty and rootless golden bytes with checksums, deterministic migrated identities, save/reopen, history isolation, and unchanged state after rejection.
+  - Dependencies: none.
+
+- [ ] `SF-CORRECTION-005` Implement and verify the real macOS file-access security boundary before claiming `SF-1504` Verified.
+  - Severity: `P1` (`M0-P1-05`).
+  - Requirements: `SF-1504-001` through `SF-1504-008`, plus `SF-1603-004`.
+  - Acceptance: one file-access service owns sandbox entitlement policy, user-selected security scopes, balanced access lifetimes, persisted bookmark resolution and stale repair, coordinated external access, relocation, denial, and redacted diagnostics; implementation status is downgraded until this behavior exists and passes on the supported distribution configuration.
+  - Evidence and tests required: entitlement inspection, real panel-selected access, relaunch bookmark resolution, stale-bookmark repair, balanced scope lifetime, file coordination/presentation, relocation, permission denial, and external modification.
+  - Dependencies: owner-approved distribution configuration is needed before final release verification, but local implementation and status correction are not blocked.
+
+- [ ] `SF-CORRECTION-006` Reconcile requirement/decision traceability and replace overstated evidence with reproducible proof.
+  - Severity: `P1` (`M0-P1-08` through `M0-P1-10`) plus necessary evidence corrections (`M0-P2-01` through `M0-P2-05`, `M0-P2-09`, and `M0-P2-13`).
+  - Requirements: `SF-0201-006` through `SF-0201-008`; `SF-0301-006` through `SF-0301-008`; `SF-0303-003`, `SF-0303-006`, `SF-0303-008`; `SF-1505-006` through `SF-1505-008`; `SF-1602-006` through `SF-1602-008`; `SF-1605-002`, `SF-1605-006` through `SF-1605-008`; `SF-1902-002`, `SF-1902-003`, `SF-1902-007`, `SF-1902-008`; and `SF-2002-001`, `SF-2002-003`, `SF-2002-008`.
+  - Acceptance: the specification and project records use one non-colliding decision namespace; requirement rows distinguish bounded implementation from full requirement verification; Milestone 0 aggregate status reflects unresolved acceptance criteria; evidence maps to named behavioral tests or retained manual/measurement records; preview-state, metadata, and policy tests are labeled at their actual scope.
+  - Evidence and tests required: a machine-checkable traceability index; real end-to-end launch/recovery UI journeys; deterministic autosave coalescing; complete keyboard/focus and accessibility-announcement coverage; retained visual-inspection manifests; named-environment performance methodology with warm-up, repetition, percentiles, frame/stall and memory measures; repository checks that reject unknown or unsubstantiated completed IDs.
+  - Dependencies: can proceed in parallel with production corrections, but final status reconciliation must cite their results.
+
+- [ ] `SF-CORRECTION-007` Establish enforceable core, command, persistence, and application test seams before authoring growth.
+  - Severity: necessary `P2` architecture correction (`M0-P2-06` and `M0-P2-07`).
+  - Requirements: `SF-1801-001`, `SF-1801-002`, `SF-1801-003`, `SF-1801-004`, `SF-1801-008`, and `SF-1802-008`.
+  - Acceptance: headless canonical model/command and persistence boundaries build without SwiftUI/AppKit; dependency direction is checked; each document window owns its own lifecycle/session state; test scenarios, large fixtures, and appearance overrides are injected only through an explicit Debug/test composition seam and are ignored by Release builds.
+  - Evidence and tests required: independent core/persistence builds, forbidden-import/dependency-cycle checks, two-window isolation tests, Release argument rejection, Debug/UI-test fixture injection, and app integration smoke coverage.
+  - Dependencies: complete before the first production Milestone 1 authoring slice.
+
+- [ ] `SF-AUTHORING-000` Produce the missing measured authoring-engine architecture runway and resolve `OD-004`/`OD-011`.
+  - Severity: `P1` prerequisite gap (`M0-P1-07`).
+  - Requirements: `SF-1901-001` through `SF-1901-008`; downstream `SF-0401-001` through `SF-0401-008`, `SF-0407-001` through `SF-0407-008`, `SF-0501-001` through `SF-0501-008`, and `SF-1903-001` through `SF-1903-008`.
+  - Acceptance: isolated production-representative prototypes compare SwiftUI, AppKit/Core Animation, and Metal as appropriate; a typed deterministic layout subset is compared with an isolated standards-engine oracle and HTML/CSS/browser output; methodology, commands, hardware/software, warm-up, P50/P95, memory, limitations, and raw results are retained; ADRs resolve or explicitly keep `OD-004` and `OD-011` open without making a browser the canonical model.
+  - Evidence and tests required: coordinate conversion, pan/zoom, incremental render/update, hit testing, overlay isolation, accessibility-tree cost, native-material compatibility, layout determinism, preview/export parity, memory, main-thread stalls, and 100-/10,000-object fixtures; explicitly record that the current 8 MiB package cannot represent the specification's 500-asset large fixture.
+  - Dependencies: `SF-CORRECTION-001` through `SF-CORRECTION-007`. Do not start production canvas/layout work first.
 
 ## IN PROGRESS
 
