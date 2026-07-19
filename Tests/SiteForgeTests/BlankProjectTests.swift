@@ -89,9 +89,10 @@ final class BlankProjectTests: XCTestCase {
     }
 
     // SF-0301-005, SF-0303-005
-    func testInitialCreationIsOneCleanNonUndoableHistoryBaseline() throws {
+    func testInitialCreationIsOneCleanNonUndoableHistoryBaseline() async throws {
         let controller = DocumentLifecycleController(session: DocumentSession())
-        controller.newDocument()
+        let creation = await controller.requestNewDocument()
+        XCTAssertEqual(creation, .completed)
         let baseline = controller.session.document
 
         XCTAssertEqual(baseline.revision, 0)

@@ -241,8 +241,15 @@ final class LaunchExperienceController: ObservableObject {
     }
 
     func restoreRecovery() {
-        lifecycle.restoreRecovery()
-        transition(to: .workspace)
+        if isPreviewScenario {
+            transition(to: .workspace)
+            return
+        }
+        Task {
+            if await lifecycle.requestRestoreRecovery() == .completed {
+                transition(to: .workspace)
+            }
+        }
     }
 
     func discardRecovery() {
@@ -281,6 +288,18 @@ final class LaunchExperienceController: ObservableObject {
         }
     }
 
+    func discoverInitialRecovery() async {
+        guard state == .welcome, !isPreviewScenario else { return }
+        await lifecycle.discoverUntitledRecoveryCandidate()
+        if let candidate = lifecycle.recoveryCandidate {
+            transition(to: .recovery(LaunchRecoveryPresentation(
+                title: "Unsaved project recovery available",
+                message: "A validated recovery candidate contains unsaved work from an earlier session.",
+                revisionSummary: candidate.summary
+            )))
+        }
+    }
+
     private func startOperation(
         _ operation: LifecycleOperation,
         work: @escaping @MainActor (UUID, ContinuousClock.Instant) async -> Void
@@ -313,13 +332,20 @@ final class LaunchExperienceController: ObservableObject {
             canCancel: false,
             accessibilityLabel: "Creating blank project, final non-cancelable step"
         )))
-        lifecycle.newDocument()
-        transition(to: .workspace)
-        await record(.new, start: start, result: .success, failure: nil)
+        switch await lifecycle.requestNewDocument() {
+        case .completed:
+            transition(to: .workspace)
+            await record(.new, start: start, result: .success, failure: nil)
+        case .cancelled:
+            await finishCancelled(.new, start: start)
+        case .failed(let failure):
+            transition(to: .failure(Self.presentation(for: failure)))
+            await record(.new, start: start, result: .failure, failure: failure)
+        }
     }
 
     private func performOpen(_ url: URL, operationID id: UUID, start: ContinuousClock.Instant) async {
-        let succeeded = await lifecycle.open(url) { [weak self] update in
+        let result = await lifecycle.requestOpen(url) { [weak self] update in
             await self?.receive(update, operationID: id)
         }
         guard id == operationID else { return }
@@ -327,7 +353,8 @@ final class LaunchExperienceController: ObservableObject {
             await finishCancelled(.open, start: start)
             return
         }
-        if succeeded {
+        switch result {
+        case .completed:
             if let candidate = lifecycle.recoveryCandidate {
                 transition(to: .recovery(LaunchRecoveryPresentation(
                     title: "Newer recovery available",
@@ -338,8 +365,9 @@ final class LaunchExperienceController: ObservableObject {
                 transition(to: .workspace)
             }
             await record(.open, start: start, result: .success, failure: nil)
-        } else {
-            let failure = lifecycle.failure ?? .ioFailure
+        case .cancelled:
+            await finishCancelled(.open, start: start)
+        case .failed(let failure):
             transition(to: .failure(Self.presentation(for: failure)))
             await record(.open, start: start, result: .failure, failure: failure)
         }
@@ -453,6 +481,7 @@ struct LaunchExperienceView: View {
         )
         .accessibilityIdentifier("launch.experience")
         .task {
+            await controller.discoverInitialRecovery()
             await Task.yield()
             assignInitialFocus()
         }

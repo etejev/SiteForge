@@ -64,6 +64,10 @@ final class LaunchExperienceTests: XCTestCase {
         try await writePackage(to: incoming)
 
         controller.openProject(incoming)
+        try await waitUntil { controller.lifecycle.pendingUnsavedChangesPrompt != nil }
+        let prompt = try XCTUnwrap(controller.lifecycle.pendingUnsavedChangesPrompt)
+        XCTAssertEqual(prompt.transition, .openProject)
+        controller.lifecycle.resolveUnsavedChanges(.discard, promptID: prompt.id)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(controller.state.kind, .loadingIndeterminate)
         controller.cancelCurrentOperation()
@@ -92,7 +96,11 @@ final class LaunchExperienceTests: XCTestCase {
             let url = fixture(name)
             try data.write(to: url)
 
-            await controller.openProjectAndWait(url)
+            let operation = Task { await controller.openProjectAndWait(url) }
+            try await waitUntil { controller.lifecycle.pendingUnsavedChangesPrompt != nil }
+            let prompt = try XCTUnwrap(controller.lifecycle.pendingUnsavedChangesPrompt)
+            controller.lifecycle.resolveUnsavedChanges(.discard, promptID: prompt.id)
+            await operation.value
 
             guard case .failure(let presentation) = controller.state else {
                 return XCTFail("Expected failure for \(name)")
@@ -129,6 +137,7 @@ final class LaunchExperienceTests: XCTestCase {
         await restorer.openProjectAndWait(url)
         XCTAssertEqual(restorer.state.kind, .recovery)
         restorer.restoreRecovery()
+        try await waitUntil { restorer.state == .workspace }
         XCTAssertEqual(restorer.state, .workspace)
         XCTAssertEqual(restorer.lifecycle.phase, .recovered)
         XCTAssertTrue(restorer.lifecycle.session.document.pages.contains { $0.name == "Recovered" })
@@ -221,7 +230,13 @@ final class LaunchExperienceTests: XCTestCase {
         backend: DocumentLifecycleBackend = DocumentLifecycleBackend(),
         preview: LaunchPreviewScenario? = nil
     ) -> LaunchExperienceController {
-        let lifecycle = DocumentLifecycleController(session: DocumentSession(), backend: backend)
+        let recoveryDirectory = fixtureDirectory.appendingPathComponent("recovery", isDirectory: true)
+        try? FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
+        let lifecycle = DocumentLifecycleController(
+            session: DocumentSession(),
+            backend: backend,
+            recoveryDirectory: recoveryDirectory
+        )
         return LaunchExperienceController(lifecycle: lifecycle, previewScenario: preview)
     }
 

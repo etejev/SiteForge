@@ -46,7 +46,8 @@ final class PersistedHistoryTests: XCTestCase {
         XCTAssertTrue(writerSaved)
 
         let reader = makeController()
-        await reader.open(url)
+        let openResult = await reader.requestOpen(url)
+        XCTAssertEqual(openResult, .completed)
         XCTAssertTrue(reader.session.canUndo)
         XCTAssertTrue(reader.session.canRedo)
         XCTAssertNil(reader.historyNotice)
@@ -75,7 +76,8 @@ final class PersistedHistoryTests: XCTestCase {
         XCTAssertTrue(branchSaved)
 
         let reopened = makeController()
-        await reopened.open(url)
+        let openResult = await reopened.requestOpen(url)
+        XCTAssertEqual(openResult, .completed)
         XCTAssertTrue(reopened.session.canRedo)
         try reopened.session.execute(.renamePage(RenamePageCommand(pageID: pageID, name: "New branch")))
         XCTAssertFalse(reopened.session.canRedo)
@@ -95,9 +97,11 @@ final class PersistedHistoryTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(650))
 
         let reopened = makeController()
-        await reopened.open(url)
+        let openResult = await reopened.requestOpen(url)
+        XCTAssertEqual(openResult, .completed)
         XCTAssertNotNil(reopened.recoveryCandidate)
-        reopened.restoreRecovery()
+        let restoreResult = await reopened.requestRestoreRecovery()
+        XCTAssertEqual(restoreResult, .completed)
         XCTAssertEqual(reopened.session.historyBoundaryRevision, durableRevision)
         XCTAssertTrue(reopened.session.canUndo)
         try reopened.session.undo()
@@ -122,7 +126,8 @@ final class PersistedHistoryTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(650))
 
         let reopened = makeController()
-        await reopened.open(url)
+        let openResult = await reopened.requestOpen(url)
+        XCTAssertEqual(openResult, .completed)
         await reopened.discardRecovery()
         XCTAssertEqual(reopened.session.document.pages[0].name, "Durable Page")
         XCTAssertTrue(reopened.session.canUndo)
@@ -141,7 +146,10 @@ final class PersistedHistoryTests: XCTestCase {
         try writer.session.execute(.renamePage(RenamePageCommand(pageID: pageID, name: "Recovered")))
         try await Task.sleep(for: .milliseconds(650))
 
-        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: url)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(
+            for: writer.currentProjectID,
+            in: fixtureDirectory.appendingPathComponent("recovery", isDirectory: true)
+        )
         let packageStore = ProjectPackageStore()
         let recoveryPackage = try await packageStore.read(from: recoveryURL)
         let history = recoveryPackage.optionalMembers.first { $0.path == PersistedHistoryStore.memberPath }!
@@ -155,9 +163,11 @@ final class PersistedHistoryTests: XCTestCase {
         ), to: recoveryURL)
 
         let reopened = makeController()
-        await reopened.open(url)
+        let openResult = await reopened.requestOpen(url)
+        XCTAssertEqual(openResult, .completed)
         XCTAssertNotNil(reopened.recoveryCandidate)
-        reopened.restoreRecovery()
+        let restoreResult = await reopened.requestRestoreRecovery()
+        XCTAssertEqual(restoreResult, .completed)
         XCTAssertEqual(reopened.session.document.pages[0].name, "Recovered")
         XCTAssertFalse(reopened.session.canUndo)
         XCTAssertFalse(reopened.session.canRedo)
@@ -172,7 +182,8 @@ final class PersistedHistoryTests: XCTestCase {
         try await ProjectPackageStore().write(package, to: url)
 
         let controller = makeController()
-        await controller.open(url)
+        let openResult = await controller.requestOpen(url)
+        XCTAssertEqual(openResult, .completed)
         XCTAssertEqual(controller.session.document, document)
         XCTAssertFalse(controller.session.canUndo)
         XCTAssertFalse(controller.session.canRedo)
@@ -228,7 +239,8 @@ final class PersistedHistoryTests: XCTestCase {
         try await ProjectPackageStore().write(package, to: url)
 
         let controller = makeController()
-        await controller.open(url)
+        let openResult = await controller.requestOpen(url)
+        XCTAssertEqual(openResult, .completed)
         XCTAssertEqual(controller.session.document, valid.package.document)
         XCTAssertFalse(controller.session.canUndo)
         XCTAssertNotNil(controller.historyNotice)
@@ -281,7 +293,12 @@ final class PersistedHistoryTests: XCTestCase {
     }
 
     private func makeController() -> DocumentLifecycleController {
-        DocumentLifecycleController(session: DocumentSession())
+        let recoveryDirectory = fixtureDirectory.appendingPathComponent("recovery", isDirectory: true)
+        try? FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
+        return DocumentLifecycleController(
+            session: DocumentSession(),
+            recoveryDirectory: recoveryDirectory
+        )
     }
 
     private func makeValidHistoryFixture(entryCount: Int, pageName: String = "Fixture Page") async throws

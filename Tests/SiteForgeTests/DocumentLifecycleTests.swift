@@ -11,9 +11,10 @@ final class DocumentLifecycleTests: XCTestCase {
         super.tearDown()
     }
 
-    func testNewDocumentHasCleanUntitledStateAndCommands() {
+    func testNewDocumentHasCleanUntitledStateAndCommands() async {
         let controller = makeController()
-        controller.newDocument()
+        let result = await controller.requestNewDocument()
+        XCTAssertEqual(result, .completed)
         XCTAssertEqual(controller.phase, .clean)
         XCTAssertEqual(controller.displayName, "Untitled")
         XCTAssertTrue(controller.canSave)
@@ -32,8 +33,10 @@ final class DocumentLifecycleTests: XCTestCase {
         let secondSaved = await controller.save(to: second)
         XCTAssertTrue(secondSaved)
 
-        controller.newDocument()
-        await controller.open(first)
+        let newResult = await controller.requestNewDocument()
+        XCTAssertEqual(newResult, .completed)
+        let openResult = await controller.requestOpen(first)
+        XCTAssertEqual(openResult, .completed)
         XCTAssertEqual(controller.session.document.pages.map(\.name), ["Home", "Not Found", "Landing"])
         XCTAssertEqual(controller.displayName, "Lifecycle")
         XCTAssertEqual(controller.phase, .clean)
@@ -48,7 +51,10 @@ final class DocumentLifecycleTests: XCTestCase {
 
         let malformed = fixture("Malformed.siteforge")
         try Data("bad".utf8).write(to: malformed)
-        await controller.open(malformed)
+        let result = await transition(controller, decision: .discard) {
+            await controller.requestOpen(malformed)
+        }
+        XCTAssertEqual(result, .failed(.malformedPackage))
         XCTAssertEqual(controller.session.document, before)
         XCTAssertEqual(controller.phase, .failed)
         XCTAssertEqual(controller.failure, .malformedPackage)
@@ -92,14 +98,16 @@ final class DocumentLifecycleTests: XCTestCase {
         try addPage("One", to: controller)
         try addPage("Two", to: controller)
         try await Task.sleep(for: .milliseconds(600))
-        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: url)
+        let recoveryURL = recoveryURL(for: controller)
         XCTAssertTrue(FileManager.default.fileExists(atPath: recoveryURL.path))
 
         let reopened = makeController()
-        await reopened.open(url)
+        let openResult = await reopened.requestOpen(url)
+        XCTAssertEqual(openResult, .completed)
         XCTAssertNotNil(reopened.recoveryCandidate)
         XCTAssertEqual(reopened.recoveryCandidate?.package.document.pages.count, 4)
-        reopened.restoreRecovery()
+        let restoreResult = await reopened.requestRestoreRecovery()
+        XCTAssertEqual(restoreResult, .completed)
         XCTAssertEqual(reopened.phase, .recovered)
         XCTAssertEqual(reopened.session.document.pages.count, 4)
         XCTAssertTrue(reopened.isModified)
@@ -119,8 +127,10 @@ final class DocumentLifecycleTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(600))
 
         let reader = makeController()
-        await reader.open(url)
-        reader.restoreRecovery()
+        let openResult = await reader.requestOpen(url)
+        XCTAssertEqual(openResult, .completed)
+        let restoreResult = await reader.requestRestoreRecovery()
+        XCTAssertEqual(restoreResult, .completed)
         XCTAssertEqual(reader.session.document.pages.map(\.id), pageIDs)
         XCTAssertEqual(reader.session.document.pages.flatMap(\.rootNodeIDs), rootIDs)
         XCTAssertEqual(reader.session.document.pages[0].name, "Recovered Home")
@@ -135,13 +145,15 @@ final class DocumentLifecycleTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(600))
 
         let reader = makeController()
-        await reader.open(url)
+        let firstOpen = await reader.requestOpen(url)
+        XCTAssertEqual(firstOpen, .completed)
         XCTAssertNotNil(reader.recoveryCandidate)
         await reader.discardRecovery()
         XCTAssertNil(reader.recoveryCandidate)
 
-        try Data("bad recovery".utf8).write(to: DocumentLifecycleBackend.recoveryURL(for: url))
-        await reader.open(url)
+        try Data("bad recovery".utf8).write(to: recoveryURL(for: reader))
+        let secondOpen = await reader.requestOpen(url)
+        XCTAssertEqual(secondOpen, .completed)
         XCTAssertNil(reader.recoveryCandidate)
         XCTAssertEqual(reader.failure, .malformedRecovery)
     }
@@ -152,12 +164,20 @@ final class DocumentLifecycleTests: XCTestCase {
         let saved = await controller.save(to: url)
         XCTAssertTrue(saved)
         try addPage("Draft", to: controller)
-        XCTAssertFalse(controller.requestClose())
-        XCTAssertTrue(controller.isCloseConfirmationPresented)
-        await controller.revert()
+        let closeTask = Task { await controller.requestCloseTransition() }
+        await waitForPrompt(controller, transition: .closeWindow)
+        let closePrompt = try XCTUnwrap(controller.pendingUnsavedChangesPrompt)
+        controller.resolveUnsavedChanges(.cancel, promptID: closePrompt.id)
+        let closeResult = await closeTask.value
+        XCTAssertEqual(closeResult, .cancelled)
+        let result = await transition(controller, decision: .discard) {
+            await controller.requestRevert()
+        }
+        XCTAssertEqual(result, .completed)
         XCTAssertEqual(controller.session.document.pages.count, 2)
         XCTAssertEqual(controller.phase, .clean)
-        XCTAssertTrue(controller.requestClose())
+        let finalClose = await controller.requestCloseTransition()
+        XCTAssertEqual(finalClose, .completed)
     }
 
     func testStaleSaveSuppressionAndMainActorResponsiveness() async throws {
@@ -193,8 +213,164 @@ final class DocumentLifecycleTests: XCTestCase {
         XCTAssertFalse(description.contains(url.deletingLastPathComponent().path))
     }
 
-    private func makeController(backend: DocumentLifecycleBackend = DocumentLifecycleBackend()) -> DocumentLifecycleController {
-        DocumentLifecycleController(session: DocumentSession(), backend: backend)
+    func testCancelPreservesExactStateForNewOpenRevertAndClose() async throws {
+        let durable = fixture("TransitionGuard.siteforge")
+        let incoming = fixture("IncomingGuard.siteforge")
+        try await ProjectPackageStore().write(
+            ProjectPackage(document: ProjectCreation.blank()),
+            to: incoming
+        )
+        let controller = makeController()
+        let initialSave = await controller.save(to: durable)
+        XCTAssertTrue(initialSave)
+        try addPage("Protected Draft", to: controller)
+        let expected = controller.stateSnapshot
+
+        let operations: [(DestructiveDocumentTransition, @MainActor () async -> DocumentTransitionResult)] = [
+            (.newDocument, { await controller.requestNewDocument() }),
+            (.openProject, { await controller.requestOpen(incoming) }),
+            (.revertToSaved, { await controller.requestRevert() }),
+            (.closeWindow, { await controller.requestCloseTransition() }),
+        ]
+        for (expectedTransition, operation) in operations {
+            let task = Task { await operation() }
+            await waitForPrompt(controller, transition: expectedTransition)
+            let prompt = try XCTUnwrap(controller.pendingUnsavedChangesPrompt)
+            XCTAssertFalse(prompt.message.contains(durable.deletingLastPathComponent().path))
+            controller.resolveUnsavedChanges(.cancel, promptID: prompt.id)
+            let result = await task.value
+            XCTAssertEqual(result, .cancelled)
+            XCTAssertEqual(controller.stateSnapshot, expected)
+        }
+    }
+
+    func testSaveDiscardAndSavePanelCancellationBranchesAreDeterministic() async throws {
+        let durable = fixture("SaveBranch.siteforge")
+        let incoming = fixture("DiscardBranch.siteforge")
+        var incomingDocument = ProjectCreation.blank()
+        incomingDocument.pages[0].name = "Incoming Home"
+        try await ProjectPackageStore().write(ProjectPackage(document: incomingDocument), to: incoming)
+
+        let savedController = makeController()
+        let initialSave = await savedController.save(to: durable)
+        XCTAssertTrue(initialSave)
+        try addPage("Saved Before New", to: savedController)
+        let newResult = await transition(savedController, decision: .save) {
+            await savedController.requestNewDocument()
+        }
+        XCTAssertEqual(newResult, .completed)
+        XCTAssertEqual(savedController.phase, .clean)
+        let durablePackage = try await ProjectPackageStore().read(from: durable)
+        XCTAssertTrue(durablePackage.document.pages.contains { $0.name == "Saved Before New" })
+
+        try addPage("Discarded Draft", to: savedController)
+        let openResult = await transition(savedController, decision: .discard) {
+            await savedController.requestOpen(incoming)
+        }
+        XCTAssertEqual(openResult, .completed)
+        XCTAssertEqual(savedController.session.document, incomingDocument)
+
+        let cancelledController = makeController(saveDestinationProvider: { _ in nil })
+        try addPage("Untitled Draft", to: cancelledController)
+        let beforeCancellation = cancelledController.stateSnapshot
+        let cancelled = await transition(cancelledController, decision: .save) {
+            await cancelledController.requestNewDocument()
+        }
+        XCTAssertEqual(cancelled, .cancelled)
+        XCTAssertEqual(cancelledController.stateSnapshot, beforeCancellation)
+    }
+
+    func testFailedTransitionSaveRestoresExactStateAndReportsFailureSeparately() async throws {
+        let backend = DocumentLifecycleBackend()
+        await backend.configureForTesting(fault: .io)
+        let destination = fixture("FailedTransitionSave.siteforge")
+        let controller = makeController(
+            backend: backend,
+            saveDestinationProvider: { _ in destination }
+        )
+        try addPage("Protected Untitled", to: controller)
+        let expected = controller.stateSnapshot
+
+        let result = await transition(controller, decision: .save) {
+            await controller.requestNewDocument()
+        }
+
+        XCTAssertEqual(result, .failed(.ioFailure))
+        XCTAssertEqual(controller.stateSnapshot, expected)
+        XCTAssertEqual(controller.transitionFailure, .ioFailure)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    func testUntitledRecoverySurvivesRelaunchAndCleansUpAfterRestoreSaveAndDiscard() async throws {
+        let recoveryDirectory = fixture("untitled-recovery", isDirectory: true)
+        let writer = makeController(recoveryDirectory: recoveryDirectory)
+        try addPage("Unsaved Untitled", to: writer)
+        try await Task.sleep(for: .milliseconds(600))
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(
+            for: writer.currentProjectID,
+            in: recoveryDirectory
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recoveryURL.path))
+
+        let relaunched = makeController(recoveryDirectory: recoveryDirectory)
+        await relaunched.discoverUntitledRecoveryCandidate()
+        XCTAssertEqual(relaunched.recoveryCandidate?.package.projectID, writer.currentProjectID)
+        let restored = await relaunched.requestRestoreRecovery()
+        XCTAssertEqual(restored, .completed)
+        XCTAssertNil(relaunched.fileURL)
+        XCTAssertTrue(relaunched.session.document.pages.contains { $0.name == "Unsaved Untitled" })
+
+        let durable = fixture("RecoveredUntitled.siteforge")
+        let durableSave = await relaunched.save(to: durable)
+        XCTAssertTrue(durableSave)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recoveryURL.path))
+
+        let discardWriter = makeController(recoveryDirectory: recoveryDirectory)
+        try addPage("Discard Me", to: discardWriter)
+        try await Task.sleep(for: .milliseconds(600))
+        let discardURL = DocumentLifecycleBackend.recoveryURL(
+            for: discardWriter.currentProjectID,
+            in: recoveryDirectory
+        )
+        let discardReader = makeController(recoveryDirectory: recoveryDirectory)
+        await discardReader.discoverUntitledRecoveryCandidate()
+        XCTAssertNotNil(discardReader.recoveryCandidate)
+        await discardReader.discardRecovery()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: discardURL.path))
+    }
+
+    func testRestoreRecoveryCancellationPreservesCurrentEditAndHistory() async throws {
+        let durable = fixture("RestoreGuard.siteforge")
+        let writer = makeController()
+        let initialSave = await writer.save(to: durable)
+        XCTAssertTrue(initialSave)
+        try addPage("Recovery Version", to: writer)
+        try await Task.sleep(for: .milliseconds(600))
+
+        let reader = makeController()
+        let openResult = await reader.requestOpen(durable)
+        XCTAssertEqual(openResult, .completed)
+        XCTAssertNotNil(reader.recoveryCandidate)
+        try addPage("Current Unsaved Version", to: reader)
+        let expected = reader.stateSnapshot
+        let result = await transition(reader, decision: .cancel) {
+            await reader.requestRestoreRecovery()
+        }
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertEqual(reader.stateSnapshot, expected)
+    }
+
+    private func makeController(
+        backend: DocumentLifecycleBackend = DocumentLifecycleBackend(),
+        recoveryDirectory: URL? = nil,
+        saveDestinationProvider: @escaping SaveDestinationProvider = DocumentLifecycleController.nativeSaveDestination
+    ) -> DocumentLifecycleController {
+        DocumentLifecycleController(
+            session: DocumentSession(),
+            backend: backend,
+            recoveryDirectory: recoveryDirectory ?? fixture("recovery", isDirectory: true),
+            saveDestinationProvider: saveDestinationProvider
+        )
     }
 
     private func addPage(_ name: String, to controller: DocumentLifecycleController) throws {
@@ -203,19 +379,53 @@ final class DocumentLifecycleTests: XCTestCase {
         )))
     }
 
-    private func fixture(_ name: String) -> URL {
+    private func fixture(_ name: String, isDirectory: Bool = false) -> URL {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let directory = repository
             .appendingPathComponent(".siteforge-test-fixtures", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         if !fixtureURLs.contains(directory) { fixtureURLs.append(directory) }
-        return directory.appendingPathComponent(name)
+        let url = directory.appendingPathComponent(name, isDirectory: isDirectory)
+        if isDirectory { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        return url
+    }
+
+    private func recoveryURL(for controller: DocumentLifecycleController) -> URL {
+        DocumentLifecycleBackend.recoveryURL(
+            for: controller.currentProjectID,
+            in: fixture("recovery", isDirectory: true)
+        )
+    }
+
+    private func transition(
+        _ controller: DocumentLifecycleController,
+        decision: UnsavedChangesDecision,
+        operation: @escaping @MainActor () async -> DocumentTransitionResult
+    ) async -> DocumentTransitionResult {
+        let task = Task { await operation() }
+        await waitForPrompt(controller)
+        guard let prompt = controller.pendingUnsavedChangesPrompt else { return await task.value }
+        controller.resolveUnsavedChanges(decision, promptID: prompt.id)
+        return await task.value
+    }
+
+    private func waitForPrompt(
+        _ controller: DocumentLifecycleController,
+        transition: DestructiveDocumentTransition? = nil
+    ) async {
+        for _ in 0..<100 where controller.pendingUnsavedChangesPrompt == nil {
+            await Task.yield()
+        }
+        if let transition { XCTAssertEqual(controller.pendingUnsavedChangesPrompt?.transition, transition) }
+        XCTAssertNotNil(controller.pendingUnsavedChangesPrompt)
     }
 
     private var expectedRequirementIDs: Set<String> {
-        ["SF-0301-002", "SF-0301-004", "SF-0301-005", "SF-0301-006", "SF-0301-008",
+        ["SF-0203-004", "SF-0203-005", "SF-0203-006",
+         "SF-0301-002", "SF-0301-004", "SF-0301-005", "SF-0301-006", "SF-0301-008",
          "SF-0306-001", "SF-0306-002", "SF-0306-003", "SF-0306-004", "SF-0306-005", "SF-0306-006", "SF-0306-008",
-         "SF-1504-001", "SF-1504-004", "SF-1504-006", "SF-1504-008"]
+         "SF-1504-001", "SF-1504-004", "SF-1504-006", "SF-1504-008",
+         "SF-1902-004", "SF-1902-005", "SF-1902-006"]
     }
 }

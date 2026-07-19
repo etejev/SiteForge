@@ -4,13 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-CORRECTION-001` Guard every destructive document transition and recover untitled work.
-  - Severity: `P0` (`M0-P0-01`) with the related untitled-recovery gap (`M0-P1-03`).
-  - Requirements: `SF-0203-004`, `SF-0203-005`, `SF-0203-006`; `SF-0301-004`, `SF-0301-005`, `SF-0301-006`; `SF-0306-004`, `SF-0306-005`, `SF-0306-006`; `SF-1902-004`, `SF-1902-005`, and `SF-1902-006`.
-  - Acceptance: New, Open, Revert, Close, and any future document replacement share one native Save/Discard/Cancel decision boundary; cancel or failed save preserves the exact active document, history, project identity, URL, and lifecycle phase; untitled modified documents receive a valid app-owned recovery candidate; keyboard and VoiceOver paths are equivalent.
-  - Evidence and tests required: deterministic unit and UI coverage for every Save/Discard/Cancel branch, save-panel cancellation/failure, untitled recovery after relaunch, recovery cleanup, and unchanged state after cancellation or failure. See `docs/reviews/MILESTONE-0-AND-AUTHORING-RUNWAY-AUDIT.md`.
-  - Dependencies: none. Complete before other production work.
-
 - [ ] `SF-CORRECTION-002` Make package reads, conditional replacement, and recovery artifacts one identity-bound filesystem boundary.
   - Severity: `P0` (`M0-P0-02` through `M0-P0-04`) plus security hardening in `M0-P1-06` and recovery-state correction `M0-P2-14`.
   - Requirements: `SF-0301-004`, `SF-0301-005`, `SF-0306-003`, `SF-0306-004`, `SF-1504-003`, `SF-1504-004`, `SF-1603-004`, `SF-1604-004`, and `SF-1702-004`.
@@ -69,6 +62,13 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-CORRECTION-001` Guard every destructive document transition and recover untitled work.
+  - Severity: `P0` (`M0-P0-01`) with the related untitled-recovery gap (`M0-P1-03`).
+  - Requirements: `SF-0203-004`, `SF-0203-005`, `SF-0203-006`; `SF-0301-004`, `SF-0301-005`, `SF-0301-006`; `SF-0306-004`, `SF-0306-005`, `SF-0306-006`; `SF-1902-004`, `SF-1902-005`, and `SF-1902-006`.
+  - Plan: centralize New, Open, Revert, recovery Restore, and Close behind one asynchronous Save/Discard/Cancel authorization boundary; inject the native save destination so cancellation and failure are deterministic in tests; preserve a complete lifecycle snapshot until authorization and incoming validation succeed; store both titled and untitled autosave candidates in an app-owned recovery directory keyed by stable project identity; discover valid untitled candidates on launch; expose one keyboard- and VoiceOver-operable native prompt; and verify every decision branch, relaunch recovery, cleanup, and exact-state preservation before updating evidence.
+  - Evidence: `./sf verify` passed on 2026-07-19 with 93 unit tests and 14 UI tests. Five new lifecycle tests cover exact-state cancellation for New/Open/Revert/Close, Save/Discard/save-panel-cancel decisions, save failure with separate actionable reporting, recovery-restore cancellation, and app-owned untitled recovery across relaunch/restore/durable-save/discard. The native UI journey verifies stable accessibility identifiers, keyboard Escape cancellation, Return default Save, native save-panel cancellation, and destructive discard. All production document replacements now use the shared authorization boundary; recovery artifacts are stored under Application Support by stable project identity rather than beside user projects. UI recovery tests use isolated repository-local fixture directories, and the test command removes the exact shared fixture root on success, failure, or interruption.
+  - Dependencies: none. Completed before other production corrections.
 
 - [x] `SF-FOUNDATION-009` Replace opaque workspace chrome with native translucent materials.
   - Requirements: `SF-0201-002`, `SF-0201-003`, `SF-0201-006`, `SF-0201-007`, `SF-0201-008`; `SF-1505-006`, `SF-1505-007`, `SF-1505-008`; `SF-1605-002`, `SF-1605-006`, `SF-1605-007`, and `SF-1605-008`.

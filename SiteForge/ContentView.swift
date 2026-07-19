@@ -24,5 +24,34 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(WorkspaceMaterialPolicy.preferredColorScheme())
+        .alert(
+            launchExperience.lifecycle.pendingUnsavedChangesPrompt?.transition.title ?? "Save changes?",
+            isPresented: Binding(
+                get: { launchExperience.lifecycle.pendingUnsavedChangesPrompt != nil },
+                set: { presented in
+                    guard !presented,
+                          let prompt = launchExperience.lifecycle.pendingUnsavedChangesPrompt else { return }
+                    launchExperience.lifecycle.resolveUnsavedChanges(.cancel, promptID: prompt.id)
+                }
+            )
+        ) {
+            if let prompt = launchExperience.lifecycle.pendingUnsavedChangesPrompt {
+                Button("Save") {
+                    launchExperience.lifecycle.resolveUnsavedChanges(.save, promptID: prompt.id)
+                }
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("documentTransition.save")
+                Button("Discard Changes", role: .destructive) {
+                    launchExperience.lifecycle.resolveUnsavedChanges(.discard, promptID: prompt.id)
+                }
+                .accessibilityIdentifier("documentTransition.discard")
+                Button("Cancel", role: .cancel) {
+                    launchExperience.lifecycle.resolveUnsavedChanges(.cancel, promptID: prompt.id)
+                }
+                .accessibilityIdentifier("documentTransition.cancel")
+            }
+        } message: {
+            Text(launchExperience.lifecycle.pendingUnsavedChangesPrompt?.message ?? "The current project is unchanged.")
+        }
     }
 }

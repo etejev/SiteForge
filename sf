@@ -6,6 +6,7 @@ DERIVED_DATA=${SITEFORGE_DERIVED_DATA:-${TMPDIR%/}/SiteForge/DerivedData}
 SCHEME=${SITEFORGE_SCHEME:-SiteForge}
 DESTINATION=${SITEFORGE_DESTINATION:-platform=macOS}
 CODEX_BIN=${SITEFORGE_CODEX_BIN:-}
+TEST_FIXTURE_ROOT="$ROOT/.siteforge-test-fixtures"
 
 if [[ -z "$CODEX_BIN" ]]; then
   if command -v codex >/dev/null 2>&1; then
@@ -52,7 +53,17 @@ build_app() {
 
 test_app() {
   resolve_container
+  cleanup_test_fixtures
+  trap cleanup_test_fixtures EXIT
   xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" test
+  cleanup_test_fixtures
+  trap - EXIT
+}
+
+cleanup_test_fixtures() {
+  if [[ -d "$TEST_FIXTURE_ROOT" ]]; then
+    rm -rf -- "$TEST_FIXTURE_ROOT"
+  fi
 }
 
 run_app() {

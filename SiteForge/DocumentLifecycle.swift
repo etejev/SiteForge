@@ -147,8 +147,31 @@ actor DocumentLifecycleBackend {
         catch { throw Self.map(error) }
     }
 
-    nonisolated static func recoveryURL(for url: URL) -> URL {
-        url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).recovery")
+    func prepareRecoveryDirectory(_ directory: URL) throws {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
+    func recoveryURLs(in directory: URL) throws -> [URL] {
+        do {
+            guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+            return try FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            )
+            .filter { $0.pathExtension == "siteforge-recovery" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
+    nonisolated static func recoveryURL(for projectID: ProjectID, in directory: URL) -> URL {
+        directory.appendingPathComponent("\(projectID.description).siteforge-recovery", isDirectory: false)
     }
 
     private func throwFault() throws {
@@ -199,16 +222,81 @@ actor DocumentLifecycleBackend {
 struct RecoveryCandidate: Equatable, Sendable {
     let package: ProjectPackage
     let url: URL
+    let durableURL: URL?
     let history: PersistedHistoryLoadResult
     var summary: String { "Revision \(package.document.revision), newer than the durable revision." }
 }
 
+enum DestructiveDocumentTransition: String, Equatable, Sendable {
+    case newDocument, openProject, revertToSaved, restoreRecovery, closeWindow
+
+    var title: String {
+        switch self {
+        case .newDocument: "Save changes before creating a new project?"
+        case .openProject: "Save changes before opening another project?"
+        case .revertToSaved: "Save changes before reverting?"
+        case .restoreRecovery: "Save changes before restoring recovery?"
+        case .closeWindow: "Save changes before closing?"
+        }
+    }
+
+    var consequence: String {
+        switch self {
+        case .newDocument: "Creating a new project"
+        case .openProject: "Opening another project"
+        case .revertToSaved: "Reverting to the durable project"
+        case .restoreRecovery: "Restoring the recovery candidate"
+        case .closeWindow: "Closing this window"
+        }
+    }
+}
+
+enum UnsavedChangesDecision: Equatable, Sendable { case save, discard, cancel }
+
+struct UnsavedChangesPrompt: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let transition: DestructiveDocumentTransition
+    let documentName: String
+
+    var message: String {
+        "\(transition.consequence) will discard unsaved changes in \(documentName) unless you save them first."
+    }
+}
+
+enum DocumentTransitionResult: Equatable, Sendable {
+    case completed
+    case cancelled
+    case failed(DocumentLifecycleFailure)
+}
+
+struct DocumentLifecycleStateSnapshot: Equatable, Sendable {
+    let document: CanonicalDocument
+    let history: PersistedHistorySnapshot
+    let projectID: ProjectID
+    let fileURL: URL?
+    let durableFingerprint: PackageFingerprint?
+    let phase: DocumentLifecyclePhase
+    let displayName: String
+    let failure: DocumentLifecycleFailure?
+    let recoveryCandidate: RecoveryCandidate?
+}
+
+private enum ReplacementAuthorization: Equatable {
+    case proceed(discardingChanges: Bool)
+    case cancelled
+    case failed(DocumentLifecycleFailure)
+}
+
+typealias SaveDestinationProvider = @MainActor (_ suggestedFilename: String) -> URL?
+
 @MainActor
 final class DocumentLifecycleController: ObservableObject {
     static let requirementIDs: Set<String> = [
+        "SF-0203-004", "SF-0203-005", "SF-0203-006",
         "SF-0301-002", "SF-0301-004", "SF-0301-005", "SF-0301-006", "SF-0301-008",
         "SF-0306-001", "SF-0306-002", "SF-0306-003", "SF-0306-004", "SF-0306-005", "SF-0306-006", "SF-0306-008",
         "SF-1504-001", "SF-1504-004", "SF-1504-006", "SF-1504-008",
+        "SF-1902-004", "SF-1902-005", "SF-1902-006",
     ]
 
     @Published private(set) var phase: DocumentLifecyclePhase = .clean
@@ -216,29 +304,41 @@ final class DocumentLifecycleController: ObservableObject {
     @Published private(set) var failure: DocumentLifecycleFailure?
     @Published private(set) var recoveryCandidate: RecoveryCandidate?
     @Published private(set) var historyNotice: String?
+    @Published private(set) var pendingUnsavedChangesPrompt: UnsavedChangesPrompt?
+    @Published private(set) var transitionFailure: DocumentLifecycleFailure?
     @Published var isRecoveryDetailsPresented = false
-    @Published var isCloseConfirmationPresented = false
 
     let session: DocumentSession
     let backend: DocumentLifecycleBackend
     private var project: ProjectPackage
     private var durableFingerprint: PackageFingerprint?
     private(set) var fileURL: URL?
+    private let recoveryDirectory: URL
+    private let saveDestinationProvider: SaveDestinationProvider
     private var generation = 0
     private var autosaveTask: Task<Void, Never>?
     private var observing = false
+    private var hasUnsavedChanges = false
     private var observation: AnyCancellable?
     private var allowNextClose = false
+    private var pendingDecisionContinuation: CheckedContinuation<UnsavedChangesDecision, Never>?
 
-    init(session: DocumentSession, backend: DocumentLifecycleBackend = DocumentLifecycleBackend()) {
+    init(
+        session: DocumentSession,
+        backend: DocumentLifecycleBackend = DocumentLifecycleBackend(),
+        recoveryDirectory: URL = DocumentLifecycleController.defaultRecoveryDirectory,
+        saveDestinationProvider: @escaping SaveDestinationProvider = DocumentLifecycleController.nativeSaveDestination
+    ) {
         self.session = session
         self.backend = backend
+        self.recoveryDirectory = recoveryDirectory
+        self.saveDestinationProvider = saveDestinationProvider
         let now = ProjectTimestamp(date: Date())
         project = ProjectPackage(createdAt: now, document: session.document)
         observation = session.$document.dropFirst().sink { [weak self] _ in self?.documentDidChange() }
     }
 
-    var isModified: Bool { phase == .modified || phase == .autosaving || phase == .failed || phase == .conflicted || phase == .recovered }
+    var isModified: Bool { hasUnsavedChanges }
     var title: String { displayName + (isModified ? " — Edited" : "") }
     var statusText: String {
         switch phase {
@@ -253,8 +353,56 @@ final class DocumentLifecycleController: ObservableObject {
     }
     var canSave: Bool { (fileURL == nil || isModified) && phase != .saving && phase != .autosaving }
     var canRevert: Bool { fileURL != nil && isModified && phase != .saving && phase != .autosaving }
+    var currentProjectID: ProjectID { project.projectID }
+    var stateSnapshot: DocumentLifecycleStateSnapshot {
+        DocumentLifecycleStateSnapshot(
+            document: session.document,
+            history: session.historySnapshot(),
+            projectID: project.projectID,
+            fileURL: fileURL,
+            durableFingerprint: durableFingerprint,
+            phase: phase,
+            displayName: displayName,
+            failure: failure,
+            recoveryCandidate: recoveryCandidate
+        )
+    }
 
-    func newDocument() {
+    static var defaultRecoveryDirectory: URL {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-SiteForgeRecoveryDirectory"),
+           arguments.indices.contains(index + 1) {
+            return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
+        }
+#endif
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("SiteForge/Recovery", isDirectory: true)
+    }
+
+    static func nativeSaveDestination(suggestedFilename: String) -> URL? {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.siteForgeProject]
+        panel.nameFieldStringValue = suggestedFilename
+        panel.message = "Save an atomic SiteForge project package."
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    @discardableResult
+    func requestNewDocument() async -> DocumentTransitionResult {
+        let previousProjectID = project.projectID
+        switch await authorize(.newDocument) {
+        case .cancelled: return .cancelled
+        case .failed(let error): return .failed(error)
+        case .proceed(let discarding):
+            establishNewDocument()
+            if discarding { await removeRecovery(for: previousProjectID) }
+            return .completed
+        }
+    }
+
+    private func establishNewDocument() {
         autosaveTask?.cancel()
         let document = ProjectCreation.blank()
         observing = true
@@ -263,15 +411,30 @@ final class DocumentLifecycleController: ObservableObject {
         let now = ProjectTimestamp(date: Date())
         project = ProjectPackage(createdAt: now, document: document)
         fileURL = nil; durableFingerprint = nil; displayName = "Untitled"
-        failure = nil; recoveryCandidate = nil; phase = .clean
-        historyNotice = nil
+        failure = nil; recoveryCandidate = nil; phase = .clean; hasUnsavedChanges = false
+        historyNotice = nil; transitionFailure = nil
     }
 
     @discardableResult
-    func open(
+    func requestOpen(
         _ url: URL,
         progress: (@Sendable (ProjectLoadUpdate) async -> Void)? = nil
-    ) async -> Bool {
+    ) async -> DocumentTransitionResult {
+        let previousProjectID = project.projectID
+        switch await authorize(.openProject) {
+        case .cancelled: return .cancelled
+        case .failed(let error): return .failed(error)
+        case .proceed(let discarding):
+            let result = await loadAndAdopt(url, progress: progress)
+            if result == .completed, discarding { await removeRecovery(for: previousProjectID) }
+            return result
+        }
+    }
+
+    private func loadAndAdopt(
+        _ url: URL,
+        progress: (@Sendable (ProjectLoadUpdate) async -> Void)? = nil
+    ) async -> DocumentTransitionResult {
         do {
             let loaded = try await backend.read(from: url, progress: progress)
             try Task.checkCancellation()
@@ -284,21 +447,22 @@ final class DocumentLifecycleController: ObservableObject {
             observing = false
             project = loaded.package; fileURL = url; durableFingerprint = loaded.fingerprint
             displayName = url.deletingPathExtension().lastPathComponent
-            failure = nil; phase = .clean
+            failure = nil; phase = .clean; hasUnsavedChanges = false
             await progress?(.checkingRecovery)
             await findRecoveryCandidate()
-            return true
+            transitionFailure = nil
+            return .completed
         } catch is CancellationError {
             observing = false
-            return false
+            return .cancelled
         } catch let error as DocumentLifecycleFailure {
             observing = false
             setFailure(error)
-            return false
+            return .failed(error)
         } catch {
             observing = false
             setFailure(.ioFailure)
-            return false
+            return .failed(.ioFailure)
         }
     }
 
@@ -320,21 +484,47 @@ final class DocumentLifecycleController: ObservableObject {
             project = package; fileURL = target; durableFingerprint = fingerprint
             displayName = target.deletingPathExtension().lastPathComponent
             phase = session.document.revision == snapshot.revision ? .clean : .modified
-            if phase == .clean { try? await backend.remove(DocumentLifecycleBackend.recoveryURL(for: target)) }
+            hasUnsavedChanges = phase == .modified
+            if phase == .clean { await removeRecovery(for: package.projectID) }
+            transitionFailure = nil
             return true
         } catch let error as DocumentLifecycleFailure { setFailure(error); return false }
         catch { setFailure(.ioFailure); return false }
     }
 
-    func revert() async {
-        guard let fileURL else { return }
-        await open(fileURL)
+    @discardableResult
+    func requestRevert() async -> DocumentTransitionResult {
+        guard let fileURL else { return .cancelled }
+        let previousProjectID = project.projectID
+        switch await authorize(.revertToSaved) {
+        case .cancelled: return .cancelled
+        case .failed(let error): return .failed(error)
+        case .proceed(let discarding):
+            let result = await loadAndAdopt(fileURL)
+            if result == .completed, discarding { await removeRecovery(for: previousProjectID) }
+            return result
+        }
     }
 
     func noteCancellation() { /* Native panel cancellation is intentionally state-neutral. */ }
 
-    func restoreRecovery() {
-        guard let candidate = recoveryCandidate else { return }
+    @discardableResult
+    func requestRestoreRecovery() async -> DocumentTransitionResult {
+        guard let candidate = recoveryCandidate else { return .cancelled }
+        let previousProjectID = project.projectID
+        switch await authorize(.restoreRecovery) {
+        case .cancelled: return .cancelled
+        case .failed(let error): return .failed(error)
+        case .proceed(let discarding):
+            installRecovery(candidate)
+            if discarding, previousProjectID != candidate.package.projectID {
+                await removeRecovery(for: previousProjectID)
+            }
+            return .completed
+        }
+    }
+
+    private func installRecovery(_ candidate: RecoveryCandidate) {
         observing = true
         try? session.establishBaseline(candidate.package.document)
         switch candidate.history {
@@ -344,48 +534,49 @@ final class DocumentLifecycleController: ObservableObject {
         case .cleanBaseline(let reason): historyNotice = reason.localizedDescription
         }
         observing = false
-        project = candidate.package; recoveryCandidate = nil; failure = nil; phase = .recovered
+        project = candidate.package
+        fileURL = candidate.durableURL
+        if candidate.durableURL == nil { durableFingerprint = nil; displayName = "Untitled" }
+        recoveryCandidate = nil; failure = nil; phase = .recovered; hasUnsavedChanges = true
+        transitionFailure = nil
     }
 
     func discardRecovery() async {
         guard let candidate = recoveryCandidate else { return }
         try? await backend.remove(candidate.url)
-        recoveryCandidate = nil; failure = nil; phase = .clean
+        recoveryCandidate = nil; failure = nil; phase = .clean; hasUnsavedChanges = false
     }
 
-    func requestClose() -> Bool {
-        if allowNextClose { allowNextClose = false; return true }
-        guard isModified else { return true }
-        isCloseConfirmationPresented = true
-        return false
+    func consumeCloseAuthorization() -> Bool {
+        guard allowNextClose else { return false }
+        allowNextClose = false
+        return true
     }
 
-    func saveAndClose() async {
-        let saved: Bool
-        if fileURL == nil { presentSavePanel(closeAfterSave: true); return }
-        saved = await save()
-        if saved { closeAfterConfirmation() }
+    @discardableResult
+    func requestCloseTransition() async -> DocumentTransitionResult {
+        switch await authorize(.closeWindow) {
+        case .cancelled: return .cancelled
+        case .failed(let error): return .failed(error)
+        case .proceed(let discarding):
+            if discarding { await removeRecovery(for: project.projectID) }
+            return .completed
+        }
     }
 
-    func discardAndClose() {
+    func closeAfterAuthorization(_ window: NSWindow) {
         allowNextClose = true
-        NSApp.keyWindow?.performClose(nil)
-    }
-
-    private func closeAfterConfirmation() {
-        allowNextClose = true
-        NSApp.keyWindow?.performClose(nil)
+        window.performClose(nil)
     }
 
     private func documentDidChange() {
         guard !observing else { return }
-        phase = .modified; failure = nil
+        phase = .modified; failure = nil; hasUnsavedChanges = true
         scheduleAutosave()
     }
 
     private func scheduleAutosave() {
         autosaveTask?.cancel()
-        guard fileURL != nil else { return }
         autosaveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
@@ -394,7 +585,6 @@ final class DocumentLifecycleController: ObservableObject {
     }
 
     private func writeRecovery() async {
-        guard let fileURL else { return }
         generation += 1
         let currentGeneration = generation
         let snapshot = session.document
@@ -404,8 +594,9 @@ final class DocumentLifecycleController: ObservableObject {
                                      optionalMembers: project.optionalMembers, compatibility: project.compatibility)
         phase = .autosaving
         do {
+            try await backend.prepareRecoveryDirectory(recoveryDirectory)
             _ = try await backend.write(package, history: historySnapshot, recoveryBoundary: project.document.revision,
-                                        to: DocumentLifecycleBackend.recoveryURL(for: fileURL), expected: nil,
+                                        to: recoveryURL(for: project.projectID), expected: nil,
                                         generation: currentGeneration, operation: .autosave)
             if currentGeneration == generation { phase = .modified }
         } catch let error as DocumentLifecycleFailure { setFailure(error) }
@@ -414,7 +605,7 @@ final class DocumentLifecycleController: ObservableObject {
 
     private func findRecoveryCandidate() async {
         guard let fileURL else { return }
-        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: fileURL)
+        let recoveryURL = recoveryURL(for: project.projectID)
         guard FileManager.default.fileExists(atPath: recoveryURL.path) else { recoveryCandidate = nil; return }
         do {
             let loaded = try await backend.read(from: recoveryURL, operation: .open)
@@ -422,10 +613,108 @@ final class DocumentLifecycleController: ObservableObject {
                   loaded.package.document.revision > project.document.revision else {
                 try? await backend.remove(recoveryURL); recoveryCandidate = nil; return
             }
-            recoveryCandidate = RecoveryCandidate(package: loaded.package, url: recoveryURL, history: loaded.history)
+            recoveryCandidate = RecoveryCandidate(package: loaded.package, url: recoveryURL, durableURL: fileURL, history: loaded.history)
         } catch {
             recoveryCandidate = nil; setFailure(.malformedRecovery)
         }
+    }
+
+    func discoverUntitledRecoveryCandidate() async {
+        guard fileURL == nil, !isModified else { return }
+        do {
+            let urls = try await backend.recoveryURLs(in: recoveryDirectory)
+            var candidates: [RecoveryCandidate] = []
+            for url in urls {
+                do {
+                    let loaded = try await backend.read(from: url, operation: .open)
+                    guard loaded.package.document.revision > 0 else { continue }
+                    candidates.append(RecoveryCandidate(
+                        package: loaded.package,
+                        url: url,
+                        durableURL: nil,
+                        history: loaded.history
+                    ))
+                } catch {
+                    continue
+                }
+            }
+            recoveryCandidate = candidates.max {
+                if $0.package.modifiedAt == $1.package.modifiedAt {
+                    return $0.package.projectID.description < $1.package.projectID.description
+                }
+                return $0.package.modifiedAt < $1.package.modifiedAt
+            }
+        } catch {
+            setFailure(.malformedRecovery)
+        }
+    }
+
+    func resolveUnsavedChanges(_ decision: UnsavedChangesDecision, promptID: UUID) {
+        guard pendingUnsavedChangesPrompt?.id == promptID else { return }
+        let continuation = pendingDecisionContinuation
+        pendingDecisionContinuation = nil
+        pendingUnsavedChangesPrompt = nil
+        continuation?.resume(returning: decision)
+    }
+
+    private func authorize(_ transition: DestructiveDocumentTransition) async -> ReplacementAuthorization {
+        guard isModified else { return .proceed(discardingChanges: false) }
+        let originalPhase = phase
+        let originalFailure = failure
+        let decision = await requestUnsavedChangesDecision(for: transition)
+        switch decision {
+        case .cancel:
+            return .cancelled
+        case .discard:
+            return .proceed(discardingChanges: true)
+        case .save:
+            let target: URL?
+            if let fileURL { target = fileURL }
+            else { target = saveDestinationProvider(suggestedSaveFilename) }
+            guard let target else { return .cancelled }
+            let saved = await save(to: fileURL == nil ? target : nil)
+            guard saved else {
+                let saveFailure = failure ?? .ioFailure
+                phase = originalPhase
+                failure = originalFailure
+                transitionFailure = saveFailure
+                return .failed(saveFailure)
+            }
+            return .proceed(discardingChanges: false)
+        }
+    }
+
+    private func requestUnsavedChangesDecision(
+        for transition: DestructiveDocumentTransition
+    ) async -> UnsavedChangesDecision {
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if let prior = pendingDecisionContinuation { prior.resume(returning: .cancel) }
+                pendingDecisionContinuation = continuation
+                pendingUnsavedChangesPrompt = UnsavedChangesPrompt(
+                    id: id,
+                    transition: transition,
+                    documentName: displayName
+                )
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.resolveUnsavedChanges(.cancel, promptID: id)
+            }
+        }
+    }
+
+    private var suggestedSaveFilename: String {
+        displayName == "Untitled" ? "Untitled.siteforge" : "\(displayName).siteforge"
+    }
+
+    private func recoveryURL(for projectID: ProjectID) -> URL {
+        DocumentLifecycleBackend.recoveryURL(for: projectID, in: recoveryDirectory)
+    }
+
+    private func removeRecovery(for projectID: ProjectID) async {
+        try? await backend.remove(recoveryURL(for: projectID))
     }
 
     private func setFailure(_ error: DocumentLifecycleFailure) {
@@ -441,18 +730,11 @@ final class DocumentLifecycleController: ObservableObject {
         panel.message = "Open a validated SiteForge project."
         panel.accessoryView = nil
         guard panel.runModal() == .OK, let url = panel.url else { noteCancellation(); return }
-        Task { await open(url) }
+        Task { _ = await requestOpen(url) }
     }
 
-    func presentSavePanel(closeAfterSave: Bool = false) {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.siteForgeProject]
-        panel.nameFieldStringValue = displayName == "Untitled" ? "Untitled.siteforge" : "\(displayName).siteforge"
-        panel.message = "Save an atomic SiteForge project package."
-        guard panel.runModal() == .OK, let url = panel.url else { noteCancellation(); return }
-        Task {
-            let saved = await save(to: url)
-            if saved && closeAfterSave { closeAfterConfirmation() }
-        }
+    func presentSavePanel() {
+        guard let url = saveDestinationProvider(suggestedSaveFilename) else { noteCancellation(); return }
+        Task { _ = await save(to: url) }
     }
 }

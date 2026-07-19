@@ -2,10 +2,19 @@ import XCTest
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
+    private lazy var recoveryDirectory: URL = {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".siteforge-test-fixtures/ui-\(UUID())", isDirectory: true)
+    }()
+
     private func launchWorkspace() -> XCUIApplication {
         continueAfterFailure = false
         let application = XCUIApplication()
-        application.launchArguments += ["-AppleKeyboardUIMode", "3"]
+        application.launchArguments += [
+            "-AppleKeyboardUIMode", "3",
+            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
+        ]
         application.launch()
         application.activate()
 
@@ -31,6 +40,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.launchArguments += [
             "-AppleKeyboardUIMode", "3",
             "-SiteForgeLaunchScenario", scenario,
+            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
         ]
         if reduceMotion {
             application.launchArguments += ["-SiteForgeReduceMotion", "YES"]
@@ -156,6 +166,38 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         let status = application.descendants(matching: .any)["status.document"]
         XCTAssertTrue(status.exists)
+    }
+
+    // SF-0203-006, SF-0301-006, SF-0306-006, SF-1902-006
+    @MainActor
+    func testUnsavedTransitionDecisionIsNativeKeyboardAndAccessibilityOperable() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeStartModified", "YES",
+        ])
+
+        application.typeKey("n", modifierFlags: .command)
+        XCTAssertTrue(application.buttons["documentTransition.discard"].waitForExistence(timeout: 2))
+        for identifier in ["documentTransition.save", "documentTransition.discard", "documentTransition.cancel"] {
+            XCTAssertTrue(application.buttons[identifier].exists, identifier)
+            XCTAssertTrue(application.buttons[identifier].isHittable, identifier)
+        }
+
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertFalse(application.buttons["documentTransition.discard"].exists)
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].exists)
+
+        application.typeKey("n", modifierFlags: .command)
+        XCTAssertTrue(application.buttons["documentTransition.discard"].waitForExistence(timeout: 2))
+        application.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(application.buttons["Cancel"].waitForExistence(timeout: 2))
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].exists)
+
+        application.typeKey("n", modifierFlags: .command)
+        XCTAssertTrue(application.buttons["documentTransition.discard"].waitForExistence(timeout: 2))
+        application.buttons["documentTransition.discard"].click()
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 2))
+        XCTAssertFalse(application.windows.firstMatch.title.contains("Edited"))
     }
 
     // SF-0201-006, SF-0301-002, SF-1602-006

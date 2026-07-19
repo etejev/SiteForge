@@ -49,6 +49,8 @@ This file records user-visible behavior during development. It is not a substitu
 ### Fixed
 
 - Direct or transactional removal can no longer leave a project with an invalid empty page list, and duplicate published routes are rejected before commit.
+- New, Open, Revert, recovery Restore, and window Close now share one native Save/Discard/Cancel decision boundary; cancellation and failed saves preserve the exact active document, history, identity, location, fingerprint, and lifecycle presentation.
+- Modified untitled projects now autosave to app-owned, project-identity-keyed recovery storage and can be discovered, restored, saved durably, or discarded after relaunch without writing beside user project files.
 
 ### Known limitations
 

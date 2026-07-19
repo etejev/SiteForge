@@ -68,17 +68,6 @@ struct WorkspaceShellView: View {
             .padding(24).frame(minWidth: 420)
             .accessibilityIdentifier("recovery.details")
         }
-        .alert("Save changes before closing?", isPresented: Binding(
-            get: { state.lifecycle.isCloseConfirmationPresented },
-            set: { state.lifecycle.isCloseConfirmationPresented = $0 }
-        )) {
-            Button("Save") { Task { await state.lifecycle.saveAndClose() } }
-                .keyboardShortcut(.defaultAction)
-            Button("Discard Changes", role: .destructive) { state.lifecycle.discardAndClose() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Unsaved changes in \(state.lifecycle.displayName) will otherwise be lost.")
-        }
         .onKeyPress(.tab) {
             guard focusedControl == .navigatorLayers else { return .ignored }
             focusedControl = .viewportPreset
@@ -98,7 +87,7 @@ private struct RecoveryCandidateBar: View {
                 .accessibilityIdentifier("recovery.inspect")
             Button("Discard") { Task { await controller.discardRecovery() } }
                 .accessibilityIdentifier("recovery.discard")
-            Button("Restore") { controller.restoreRecovery() }
+            Button("Restore") { Task { _ = await controller.requestRestoreRecovery() } }
                 .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("recovery.restore")
         }
@@ -136,8 +125,16 @@ private struct WindowCloseGuard: NSViewRepresentable {
             candidate.delegate = self
         }
         func windowShouldClose(_ sender: NSWindow) -> Bool {
-            guard controller.requestClose() else { return false }
-            return priorDelegate?.windowShouldClose?(sender) ?? true
+            if controller.consumeCloseAuthorization() {
+                return priorDelegate?.windowShouldClose?(sender) ?? true
+            }
+            Task { @MainActor [weak self, weak sender] in
+                guard let self, let sender else { return }
+                if await controller.requestCloseTransition() == .completed {
+                    controller.closeAfterAuthorization(sender)
+                }
+            }
+            return false
         }
     }
 }
@@ -560,7 +557,7 @@ struct SiteForgeCommands: Commands {
             Button("Save As…") { state.lifecycle.presentSavePanel() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .disabled(!launchExperience.isWorkspaceVisible)
-            Button("Revert to Saved") { Task { await state.lifecycle.revert() } }
+            Button("Revert to Saved") { Task { _ = await state.lifecycle.requestRevert() } }
                 .disabled(!launchExperience.isWorkspaceVisible || !state.lifecycle.canRevert)
         }
         CommandGroup(replacing: .undoRedo) {
