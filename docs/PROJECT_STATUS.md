@@ -9,9 +9,9 @@ Milestone 0 feature work is implemented through `SF-FOUNDATION-009`; the milesto
 - Compatibility: canonical schema v2 writes deterministically and reads supported schema-v1 packages with deterministic minimum-page/root migration where required.
 - Launch/loading: deterministic real-operation stages cover welcome, blank creation, package read, canonical/history validation, atomic adoption, recovery detection, cancellation, failure, retry, and recovery selection while preserving the last valid project.
 - Appearance: navigator, inspector, unified toolbar/title bar, viewport, status, recovery, and launch surfaces use centralized native materials with opaque Reduce Transparency fallback, stronger increased-contrast boundaries, dynamic light/dark appearance, inactive-window treatment, and pass-through hit testing.
-- Audit correction: `SF-CORRECTION-001` resolves destructive-transition data loss and untitled crash recovery; `SF-CORRECTION-002` binds package/recovery I/O to stable filesystem identity; `SF-CORRECTION-003` scopes all lifecycle work by typed epoch, document/project/revision/destination identity, and intent while making manual Save deterministically drain autosave.
-- Verification: `./sf verify` passed on 2026-07-19 with 115 unit tests and 14 UI tests after `SF-CORRECTION-003`.
-- Next READY item: `SF-CORRECTION-004`, strict current-schema decoding, revision bounds, and historical migration evidence.
+- Audit correction: `SF-CORRECTION-001` resolves destructive-transition data loss and untitled crash recovery; `SF-CORRECTION-002` binds package/recovery I/O to stable filesystem identity; `SF-CORRECTION-003` scopes all lifecycle work by typed epoch and intent; `SF-CORRECTION-004` enforces strict current-schema decoding, explicit legacy migration, immutable compatibility goldens, and a non-trapping terminal revision boundary.
+- Verification: `./sf verify` passed on 2026-07-19 with 119 unit tests and 14 UI tests after `SF-CORRECTION-004`.
+- Next READY item: `SF-CORRECTION-005`, the real macOS sandbox, security-scope, bookmark, and file-coordination boundary.
 - Open release decisions: publisher/public bundle identity (`OD-001`) and distribution trust level (`OD-002`). No publishing, distribution signing, or notarization is authorized.
 
 Detailed requirement evidence remains in `IMPLEMENTATION_STATUS.md`; ordered work remains in `CODEX_QUEUE.md`.

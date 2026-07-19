@@ -32,6 +32,7 @@ This file records user-visible behavior during development. It is not a substitu
 - Retained visual-regression fixtures for light, dark, Reduce Transparency, Increased Contrast, inactive-window policy, default/minimum sizing, and 10,000-page scrolling.
 - Identity-bound package I/O that captures validated bytes, bounded SHA-256 fingerprint, device/inode identity, and security metadata from one no-follow descriptor snapshot, with deterministic barrier-controlled race coverage.
 - App-owned recovery validation and typed deletion failures that preserve mismatched artifacts and retain a recovery candidate when deletion must be retried.
+- Immutable package-v1/schema-v1 compatibility fixtures for empty and rootless legacy projects, with retained provenance and decoded-package checksums.
 
 ### Changed
 
@@ -50,6 +51,7 @@ This file records user-visible behavior during development. It is not a substitu
 - Existing package replacement now requires the exact previously validated digest, byte count, device, and inode; same-directory staging commits with exclusive create or an identity-checked atomic swap and preserves owner, group, mode, extended ACL, and approved extended attributes.
 - Lifecycle reads, saves, autosaves, recovery writes, and document transitions now carry a typed epoch, operation, document/project, revision, destination, and intent identity; every document-adoption boundary invalidates prior work.
 - Manual Save now deterministically cancels or drains pending autosave work. An edit made during Save leaves the captured revision durable while the newer active revision remains modified and recoverable.
+- Current canonical schema v2 now requires every document and page field and never applies legacy defaults; schema-v1 compatibility uses a separate explicit migration adapter.
 
 ### Fixed
 
@@ -58,6 +60,7 @@ This file records user-visible behavior during development. It is not a substitu
 - Modified untitled projects now autosave to app-owned, project-identity-keyed recovery storage and can be discovered, restored, saved durably, or discarded after relaunch without writing beside user project files.
 - Opening no longer rereads a path to fingerprint validated content, and concurrent replacement, delete/recreate, same-inode modification, hard-link, source/destination/ancestor symlink, sparse-input, recovery-collision, and deletion-failure cases preserve the last committed document and external bytes.
 - Stale lifecycle success, failure, and cancellation can no longer reattach canonical state, metadata, history, recovery state, failure state, or UI phase after New, Open, Revert, Restore, or Close; autosave burst coalescing and revision order are now verified without wall-clock sleeps.
+- Terminal or non-incrementable document revisions now fail with a typed actionable error while preserving the exact committed document and command history instead of risking integer overflow.
 
 ### Known limitations
 

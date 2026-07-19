@@ -146,12 +146,14 @@ struct CommandCancellation: Sendable {
 enum CommandExecutionError: Error, Equatable, LocalizedError {
     case disabled(String)
     case cancelled
+    case revisionExhausted
     case invalidResult(ModelValidationError)
 
     var errorDescription: String? {
         switch self {
         case .disabled(let reason): reason
         case .cancelled: "The command was cancelled before it committed."
+        case .revisionExhausted: "The document revision cannot accept another transaction. Keep this file unchanged and open a compatible earlier project version."
         case .invalidResult(let error): "The command produced an invalid document: \(error.localizedDescription)"
         }
     }
@@ -665,10 +667,17 @@ final class DocumentSession: ObservableObject {
         let committedDocument = document
         do {
             guard !cancellation.isCancelled() else { throw CommandExecutionError.cancelled }
+            guard committedDocument.revision < UInt64.max - 1 else {
+                throw CommandExecutionError.revisionExhausted
+            }
             var draft = committedDocument
             let mutation = try registry.apply(command, to: &draft, cancellation: cancellation)
             guard !cancellation.isCancelled() else { throw CommandExecutionError.cancelled }
-            draft.revision = committedDocument.revision + 1
+            let (nextRevision, overflow) = committedDocument.revision.addingReportingOverflow(1)
+            guard !overflow, nextRevision < UInt64.max else {
+                throw CommandExecutionError.revisionExhausted
+            }
+            draft.revision = nextRevision
             do {
                 try draft.validate()
             } catch let error as ModelValidationError {
@@ -691,7 +700,7 @@ final class DocumentSession: ObservableObject {
             let category: DiagnosticFailureCategory
             switch error {
             case .cancelled: category = .cancellation
-            case .disabled: category = .validation
+            case .disabled, .revisionExhausted: category = .validation
             case .invalidResult: category = .modelInvariant
             }
             recordDiagnostic(

@@ -17,6 +17,8 @@ Blank creation records explicit blank-default provenance and establishes the com
 
 Canonical document schema v2 stores routes, roles, provenance, and creation kind. Supported schema-v1 payloads are decoded before adoption. Missing page metadata receives explicit migrated-legacy provenance; empty legacy documents receive Home and Not Found, and rootless legacy pages receive one minimum root. Migrated page/root identifiers are deterministically derived from existing document or page identity so repeated opens yield the same result. Persisted history that no longer matches the migrated canonical state is isolated by ADR-0003 and opens on a clean baseline.
 
+ADR-0009 makes this a strict schema boundary: current schema v2 never invokes these defaults, and the compatibility behavior exists only in the schema-v1 adapter proven by immutable historical package fixtures.
+
 ## Consequences
 
 - Save, reopen, autosave, and recovery preserve page and root identities through the existing package and lifecycle boundaries.

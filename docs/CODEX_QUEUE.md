@@ -4,13 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-CORRECTION-004` Harden current-schema decoding, revision bounds, and historical migration evidence.
-  - Severity: `P1` (`M0-P1-04`) with necessary migration evidence from `M0-P2-05`.
-  - Requirements: `SF-0301-004`, `SF-0301-005`, `SF-0303-005`, `SF-0303-008`, `SF-0307-004`, `SF-1702-004`, `SF-1702-008`, `SF-1902-004`, and `SF-1902-008`.
-  - Acceptance: schema v2 rejects missing current fields instead of silently applying legacy migration; schema-specific DTOs perform only explicit supported migrations; revisions that cannot accept a transaction are rejected with a typed error rather than trapping; immutable schema-v1 golden packages cover empty and rootless documents.
-  - Evidence and tests required: maximum/overflow revisions, missing v2 metadata/pages/roots, schema-v1 empty and rootless golden bytes with checksums, deterministic migrated identities, save/reopen, history isolation, and unchanged state after rejection.
-  - Dependencies: none.
-
 - [ ] `SF-CORRECTION-005` Implement and verify the real macOS file-access security boundary before claiming `SF-1504` Verified.
   - Severity: `P1` (`M0-P1-05`).
   - Requirements: `SF-1504-001` through `SF-1504-008`, plus `SF-1603-004`.
@@ -48,6 +41,13 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-CORRECTION-004` Harden current-schema decoding, revision bounds, and historical migration evidence.
+  - Severity: `P1` (`M0-P1-04`) with necessary migration evidence from `M0-P2-05`.
+  - Requirements: `SF-0301-004`, `SF-0301-005`, `SF-0303-005`, `SF-0303-008`, `SF-0307-004`, `SF-1702-004`, `SF-1702-008`, `SF-1902-004`, and `SF-1902-008`.
+  - Plan: make schema v2 decode through strict current DTOs with every canonical field required; isolate schema-v1 decoding and deterministic empty/rootless migration in an explicit legacy adapter; reserve the terminal revision and use checked command arithmetic with a typed non-mutating exhaustion failure; add immutable tracked schema-v1 empty/rootless golden packages with provenance and checksums; then prove strict rejection, deterministic identities, save/reopen, history isolation, revision boundaries, and unchanged lifecycle state before updating compatibility evidence.
+  - Evidence: `./sf verify` passed on 2026-07-19 with 119 unit tests and 14 UI tests. Current schema v2 rejects absent creation/template/page metadata and absent page route/role/provenance/root/node fields, plus empty and rootless current pages. A schema-v1-only adapter migrates two immutable package-v1 golden fixtures whose decoded SHA-256 checksums are retained beside their Base64 bytes; tests prove exact project/document/page/root identities, approved structure, invalid legacy variants, deterministic save/reopen, and clean missing-history isolation. Maximum and near-maximum revision tests prove typed exhaustion, checked arithmetic, exact committed-state preservation, and retained undo/redo state without overflow. ADR-0009 records the strict schema and terminal-revision boundary.
+  - Dependencies: none.
 
 - [x] `SF-CORRECTION-003` Scope asynchronous lifecycle work by document epoch, destination, revision, and intent.
   - Severity: `P1` (`M0-P1-01` and `M0-P1-02`) plus the related autosave-coalescing portion of `M0-P2-04`.

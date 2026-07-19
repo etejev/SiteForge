@@ -206,22 +206,11 @@ struct DocumentPage: Codable, Equatable, Identifiable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(PageID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
-        route = try container.decodeIfPresent(PageRoute.self, forKey: .route)
-            ?? Self.defaultRoute(for: name)
-        role = try container.decodeIfPresent(PageRole.self, forKey: .role)
-            ?? (route.rawValue == "/" ? .home : .standard)
-        provenance = try container.decodeIfPresent(PageProvenance.self, forKey: .provenance)
-            ?? .migratedLegacy
-        let decodedRoots = try container.decodeIfPresent([NodeID].self, forKey: .rootNodeIDs) ?? []
-        let decodedNodes = try container.decodeIfPresent([DocumentNode].self, forKey: .nodes) ?? []
-        if decodedRoots.isEmpty && decodedNodes.isEmpty {
-            let rootID = NodeID(Self.deterministicUUID(namespace: id.rawValue, label: "minimum-root"))
-            rootNodeIDs = [rootID]
-            nodes = [Self.minimumRoot(id: rootID, pageID: id)]
-        } else {
-            rootNodeIDs = decodedRoots
-            nodes = decodedNodes
-        }
+        route = try container.decode(PageRoute.self, forKey: .route)
+        role = try container.decode(PageRole.self, forKey: .role)
+        provenance = try container.decode(PageProvenance.self, forKey: .provenance)
+        rootNodeIDs = try container.decode([NodeID].self, forKey: .rootNodeIDs)
+        nodes = try container.decode([DocumentNode].self, forKey: .nodes)
     }
 
     static func minimum(
@@ -255,11 +244,11 @@ struct DocumentPage: Codable, Equatable, Identifiable, Sendable {
         ))
     }
 
-    private static func minimumRoot(id: NodeID, pageID: PageID) -> DocumentNode {
+    fileprivate static func minimumRoot(id: NodeID, pageID: PageID) -> DocumentNode {
         DocumentNode(id: id, kind: .frame, name: "Root", parent: .page(pageID))
     }
 
-    private static func defaultRoute(for name: String) -> PageRoute {
+    fileprivate static func defaultRoute(for name: String) -> PageRoute {
         if name.caseInsensitiveCompare("Home") == .orderedSame { return PageRoute(rawValue: "/") }
         let slug = name.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
@@ -299,13 +288,31 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(DocumentID.self, forKey: .id)
         revision = try container.decode(UInt64.self, forKey: .revision)
-        creationKind = try container.decodeIfPresent(ProjectCreationKind.self, forKey: .creationKind)
-            ?? .migratedLegacy
+        creationKind = try container.decode(ProjectCreationKind.self, forKey: .creationKind)
+        guard container.contains(.templateID) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.templateID,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Current schema requires templateID, including an explicit null value."
+                )
+            )
+        }
         templateID = try container.decodeIfPresent(TemplateID.self, forKey: .templateID)
-        let decodedPages = try container.decode([DocumentPage].self, forKey: .pages)
-        pages = decodedPages.isEmpty
-            ? BlankProjectDefaults.pages(documentID: id, provenance: .migratedLegacy)
-            : decodedPages
+        pages = try container.decode([DocumentPage].self, forKey: .pages)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(revision, forKey: .revision)
+        try container.encode(creationKind, forKey: .creationKind)
+        if let templateID {
+            try container.encode(templateID, forKey: .templateID)
+        } else {
+            try container.encodeNil(forKey: .templateID)
+        }
+        try container.encode(pages, forKey: .pages)
     }
 }
 
@@ -376,6 +383,7 @@ enum ProjectCreation {
 }
 
 enum ModelValidationError: Error, Equatable, LocalizedError {
+    case revisionNotIncrementable
     case emptyPageList
     case duplicatePageID
     case duplicatePageRoute
@@ -397,6 +405,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .revisionNotIncrementable: "The document revision cannot accept another transaction."
         case .emptyPageList: "A project must contain at least one page."
         case .duplicatePageID: "Page identifiers must be unique."
         case .duplicatePageRoute: "Published page routes must be unique."
@@ -426,6 +435,7 @@ extension CanonicalDocument {
     }
 
     func validate() throws {
+        guard revision < UInt64.max else { throw ModelValidationError.revisionNotIncrementable }
         guard !pages.isEmpty else { throw ModelValidationError.emptyPageList }
         guard Set(pages.map(\.id)).count == pages.count else {
             throw ModelValidationError.duplicatePageID
@@ -578,9 +588,80 @@ enum DocumentSerializer {
         let schemaVersion: Int
     }
 
-    private struct Envelope: Codable {
+    private struct CurrentEnvelope: Codable {
         let schemaVersion: Int
         let document: CanonicalDocument
+    }
+
+    private struct SchemaOneEnvelope: Decodable {
+        let schemaVersion: Int
+        let document: SchemaOneDocument
+    }
+
+    private struct SchemaOneDocument: Decodable {
+        let id: DocumentID
+        let revision: UInt64
+        let pages: [SchemaOnePage]
+
+        func migrated() -> CanonicalDocument {
+            let migratedPages = pages.isEmpty
+                ? BlankProjectDefaults.pages(documentID: id, provenance: .migratedLegacy)
+                : pages.map { $0.migrated() }
+            return CanonicalDocument(
+                id: id,
+                revision: revision,
+                creationKind: .migratedLegacy,
+                templateID: nil,
+                pages: migratedPages
+            )
+        }
+    }
+
+    private struct SchemaOnePage: Decodable {
+        let id: PageID
+        let name: String
+        let rootNodeIDs: [NodeID]
+        let nodes: [DocumentNode]
+
+        private enum CodingKeys: String, CodingKey {
+            case id, name, rootNodeIDs, nodes
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(PageID.self, forKey: .id)
+            name = try container.decode(String.self, forKey: .name)
+            rootNodeIDs = try container.decodeIfPresent([NodeID].self, forKey: .rootNodeIDs) ?? []
+            nodes = try container.decodeIfPresent([DocumentNode].self, forKey: .nodes) ?? []
+        }
+
+        func migrated() -> DocumentPage {
+            let route = DocumentPage.defaultRoute(for: name)
+            let role: PageRole = route.rawValue == "/" ? .home : .standard
+            if rootNodeIDs.isEmpty && nodes.isEmpty {
+                let rootID = NodeID(DocumentPage.deterministicUUID(
+                    namespace: id.rawValue,
+                    label: "minimum-root"
+                ))
+                return .minimum(
+                    id: id,
+                    rootID: rootID,
+                    name: name,
+                    route: route.rawValue,
+                    role: role,
+                    provenance: .migratedLegacy
+                )
+            }
+            return DocumentPage(
+                id: id,
+                name: name,
+                route: route,
+                role: role,
+                provenance: .migratedLegacy,
+                rootNodeIDs: rootNodeIDs,
+                nodes: nodes
+            )
+        }
     }
 
     static func encode(_ document: CanonicalDocument) throws -> Data {
@@ -593,7 +674,7 @@ enum DocumentSerializer {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(
-            Envelope(schemaVersion: currentSchemaVersion, document: document)
+            CurrentEnvelope(schemaVersion: currentSchemaVersion, document: document)
         )
     }
 
@@ -609,17 +690,28 @@ enum DocumentSerializer {
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
 
-        let envelope: Envelope
-        do {
-            envelope = try decoder.decode(Envelope.self, from: data)
-        } catch {
-            throw DocumentSerializationError.malformedInput
+        let document: CanonicalDocument
+        switch header.schemaVersion {
+        case 1:
+            do {
+                document = try decoder.decode(SchemaOneEnvelope.self, from: data).document.migrated()
+            } catch {
+                throw DocumentSerializationError.malformedInput
+            }
+        case currentSchemaVersion:
+            do {
+                document = try decoder.decode(CurrentEnvelope.self, from: data).document
+            } catch {
+                throw DocumentSerializationError.malformedInput
+            }
+        default:
+            throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
         do {
-            try envelope.document.validate()
+            try document.validate()
         } catch let error as ModelValidationError {
             throw DocumentSerializationError.invalidModel(error)
         }
-        return envelope.document
+        return document
     }
 }

@@ -287,6 +287,81 @@ final class CommandKernelTests: XCTestCase {
         }
     }
 
+    // SF-0301-004, SF-0303-005, SF-1702-004
+    func testCurrentSchemaRequiresEveryCurrentDocumentAndPageField() throws {
+        let encoded = try DocumentSerializer.encode(populatedDocument())
+        let topLevelFields = ["creationKind", "templateID", "pages"]
+        for field in topLevelFields {
+            let candidate = try editingCurrentDocument(encoded) { $0.removeValue(forKey: field) }
+            XCTAssertThrowsError(try DocumentSerializer.decode(candidate), "Missing \(field)") { error in
+                XCTAssertEqual(error as? DocumentSerializationError, .malformedInput)
+            }
+        }
+
+        let pageFields = ["route", "role", "provenance", "rootNodeIDs", "nodes"]
+        for field in pageFields {
+            let candidate = try editingCurrentDocument(encoded) { document in
+                var pages = document["pages"] as! [[String: Any]]
+                pages[0].removeValue(forKey: field)
+                document["pages"] = pages
+            }
+            XCTAssertThrowsError(try DocumentSerializer.decode(candidate), "Missing \(field)") { error in
+                XCTAssertEqual(error as? DocumentSerializationError, .malformedInput)
+            }
+        }
+
+        let empty = try editingCurrentDocument(encoded) { $0["pages"] = [] }
+        XCTAssertThrowsError(try DocumentSerializer.decode(empty)) { error in
+            XCTAssertEqual(error as? DocumentSerializationError, .invalidModel(.emptyPageList))
+        }
+
+        let rootless = try editingCurrentDocument(encoded) { document in
+            var pages = document["pages"] as! [[String: Any]]
+            pages[0]["rootNodeIDs"] = []
+            pages[0]["nodes"] = []
+            document["pages"] = pages
+        }
+        XCTAssertThrowsError(try DocumentSerializer.decode(rootless)) { error in
+            XCTAssertEqual(error as? DocumentSerializationError, .invalidModel(.missingPageRoot))
+        }
+    }
+
+    // SF-0307-004, SF-1702-004
+    func testTerminalRevisionIsRejectedWithoutOverflowOrMutation() throws {
+        let valid = try DocumentSerializer.encode(populatedDocument())
+        let terminal = try editingCurrentDocument(valid) { $0["revision"] = NSNumber(value: UInt64.max) }
+        XCTAssertThrowsError(try DocumentSerializer.decode(terminal)) { error in
+            XCTAssertEqual(error as? DocumentSerializationError, .invalidModel(.revisionNotIncrementable))
+        }
+
+        var exhausted = populatedDocument()
+        exhausted.revision = UInt64.max - 1
+        let session = DocumentSession(document: exhausted)
+        XCTAssertThrowsError(
+            try session.execute(.renamePage(RenamePageCommand(pageID: pageID, name: "Must Not Commit")))
+        ) { error in
+            XCTAssertEqual(error as? CommandExecutionError, .revisionExhausted)
+        }
+        XCTAssertEqual(session.document, exhausted)
+        XCTAssertFalse(session.canUndo)
+        XCTAssertFalse(session.canRedo)
+
+        var finalCommit = populatedDocument()
+        finalCommit.revision = UInt64.max - 2
+        let boundary = DocumentSession(document: finalCommit)
+        try boundary.execute(.renamePage(RenamePageCommand(pageID: pageID, name: "Last Commit")))
+        XCTAssertEqual(boundary.document.revision, UInt64.max - 1)
+        let committed = boundary.document
+        XCTAssertThrowsError(
+            try boundary.execute(.renamePage(RenamePageCommand(pageID: pageID, name: "Overflow")))
+        ) { error in
+            XCTAssertEqual(error as? CommandExecutionError, .revisionExhausted)
+        }
+        XCTAssertEqual(boundary.document, committed)
+        XCTAssertTrue(boundary.canUndo)
+        XCTAssertFalse(boundary.canRedo)
+    }
+
     // SF-0203-008, SF-0306-008, SF-1607-008
     func testDiagnosticsRedactContentAndRawIdentifiers() throws {
         let diagnostics = CommandDiagnostics()
@@ -345,4 +420,15 @@ final class CommandKernelTests: XCTestCase {
             ]
         )
     }
+}
+
+private func editingCurrentDocument(
+    _ data: Data,
+    edit: (inout [String: Any]) -> Void
+) throws -> Data {
+    var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    var document = try XCTUnwrap(envelope["document"] as? [String: Any])
+    edit(&document)
+    envelope["document"] = document
+    return try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
 }

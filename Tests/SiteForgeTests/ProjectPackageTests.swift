@@ -74,25 +74,96 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(decoded.document.id, documentID)
     }
 
-    // SF-0301-005, SF-0303-005, SF-0303-008
-    func testSchemaOneEmptyPackageMigratesToStableMinimumDefaults() async throws {
+    // SF-0301-005, SF-0303-005, SF-0303-008, SF-1702-008
+    func testImmutableSchemaOneEmptyGoldenMigratesDeterministicallyAndWithoutHistory() async throws {
         let store = ProjectPackageStore()
-        let current = try await store.encode(package())
-        let legacyDocument = Data("""
-        {"document":{"id":"\(documentID.description)","pages":[],"revision":0},"schemaVersion":1}
-        """.utf8)
-        var members = try replacingDocumentAndIntegrity(in: decodeArchive(current), with: legacyDocument)
-        members = try editingManifest(in: members) { $0["documentSchemaVersion"] = 1 }
-        let legacyPackage = encodeArchive(members)
+        let historyStore = PersistedHistoryStore()
+        let legacyPackage = try legacyGolden(
+            named: "schema-v1-empty",
+            sha256: "b5a46c3ddc705b978324e17a5e0b9912155950b2a7c05b36e07117bae4d98576"
+        )
 
         let first = try await store.decode(legacyPackage)
         let second = try await store.decode(legacyPackage)
+        XCTAssertEqual(first.projectID.description, "11000000-0000-0000-0000-000000000001")
+        XCTAssertEqual(first.document.id.description, "21000000-0000-0000-0000-000000000001")
         XCTAssertEqual(first.document.creationKind, .migratedLegacy)
         XCTAssertEqual(first.document.pages.map(\.name), ["Home", "Not Found"])
+        XCTAssertEqual(first.document.pages.map(\.route.rawValue), ["/", "/404"])
+        XCTAssertEqual(first.document.pages.map(\.role), [.home, .notFound])
         XCTAssertEqual(first.document.pages.map(\.provenance), [.migratedLegacy, .migratedLegacy])
-        XCTAssertEqual(first.document.pages.map(\.id), second.document.pages.map(\.id))
-        XCTAssertEqual(first.document.pages.flatMap(\.rootNodeIDs), second.document.pages.flatMap(\.rootNodeIDs))
+        XCTAssertEqual(first.document.pages.map(\.id.description), [
+            "7dbd7acf-dc5a-5f0d-90c5-77b9c590c4e7",
+            "c24169c4-4ee6-57fd-b673-d828c32edbbb",
+        ])
+        XCTAssertEqual(first.document.pages.flatMap(\.rootNodeIDs).map(\.description), [
+            "0cc53b20-9703-5c29-82c6-54745199eb91",
+            "c14c57c6-b3fb-531f-be51-2188bc3e44b4",
+        ])
+        XCTAssertEqual(first, second)
         XCTAssertNoThrow(try first.document.validate())
+        let history = await historyStore.load(from: first)
+        XCTAssertEqual(history, .cleanBaseline(.missing))
+
+        let savedOnce = try await store.encode(first)
+        let savedTwice = try await store.encode(first)
+        XCTAssertEqual(savedOnce, savedTwice)
+        let reopened = try await store.decode(savedOnce)
+        XCTAssertEqual(reopened, first)
+    }
+
+    // SF-0301-005, SF-0303-005, SF-0303-008, SF-1702-008
+    func testImmutableSchemaOneRootlessGoldenPreservesIdentityAndAddsOnlyMinimumRoot() async throws {
+        let store = ProjectPackageStore()
+        let legacyPackage = try legacyGolden(
+            named: "schema-v1-rootless",
+            sha256: "ef1455c5eb9055ec97fb5d41562686226e9db040313a4609e769cc5f7f44694d"
+        )
+
+        let first = try await store.decode(legacyPackage)
+        let second = try await store.decode(legacyPackage)
+        let page = try XCTUnwrap(first.document.pages.only)
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.document.revision, 4)
+        XCTAssertEqual(first.document.creationKind, .migratedLegacy)
+        XCTAssertEqual(page.id.description, "31000000-0000-0000-0000-000000000002")
+        XCTAssertEqual(page.name, "Legacy Landing")
+        XCTAssertEqual(page.route.rawValue, "/legacy-landing")
+        XCTAssertEqual(page.role, .standard)
+        XCTAssertEqual(page.provenance, .migratedLegacy)
+        XCTAssertEqual(page.rootNodeIDs.map(\.description), ["2a3ba9f8-b7dd-522b-8726-a319ed8a731b"])
+        XCTAssertEqual(page.nodes.map(\.id), page.rootNodeIDs)
+        XCTAssertNoThrow(try first.document.validate())
+
+        let resaved = try await store.encode(first)
+        let reopened = try await store.decode(resaved)
+        XCTAssertEqual(reopened, first)
+    }
+
+    // SF-0301-004, SF-0301-005, SF-1702-004, SF-1702-008
+    func testInvalidSchemaOneGoldenVariantsAreRejectedWithoutCompatibilityDefaults() async throws {
+        let store = ProjectPackageStore()
+        let golden = try legacyGolden(
+            named: "schema-v1-rootless",
+            sha256: "ef1455c5eb9055ec97fb5d41562686226e9db040313a4609e769cc5f7f44694d"
+        )
+        let members = try decodeArchive(golden)
+        let documentMember = try XCTUnwrap(members.first { $0.path == "document.json" })
+        let original = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: documentMember.data) as? [String: Any]
+        )
+
+        for field in ["id", "pages"] {
+            var envelope = original
+            var document = try XCTUnwrap(envelope["document"] as? [String: Any])
+            document.removeValue(forKey: field)
+            envelope["document"] = document
+            let invalid = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+            let archive = try replacingDocumentAndIntegrity(in: members, with: invalid)
+            await XCTAssertThrowsProjectPackageError(.corruptDocument) {
+                try await store.decode(encodeArchive(archive))
+            }
+        }
     }
 
     // SF-0301-004, SF-1702-004
@@ -301,6 +372,22 @@ final class ProjectPackageTests: XCTestCase {
             ]
         )
     }
+
+    private func legacyGolden(named name: String, sha256 expectedHash: String) throws -> Data {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/Legacy/\(name).siteforge.b64")
+        let encoded = try Data(contentsOf: url)
+        let package = try XCTUnwrap(Data(base64Encoded: encoded, options: .ignoreUnknownCharacters))
+        let actualHash = SHA256.hash(data: package).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(actualHash, expectedHash, "The immutable compatibility fixture changed")
+        return package
+    }
+}
+
+private extension Array {
+    var only: Element? { count == 1 ? first : nil }
 }
 
 private struct ArchiveMember {
