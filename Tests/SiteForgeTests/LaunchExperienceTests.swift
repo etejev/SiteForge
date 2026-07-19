@@ -3,9 +3,9 @@ import XCTest
 
 @MainActor
 final class LaunchExperienceTests: XCTestCase {
-    private var fixtureDirectory: URL!
+    nonisolated(unsafe) private var fixtureDirectory: URL!
 
-    override func setUp() {
+    nonisolated override func setUp() {
         super.setUp()
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -13,7 +13,7 @@ final class LaunchExperienceTests: XCTestCase {
         try? FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
     }
 
-    override func tearDown() {
+    nonisolated override func tearDown() {
         try? FileManager.default.removeItem(at: fixtureDirectory)
         super.tearDown()
     }
@@ -128,11 +128,14 @@ final class LaunchExperienceTests: XCTestCase {
 
     func testNewerRecoveryCandidatePresentsRestoreAndDiscardPaths() async throws {
         let url = fixture("Recovery.siteforge")
-        let writer = makeController()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(autosaveDebouncer: debouncer)
         let saved = await writer.lifecycle.save(to: url)
         XCTAssertTrue(saved)
         try addPage("Recovered", to: writer.lifecycle.session)
-        try await Task.sleep(for: .milliseconds(600))
+        await debouncer.waitUntilPending()
+        debouncer.fireAll()
+        while writer.lifecycle.hasPendingAutosaveWork { await Task.yield() }
 
         let restorer = makeController()
         await restorer.openProjectAndWait(url)
@@ -229,14 +232,16 @@ final class LaunchExperienceTests: XCTestCase {
 
     private func makeController(
         backend: DocumentLifecycleBackend = DocumentLifecycleBackend(),
-        preview: LaunchPreviewScenario? = nil
+        preview: LaunchPreviewScenario? = nil,
+        autosaveDebouncer: any LifecycleAutosaveDebouncing = ContinuousLifecycleAutosaveDebouncer()
     ) -> LaunchExperienceController {
         let recoveryDirectory = fixtureDirectory.appendingPathComponent("recovery", isDirectory: true)
         try? FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
         let lifecycle = DocumentLifecycleController(
             session: DocumentSession(),
             backend: backend,
-            recoveryDirectory: recoveryDirectory
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: autosaveDebouncer
         )
         return LaunchExperienceController(lifecycle: lifecycle, previewScenario: preview)
     }

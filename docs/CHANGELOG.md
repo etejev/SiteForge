@@ -48,6 +48,8 @@ This file records user-visible behavior during development. It is not a substitu
 - Chrome appearance now resolves native material, opaque accessibility fallback, separator strength, and active-window emphasis from one shared policy while leaving canonical document state and canvas hit testing unchanged.
 - The bounded canvas placeholder now adapts to the available viewport so its empty-state copy remains readable at the supported minimum window size.
 - Existing package replacement now requires the exact previously validated digest, byte count, device, and inode; same-directory staging commits with exclusive create or an identity-checked atomic swap and preserves owner, group, mode, extended ACL, and approved extended attributes.
+- Lifecycle reads, saves, autosaves, recovery writes, and document transitions now carry a typed epoch, operation, document/project, revision, destination, and intent identity; every document-adoption boundary invalidates prior work.
+- Manual Save now deterministically cancels or drains pending autosave work. An edit made during Save leaves the captured revision durable while the newer active revision remains modified and recoverable.
 
 ### Fixed
 
@@ -55,6 +57,7 @@ This file records user-visible behavior during development. It is not a substitu
 - New, Open, Revert, recovery Restore, and window Close now share one native Save/Discard/Cancel decision boundary; cancellation and failed saves preserve the exact active document, history, identity, location, fingerprint, and lifecycle presentation.
 - Modified untitled projects now autosave to app-owned, project-identity-keyed recovery storage and can be discovered, restored, saved durably, or discarded after relaunch without writing beside user project files.
 - Opening no longer rereads a path to fingerprint validated content, and concurrent replacement, delete/recreate, same-inode modification, hard-link, source/destination/ancestor symlink, sparse-input, recovery-collision, and deletion-failure cases preserve the last committed document and external bytes.
+- Stale lifecycle success, failure, and cancellation can no longer reattach canonical state, metadata, history, recovery state, failure state, or UI phase after New, Open, Revert, Restore, or Close; autosave burst coalescing and revision order are now verified without wall-clock sleeps.
 
 ### Known limitations
 

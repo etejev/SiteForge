@@ -4,13 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-CORRECTION-003` Scope asynchronous lifecycle work by document epoch, destination, revision, and intent.
-  - Severity: `P1` (`M0-P1-01` and `M0-P1-02`).
-  - Requirements: `SF-0301-002`, `SF-0301-004`, `SF-0301-005`; `SF-0306-003`, `SF-0306-004`, `SF-0306-005`; `SF-1504-004`; and `SF-1902-004`.
-  - Acceptance: New, Open, Revert, Restore, and Close invalidate or safely drain all prior work; a completion may update UI or metadata only when its epoch, document/project identity, revision, destination, and operation intent still match; autosave cannot supersede an explicit durable Save; manual Save deterministically drains or cancels pending autosave.
-  - Evidence and tests required: save/autosave crossed with New, Open, Revert, Restore, Close, and each other using deterministic barriers and a controllable clock; assert canonical state, project identity, URL, history boundary, phase, fingerprint, and disk bytes.
-  - Dependencies: `SF-CORRECTION-002` defines the commit boundary.
-
 - [ ] `SF-CORRECTION-004` Harden current-schema decoding, revision bounds, and historical migration evidence.
   - Severity: `P1` (`M0-P1-04`) with necessary migration evidence from `M0-P2-05`.
   - Requirements: `SF-0301-004`, `SF-0301-005`, `SF-0303-005`, `SF-0303-008`, `SF-0307-004`, `SF-1702-004`, `SF-1702-008`, `SF-1902-004`, and `SF-1902-008`.
@@ -26,10 +19,10 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
   - Dependencies: owner-approved distribution configuration is needed before final release verification, but local implementation and status correction are not blocked.
 
 - [ ] `SF-CORRECTION-006` Reconcile requirement/decision traceability and replace overstated evidence with reproducible proof.
-  - Severity: `P1` (`M0-P1-08` through `M0-P1-10`) plus necessary evidence corrections (`M0-P2-01` through `M0-P2-05`, `M0-P2-09`, and `M0-P2-13`).
+  - Severity: `P1` (`M0-P1-08` through `M0-P1-10`) plus necessary evidence corrections (`M0-P2-01` through `M0-P2-03`, `M0-P2-05`, `M0-P2-09`, and `M0-P2-13`).
   - Requirements: `SF-0201-006` through `SF-0201-008`; `SF-0301-006` through `SF-0301-008`; `SF-0303-003`, `SF-0303-006`, `SF-0303-008`; `SF-1505-006` through `SF-1505-008`; `SF-1602-006` through `SF-1602-008`; `SF-1605-002`, `SF-1605-006` through `SF-1605-008`; `SF-1902-002`, `SF-1902-003`, `SF-1902-007`, `SF-1902-008`; and `SF-2002-001`, `SF-2002-003`, `SF-2002-008`.
   - Acceptance: the specification and project records use one non-colliding decision namespace; requirement rows distinguish bounded implementation from full requirement verification; Milestone 0 aggregate status reflects unresolved acceptance criteria; evidence maps to named behavioral tests or retained manual/measurement records; preview-state, metadata, and policy tests are labeled at their actual scope.
-  - Evidence and tests required: a machine-checkable traceability index; real end-to-end launch/recovery UI journeys; deterministic autosave coalescing; complete keyboard/focus and accessibility-announcement coverage; retained visual-inspection manifests; named-environment performance methodology with warm-up, repetition, percentiles, frame/stall and memory measures; repository checks that reject unknown or unsubstantiated completed IDs.
+  - Evidence and tests required: a machine-checkable traceability index; real end-to-end launch/recovery UI journeys; complete keyboard/focus and accessibility-announcement coverage; retained visual-inspection manifests; named-environment performance methodology with warm-up, repetition, percentiles, frame/stall and memory measures; repository checks that reject unknown or unsubstantiated completed IDs.
   - Dependencies: can proceed in parallel with production corrections, but final status reconciliation must cite their results.
 
 - [ ] `SF-CORRECTION-007` Establish enforceable core, command, persistence, and application test seams before authoring growth.
@@ -55,6 +48,13 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-CORRECTION-003` Scope asynchronous lifecycle work by document epoch, destination, revision, and intent.
+  - Severity: `P1` (`M0-P1-01` and `M0-P1-02`) plus the related autosave-coalescing portion of `M0-P2-04`.
+  - Requirements: `SF-0301-002`, `SF-0301-004`, `SF-0301-005`; `SF-0306-003`, `SF-0306-004`, `SF-0306-005`; `SF-1504-004`; and `SF-1902-004`.
+  - Plan: assign every asynchronous lifecycle operation a typed intent and immutable identity containing epoch, operation ID, document/project identity, canonical revision, and sanitized destination identity; advance the epoch and cancel or drain prior read/save/autosave/recovery work at every document-adoption boundary; make stale success, failure, and cancellation state-neutral; serialize manual saves after deterministically draining autosave; preserve a captured durable revision when edits occur during Save while keeping the newer active revision modified and recoverable; and prove exact state, disk, write-count, and revision ordering with injected debouncers and actor barriers.
+  - Evidence: `./sf verify` passed on 2026-07-19 with 115 unit tests and 14 UI tests. Eleven new deterministic lifecycle race tests cover Save and executing autosave crossed with New, Open, Revert, Restore, and Close; pending and executing autosave followed by Save; exact burst coalescing and separated revision order; edit during Save; Save As during pending autosave; stale successful and failed completions; cancellation before preparation and before filesystem commit; complete operation identity; and diagnostic redaction. Existing autosave/recovery integration tests now use the injected debouncer rather than wall-clock sleeps. ADR-0008 records the lifecycle epoch and intent boundary.
+  - Dependencies: `SF-CORRECTION-002` supplies the retained identity-bound conditional filesystem commit.
 
 - [x] `SF-CORRECTION-002` Make package reads, conditional replacement, and recovery artifacts one identity-bound filesystem boundary.
   - Severity: `P0` (`M0-P0-02` through `M0-P0-04`) plus the filesystem portion of `M0-P1-06`, bounded-fingerprint correction `M0-P2-10`, and recovery-state correction `M0-P2-14`.

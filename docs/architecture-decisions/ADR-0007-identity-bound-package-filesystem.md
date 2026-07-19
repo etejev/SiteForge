@@ -12,6 +12,8 @@ ADR-0001 selected a deterministic single-file package and ADR-0002 required open
 
 This decision is bounded to local macOS package and recovery I/O. Security-scoped bookmarks, App Sandbox entitlements, and file coordination for user-selected locations remain assigned to `SF-CORRECTION-005`.
 
+ADR-0008 defines lifecycle epoch, operation intent, and Save/autosave coordination above this boundary. The filesystem layer remains responsible for the final identity-bound conditional commit and does not use a global generation to order semantically distinct lifecycle operations.
+
 ## Decision drivers
 
 - A parsed package and its durable fingerprint must describe one validated file object.
@@ -82,7 +84,7 @@ Recovery storage is the app-owned directory selected by the lifecycle layer, nor
 
 ## Verification
 
-`IdentityBoundFileSystemTests` uses actor barriers at snapshot capture, destination validation, post-swap validation, and recovery deletion. Eleven tests cover source replacement and symlink swap, destination replacement, same-byte delete/recreate with a new inode, destination and ancestor symlink swaps, same-inode modification before commit and after atomic swap, rollback of a changed displaced object, oversized sparse files, hard links and foreign-owner policy, real mode/ACL/xattr preservation, malformed and mismatched recovery collisions, permission-denied deletion with retained-candidate retry, and exact lifecycle/disk preservation. Existing tests retain interruption, static-symlink, deterministic-package, diagnostic-redaction, autosave, reopen, and recovery coverage. `./sf verify` passes with 104 unit tests and 14 UI tests.
+`IdentityBoundFileSystemTests` uses actor barriers at snapshot capture, destination validation, post-swap validation, and recovery deletion. Eleven tests cover source replacement and symlink swap, destination replacement, same-byte delete/recreate with a new inode, destination and ancestor symlink swaps, same-inode modification before commit and after atomic swap, rollback of a changed displaced object, oversized sparse files, hard links and foreign-owner policy, real mode/ACL/xattr preservation, malformed and mismatched recovery collisions, permission-denied deletion with retained-candidate retry, and exact lifecycle/disk preservation. Existing tests retain interruption, static-symlink, deterministic-package, diagnostic-redaction, autosave, reopen, and recovery coverage. ADR-0008 adds deterministic lifecycle-race coverage above this unchanged boundary. `./sf verify` passes with 115 unit tests and 14 UI tests after `SF-CORRECTION-003`.
 
 ## Reversal
 

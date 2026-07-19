@@ -3,9 +3,9 @@ import XCTest
 
 @MainActor
 final class PersistedHistoryTests: XCTestCase {
-    private var fixtureDirectory: URL!
+    nonisolated(unsafe) private var fixtureDirectory: URL!
 
-    override func setUp() {
+    nonisolated override func setUp() {
         super.setUp()
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -13,7 +13,7 @@ final class PersistedHistoryTests: XCTestCase {
         try? FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
     }
 
-    override func tearDown() {
+    nonisolated override func tearDown() {
         try? FileManager.default.removeItem(at: fixtureDirectory)
         fixtureDirectory = nil
         super.tearDown()
@@ -86,7 +86,8 @@ final class PersistedHistoryTests: XCTestCase {
 
     func testRecoveryRestoresOnlyTransactionsAfterExplicitDurableBoundary() async throws {
         let url = fixtureDirectory.appendingPathComponent("RecoveryHistory.siteforge")
-        let writer = makeController()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(autosaveDebouncer: debouncer)
         let pageID = PageID()
         try writer.session.execute(.insertPage(InsertPageCommand(page: DocumentPage(id: pageID, name: "Recovery Page"), index: 0)))
         let recoverySaved = await writer.save(to: url)
@@ -94,7 +95,7 @@ final class PersistedHistoryTests: XCTestCase {
         let durableRevision = writer.session.document.revision
         try writer.session.execute(.renamePage(RenamePageCommand(pageID: pageID, name: "Recovered one")))
         try writer.session.execute(.renamePage(RenamePageCommand(pageID: pageID, name: "Recovered two")))
-        try await Task.sleep(for: .milliseconds(650))
+        await flushAutosave(writer, with: debouncer)
 
         let reopened = makeController()
         let openResult = await reopened.requestOpen(url)
@@ -117,13 +118,14 @@ final class PersistedHistoryTests: XCTestCase {
 
     func testDiscardedRecoveryRetainsDurableHistoryBoundary() async throws {
         let url = fixtureDirectory.appendingPathComponent("DiscardBoundary.siteforge")
-        let writer = makeController()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(autosaveDebouncer: debouncer)
         let pageID = PageID()
         try writer.session.execute(.insertPage(InsertPageCommand(page: DocumentPage(id: pageID, name: "Durable Page"), index: 0)))
         let discardSaved = await writer.save(to: url)
         XCTAssertTrue(discardSaved)
         try writer.session.execute(.renamePage(RenamePageCommand(pageID: pageID, name: "Recovery only")))
-        try await Task.sleep(for: .milliseconds(650))
+        await flushAutosave(writer, with: debouncer)
 
         let reopened = makeController()
         let openResult = await reopened.requestOpen(url)
@@ -138,13 +140,14 @@ final class PersistedHistoryTests: XCTestCase {
 
     func testIncompatibleRecoveryHistoryRestoresDocumentOnCleanNonCrossableBaseline() async throws {
         let url = fixtureDirectory.appendingPathComponent("IncompatibleRecovery.siteforge")
-        let writer = makeController()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(autosaveDebouncer: debouncer)
         let pageID = PageID()
         try writer.session.execute(.insertPage(InsertPageCommand(page: DocumentPage(id: pageID, name: "Recovery Boundary"), index: 0)))
         let durableSaved = await writer.save(to: url)
         XCTAssertTrue(durableSaved)
         try writer.session.execute(.renamePage(RenamePageCommand(pageID: pageID, name: "Recovered")))
-        try await Task.sleep(for: .milliseconds(650))
+        await flushAutosave(writer, with: debouncer)
 
         let recoveryURL = DocumentLifecycleBackend.recoveryURL(
             for: writer.currentProjectID,
@@ -293,13 +296,25 @@ final class PersistedHistoryTests: XCTestCase {
         XCTAssertTrue(description.contains("document-"))
     }
 
-    private func makeController() -> DocumentLifecycleController {
+    private func makeController(
+        autosaveDebouncer: any LifecycleAutosaveDebouncing = ContinuousLifecycleAutosaveDebouncer()
+    ) -> DocumentLifecycleController {
         let recoveryDirectory = fixtureDirectory.appendingPathComponent("recovery", isDirectory: true)
         try? FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
         return DocumentLifecycleController(
             session: DocumentSession(),
-            recoveryDirectory: recoveryDirectory
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: autosaveDebouncer
         )
+    }
+
+    private func flushAutosave(
+        _ controller: DocumentLifecycleController,
+        with debouncer: ManualLifecycleAutosaveDebouncer
+    ) async {
+        await debouncer.waitUntilPending()
+        debouncer.fireAll()
+        while controller.hasPendingAutosaveWork { await Task.yield() }
     }
 
     private func makeValidHistoryFixture(entryCount: Int, pageName: String = "Fixture Page") async throws

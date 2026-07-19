@@ -4,9 +4,9 @@ import XCTest
 
 @MainActor
 final class DocumentLifecycleTests: XCTestCase {
-    private var fixtureURLs: [URL] = []
+    nonisolated(unsafe) private var fixtureURLs: [URL] = []
 
-    override func tearDown() {
+    nonisolated override func tearDown() {
         for url in fixtureURLs { try? FileManager.default.removeItem(at: url) }
         fixtureURLs.removeAll()
         super.tearDown()
@@ -93,12 +93,13 @@ final class DocumentLifecycleTests: XCTestCase {
 
     func testAutosaveCoalescesAndCreatesNewerValidRecoveryCandidate() async throws {
         let url = fixture("Recovery.siteforge")
-        let controller = makeController()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let controller = makeController(autosaveDebouncer: debouncer)
         let saved = await controller.save(to: url)
         XCTAssertTrue(saved)
         try addPage("One", to: controller)
         try addPage("Two", to: controller)
-        try await Task.sleep(for: .milliseconds(600))
+        await flushAutosave(controller, with: debouncer)
         let recoveryURL = recoveryURL(for: controller)
         XCTAssertTrue(FileManager.default.fileExists(atPath: recoveryURL.path))
 
@@ -116,7 +117,8 @@ final class DocumentLifecycleTests: XCTestCase {
 
     func testDefaultPageAndRootIdentifiersSurviveAutosaveRecovery() async throws {
         let url = fixture("DefaultIdentityRecovery.siteforge")
-        let writer = makeController()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(autosaveDebouncer: debouncer)
         let pageIDs = writer.session.document.pages.map(\.id)
         let rootIDs = writer.session.document.pages.flatMap(\.rootNodeIDs)
         let saved = await writer.save(to: url)
@@ -125,7 +127,7 @@ final class DocumentLifecycleTests: XCTestCase {
             pageID: writer.session.document.pages[0].id,
             name: "Recovered Home"
         )))
-        try await Task.sleep(for: .milliseconds(600))
+        await flushAutosave(writer, with: debouncer)
 
         let reader = makeController()
         let openResult = await reader.requestOpen(url)
@@ -139,11 +141,12 @@ final class DocumentLifecycleTests: XCTestCase {
 
     func testDiscardAndMalformedRecoveryAreIntentional() async throws {
         let url = fixture("Discard.siteforge")
-        let writer = makeController()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(autosaveDebouncer: debouncer)
         let saved = await writer.save(to: url)
         XCTAssertTrue(saved)
         try addPage("Recovered", to: writer)
-        try await Task.sleep(for: .milliseconds(600))
+        await flushAutosave(writer, with: debouncer)
 
         let reader = makeController()
         let firstOpen = await reader.requestOpen(url)
@@ -305,9 +308,13 @@ final class DocumentLifecycleTests: XCTestCase {
 
     func testUntitledRecoverySurvivesRelaunchAndCleansUpAfterRestoreSaveAndDiscard() async throws {
         let recoveryDirectory = fixture("untitled-recovery", isDirectory: true)
-        let writer = makeController(recoveryDirectory: recoveryDirectory)
+        let writerDebouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: writerDebouncer
+        )
         try addPage("Unsaved Untitled", to: writer)
-        try await Task.sleep(for: .milliseconds(600))
+        await flushAutosave(writer, with: writerDebouncer)
         let recoveryURL = DocumentLifecycleBackend.recoveryURL(
             for: writer.currentProjectID,
             in: recoveryDirectory
@@ -327,9 +334,13 @@ final class DocumentLifecycleTests: XCTestCase {
         XCTAssertTrue(durableSave)
         XCTAssertFalse(FileManager.default.fileExists(atPath: recoveryURL.path))
 
-        let discardWriter = makeController(recoveryDirectory: recoveryDirectory)
+        let discardDebouncer = ManualLifecycleAutosaveDebouncer()
+        let discardWriter = makeController(
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: discardDebouncer
+        )
         try addPage("Discard Me", to: discardWriter)
-        try await Task.sleep(for: .milliseconds(600))
+        await flushAutosave(discardWriter, with: discardDebouncer)
         let discardURL = DocumentLifecycleBackend.recoveryURL(
             for: discardWriter.currentProjectID,
             in: recoveryDirectory
@@ -343,11 +354,12 @@ final class DocumentLifecycleTests: XCTestCase {
 
     func testRestoreRecoveryCancellationPreservesCurrentEditAndHistory() async throws {
         let durable = fixture("RestoreGuard.siteforge")
-        let writer = makeController()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(autosaveDebouncer: debouncer)
         let initialSave = await writer.save(to: durable)
         XCTAssertTrue(initialSave)
         try addPage("Recovery Version", to: writer)
-        try await Task.sleep(for: .milliseconds(600))
+        await flushAutosave(writer, with: debouncer)
 
         let reader = makeController()
         let openResult = await reader.requestOpen(durable)
@@ -365,14 +377,25 @@ final class DocumentLifecycleTests: XCTestCase {
     private func makeController(
         backend: DocumentLifecycleBackend = DocumentLifecycleBackend(),
         recoveryDirectory: URL? = nil,
-        saveDestinationProvider: @escaping SaveDestinationProvider = DocumentLifecycleController.nativeSaveDestination
+        saveDestinationProvider: @escaping SaveDestinationProvider = DocumentLifecycleController.nativeSaveDestination,
+        autosaveDebouncer: any LifecycleAutosaveDebouncing = ContinuousLifecycleAutosaveDebouncer()
     ) -> DocumentLifecycleController {
         DocumentLifecycleController(
             session: DocumentSession(),
             backend: backend,
             recoveryDirectory: recoveryDirectory ?? fixture("recovery", isDirectory: true),
-            saveDestinationProvider: saveDestinationProvider
+            saveDestinationProvider: saveDestinationProvider,
+            autosaveDebouncer: autosaveDebouncer
         )
+    }
+
+    private func flushAutosave(
+        _ controller: DocumentLifecycleController,
+        with debouncer: ManualLifecycleAutosaveDebouncer
+    ) async {
+        await debouncer.waitUntilPending()
+        debouncer.fireAll()
+        while controller.hasPendingAutosaveWork { await Task.yield() }
     }
 
     private func addPage(_ name: String, to controller: DocumentLifecycleController) throws {

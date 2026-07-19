@@ -311,15 +311,15 @@ final class IdentityBoundFileSystemTests: XCTestCase {
 
         let backend = DocumentLifecycleBackend(store: store)
         let history = DocumentSession().historySnapshot()
+        let expectedRecovery = package(named: "Expected Recovery", project: 13)
         do {
             _ = try await backend.write(
-                package(named: "Expected Recovery", project: 13),
+                expectedRecovery,
                 history: history,
                 recoveryBoundary: 0,
                 to: recoveryURL,
                 expected: nil,
-                generation: 1,
-                operation: .autosave
+                identity: operationIdentity(for: expectedRecovery, at: recoveryURL, intent: .autosave)
             )
             XCTFail("Expected recovery ownership conflict")
         } catch {
@@ -333,13 +333,12 @@ final class IdentityBoundFileSystemTests: XCTestCase {
         XCTAssertEqual(Darwin.chmod(recoveryURL.path, mode_t(0o600)), 0)
         do {
             _ = try await backend.write(
-                package(named: "Expected Recovery", project: 13),
+                expectedRecovery,
                 history: history,
                 recoveryBoundary: 0,
                 to: recoveryURL,
                 expected: nil,
-                generation: 2,
-                operation: .autosave
+                identity: operationIdentity(for: expectedRecovery, at: recoveryURL, intent: .autosave)
             )
             XCTFail("Expected malformed recovery rejection")
         } catch {
@@ -476,6 +475,22 @@ final class IdentityBoundFileSystemTests: XCTestCase {
 
     private func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func operationIdentity(
+        for package: ProjectPackage,
+        at url: URL,
+        intent: LifecycleOperationIntent
+    ) -> LifecycleOperationIdentity {
+        LifecycleOperationIdentity(
+            id: LifecycleOperationID(),
+            epoch: LifecycleEpoch(),
+            documentID: package.document.id,
+            projectID: package.projectID,
+            revision: package.document.revision,
+            destination: .file(url, kind: intent == .autosave ? .recovery : .durable),
+            intent: intent
+        )
     }
 
     private func setXattr(_ name: String, value: Data, at url: URL) throws {
