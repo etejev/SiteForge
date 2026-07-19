@@ -45,6 +45,10 @@ for plist in SiteForge/Info.plist SiteForge/SiteForge.entitlements; do
   fi
 done
 
+if ! scripts/check-traceability.py; then
+  failed=1
+fi
+
 entitlement_value() {
   /usr/libexec/PlistBuddy -c "Print :$1" SiteForge/SiteForge.entitlements 2>/dev/null
 }

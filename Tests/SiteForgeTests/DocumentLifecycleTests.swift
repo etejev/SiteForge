@@ -218,6 +218,42 @@ final class DocumentLifecycleTests: XCTestCase {
         XCTAssertFalse(description.contains(url.deletingLastPathComponent().path))
     }
 
+    func testDiagnosticsCoverRevertRestoreAndDiscardRecoveryWithRedactedIdentity() async throws {
+        let backend = DocumentLifecycleBackend()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let durable = fixture("DiagnosticRecovery.siteforge")
+        let writer = makeController(backend: backend, autosaveDebouncer: debouncer)
+        let initialSave = await writer.save(to: durable)
+        XCTAssertTrue(initialSave)
+        try addPage("Diagnostic Draft", to: writer)
+        await flushAutosave(writer, with: debouncer)
+
+        let restorer = makeController(backend: backend)
+        let restoreOpen = await restorer.requestOpen(durable)
+        XCTAssertEqual(restoreOpen, .completed)
+        XCTAssertNotNil(restorer.recoveryCandidate)
+        let restored = await restorer.requestRestoreRecovery()
+        XCTAssertEqual(restored, .completed)
+
+        let discarder = makeController(backend: backend)
+        let discardOpen = await discarder.requestOpen(durable)
+        XCTAssertEqual(discardOpen, .completed)
+        XCTAssertNotNil(discarder.recoveryCandidate)
+        await discarder.discardRecovery()
+
+        let revertResult = await transition(writer, decision: .discard) {
+            await writer.requestRevert()
+        }
+        XCTAssertEqual(revertResult, .completed)
+
+        let records = await backend.diagnosticRecords()
+        let successful = Set(records.filter { $0.result == .success }.map(\.operation))
+        XCTAssertTrue(successful.isSuperset(of: [.revert, .restore, .discardRecovery]))
+        let description = String(describing: records)
+        XCTAssertFalse(description.contains(durable.path))
+        XCTAssertFalse(description.contains("Diagnostic Draft"))
+    }
+
     func testCancelPreservesExactStateForNewOpenRevertAndClose() async throws {
         let durable = fixture("TransitionGuard.siteforge")
         let incoming = fixture("IncomingGuard.siteforge")

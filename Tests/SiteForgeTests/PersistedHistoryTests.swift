@@ -226,7 +226,7 @@ final class PersistedHistoryTests: XCTestCase {
 
         for (data, expected) in cases {
             let store = PersistedHistoryStore()
-            let result = await store.load(from: package(valid.package, historyData: data))
+            let result = try await store.load(from: package(valid.package, historyData: data))
             XCTAssertEqual(result, .cleanBaseline(expected))
         }
     }
@@ -260,7 +260,7 @@ final class PersistedHistoryTests: XCTestCase {
         let store = PersistedHistoryStore()
         let retainedData = try await store.encodeRetained(session.historySnapshot())
         XCTAssertLessThanOrEqual(retainedData.count, PersistedHistoryStore.maximumHistoryBytes)
-        let retained = await store.load(from: package(ProjectPackage(document: session.document), historyData: retainedData))
+        let retained = try await store.load(from: package(ProjectPackage(document: session.document), historyData: retainedData))
         guard case .restored(let snapshot) = retained else { return XCTFail("Retained history must validate") }
         XCTAssertLessThanOrEqual(snapshot.undoEntries.count + snapshot.redoEntries.count, PersistedHistoryStore.maximumEntryCount)
         XCTAssertEqual(snapshot.undoEntries.last?.resultRevision, session.document.revision)
@@ -288,12 +288,31 @@ final class PersistedHistoryTests: XCTestCase {
         let diagnostics = PersistedHistoryDiagnostics()
         let store = PersistedHistoryStore(diagnostics: diagnostics)
         let valid = try await makeValidHistoryFixture(entryCount: 1, pageName: "top-secret-page")
-        _ = await store.load(from: package(valid.package, historyData: valid.data))
+        _ = try await store.load(from: package(valid.package, historyData: valid.data))
         let description = String(describing: await diagnostics.records)
         XCTAssertFalse(description.contains("top-secret-page"))
         XCTAssertFalse(description.contains(valid.package.document.id.description))
         XCTAssertFalse(description.contains(fixtureDirectory.path))
         XCTAssertTrue(description.contains("document-"))
+    }
+
+    // SF-0301-004, SF-0301-007, SF-0307-008
+    func testCancellationInsideHistoryValidationIsDistinctFromIsolation() async throws {
+        let valid = try await makeValidHistoryFixture(entryCount: 4)
+        let barrier = DeterministicCancellationBarrier(blockAt: 3)
+        let store = PersistedHistoryStore(cancellation: CooperativeCancellationCheckpoint(barrier.check))
+        let task = Task { try await store.load(from: package(valid.package, historyData: valid.data)) }
+
+        await barrier.waitUntilBlocked()
+        task.cancel()
+        barrier.release()
+
+        do {
+            _ = try await task.value
+            XCTFail("Cancelled history validation must not produce an isolation baseline")
+        } catch is CancellationError {
+            // The lifecycle can keep the current document and report cancellation.
+        }
     }
 
     private func makeController(

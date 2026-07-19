@@ -1,6 +1,25 @@
 # Open Decisions
 
-## OD-001 — Publisher identity and bundle identifier
+## OD-001 — Minimum supported macOS release and reference hardware tiers
+
+Status: Open
+
+- Needed by: Milestone 0 exit and any release-level performance claim.
+- Recommended default: support the current and previous two major macOS releases, with Apple silicon as the primary reference tier.
+- Safe temporary assumption: the reversible local project continues to target macOS 14.0, while evidence is labeled with the exact OS, SDK, Xcode, architecture, and hardware on which it was gathered.
+- Owner decision: final supported OS range and reference hardware tiers.
+- Affected requirements: `SF-0201-007`, `SF-0301-007`, `SF-1505-007`, `SF-1602-007`, `SF-1605-007`, `SF-1902-007`, and `SF-2002-003`.
+
+## OD-002 — Persistence store and project package representation
+
+Status: Approved — 2026-07-19
+
+- Decision: use the deterministic versioned single-file project-package container defined by ADR-0001, with bounded persisted history from ADR-0003 and identity-bound atomic replacement from ADR-0007.
+- Reversibility: a later package version may adopt a directory or standard archive while retaining an explicit migration reader for package v1.
+- Scale boundary: package v1 remains limited to 8 MiB total and 4 MiB per member; the 500-asset authoring fixture requires a later measured resource-storage decision and is not represented by current performance evidence.
+- Affected requirements: `SF-0301-001`, `SF-0301-003`, `SF-0301-004`, `SF-1702-001`, `SF-1702-004`, and `SF-1702-008`.
+
+## OD-012 — Publisher identity and bundle identifier
 
 Status: Open
 
@@ -10,7 +29,7 @@ Status: Open
 - Safe temporary assumption: local development identifier only; do not register or publish externally.
 - Affected areas: signing, entitlements, update feed, saved preferences, crash identifiers.
 
-## OD-002 — Initial distribution trust level
+## OD-013 — Initial distribution trust level
 
 Status: Open
 

@@ -35,6 +35,9 @@ This file records user-visible behavior during development. It is not a substitu
 - Immutable package-v1/schema-v1 compatibility fixtures for empty and rootless legacy projects, with retained provenance and decoded-package checksums.
 - Centralized macOS file-access boundary with native panel authorization, real app-scoped security bookmarks, stale-bookmark repair, coordinated package I/O, relocation support, external file presentation, typed denial/recovery failures, and privacy-preserving diagnostics.
 - Unsigned Release-candidate App Sandbox, user-selected read/write, and app-scoped bookmark declarations plus a registered `.siteforge` project-package document type.
+- Cooperative cancellation checkpoints inside package container parsing, canonical graph validation, and persisted-history validation, preserving cancellation as distinct from corruption or isolation.
+- A canonical decision namespace, machine-checked bounded requirement-evidence index, and retained visual/performance methodology records with explicit authoring and 500-asset limitations.
+- Real production-loader UI regression journeys for valid and malformed packages, Retry, recovery discovery, keyboard Restore, and Discard, plus an injectable native accessibility-announcement boundary.
 
 ### Changed
 
@@ -48,6 +51,7 @@ This file records user-visible behavior during development. It is not a substitu
 - New-project creation now establishes the complete approved blank structure as one clean history baseline; it does not record default seeding as user edits.
 - File-menu New and Open now enter the same launch coordinator as the initial experience, while package I/O and validation remain in the actor-isolated lifecycle backend.
 - Opening a project publishes actual loading stages and checks cancellation before the single validated adoption boundary; the prior canonical document remains active after cancellation or failure.
+- Requirement status now distinguishes verified foundation slices from full generated-site, canvas-renderer, accessibility-release, and performance acceptance; policy and synthetic-page tests are labeled as smoke evidence rather than renderer benchmarks.
 - Chrome appearance now resolves native material, opaque accessibility fallback, separator strength, and active-window emphasis from one shared policy while leaving canonical document state and canvas hit testing unchanged.
 - The bounded canvas placeholder now adapts to the available viewport so its empty-state copy remains readable at the supported minimum window size.
 - Existing package replacement now requires the exact previously validated digest, byte count, device, and inode; same-directory staging commits with exclusive create or an identity-checked atomic swap and preserves owner, group, mode, extended ACL, and approved extended attributes.

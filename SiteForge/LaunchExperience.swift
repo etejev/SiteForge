@@ -142,6 +142,15 @@ actor LaunchExperienceDiagnostics {
     func snapshot() -> [LaunchDiagnosticRecord] { records }
 }
 
+@MainActor
+struct AccessibilityAnnouncementPoster {
+    var post: (String) -> Void
+
+    static let native = AccessibilityAnnouncementPoster { message in
+        AccessibilityNotification.Announcement(message).post()
+    }
+}
+
 enum LaunchPreviewScenario: String {
     case welcome
     case loadingIndeterminate
@@ -177,14 +186,21 @@ final class LaunchExperienceController: ObservableObject {
     private var lastOpenURL: URL?
     private(set) var isPreviewScenario = false
     let forcesReducedMotionForTesting: Bool
+#if DEBUG
+    private var didStartIntegrationOpen = false
+    private var integrationRetryBase64URL: URL?
+#endif
+    private let announcementPoster: AccessibilityAnnouncementPoster
 
     init(
         lifecycle: DocumentLifecycleController,
         diagnostics: LaunchExperienceDiagnostics = LaunchExperienceDiagnostics(),
-        previewScenario: LaunchPreviewScenario? = LaunchPreviewScenario.from(arguments: ProcessInfo.processInfo.arguments)
+        previewScenario: LaunchPreviewScenario? = LaunchPreviewScenario.from(arguments: ProcessInfo.processInfo.arguments),
+        announcementPoster: AccessibilityAnnouncementPoster = .native
     ) {
         self.lifecycle = lifecycle
         self.diagnostics = diagnostics
+        self.announcementPoster = announcementPoster
         let initial = Self.previewState(previewScenario) ?? .welcome
         state = initial
         transitionHistory = [initial.kind]
@@ -193,6 +209,57 @@ final class LaunchExperienceController: ObservableObject {
     }
 
     var isWorkspaceVisible: Bool { state == .workspace }
+
+    func announceCurrentState() {
+        announcementPoster.post(state.announcement)
+    }
+
+#if DEBUG
+    /// Exercises the production package loader from UI automation without teaching Release builds a test path.
+    func startIntegrationOpenIfConfigured(arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
+        guard !didStartIntegrationOpen,
+              let index = arguments.firstIndex(of: "-SiteForgeIntegrationOpenProject"),
+              arguments.indices.contains(index + 1) else { return false }
+        didStartIntegrationOpen = true
+        let destination = URL(fileURLWithPath: arguments[index + 1])
+        if let source = Self.argumentURL("-SiteForgeIntegrationPackageBase64", in: arguments) {
+            let malformed = arguments.contains("-SiteForgeIntegrationStartMalformed")
+            try? Self.writeIntegrationPackage(from: source, to: destination, malformed: malformed)
+        }
+        integrationRetryBase64URL = Self.argumentURL("-SiteForgeIntegrationRetryBase64", in: arguments)
+        openProject(destination, userSelected: true)
+        return true
+    }
+
+    func prepareIntegrationRecoveryIfConfigured(arguments: [String] = ProcessInfo.processInfo.arguments) {
+        guard let source = Self.argumentURL("-SiteForgeIntegrationRecoveryBase64", in: arguments),
+              let destination = Self.argumentURL("-SiteForgeIntegrationRecoveryDestination", in: arguments) else { return }
+        try? Self.writeIntegrationPackage(from: source, to: destination, malformed: false)
+    }
+
+    private static func argumentURL(_ name: String, in arguments: [String]) -> URL? {
+        guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else { return nil }
+        return URL(fileURLWithPath: arguments[index + 1])
+    }
+
+    private static func writeIntegrationPackage(from source: URL, to destination: URL, malformed: Bool) throws {
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let data: Data
+        if malformed {
+            data = Data("malformed project package".utf8)
+        } else {
+            let encoded = try String(contentsOf: source).filter { !$0.isWhitespace }
+            guard let decoded = Data(base64Encoded: encoded) else { throw CocoaError(.fileReadCorruptFile) }
+            data = decoded
+        }
+        try data.write(to: destination, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+    }
+#endif
 
     func createBlankProject() {
         startOperation(.new) { [weak self] id, start in
@@ -233,6 +300,12 @@ final class LaunchExperienceController: ObservableObject {
 
     func retry() {
         guard let lastOpenURL else { return }
+#if DEBUG
+        if let integrationRetryBase64URL {
+            try? Self.writeIntegrationPackage(from: integrationRetryBase64URL, to: lastOpenURL, malformed: false)
+            self.integrationRetryBase64URL = nil
+        }
+#endif
         openProject(lastOpenURL)
     }
 
@@ -486,13 +559,21 @@ struct LaunchExperienceView: View {
         )
         .accessibilityIdentifier("launch.experience")
         .task {
+#if DEBUG
+            controller.prepareIntegrationRecoveryIfConfigured()
+            if controller.startIntegrationOpenIfConfigured() {
+                await Task.yield()
+                assignInitialFocus()
+                return
+            }
+#endif
             await controller.discoverInitialRecovery()
             await Task.yield()
             assignInitialFocus()
         }
         .onChange(of: controller.state.kind) { _, _ in
             assignInitialFocus()
-            AccessibilityNotification.Announcement(controller.state.announcement).post()
+            controller.announceCurrentState()
         }
         .animation(effectiveReduceMotion ? nil : .easeInOut(duration: 0.18), value: controller.state.kind)
     }

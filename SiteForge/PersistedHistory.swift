@@ -112,9 +112,14 @@ actor PersistedHistoryStore {
     ]
 
     private let diagnostics: PersistedHistoryDiagnostics
+    private let cancellation: CooperativeCancellationCheckpoint
 
-    init(diagnostics: PersistedHistoryDiagnostics = PersistedHistoryDiagnostics()) {
+    init(
+        diagnostics: PersistedHistoryDiagnostics = PersistedHistoryDiagnostics(),
+        cancellation: CooperativeCancellationCheckpoint = CooperativeCancellationCheckpoint()
+    ) {
         self.diagnostics = diagnostics
+        self.cancellation = cancellation
     }
 
     func encodeRetained(_ snapshot: PersistedHistorySnapshot) async throws -> Data {
@@ -133,16 +138,23 @@ actor PersistedHistoryStore {
         return data
     }
 
-    func load(from package: ProjectPackage) async -> PersistedHistoryLoadResult {
+    func load(from package: ProjectPackage) async throws -> PersistedHistoryLoadResult {
+        try cancellation.check()
         guard let member = package.optionalMembers.first(where: { $0.path == Self.memberPath }) else {
             let error = PersistedHistoryError.missing
             await record(.legacy, document: package.document, error: error)
             return .cleanBaseline(error)
         }
         do {
-            let snapshot = try Self.decodeAndValidate(member.data, document: package.document)
+            let snapshot = try Self.decodeAndValidate(
+                member.data,
+                document: package.document,
+                cancellation: cancellation
+            )
             await record(.restored, snapshot: snapshot, error: nil)
             return .restored(snapshot)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as PersistedHistoryError {
             await record(.isolated, document: package.document, error: error)
             return .cleanBaseline(error)
@@ -183,11 +195,17 @@ private extension PersistedHistoryStore {
         return try encoder.encode(snapshot)
     }
 
-    static func decodeAndValidate(_ data: Data, document: CanonicalDocument) throws -> PersistedHistorySnapshot {
+    static func decodeAndValidate(
+        _ data: Data,
+        document: CanonicalDocument,
+        cancellation: CooperativeCancellationCheckpoint
+    ) throws -> PersistedHistorySnapshot {
+        try cancellation.check()
         guard data.count <= maximumHistoryBytes else { throw PersistedHistoryError.oversized }
         let snapshot: PersistedHistorySnapshot
         do { snapshot = try JSONDecoder().decode(PersistedHistorySnapshot.self, from: data) }
         catch { throw PersistedHistoryError.corrupt }
+        try cancellation.check()
         guard snapshot.format == "app.siteforge.persisted-history" else { throw PersistedHistoryError.corrupt }
         guard snapshot.schemaVersion == PersistedHistorySnapshot.currentSchemaVersion else {
             throw PersistedHistoryError.unsupportedSchema(snapshot.schemaVersion)
@@ -199,15 +217,20 @@ private extension PersistedHistoryStore {
               snapshot.boundaryRevision <= document.revision else {
             throw PersistedHistoryError.documentMismatch
         }
-        try validateEntries(snapshot, document: document)
+        try validateEntries(snapshot, document: document, cancellation: cancellation)
         return snapshot
     }
 
-    static func validateEntries(_ snapshot: PersistedHistorySnapshot, document: CanonicalDocument) throws {
+    static func validateEntries(
+        _ snapshot: PersistedHistorySnapshot,
+        document: CanonicalDocument,
+        cancellation: CooperativeCancellationCheckpoint
+    ) throws {
         let all = snapshot.undoEntries + snapshot.redoEntries
         guard Set(all.map(\.id)).count == all.count else { throw PersistedHistoryError.duplicateTransaction }
         let registry = CommandRegistry()
         for entry in all {
+            try cancellation.check()
             guard entry.resultRevision == entry.parentRevision + 1 else { throw PersistedHistoryError.revisionMismatch }
             guard entry.commandName == entry.forward.name,
                   entry.label == registry.descriptor(for: entry.commandName).title,
@@ -217,6 +240,7 @@ private extension PersistedHistoryStore {
 
         let logicalOrder = snapshot.undoEntries + snapshot.redoEntries.reversed()
         for pair in zip(logicalOrder, logicalOrder.dropFirst()) where pair.0.resultRevision != pair.1.parentRevision {
+            try cancellation.check()
             throw PersistedHistoryError.reorderedTransactions
         }
         if let first = logicalOrder.first, first.parentRevision < snapshot.boundaryRevision {
@@ -225,6 +249,7 @@ private extension PersistedHistoryStore {
 
         var undoDocument = document
         for entry in snapshot.undoEntries.reversed() {
+            try cancellation.check()
             let current = undoDocument
             let availability = registry.availability(for: entry.inverse, in: undoDocument)
             guard availability.isEnabled else { throw PersistedHistoryError.inverseMismatch }
@@ -236,6 +261,7 @@ private extension PersistedHistoryStore {
 
         var redoDocument = document
         for entry in snapshot.redoEntries.reversed() {
+            try cancellation.check()
             let before = redoDocument
             let availability = registry.availability(for: entry.forward, in: redoDocument)
             guard availability.isEnabled else { throw PersistedHistoryError.inverseMismatch }

@@ -26942,3 +26942,5 @@ Work packet: Bounded implementation assignment containing requirement IDs, allow
 | OD-009 | Supported browser matrix for generated output | Web platform | Before Milestone 3 exit | Versioned targets based on user needs and feature compatibility |
 | OD-010 | Component library package registry and offline distribution | Architecture | Before Milestone 2 exit | File-based signed packages with pinned versions and local cache |
 | OD-011 | Canvas technology split among SwiftUI, AppKit, Metal/Core Animation | Architecture | Architecture runway | Use native controls for chrome; benchmark canvas alternatives against budgets |
+| OD-012 | Publisher identity, public product name, and bundle identifier | Owner/Product | Before first distributable build | Keep `app.siteforge.SiteForge` local and reversible; do not register or publish |
+| OD-013 | Initial distribution trust level and channels | Owner/Product/Security | Before external distribution | Local unsigned development only until signing/notarization/channel decisions are approved |

@@ -2,6 +2,16 @@ import CryptoKit
 import Darwin
 import Foundation
 
+struct CooperativeCancellationCheckpoint: Sendable {
+    private let operation: @Sendable () throws -> Void
+
+    init(_ operation: @escaping @Sendable () throws -> Void = { try Task.checkCancellation() }) {
+        self.operation = operation
+    }
+
+    func check() throws { try operation() }
+}
+
 enum ProjectIdentifierDomain: StableIdentifierDomain {
     static let diagnosticNamespace = "project"
 }
@@ -219,13 +229,16 @@ actor ProjectPackageStore {
     private static let documentPath = "document.json"
     private let diagnostics: ProjectPackageDiagnostics
     private let fileSystem: IdentityBoundPackageFileSystem
+    private let cancellation: CooperativeCancellationCheckpoint
 
     init(
         diagnostics: ProjectPackageDiagnostics = ProjectPackageDiagnostics(),
-        ioObserver: (any ProjectPackageIOObserving)? = nil
+        ioObserver: (any ProjectPackageIOObserving)? = nil,
+        cancellation: CooperativeCancellationCheckpoint = CooperativeCancellationCheckpoint()
     ) {
         self.diagnostics = diagnostics
         fileSystem = IdentityBoundPackageFileSystem(observer: ioObserver)
+        self.cancellation = cancellation
     }
 
     func encode(_ package: ProjectPackage) async throws -> Data {
@@ -243,7 +256,7 @@ actor ProjectPackageStore {
     func decode(_ data: Data) async throws -> ProjectPackage {
         let started = ContinuousClock.now
         do {
-            let package = try Self.parseContainer(data)
+            let package = try Self.parseContainer(data, cancellation: cancellation)
             await record(.read, projectID: package.projectID, started: started, error: nil)
             return package
         } catch {
@@ -313,7 +326,7 @@ actor ProjectPackageStore {
             } else {
                 file = try await fileSystem.readSnapshot(from: source, maximumBytes: Self.maximumPackageBytes)
             }
-            let package = try Self.parseContainer(file.bytes)
+            let package = try Self.parseContainer(file.bytes, cancellation: cancellation)
             if let recoveryOwner, package.projectID != recoveryOwner {
                 throw ProjectPackageError.unsafeRecoveryArtifact
             }
@@ -399,9 +412,14 @@ private extension ProjectPackageStore {
         return try ArchiveCodec.encode(payloads)
     }
 
-    static func parseContainer(_ data: Data) throws -> ProjectPackage {
+    static func parseContainer(
+        _ data: Data,
+        cancellation: CooperativeCancellationCheckpoint
+    ) throws -> ProjectPackage {
+        try cancellation.check()
         guard data.count <= maximumPackageBytes else { throw ProjectPackageError.oversizedInput }
         let payloads = try ArchiveCodec.decode(data)
+        try cancellation.check()
         let byPath = Dictionary(uniqueKeysWithValues: payloads.map { ($0.path, $0) })
         guard let manifestData = byPath[manifestPath]?.data else { throw ProjectPackageError.missingManifest }
         guard let documentData = byPath[documentPath]?.data else { throw ProjectPackageError.missingDocument }
@@ -412,6 +430,7 @@ private extension ProjectPackageStore {
         } catch {
             throw ProjectPackageError.corruptManifest
         }
+        try cancellation.check()
         guard manifest.format == "app.siteforge.project-package" else {
             throw ProjectPackageError.corruptManifest
         }
@@ -428,11 +447,14 @@ private extension ProjectPackageStore {
             )
         }
         try validateManifestMetadata(manifest)
-        try validateDescriptors(manifest.members, payloads: payloads)
+        try validateDescriptors(manifest.members, payloads: payloads, cancellation: cancellation)
+        try cancellation.check()
 
         let document: CanonicalDocument
         do {
-            document = try DocumentSerializer.decode(documentData)
+            document = try DocumentSerializer.decode(documentData, checkpoint: cancellation.check)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as DocumentSerializationError {
             if case .unsupportedSchema(let version) = error {
                 throw ProjectPackageError.unsupportedDocumentSchema(version)
@@ -441,6 +463,7 @@ private extension ProjectPackageStore {
         } catch {
             throw ProjectPackageError.corruptDocument
         }
+        try cancellation.check()
         guard document.id.description.isEmpty == false else { throw ProjectPackageError.malformedMetadata }
 
         let descriptorByPath = Dictionary(uniqueKeysWithValues: manifest.members.map { ($0.path, $0) })
@@ -503,11 +526,13 @@ private extension ProjectPackageStore {
 
     static func validateDescriptors(
         _ descriptors: [MemberDescriptor],
-        payloads: [ProjectPackageMember]
+        payloads: [ProjectPackageMember],
+        cancellation: CooperativeCancellationCheckpoint
     ) throws {
         guard descriptors.count <= maximumMemberCount else { throw ProjectPackageError.oversizedInput }
         var paths = Set<String>()
         for descriptor in descriptors {
+            try cancellation.check()
             try validateMemberPath(descriptor.path)
             guard paths.insert(descriptor.path).inserted else { throw ProjectPackageError.duplicateMember }
             guard descriptor.path != manifestPath else { throw ProjectPackageError.corruptManifest }
@@ -524,6 +549,7 @@ private extension ProjectPackageStore {
         }
         let payloadByPath = Dictionary(uniqueKeysWithValues: payloads.map { ($0.path, $0.data) })
         for descriptor in descriptors {
+            try cancellation.check()
             guard let data = payloadByPath[descriptor.path],
                   data.count == descriptor.byteCount,
                   checksum(data) == descriptor.sha256 else {

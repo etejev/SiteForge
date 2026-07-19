@@ -4,13 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-CORRECTION-006` Reconcile requirement/decision traceability and replace overstated evidence with reproducible proof.
-  - Severity: `P1` (`M0-P1-08` through `M0-P1-10`) plus necessary evidence corrections (`M0-P2-01` through `M0-P2-03`, `M0-P2-05`, `M0-P2-09`, and `M0-P2-13`).
-  - Requirements: `SF-0201-006` through `SF-0201-008`; `SF-0301-006` through `SF-0301-008`; `SF-0303-003`, `SF-0303-006`, `SF-0303-008`; `SF-1505-006` through `SF-1505-008`; `SF-1602-006` through `SF-1602-008`; `SF-1605-002`, `SF-1605-006` through `SF-1605-008`; `SF-1902-002`, `SF-1902-003`, `SF-1902-007`, `SF-1902-008`; and `SF-2002-001`, `SF-2002-003`, `SF-2002-008`.
-  - Acceptance: the specification and project records use one non-colliding decision namespace; requirement rows distinguish bounded implementation from full requirement verification; Milestone 0 aggregate status reflects unresolved acceptance criteria; evidence maps to named behavioral tests or retained manual/measurement records; preview-state, metadata, and policy tests are labeled at their actual scope.
-  - Evidence and tests required: a machine-checkable traceability index; real end-to-end launch/recovery UI journeys; complete keyboard/focus and accessibility-announcement coverage; retained visual-inspection manifests; named-environment performance methodology with warm-up, repetition, percentiles, frame/stall and memory measures; repository checks that reject unknown or unsubstantiated completed IDs.
-  - Dependencies: can proceed in parallel with production corrections, but final status reconciliation must cite their results.
-
 - [ ] `SF-CORRECTION-007` Establish enforceable core, command, persistence, and application test seams before authoring growth.
   - Severity: necessary `P2` architecture correction (`M0-P2-06` and `M0-P2-07`).
   - Requirements: `SF-1801-001`, `SF-1801-002`, `SF-1801-003`, `SF-1801-004`, `SF-1801-008`, and `SF-1802-008`.
@@ -18,12 +11,19 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
   - Evidence and tests required: independent core/persistence builds, forbidden-import/dependency-cycle checks, two-window isolation tests, Release argument rejection, Debug/UI-test fixture injection, and app integration smoke coverage.
   - Dependencies: complete before the first production Milestone 1 authoring slice.
 
+- [ ] `SF-CORRECTION-008` Close the residual accessibility, stable-row identity, repository scanning, asset-capacity, and fixture-hygiene findings.
+  - Severity: residual `P2`/`P3` work (`M0-P2-03`, `M0-P2-08`, `M0-P2-11`, `M0-P2-12`, `M0-P3-01`, and `M0-P3-02`).
+  - Requirements: `SF-0201-006`, `SF-0202-006`, `SF-0202-008`, `SF-0303-001`, `SF-0303-006`, `SF-0303-008`, `SF-1505-006`, `SF-1602-006`, `SF-1605-006`, `SF-1702-008`, and `SF-2002-008`.
+  - Acceptance: complete forward/reverse keyboard traversal and retained accessibility evidence; PageID-derived stable row identifiers; repository-wide credential/artifact scanning with safe exclusions; a versioned secure resource-capacity decision and representative 500-asset fixture without weakening package limits; one native open-panel path; and centralized, residue-free test-fixture construction.
+  - Evidence and tests required: behavioral keyboard/VoiceOver and stable-ID tests, seeded scanner positives/negatives, deterministic resource-capacity tests or an approved bounded persistence decision, dead-path removal checks, and fixture-cleanup tests on success/failure/interruption.
+  - Dependencies: `SF-CORRECTION-007` provides the composition and fixture seams. Complete before `SF-AUTHORING-000`.
+
 - [ ] `SF-AUTHORING-000` Produce the missing measured authoring-engine architecture runway and resolve `OD-004`/`OD-011`.
   - Severity: `P1` prerequisite gap (`M0-P1-07`).
   - Requirements: `SF-1901-001` through `SF-1901-008`; downstream `SF-0401-001` through `SF-0401-008`, `SF-0407-001` through `SF-0407-008`, `SF-0501-001` through `SF-0501-008`, and `SF-1903-001` through `SF-1903-008`.
   - Acceptance: isolated production-representative prototypes compare SwiftUI, AppKit/Core Animation, and Metal as appropriate; a typed deterministic layout subset is compared with an isolated standards-engine oracle and HTML/CSS/browser output; methodology, commands, hardware/software, warm-up, P50/P95, memory, limitations, and raw results are retained; ADRs resolve or explicitly keep `OD-004` and `OD-011` open without making a browser the canonical model.
   - Evidence and tests required: coordinate conversion, pan/zoom, incremental render/update, hit testing, overlay isolation, accessibility-tree cost, native-material compatibility, layout determinism, preview/export parity, memory, main-thread stalls, and 100-/10,000-object fixtures; explicitly record that the current 8 MiB package cannot represent the specification's 500-asset large fixture.
-  - Dependencies: `SF-CORRECTION-001` through `SF-CORRECTION-007`. Do not start production canvas/layout work first.
+  - Dependencies: `SF-CORRECTION-001` through `SF-CORRECTION-008`. Do not start production canvas/layout work first.
 
 ## IN PROGRESS
 
@@ -34,6 +34,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-CORRECTION-006` Reconcile requirement/decision traceability and replace overstated evidence with reproducible proof.
+  - Severity: `P1` (`M0-P1-08` through `M0-P1-10`) plus necessary evidence corrections (`M0-P2-01` through `M0-P2-03`, `M0-P2-05`, `M0-P2-09`, and `M0-P2-13`).
+  - Requirements: `SF-0201-006` through `SF-0201-008`; `SF-0301-006` through `SF-0301-008`; `SF-0303-003`, `SF-0303-006`, `SF-0303-008`; `SF-1505-006` through `SF-1505-008`; `SF-1602-006` through `SF-1602-008`; `SF-1605-002`, `SF-1605-006` through `SF-1605-008`; `SF-1902-002`, `SF-1902-003`, `SF-1902-007`, `SF-1902-008`; and `SF-2002-001`, `SF-2002-003`, `SF-2002-008`.
+  - Acceptance: the specification and project records use one non-colliding decision namespace; requirement rows distinguish bounded implementation from full requirement verification; Milestone 0 aggregate status reflects unresolved acceptance criteria; evidence maps to named behavioral tests or retained manual/measurement records; preview-state, metadata, and policy tests are labeled at their actual scope.
+  - Evidence and tests required: a machine-checkable traceability index; real end-to-end launch/recovery UI journeys; complete keyboard/focus and accessibility-announcement coverage; retained visual-inspection manifests; named-environment performance methodology with warm-up, repetition, percentiles, frame/stall and memory measures; repository checks that reject unknown or unsubstantiated completed IDs.
+  - Plan: restore the specification's canonical `OD-001…OD-011` meanings, move the two release-only questions to new non-colliding IDs, and link persistence to its resolving ADR; replace aggregate/full-requirement Verified claims with bounded statuses and explicit uncovered acceptance criteria; add cooperative cancellation checkpoints inside package parsing, canonical validation, and persisted-history validation with deterministic barrier tests; instrument every lifecycle intent across success, failure, and cancellation with redacted identities; add production-flow UI/accessibility coverage and a retained visual-inspection manifest; create one machine-readable requirement-to-named-test/artifact index plus a repository lint that rejects unknown IDs, missing evidence, conflicting decisions, and unsupported Verified claims; and capture repeatable named-environment foundation measurements while explicitly reserving renderer/object/asset claims for `SF-AUTHORING-000` and preserving the 8-MiB package security limit.
+  - Dependencies: completed after corrections 001–005; full `./sf verify` passes with 133 unit and 16 UI tests.
 
 - [x] `SF-CORRECTION-005` Implement and verify the real macOS file-access security boundary before claiming `SF-1504` Verified.
   - Severity: `P1` (`M0-P1-05`) and the remaining security-scope/coordination portion of `M0-P1-06`.
@@ -130,6 +138,6 @@ None.
 - [x] `SF-FOUNDATION-001` Create the native macOS Xcode project and test targets.
   - Requirements: `SF-1501-008`, `SF-1802-008`, `SF-1902-006`, and `SF-1902-008` for the bounded application, build/test, accessibility, and automated-smoke foundation.
   - Acceptance: `./sf build`, `./sf test`, and `./sf verify` pass with repository-local source and project files and Derived Data outside the checkout.
-  - Dependencies: uses the reversible development bundle identifier `app.siteforge.SiteForge`; final publisher identity and distribution channel remain governed by `OD-001` and `OD-002`.
+  - Dependencies: uses the reversible development bundle identifier `app.siteforge.SiteForge`; final publisher identity and distribution channel remain governed by `OD-012` and `OD-013`.
   - Plan: audit and retain the valid partial project; finish the Swift 6/macOS 14 app, unit-test, and UI-test targets in one shared scheme; add identity, requirement-traceability, accessibility, and launch smoke coverage; use credential-free local ad-hoc signing only where XCTest requires it; keep Release distribution signing disabled; and make command-line project discovery and build output portable.
   - Evidence: `./sf build` succeeded; `./sf test` executed two unit tests and one UI test with zero failures; `./sf verify` passed repository checks, build, and both test targets on 2026-07-19 using Xcode 27.0 beta, including from an isolated copy containing only tracked and non-ignored source files. Project review found no generated products, `xcuserdata`, absolute machine paths, development team, provisioning profile, certificate, or distribution-signing requirement.

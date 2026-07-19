@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-07-19
 - Owners: Product / Engineering
+- Decision: resolves OD-002
 - Requirements: SF-0301-001, SF-0301-003, SF-0301-004, SF-0301-008, SF-1702-001, SF-1702-004, SF-1702-008
 
 ## Context

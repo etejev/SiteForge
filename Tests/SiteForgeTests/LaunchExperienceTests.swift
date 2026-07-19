@@ -168,6 +168,27 @@ final class LaunchExperienceTests: XCTestCase {
         XCTAssertTrue(failure.state.announcement.contains("failed"))
     }
 
+    func testEveryInteractiveTransitionPostsItsSpecificAccessibilityAnnouncement() async {
+        var messages: [String] = []
+        let controller = LaunchExperienceController(
+            lifecycle: DocumentLifecycleController(
+                session: DocumentSession(),
+                recoveryDirectory: fixtureDirectory.appendingPathComponent("announcement-recovery", isDirectory: true)
+            ),
+            previewScenario: .welcome,
+            announcementPoster: AccessibilityAnnouncementPoster { messages.append($0) }
+        )
+
+        controller.announceCurrentState()
+        await controller.createBlankProjectAndWait()
+        controller.announceCurrentState()
+
+        XCTAssertEqual(messages, [
+            "SiteForge is ready. Create a blank project or open an existing project.",
+            "Project ready.",
+        ])
+    }
+
     func testReduceMotionReplacesAnimatedIndeterminateProgress() {
         XCTAssertTrue(LaunchExperienceController.usesAnimatedIndeterminateProgress(reduceMotion: false))
         XCTAssertFalse(LaunchExperienceController.usesAnimatedIndeterminateProgress(reduceMotion: true))

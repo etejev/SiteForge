@@ -199,6 +199,14 @@ actor DocumentLifecycleBackend {
     func historyDiagnosticRecords() async -> [HistoryDiagnosticRecord] { await historyStore.diagnosticRecords() }
     func fileAccessDiagnosticRecords() async -> [FileAccessDiagnostic] { await fileAccess.diagnosticRecords() }
 
+    func recordEvent(
+        _ identity: LifecycleOperationIdentity,
+        result: LifecycleResult,
+        failure: DocumentLifecycleFailure? = nil
+    ) async {
+        await record(identity, nil, .now, result, failure)
+    }
+
     func authorizeUserSelection(_ url: URL) async throws {
         do { try await fileAccess.authorizeUserSelection(url) }
         catch { throw Self.map(error) }
@@ -234,7 +242,7 @@ actor DocumentLifecycleBackend {
             await progress?(.validatingCanonicalDocument)
             try Task.checkCancellation()
             await progress?(.validatingHistory)
-            let history = await historyStore.load(from: read.package)
+            let history = try await historyStore.load(from: read.package)
             try Task.checkCancellation()
             await progress?(.preparingWorkspace)
             await observer?.reached(.afterRead, operation: identity)
@@ -277,7 +285,7 @@ actor DocumentLifecycleBackend {
             }
             let (sourceURL, read) = accessed
             try Task.checkCancellation()
-            let history = await historyStore.load(from: read.package)
+            let history = try await historyStore.load(from: read.package)
             try Task.checkCancellation()
             await observer?.reached(.afterRead, operation: identity)
             try Task.checkCancellation()
@@ -363,6 +371,7 @@ actor DocumentLifecycleBackend {
         expected: PackageFingerprint? = nil,
         identity: LifecycleOperationIdentity
     ) async throws {
+        let start = ContinuousClock.now
         do {
             try Task.checkCancellation()
             await observer?.reached(.beforeRecoveryDeletion, operation: identity)
@@ -371,12 +380,17 @@ actor DocumentLifecycleBackend {
                 try await store.removeOwnedRecovery(at: coordinatedURL, projectID: projectID, expected: expected)
             }
             await observer?.reached(.afterRecoveryDeletion, operation: identity)
+            await record(identity, projectID, start, .success, nil)
         } catch let error as ProjectPackageError where error == .packageUnavailable {
+            await record(identity, projectID, start, .success, nil)
             return
         } catch is CancellationError {
+            await record(identity, projectID, start, .cancelled, nil)
             throw CancellationError()
         } catch {
-            throw Self.map(error)
+            let failure = Self.map(error)
+            await record(identity, projectID, start, .failure, failure)
+            throw failure
         }
     }
 
@@ -962,17 +976,32 @@ final class DocumentLifecycleController: ObservableObject {
     @discardableResult
     func requestRestoreRecovery() async -> DocumentTransitionResult {
         guard let candidate = recoveryCandidate else { return .cancelled }
+        let identity = makeOperation(
+            intent: .restore,
+            destination: .file(candidate.url, kind: .recovery),
+            documentID: candidate.package.document.id,
+            projectID: candidate.package.projectID,
+            revision: candidate.package.document.revision
+        )
         let previousProjectID = project.projectID
         switch await authorize(.restoreRecovery) {
-        case .cancelled: return .cancelled
-        case .failed(let error): return .failed(error)
+        case .cancelled:
+            await backend.recordEvent(identity, result: .cancelled)
+            return .cancelled
+        case .failed(let error):
+            await backend.recordEvent(identity, result: .failure, failure: error)
+            return .failed(error)
         case .proceed(let discarding):
             await beginDocumentBoundary()
-            guard recoveryCandidate == candidate else { return .cancelled }
+            guard recoveryCandidate == candidate else {
+                await backend.recordEvent(identity, result: .cancelled)
+                return .cancelled
+            }
             installRecovery(candidate)
             if discarding, previousProjectID != candidate.package.projectID {
                 await removeRecovery(for: previousProjectID)
             }
+            await backend.recordEvent(identity, result: .success)
             return .completed
         }
     }

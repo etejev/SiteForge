@@ -2,10 +2,13 @@ import XCTest
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
-    private lazy var recoveryDirectory: URL = {
+    private lazy var fixtureRoot: URL = {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".siteforge-test-fixtures/ui-\(UUID())", isDirectory: true)
+    }()
+    private lazy var recoveryDirectory: URL = {
+        fixtureRoot.appendingPathComponent("recovery", isDirectory: true)
     }()
 
     private func launchWorkspace() -> XCUIApplication {
@@ -63,6 +66,37 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func launchIntegrationOpen(
+        _ url: URL,
+        base64Fixture: URL,
+        startMalformed: Bool = false,
+        retryBase64Fixture: URL? = nil
+    ) -> XCUIApplication {
+        continueAfterFailure = false
+        let application = XCUIApplication()
+        application.launchArguments += [
+            "-NSTreatUnknownArgumentsAsOpen", "NO",
+            "-AppleKeyboardUIMode", "3",
+            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
+            "-SiteForgeIntegrationOpenProject", url.path,
+            "-SiteForgeIntegrationPackageBase64", base64Fixture.path,
+        ]
+        if startMalformed { application.launchArguments.append("-SiteForgeIntegrationStartMalformed") }
+        if let retryBase64Fixture {
+            application.launchArguments += ["-SiteForgeIntegrationRetryBase64", retryBase64Fixture.path]
+        }
+        application.launch()
+        application.activate()
+        XCTAssertTrue(application.windows.firstMatch.waitForExistence(timeout: 5))
+        return application
+    }
+
+    private func legacyFixtureURL(named name: String) -> URL {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return repository.appendingPathComponent("Tests/Fixtures/Legacy/\(name).siteforge.b64")
     }
 
     // SF-0201-002, SF-0201-004, SF-0201-008
@@ -250,6 +284,69 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(recovery.buttons["launch.recovery.restore"].isHittable)
         recovery.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(recovery.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 2))
+    }
+
+    // SF-0201-004, SF-0201-006, SF-0301-004, SF-0301-006, SF-1602-008
+    func testProductionLoaderOpensRealPackageAndRetriesMalformedBytesWithoutPreviewState() throws {
+        let valid = legacyFixtureURL(named: "schema-v1-empty")
+        let project = fixtureRoot.appendingPathComponent("Production-loader.siteforge")
+
+        var application = launchIntegrationOpen(project, base64Fixture: valid)
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
+        XCTAssertTrue(application.descendants(matching: .any)["navigator.page.home"].exists)
+        application.terminate()
+
+        application = launchIntegrationOpen(
+            project,
+            base64Fixture: valid,
+            startMalformed: true,
+            retryBase64Fixture: valid
+        )
+        let retry = application.buttons["launch.retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        let failureMessage = application.staticTexts["launch.failure.message"]
+        XCTAssertTrue(failureMessage.exists)
+        XCTAssertFalse(failureMessage.label.contains("/Users/"))
+        retry.click()
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
+    }
+
+    // SF-0301-004, SF-0301-006, SF-0301-008, SF-1602-006
+    func testProductionRecoveryDiscoverySupportsKeyboardRestoreAndDiscard() throws {
+        let recoveryBytes = legacyFixtureURL(named: "schema-v1-rootless")
+        let recovery = recoveryDirectory.appendingPathComponent(
+            "11000000-0000-0000-0000-000000000002.siteforge-recovery"
+        )
+        var application = XCUIApplication()
+        application.launchArguments += [
+            "-NSTreatUnknownArgumentsAsOpen", "NO",
+            "-AppleKeyboardUIMode", "3",
+            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
+            "-SiteForgeIntegrationRecoveryBase64", recoveryBytes.path,
+            "-SiteForgeIntegrationRecoveryDestination", recovery.path,
+        ]
+        application.launch()
+        application.activate()
+        let restore = application.buttons["launch.recovery.restore"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        application.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
+        application.terminate()
+
+        application = XCUIApplication()
+        application.launchArguments += [
+            "-NSTreatUnknownArgumentsAsOpen", "NO",
+            "-AppleKeyboardUIMode", "3",
+            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
+            "-SiteForgeIntegrationRecoveryBase64", recoveryBytes.path,
+            "-SiteForgeIntegrationRecoveryDestination", recovery.path,
+        ]
+        application.launch()
+        application.activate()
+        let discard = application.buttons["launch.recovery.discard"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 5))
+        discard.click()
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
     }
 
     // SF-0201-006, SF-0201-007, SF-1602-006

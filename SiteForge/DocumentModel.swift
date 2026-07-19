@@ -434,7 +434,8 @@ extension CanonicalDocument {
         return self
     }
 
-    func validate() throws {
+    func validate(checkpoint: () throws -> Void = {}) throws {
+        try checkpoint()
         guard revision < UInt64.max else { throw ModelValidationError.revisionNotIncrementable }
         guard !pages.isEmpty else { throw ModelValidationError.emptyPageList }
         guard Set(pages.map(\.id)).count == pages.count else {
@@ -457,9 +458,11 @@ extension CanonicalDocument {
         var documentNodeIDs = Set<NodeID>()
         var documentPropertyIDs = Set<PropertyID>()
         for page in pages {
+            try checkpoint()
             try page.validate(
                 documentNodeIDs: &documentNodeIDs,
-                documentPropertyIDs: &documentPropertyIDs
+                documentPropertyIDs: &documentPropertyIDs,
+                checkpoint: checkpoint
             )
         }
     }
@@ -468,8 +471,10 @@ extension CanonicalDocument {
 private extension DocumentPage {
     func validate(
         documentNodeIDs: inout Set<NodeID>,
-        documentPropertyIDs: inout Set<PropertyID>
+        documentPropertyIDs: inout Set<PropertyID>,
+        checkpoint: () throws -> Void
     ) throws {
+        try checkpoint()
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelValidationError.invalidPageName
         }
@@ -496,6 +501,7 @@ private extension DocumentPage {
 
         let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
         for rootID in rootNodeIDs {
+            try checkpoint()
             guard let root = nodesByID[rootID] else { throw ModelValidationError.missingNode }
             guard root.parent == .page(id) else { throw ModelValidationError.invalidParent }
         }
@@ -507,6 +513,7 @@ private extension DocumentPage {
         guard declaredRoots == Set(rootNodeIDs) else { throw ModelValidationError.invalidParent }
 
         for node in nodes {
+            try checkpoint()
             guard !node.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw ModelValidationError.invalidNodeName
             }
@@ -525,6 +532,7 @@ private extension DocumentPage {
             }
 
             for childID in node.childIDs {
+                try checkpoint()
                 guard let child = nodesByID[childID] else { throw ModelValidationError.missingNode }
                 guard child.parent == .node(node.id) else {
                     throw ModelValidationError.inconsistentChildren
@@ -551,6 +559,7 @@ private extension DocumentPage {
 
         var visited = Set<NodeID>()
         func visit(_ nodeID: NodeID) throws {
+            try checkpoint()
             guard visited.insert(nodeID).inserted else {
                 throw ModelValidationError.cyclicOrUnreachableTree
             }
@@ -560,6 +569,7 @@ private extension DocumentPage {
             }
         }
         for rootID in rootNodeIDs {
+            try checkpoint()
             try visit(rootID)
         }
         guard visited == nodeIDs else { throw ModelValidationError.cyclicOrUnreachableTree }
@@ -678,7 +688,8 @@ enum DocumentSerializer {
         )
     }
 
-    static func decode(_ data: Data) throws -> CanonicalDocument {
+    static func decode(_ data: Data, checkpoint: () throws -> Void = {}) throws -> CanonicalDocument {
+        try checkpoint()
         let decoder = JSONDecoder()
         let header: SchemaHeader
         do {
@@ -686,6 +697,7 @@ enum DocumentSerializer {
         } catch {
             throw DocumentSerializationError.malformedInput
         }
+        try checkpoint()
         guard (minimumSupportedSchemaVersion...currentSchemaVersion).contains(header.schemaVersion) else {
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
@@ -707,8 +719,9 @@ enum DocumentSerializer {
         default:
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
+        try checkpoint()
         do {
-            try document.validate()
+            try document.validate(checkpoint: checkpoint)
         } catch let error as ModelValidationError {
             throw DocumentSerializationError.invalidModel(error)
         }

@@ -74,6 +74,25 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(decoded.document.id, documentID)
     }
 
+    // SF-0301-004, SF-0301-007, SF-0301-008
+    func testCancellationInsideContainerAndCanonicalValidationIsDistinctAndNonAdopting() async throws {
+        let encoded = try await ProjectPackageStore().encode(package())
+        let barrier = DeterministicCancellationBarrier(blockAt: 4)
+        let store = ProjectPackageStore(cancellation: CooperativeCancellationCheckpoint(barrier.check))
+        let task = Task { try await store.decode(encoded) }
+
+        await barrier.waitUntilBlocked()
+        task.cancel()
+        barrier.release()
+
+        do {
+            _ = try await task.value
+            XCTFail("Cancelled package validation must not return a package")
+        } catch is CancellationError {
+            // Cancellation is intentionally distinct from corrupt input.
+        }
+    }
+
     // SF-0301-005, SF-0303-005, SF-0303-008, SF-1702-008
     func testImmutableSchemaOneEmptyGoldenMigratesDeterministicallyAndWithoutHistory() async throws {
         let store = ProjectPackageStore()
@@ -102,7 +121,7 @@ final class ProjectPackageTests: XCTestCase {
         ])
         XCTAssertEqual(first, second)
         XCTAssertNoThrow(try first.document.validate())
-        let history = await historyStore.load(from: first)
+        let history = try await historyStore.load(from: first)
         XCTAssertEqual(history, .cleanBaseline(.missing))
 
         let savedOnce = try await store.encode(first)
@@ -388,6 +407,36 @@ final class ProjectPackageTests: XCTestCase {
 
 private extension Array {
     var only: Element? { count == 1 ? first : nil }
+}
+
+final class DeterministicCancellationBarrier: @unchecked Sendable {
+    private let lock = NSLock()
+    private let blocked = DispatchSemaphore(value: 0)
+    private let continuation = DispatchSemaphore(value: 0)
+    private let blockAt: Int
+    private var count = 0
+
+    init(blockAt: Int) { self.blockAt = blockAt }
+
+    func check() throws {
+        let shouldBlock = lock.withLock { () -> Bool in
+            count += 1
+            return count == blockAt
+        }
+        if shouldBlock {
+            blocked.signal()
+            continuation.wait()
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitUntilBlocked() async {
+        await Task.detached { self.waitUntilBlockedSynchronously() }.value
+    }
+
+    func release() { continuation.signal() }
+
+    private func waitUntilBlockedSynchronously() { blocked.wait() }
 }
 
 private struct ArchiveMember {
