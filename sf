@@ -1,0 +1,129 @@
+#!/bin/zsh
+set -euo pipefail
+
+ROOT=${0:A:h}
+DERIVED_DATA="$ROOT/.build/DerivedData"
+SCHEME=${SITEFORGE_SCHEME:-SiteForge}
+DESTINATION=${SITEFORGE_DESTINATION:-platform=macOS}
+CODEX_BIN=${SITEFORGE_CODEX_BIN:-}
+
+if [[ -z "$CODEX_BIN" ]]; then
+  if command -v codex >/dev/null 2>&1; then
+    CODEX_BIN=$(command -v codex)
+  elif [[ -x /Applications/ChatGPT.app/Contents/Resources/codex ]]; then
+    CODEX_BIN=/Applications/ChatGPT.app/Contents/Resources/codex
+  fi
+fi
+
+typeset -ga CONTAINER_ARGS
+
+resolve_container() {
+  if [[ -n ${SITEFORGE_WORKSPACE:-} ]]; then
+    CONTAINER_ARGS=(-workspace "$SITEFORGE_WORKSPACE")
+    return
+  fi
+  if [[ -n ${SITEFORGE_PROJECT:-} ]]; then
+    CONTAINER_ARGS=(-project "$SITEFORGE_PROJECT")
+    return
+  fi
+
+  local workspace project
+  workspace=$(find "$ROOT" -maxdepth 2 -name '*.xcworkspace' -not -path '*/.build/*' -print -quit)
+  if [[ -n "$workspace" ]]; then
+    CONTAINER_ARGS=(-workspace "$workspace")
+    return
+  fi
+  project=$(find "$ROOT" -maxdepth 2 -name '*.xcodeproj' -not -path '*/.build/*' -print -quit)
+  if [[ -n "$project" ]]; then
+    CONTAINER_ARGS=(-project "$project")
+    return
+  fi
+
+  print -u2 "No Xcode workspace or project was found."
+  print -u2 "Create SiteForge.xcodeproj, or set SITEFORGE_WORKSPACE / SITEFORGE_PROJECT."
+  return 2
+}
+
+build_app() {
+  resolve_container
+  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" build
+}
+
+test_app() {
+  resolve_container
+  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" test
+}
+
+run_app() {
+  local app
+  app=$(find "$DERIVED_DATA/Build/Products" -type d -name 'SiteForge.app' -print -quit 2>/dev/null || true)
+  if [[ -z "$app" ]]; then
+    build_app
+    app=$(find "$DERIVED_DATA/Build/Products" -type d -name 'SiteForge.app' -print -quit)
+  fi
+  open "$app"
+}
+
+usage() {
+  cat <<'EOF'
+SiteForge local commands
+
+  ./sf dev             Build and launch SiteForge locally
+  ./sf build           Build the macOS app
+  ./sf test            Run the test suite
+  ./sf verify          Run repository checks, build, and tests
+  ./sf watch           Re-run verification when source files change
+  ./sf next            Ask Codex to complete the next ready queue item
+  ./sf loop [count]    Let Codex process up to count items (default 5)
+  ./sf status          Show project, queue, and git status
+  ./sf release-local   Create an unsigned local alpha ZIP; never publish
+
+Optional environment variables:
+  SITEFORGE_SCHEME, SITEFORGE_WORKSPACE, SITEFORGE_PROJECT,
+  SITEFORGE_DESTINATION, SITEFORGE_CODEX_BIN
+EOF
+}
+
+case ${1:-help} in
+  dev)
+    build_app
+    run_app
+    ;;
+  build)
+    build_app
+    ;;
+  test)
+    test_app
+    ;;
+  verify)
+    "$ROOT/scripts/check-repository.sh"
+    build_app
+    test_app
+    ;;
+  watch)
+    exec "$ROOT/scripts/watch-and-verify.sh"
+    ;;
+  next)
+    [[ -n "$CODEX_BIN" ]] || { print -u2 "Codex CLI was not found."; exit 2; }
+    mkdir -p "$ROOT/.codex-loop"
+    "$CODEX_BIN" exec -C "$ROOT" -s workspace-write -o "$ROOT/.codex-loop/last-message.md" - < "$ROOT/docs/CODEX_NEXT_PROMPT.md"
+    ;;
+  loop)
+    [[ -n "$CODEX_BIN" ]] || { print -u2 "Codex CLI was not found."; exit 2; }
+    exec "$ROOT/scripts/codex-loop.sh" "${2:-5}"
+    ;;
+  status)
+    "$ROOT/scripts/project-status.sh"
+    ;;
+  release-local)
+    "$ROOT/scripts/package-local-alpha.sh"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    print -u2 "Unknown command: $1"
+    usage
+    exit 2
+    ;;
+esac

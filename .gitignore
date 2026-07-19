@@ -1,0 +1,16 @@
+.DS_Store
+.build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.codex-loop/*
+!.codex-loop/.gitkeep
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.key
+*.pem
+*.dmg
+*.zip
+

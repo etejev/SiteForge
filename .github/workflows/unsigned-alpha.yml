@@ -1,0 +1,28 @@
+name: Unsigned Alpha
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_unsigned:
+        description: Type UNSIGNED to create an untrusted alpha artifact
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    if: ${{ inputs.confirm_unsigned == 'UNSIGNED' }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, test, and package locally
+        run: ./sf release-local
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SiteForge-unsigned-alpha
+          path: .build/local-alpha/*
+          retention-days: 7
+
