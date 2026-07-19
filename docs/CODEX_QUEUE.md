@@ -4,13 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-CORRECTION-005` Implement and verify the real macOS file-access security boundary before claiming `SF-1504` Verified.
-  - Severity: `P1` (`M0-P1-05`).
-  - Requirements: `SF-1504-001` through `SF-1504-008`, plus `SF-1603-004`.
-  - Acceptance: one file-access service owns sandbox entitlement policy, user-selected security scopes, balanced access lifetimes, persisted bookmark resolution and stale repair, coordinated external access, relocation, denial, and redacted diagnostics; implementation status is downgraded until this behavior exists and passes on the supported distribution configuration.
-  - Evidence and tests required: entitlement inspection, real panel-selected access, relaunch bookmark resolution, stale-bookmark repair, balanced scope lifetime, file coordination/presentation, relocation, permission denial, and external modification.
-  - Dependencies: owner-approved distribution configuration is needed before final release verification, but local implementation and status correction are not blocked.
-
 - [ ] `SF-CORRECTION-006` Reconcile requirement/decision traceability and replace overstated evidence with reproducible proof.
   - Severity: `P1` (`M0-P1-08` through `M0-P1-10`) plus necessary evidence corrections (`M0-P2-01` through `M0-P2-03`, `M0-P2-05`, `M0-P2-09`, and `M0-P2-13`).
   - Requirements: `SF-0201-006` through `SF-0201-008`; `SF-0301-006` through `SF-0301-008`; `SF-0303-003`, `SF-0303-006`, `SF-0303-008`; `SF-1505-006` through `SF-1505-008`; `SF-1602-006` through `SF-1602-008`; `SF-1605-002`, `SF-1605-006` through `SF-1605-008`; `SF-1902-002`, `SF-1902-003`, `SF-1902-007`, `SF-1902-008`; and `SF-2002-001`, `SF-2002-003`, `SF-2002-008`.
@@ -41,6 +34,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-CORRECTION-005` Implement and verify the real macOS file-access security boundary before claiming `SF-1504` Verified.
+  - Severity: `P1` (`M0-P1-05`) and the remaining security-scope/coordination portion of `M0-P1-06`.
+  - Requirements: `SF-1504-001` through `SF-1504-008`, plus `SF-1603-004`.
+  - Plan: introduce one actor-isolated file-access service above the identity-bound package store; configure the unsigned Release candidate for App Sandbox, user-selected read/write, and app-scoped bookmarks while leaving local Debug/XCTest credential-free; persist versioned bookmarks in restrictive app-owned storage; resolve and repair stale or relocated bookmarks; balance every security-scope lifetime around off-main `NSFileCoordinator` access; register a native file presenter for move/change/delete events; route panel-selected open/save and subsequent reopen/revert/save through that boundary; declare the SiteForge package type; add real Foundation bookmark round trips plus deterministic injected denial/stale/relocation/coordination/lifetime/redaction/lifecycle tests; and downgrade full SF-1504 release verification until an owner-approved signed distribution configuration is exercised.
+  - Evidence: `./sf verify` passed on 2026-07-19 with 129 unit tests and 14 UI tests. Ten new tests exercise a real Foundation security-scoped bookmark across service recreation; parent-scoped creation and relaunch of a newly saved project; restrictive bookmark-store permissions; stale repair and relocation; balanced scope success, denial, and coordinated failure; lifecycle selected-open/relaunch; `NSFilePresenter` change/move/delete behavior; exact canonical preservation during external change/relocation; entitlement and project-type declarations; and redacted diagnostics. Retained lifecycle, identity-bound filesystem, native panel, keyboard, and accessibility tests remain green. Release build settings declare App Sandbox, user-selected read/write, and app-scoped bookmarks while distribution signing remains disabled. ADR-0010 records the boundary and its portability/release limits.
+  - Status boundary: the correction fixes the audit's absent implementation and overclaim by classifying the bounded local file-access slice as Verified, while the complete generated `SF-1504-001…008` module acceptance and signed sandboxed distribution exercise remain Implemented/Not fully Verified pending later external-asset authoring scope and owner-approved distribution configuration.
+  - Dependencies: owner-approved publisher/trust configuration is still required before final distributed-build verification; no credential or signing action was taken.
 
 - [x] `SF-CORRECTION-004` Harden current-schema decoding, revision bounds, and historical migration evidence.
   - Severity: `P1` (`M0-P1-04`) with necessary migration evidence from `M0-P2-05`.

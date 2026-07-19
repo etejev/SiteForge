@@ -12,6 +12,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         continueAfterFailure = false
         let application = XCUIApplication()
         application.launchArguments += [
+            "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-AppleKeyboardUIMode", "3",
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
         ]
@@ -38,6 +39,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         continueAfterFailure = false
         let application = XCUIApplication()
         application.launchArguments += [
+            "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-AppleKeyboardUIMode", "3",
             "-SiteForgeLaunchScenario", scenario,
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,

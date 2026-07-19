@@ -30,6 +30,8 @@
 		100000000000000000000021 /* IdentityBoundFileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000024 /* IdentityBoundFileSystem.swift */; };
 		100000000000000000000022 /* IdentityBoundFileSystemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000025 /* IdentityBoundFileSystemTests.swift */; };
 		100000000000000000000023 /* DocumentLifecycleRaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000026 /* DocumentLifecycleRaceTests.swift */; };
+		100000000000000000000024 /* FileAccessBoundary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000027 /* FileAccessBoundary.swift */; };
+		100000000000000000000025 /* FileAccessBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000030 /* FileAccessBoundaryTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -76,6 +78,10 @@
 		200000000000000000000024 /* IdentityBoundFileSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityBoundFileSystem.swift; sourceTree = "<group>"; };
 		200000000000000000000025 /* IdentityBoundFileSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityBoundFileSystemTests.swift; sourceTree = "<group>"; };
 		200000000000000000000026 /* DocumentLifecycleRaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentLifecycleRaceTests.swift; sourceTree = "<group>"; };
+		200000000000000000000027 /* FileAccessBoundary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessBoundary.swift; sourceTree = "<group>"; };
+		200000000000000000000028 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		200000000000000000000029 /* SiteForge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SiteForge.entitlements; sourceTree = "<group>"; };
+		200000000000000000000030 /* FileAccessBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessBoundaryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,9 +112,12 @@
 				200000000000000000000011 /* CommandKernel.swift */,
 				200000000000000000000013 /* ProjectPackage.swift */,
 				200000000000000000000024 /* IdentityBoundFileSystem.swift */,
+				200000000000000000000027 /* FileAccessBoundary.swift */,
 				200000000000000000000015 /* DocumentLifecycle.swift */,
 				200000000000000000000017 /* PersistedHistory.swift */,
 				200000000000000000000020 /* LaunchExperience.swift */,
+				200000000000000000000028 /* Info.plist */,
+				200000000000000000000029 /* SiteForge.entitlements */,
 			);
 			path = SiteForge;
 			sourceTree = "<group>";
@@ -135,6 +144,7 @@
 				200000000000000000000023 /* WorkspaceMaterialPolicyTests.swift */,
 				200000000000000000000025 /* IdentityBoundFileSystemTests.swift */,
 				200000000000000000000026 /* DocumentLifecycleRaceTests.swift */,
+				200000000000000000000030 /* FileAccessBoundaryTests.swift */,
 			);
 			path = SiteForgeTests;
 			sourceTree = "<group>";
@@ -226,8 +236,8 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		600000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001 /* SiteForgeApp.swift in Sources */, 100000000000000000000002 /* ContentView.swift in Sources */, 100000000000000000000005 /* WorkspaceShellModel.swift in Sources */, 100000000000000000000006 /* WorkspaceShellView.swift in Sources */, 100000000000000000000019 /* WorkspaceMaterialPolicy.swift in Sources */, 100000000000000000000007 /* DocumentModel.swift in Sources */, 100000000000000000000008 /* CommandKernel.swift in Sources */, 100000000000000000000010 /* ProjectPackage.swift in Sources */, 100000000000000000000021 /* IdentityBoundFileSystem.swift in Sources */, 100000000000000000000012 /* DocumentLifecycle.swift in Sources */, 100000000000000000000014 /* PersistedHistory.swift in Sources */, 100000000000000000000017 /* LaunchExperience.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
-		600000000000000000000002 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000003 /* AppMetadataTests.swift in Sources */, 100000000000000000000009 /* CommandKernelTests.swift in Sources */, 100000000000000000000011 /* ProjectPackageTests.swift in Sources */, 100000000000000000000013 /* DocumentLifecycleTests.swift in Sources */, 100000000000000000000023 /* DocumentLifecycleRaceTests.swift in Sources */, 100000000000000000000015 /* PersistedHistoryTests.swift in Sources */, 100000000000000000000016 /* BlankProjectTests.swift in Sources */, 100000000000000000000018 /* LaunchExperienceTests.swift in Sources */, 100000000000000000000020 /* WorkspaceMaterialPolicyTests.swift in Sources */, 100000000000000000000022 /* IdentityBoundFileSystemTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001 /* SiteForgeApp.swift in Sources */, 100000000000000000000002 /* ContentView.swift in Sources */, 100000000000000000000005 /* WorkspaceShellModel.swift in Sources */, 100000000000000000000006 /* WorkspaceShellView.swift in Sources */, 100000000000000000000019 /* WorkspaceMaterialPolicy.swift in Sources */, 100000000000000000000007 /* DocumentModel.swift in Sources */, 100000000000000000000008 /* CommandKernel.swift in Sources */, 100000000000000000000010 /* ProjectPackage.swift in Sources */, 100000000000000000000021 /* IdentityBoundFileSystem.swift in Sources */, 100000000000000000000024 /* FileAccessBoundary.swift in Sources */, 100000000000000000000012 /* DocumentLifecycle.swift in Sources */, 100000000000000000000014 /* PersistedHistory.swift in Sources */, 100000000000000000000017 /* LaunchExperience.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000002 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000003 /* AppMetadataTests.swift in Sources */, 100000000000000000000009 /* CommandKernelTests.swift in Sources */, 100000000000000000000011 /* ProjectPackageTests.swift in Sources */, 100000000000000000000013 /* DocumentLifecycleTests.swift in Sources */, 100000000000000000000023 /* DocumentLifecycleRaceTests.swift in Sources */, 100000000000000000000025 /* FileAccessBoundaryTests.swift in Sources */, 100000000000000000000015 /* PersistedHistoryTests.swift in Sources */, 100000000000000000000016 /* BlankProjectTests.swift in Sources */, 100000000000000000000018 /* LaunchExperienceTests.swift in Sources */, 100000000000000000000020 /* WorkspaceMaterialPolicyTests.swift in Sources */, 100000000000000000000022 /* IdentityBoundFileSystemTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 		600000000000000000000003 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000004 /* SiteForgeLaunchTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
@@ -239,8 +249,8 @@
 /* Begin XCBuildConfiguration section */
 		A00000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CODE_SIGNING_ALLOWED = YES; CODE_SIGNING_REQUIRED = YES; CODE_SIGN_IDENTITY = "-"; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0;}; name = Debug; };
 		A00000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0;}; name = Release; };
-		A00000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CURRENT_PROJECT_VERSION = 1; ENABLE_HARDENED_RUNTIME = NO; ENABLE_TESTABILITY = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = SiteForge; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForge; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone";}; name = Debug; };
-		A00000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CURRENT_PROJECT_VERSION = 1; ENABLE_HARDENED_RUNTIME = NO; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = SiteForge; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForge; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES;}; name = Release; };
+		A00000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CURRENT_PROJECT_VERSION = 1; ENABLE_HARDENED_RUNTIME = NO; ENABLE_TESTABILITY = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = SiteForge/Info.plist; INFOPLIST_KEY_CFBundleDisplayName = SiteForge; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForge; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone";}; name = Debug; };
+		A00000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = SiteForge/SiteForge.entitlements; CURRENT_PROJECT_VERSION = 1; ENABLE_APP_SANDBOX = YES; ENABLE_HARDENED_RUNTIME = NO; ENABLE_USER_SELECTED_FILES = readwrite; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = SiteForge/Info.plist; INFOPLIST_KEY_CFBundleDisplayName = SiteForge; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForge; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES;}; name = Release; };
 		A00000000000000000000005 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForgeTests; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SiteForge.app/Contents/MacOS/SiteForge";}; name = Debug; };
 		A00000000000000000000006 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForgeTests; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SiteForge.app/Contents/MacOS/SiteForge";}; name = Release; };
 		A00000000000000000000007 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForgeUITests; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_TARGET_NAME = SiteForge;}; name = Debug; };

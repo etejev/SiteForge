@@ -157,6 +157,12 @@ struct LoadedProject: Sendable {
     let package: ProjectPackage
     let fingerprint: PackageFingerprint
     let history: PersistedHistoryLoadResult
+    let sourceURL: URL
+}
+
+struct CompletedPackageWrite: Sendable {
+    let fingerprint: PackageFingerprint
+    let destinationURL: URL
 }
 
 enum LifecycleBackendFault: Sendable { case none, permission, staleScope, io }
@@ -165,6 +171,7 @@ actor DocumentLifecycleBackend {
     private let store: ProjectPackageStore
     private let diagnostics: DocumentLifecycleDiagnostics
     private let historyStore: PersistedHistoryStore
+    private let fileAccess: FileAccessService
     private let observer: (any LifecycleBackendObserving)?
     private var fault: LifecycleBackendFault = .none
     private var delayNanoseconds: UInt64 = 0
@@ -173,11 +180,13 @@ actor DocumentLifecycleBackend {
         store: ProjectPackageStore = ProjectPackageStore(),
         diagnostics: DocumentLifecycleDiagnostics = DocumentLifecycleDiagnostics(),
         historyStore: PersistedHistoryStore = PersistedHistoryStore(),
+        fileAccess: FileAccessService = FileAccessService(),
         observer: (any LifecycleBackendObserving)? = nil
     ) {
         self.store = store
         self.diagnostics = diagnostics
         self.historyStore = historyStore
+        self.fileAccess = fileAccess
         self.observer = observer
     }
 
@@ -188,6 +197,17 @@ actor DocumentLifecycleBackend {
 
     func diagnosticRecords() async -> [LifecycleDiagnostic] { await diagnostics.records }
     func historyDiagnosticRecords() async -> [HistoryDiagnosticRecord] { await historyStore.diagnosticRecords() }
+    func fileAccessDiagnosticRecords() async -> [FileAccessDiagnostic] { await fileAccess.diagnosticRecords() }
+
+    func authorizeUserSelection(_ url: URL) async throws {
+        do { try await fileAccess.authorizeUserSelection(url) }
+        catch { throw Self.map(error) }
+    }
+
+    func recordRelocation(from oldURL: URL, to newURL: URL) async throws {
+        do { try await fileAccess.recordRelocation(from: oldURL, to: newURL) }
+        catch { throw Self.map(error) }
+    }
 
     func read(
         from url: URL,
@@ -202,7 +222,14 @@ actor DocumentLifecycleBackend {
             try Task.checkCancellation()
             await progress?(.readingPackage)
             if delayNanoseconds > 0 { try await Task.sleep(nanoseconds: delayNanoseconds) }
-            let read = try await store.readSnapshot(from: url)
+            let accessed = try await fileAccess.withAccess(
+                to: url,
+                intent: identity.intent == .revert ? .revert : .open
+            ) { [store] coordinatedURL in
+                let read = try await store.readSnapshot(from: coordinatedURL)
+                return (coordinatedURL, read)
+            }
+            let (sourceURL, read) = accessed
             try Task.checkCancellation()
             await progress?(.validatingCanonicalDocument)
             try Task.checkCancellation()
@@ -213,7 +240,12 @@ actor DocumentLifecycleBackend {
             await observer?.reached(.afterRead, operation: identity)
             try Task.checkCancellation()
             await record(identity, read.package.projectID, start, .success, nil)
-            return LoadedProject(package: read.package, fingerprint: read.file.fingerprint, history: history)
+            return LoadedProject(
+                package: read.package,
+                fingerprint: read.file.fingerprint,
+                history: history,
+                sourceURL: sourceURL
+            )
         } catch is CancellationError {
             await record(identity, nil, start, .cancelled, nil)
             throw CancellationError()
@@ -236,17 +268,26 @@ actor DocumentLifecycleBackend {
             await observer?.reached(.beforeRead, operation: identity)
             try Task.checkCancellation()
             if delayNanoseconds > 0 { try await Task.sleep(nanoseconds: delayNanoseconds) }
-            let read = try await store.readOwnedRecoverySnapshot(
-                from: url,
-                expectedProjectID: expectedProjectID
-            )
+            let accessed = try await fileAccess.withAccess(to: url, intent: .recovery) { [store] coordinatedURL in
+                let read = try await store.readOwnedRecoverySnapshot(
+                    from: coordinatedURL,
+                    expectedProjectID: expectedProjectID
+                )
+                return (coordinatedURL, read)
+            }
+            let (sourceURL, read) = accessed
             try Task.checkCancellation()
             let history = await historyStore.load(from: read.package)
             try Task.checkCancellation()
             await observer?.reached(.afterRead, operation: identity)
             try Task.checkCancellation()
             await record(identity, read.package.projectID, start, .success, nil)
-            return LoadedProject(package: read.package, fingerprint: read.file.fingerprint, history: history)
+            return LoadedProject(
+                package: read.package,
+                fingerprint: read.file.fingerprint,
+                history: history,
+                sourceURL: sourceURL
+            )
         } catch is CancellationError {
             await record(identity, nil, start, .cancelled, nil)
             throw CancellationError()
@@ -264,7 +305,7 @@ actor DocumentLifecycleBackend {
         to url: URL,
         expected: PackageFingerprint?,
         identity: LifecycleOperationIdentity
-    ) async throws -> PackageFingerprint {
+    ) async throws -> CompletedPackageWrite {
         let start = ContinuousClock.now
         do {
             try throwFault()
@@ -293,15 +334,19 @@ actor DocumentLifecycleBackend {
             try Task.checkCancellation()
             await observer?.reached(.beforeFilesystemWrite, operation: identity)
             try Task.checkCancellation()
-            let fingerprint = try await store.write(
-                packageWithHistory,
-                to: url,
-                expected: replacementExpectation,
-                policy: policy
-            )
+            let accessIntent: FileAccessIntent = identity.intent == .autosave ? .autosave : .save
+            let completed = try await fileAccess.withAccess(to: url, intent: accessIntent) { [store] coordinatedURL in
+                let fingerprint = try await store.write(
+                    packageWithHistory,
+                    to: coordinatedURL,
+                    expected: replacementExpectation,
+                    policy: policy
+                )
+                return CompletedPackageWrite(fingerprint: fingerprint, destinationURL: coordinatedURL)
+            }
             await observer?.reached(.afterFilesystemWrite, operation: identity)
             await record(identity, package.projectID, start, .success, nil)
-            return fingerprint
+            return completed
         } catch is CancellationError {
             await record(identity, package.projectID, start, .cancelled, nil)
             throw CancellationError()
@@ -322,7 +367,9 @@ actor DocumentLifecycleBackend {
             try Task.checkCancellation()
             await observer?.reached(.beforeRecoveryDeletion, operation: identity)
             try Task.checkCancellation()
-            try await store.removeOwnedRecovery(at: url, projectID: projectID, expected: expected)
+            try await fileAccess.withAccess(to: url, intent: .autosave) { [store] coordinatedURL in
+                try await store.removeOwnedRecovery(at: coordinatedURL, projectID: projectID, expected: expected)
+            }
             await observer?.reached(.afterRecoveryDeletion, operation: identity)
         } catch let error as ProjectPackageError where error == .packageUnavailable {
             return
@@ -403,6 +450,14 @@ actor DocumentLifecycleBackend {
 
     private nonisolated static func map(_ error: Error) -> DocumentLifecycleFailure {
         if let error = error as? DocumentLifecycleFailure { return error }
+        if let error = error as? FileAccessFailure {
+            switch error {
+            case .permissionDenied: return .permissionDenied
+            case .missingBookmark, .corruptBookmarkStore, .staleBookmarkRepairFailed:
+                return .staleSecurityScope
+            case .coordinationFailed: return .ioFailure
+            }
+        }
         if let error = error as? ProjectPackageError {
             switch error {
             case .fileIdentityChanged: return .externalModification
@@ -575,6 +630,7 @@ final class DocumentLifecycleController: ObservableObject {
     private var observation: AnyCancellable?
     private var allowNextClose = false
     private var pendingDecisionContinuation: CheckedContinuation<UnsavedChangesDecision, Never>?
+    private var filePresenter: ProjectFilePresenter?
 
     init(
         session: DocumentSession,
@@ -667,6 +723,7 @@ final class DocumentLifecycleController: ObservableObject {
     }
 
     private func establishNewDocument() {
+        stopPresentingDurableFile()
         let document = ProjectCreation.blank()
         observing = true
         try? session.establishBaseline(document)
@@ -681,6 +738,7 @@ final class DocumentLifecycleController: ObservableObject {
     @discardableResult
     func requestOpen(
         _ url: URL,
+        userSelected: Bool = false,
         progress: (@Sendable (ProjectLoadUpdate) async -> Void)? = nil
     ) async -> DocumentTransitionResult {
         let previousProjectID = project.projectID
@@ -688,6 +746,16 @@ final class DocumentLifecycleController: ObservableObject {
         case .cancelled: return .cancelled
         case .failed(let error): return .failed(error)
         case .proceed(let discarding):
+            if userSelected {
+                do { try await backend.authorizeUserSelection(url) }
+                catch let error as DocumentLifecycleFailure {
+                    setFailure(error)
+                    return .failed(error)
+                } catch {
+                    setFailure(.permissionDenied)
+                    return .failed(.permissionDenied)
+                }
+            }
             await beginDocumentBoundary()
             let result = await loadAndAdopt(url, intent: .open, progress: progress)
             if result == .completed, discarding { await removeRecovery(for: previousProjectID) }
@@ -749,8 +817,9 @@ final class DocumentLifecycleController: ObservableObject {
                 return .failed(.malformedPackage)
             }
             observing = false
-            project = loaded.package; fileURL = url; durableFingerprint = loaded.fingerprint
-            displayName = url.deletingPathExtension().lastPathComponent
+            project = loaded.package; fileURL = loaded.sourceURL; durableFingerprint = loaded.fingerprint
+            displayName = loaded.sourceURL.deletingPathExtension().lastPathComponent
+            startPresentingDurableFile(loaded.sourceURL)
             failure = nil; phase = .clean; hasUnsavedChanges = false
             await progress?(.checkingRecovery)
             await findRecoveryCandidate()
@@ -764,7 +833,7 @@ final class DocumentLifecycleController: ObservableObject {
         }
     }
 
-    @discardableResult func save(to destination: URL? = nil) async -> Bool {
+    @discardableResult func save(to destination: URL? = nil, userSelected: Bool = false) async -> Bool {
         let invocationEpoch = lifecycleEpoch
         await cancelAndDrainAutosave()
         if let priorSave = activeSaveTask {
@@ -773,6 +842,11 @@ final class DocumentLifecycleController: ObservableObject {
         await cancelAndDrainAutosave()
         guard lifecycleEpoch == invocationEpoch, !Task.isCancelled else { return false }
         guard let target = destination ?? fileURL else { return false }
+        if userSelected {
+            do { try await backend.authorizeUserSelection(target) }
+            catch let error as DocumentLifecycleFailure { setFailure(error); return false }
+            catch { setFailure(.permissionDenied); return false }
+        }
         let snapshot = session.document
         let historySnapshot = session.historySnapshot()
         let now = ProjectTimestamp(date: clock.now())
@@ -824,7 +898,7 @@ final class DocumentLifecycleController: ObservableObject {
         phase = .saving
         failure = nil
         do {
-            let fingerprint = try await backend.write(
+            let completed = try await backend.write(
                 package,
                 history: history,
                 to: target,
@@ -838,9 +912,10 @@ final class DocumentLifecycleController: ObservableObject {
                 return false
             }
             project = package
-            fileURL = target
-            durableFingerprint = fingerprint
-            displayName = target.deletingPathExtension().lastPathComponent
+            fileURL = completed.destinationURL
+            durableFingerprint = completed.fingerprint
+            displayName = completed.destinationURL.deletingPathExtension().lastPathComponent
+            startPresentingDurableFile(completed.destinationURL)
             if session.document.revision == identity.revision {
                 phase = .clean
                 hasUnsavedChanges = false
@@ -917,6 +992,8 @@ final class DocumentLifecycleController: ObservableObject {
         if candidate.durableURL == nil { durableFingerprint = nil; displayName = "Untitled" }
         recoveryCandidate = nil; failure = nil; phase = .recovered; hasUnsavedChanges = true
         transitionFailure = nil
+        if let durableURL = candidate.durableURL { startPresentingDurableFile(durableURL) }
+        else { stopPresentingDurableFile() }
     }
 
     func discardRecovery() async {
@@ -967,6 +1044,7 @@ final class DocumentLifecycleController: ObservableObject {
         case .proceed(let discarding):
             await beginDocumentBoundary()
             if discarding { await removeRecovery(for: project.projectID) }
+            stopPresentingDurableFile()
             return .completed
         }
     }
@@ -1344,11 +1422,41 @@ final class DocumentLifecycleController: ObservableObject {
         panel.message = "Open a validated SiteForge project."
         panel.accessoryView = nil
         guard panel.runModal() == .OK, let url = panel.url else { noteCancellation(); return }
-        Task { _ = await requestOpen(url) }
+        Task { _ = await requestOpen(url, userSelected: true) }
     }
 
     func presentSavePanel() {
         guard let url = saveDestinationProvider(suggestedSaveFilename) else { noteCancellation(); return }
-        Task { _ = await save(to: url) }
+        Task { _ = await save(to: url, userSelected: true) }
+    }
+
+    private func startPresentingDurableFile(_ url: URL) {
+        stopPresentingDurableFile()
+        let presenter = ProjectFilePresenter(url: url) { [weak self] event in
+            Task { @MainActor [weak self] in self?.receiveFilePresentation(event) }
+        }
+        filePresenter = presenter
+        NSFileCoordinator.addFilePresenter(presenter)
+    }
+
+    private func stopPresentingDurableFile() {
+        guard let filePresenter else { return }
+        NSFileCoordinator.removeFilePresenter(filePresenter)
+        self.filePresenter = nil
+    }
+
+    func receiveFilePresentation(_ event: ProjectFilePresentationEvent) {
+        switch event {
+        case .changed:
+            guard phase != .saving, phase != .autosaving else { return }
+            setFailure(.externalModification)
+        case .moved(let newURL):
+            guard let oldURL = fileURL else { return }
+            fileURL = newURL
+            displayName = newURL.deletingPathExtension().lastPathComponent
+            Task { [backend] in try? await backend.recordRelocation(from: oldURL, to: newURL) }
+        case .deleted:
+            setFailure(.externalModification)
+        }
     }
 }

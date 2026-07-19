@@ -208,11 +208,11 @@ final class LaunchExperienceController: ObservableObject {
         await performBlankCreation(operationID: id, start: .now)
     }
 
-    func openProject(_ url: URL) {
+    func openProject(_ url: URL, userSelected: Bool = false) {
         lastOpenURL = url
         startOperation(.open) { [weak self] id, start in
             guard let self else { return }
-            await self.performOpen(url, operationID: id, start: start)
+            await self.performOpen(url, userSelected: userSelected, operationID: id, start: start)
         }
     }
 
@@ -221,7 +221,7 @@ final class LaunchExperienceController: ObservableObject {
         let id = UUID()
         operationID = id
         returnState = state == .workspace ? .workspace : .welcome
-        await performOpen(url, operationID: id, start: .now)
+        await performOpen(url, userSelected: false, operationID: id, start: .now)
     }
 
     func cancelCurrentOperation() {
@@ -273,7 +273,7 @@ final class LaunchExperienceController: ObservableObject {
             lifecycle.noteCancellation()
             return
         }
-        openProject(url)
+        openProject(url, userSelected: true)
     }
 
     static func usesAnimatedIndeterminateProgress(reduceMotion: Bool) -> Bool { !reduceMotion }
@@ -344,8 +344,13 @@ final class LaunchExperienceController: ObservableObject {
         }
     }
 
-    private func performOpen(_ url: URL, operationID id: UUID, start: ContinuousClock.Instant) async {
-        let result = await lifecycle.requestOpen(url) { [weak self] update in
+    private func performOpen(
+        _ url: URL,
+        userSelected: Bool = false,
+        operationID id: UUID,
+        start: ContinuousClock.Instant
+    ) async {
+        let result = await lifecycle.requestOpen(url, userSelected: userSelected) { [weak self] update in
             await self?.receive(update, operationID: id)
         }
         guard id == operationID else { return }

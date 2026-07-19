@@ -33,6 +33,8 @@ This file records user-visible behavior during development. It is not a substitu
 - Identity-bound package I/O that captures validated bytes, bounded SHA-256 fingerprint, device/inode identity, and security metadata from one no-follow descriptor snapshot, with deterministic barrier-controlled race coverage.
 - App-owned recovery validation and typed deletion failures that preserve mismatched artifacts and retain a recovery candidate when deletion must be retried.
 - Immutable package-v1/schema-v1 compatibility fixtures for empty and rootless legacy projects, with retained provenance and decoded-package checksums.
+- Centralized macOS file-access boundary with native panel authorization, real app-scoped security bookmarks, stale-bookmark repair, coordinated package I/O, relocation support, external file presentation, typed denial/recovery failures, and privacy-preserving diagnostics.
+- Unsigned Release-candidate App Sandbox, user-selected read/write, and app-scoped bookmark declarations plus a registered `.siteforge` project-package document type.
 
 ### Changed
 
@@ -52,6 +54,7 @@ This file records user-visible behavior during development. It is not a substitu
 - Lifecycle reads, saves, autosaves, recovery writes, and document transitions now carry a typed epoch, operation, document/project, revision, destination, and intent identity; every document-adoption boundary invalidates prior work.
 - Manual Save now deterministically cancels or drains pending autosave work. An edit made during Save leaves the captured revision durable while the newer active revision remains modified and recoverable.
 - Current canonical schema v2 now requires every document and page field and never applies legacy defaults; schema-v1 compatibility uses a separate explicit migration adapter.
+- Project open, revert, Save, and Save As now pass through one balanced security-scope and file-coordination owner; bookmarks remain machine-local app state rather than portable package content.
 
 ### Fixed
 
@@ -61,9 +64,11 @@ This file records user-visible behavior during development. It is not a substitu
 - Opening no longer rereads a path to fingerprint validated content, and concurrent replacement, delete/recreate, same-inode modification, hard-link, source/destination/ancestor symlink, sparse-input, recovery-collision, and deletion-failure cases preserve the last committed document and external bytes.
 - Stale lifecycle success, failure, and cancellation can no longer reattach canonical state, metadata, history, recovery state, failure state, or UI phase after New, Open, Revert, Restore, or Close; autosave burst coalescing and revision order are now verified without wall-clock sleeps.
 - Terminal or non-incrementable document revisions now fail with a typed actionable error while preserving the exact committed document and command history instead of risking integer overflow.
+- External project change or deletion now enters explicit conflict state without replacing the active canonical project; relocation updates the durable URL and persistent access while preserving document content.
 
 ### Known limitations
 
 - History schema v1 is intentionally bounded to the current command kernel; future command types, checkpoints, coalescing metadata, and migrations require explicit schema support.
 - The canvas editing interface and Preview behavior remain bounded placeholders for later work items.
 - Local alpha packaging is unsigned and not notarized.
+- Final sandbox/distribution verification remains pending owner-approved publisher and trust configuration; the local Release candidate is deliberately unsigned.

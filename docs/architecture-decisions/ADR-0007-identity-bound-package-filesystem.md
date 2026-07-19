@@ -10,7 +10,7 @@
 
 ADR-0001 selected a deterministic single-file package and ADR-0002 required open/save conflicts to preserve external edits. The original implementation checked paths before reopening them, fingerprinted a package with a second path read, and performed an unconditional final rename. Those boundaries could mix package bytes from one file object with a fingerprint from another, redirect work through a symlink swap, or overwrite a destination changed after conflict validation. Recovery cleanup also needed strong proof that an artifact belonged to the active project.
 
-This decision is bounded to local macOS package and recovery I/O. Security-scoped bookmarks, App Sandbox entitlements, and file coordination for user-selected locations remain assigned to `SF-CORRECTION-005`.
+This decision is bounded to local macOS package and recovery I/O. ADR-0010 now supplies the surrounding security-scoped bookmark, App Sandbox entitlement, and coordinated user-selected access boundary.
 
 ADR-0008 defines lifecycle epoch, operation intent, and Save/autosave coordination above this boundary. The filesystem layer remains responsible for the final identity-bound conditional commit and does not use a global generation to order semantically distinct lifecycle operations.
 
@@ -62,7 +62,7 @@ Recovery storage is the app-owned directory selected by the lifecycle layer, nor
 2. **Content digest without filesystem identity.** Rejected because delete/recreate with identical bytes is still a different file object and can cross ownership or lifecycle boundaries.
 3. **Advisory `flock`.** Rejected as the correctness boundary because other processes need not honor it and it does not bind ancestor path resolution.
 4. **Unconditional atomic rename.** Rejected because atomicity alone does not make expected-version validation and replacement conditional.
-5. **`NSFileCoordinator` alone.** Deferred to the user-selected access work in `SF-CORRECTION-005`; coordination supports cooperative applications but does not replace descriptor identity and no-follow validation against non-cooperating changes.
+5. **`NSFileCoordinator` alone.** Rejected as the sole boundary. ADR-0010 uses coordination for cooperative applications, while this descriptor identity and no-follow validation remains necessary against non-cooperating changes.
 
 ## Consequences
 
@@ -80,7 +80,7 @@ Recovery storage is the app-owned directory selected by the lifecycle layer, nor
 - Replacement performs additional metadata reads, synchronization, and post-swap validation.
 - The xattr allowlist is intentionally conservative and may need an explicit future compatibility decision.
 - This boundary does not claim protection from a privileged process, kernel/filesystem failure, or a process continuously racing after a completed commit.
-- App Sandbox scopes, persistent bookmarks, and coordinated user-selected file access are not solved by this ADR.
+- App Sandbox scopes, persistent bookmarks, and coordinated user-selected file access are supplied separately by ADR-0010 rather than duplicated here.
 
 ## Verification
 

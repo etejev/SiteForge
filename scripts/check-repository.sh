@@ -38,5 +38,28 @@ if [[ -d .git ]] && ! git diff --check; then
   failed=1
 fi
 
+for plist in SiteForge/Info.plist SiteForge/SiteForge.entitlements; do
+  if ! plutil -lint "$plist" >/dev/null; then
+    print -u2 "Invalid property list: $plist"
+    failed=1
+  fi
+done
+
+entitlement_value() {
+  /usr/libexec/PlistBuddy -c "Print :$1" SiteForge/SiteForge.entitlements 2>/dev/null
+}
+
+if [[ "$(entitlement_value com.apple.security.app-sandbox)" != true ]] ||
+   [[ "$(entitlement_value com.apple.security.files.user-selected.read-write)" != true ]] ||
+   [[ "$(entitlement_value com.apple.security.files.bookmarks.app-scope)" != true ]]; then
+  print -u2 "The Release-candidate sandbox entitlement policy is incomplete."
+  failed=1
+fi
+
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' SiteForge/Info.plist 2>/dev/null)" != app.siteforge.project-package ]]; then
+  print -u2 "The SiteForge project-package document type is missing."
+  failed=1
+fi
+
 (( failed == 0 )) || exit 1
 print "Repository checks passed."

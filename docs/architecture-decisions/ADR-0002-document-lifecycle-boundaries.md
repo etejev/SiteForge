@@ -6,7 +6,7 @@
 
 ## Decision
 
-SiteForge uses a main-actor lifecycle coordinator for presentation state and an actor-isolated backend for package reads, writes, fingerprints, recovery artifacts, and diagnostics. The backend delegates every durable and recovery operation to the `ProjectPackageStore` approved by ADR-0001 and the identity-bound filesystem contract in ADR-0007. ADR-0008 defines the lifecycle-wide epoch and typed operation identity above this filesystem boundary.
+SiteForge uses a main-actor lifecycle coordinator for presentation state and an actor-isolated backend for package reads, writes, fingerprints, recovery artifacts, and diagnostics. The backend delegates external durable access to the security-scope, bookmark, coordination, and presentation boundary in ADR-0010, which encloses the `ProjectPackageStore` approved by ADR-0001 and the identity-bound filesystem contract in ADR-0007. ADR-0008 defines the lifecycle-wide epoch and typed operation identity above these boundaries.
 
 An open or revert validates the complete package before replacing the current canonical document. Package bytes and the durable fingerprint are returned by one bounded descriptor snapshot. Durable saves conditionally replace only the exact previously validated digest, byte count, device, and inode, so an external modification becomes an explicit conflict instead of an overwrite. Every asynchronous operation carries the epoch, operation ID, document/project identity, revision, sanitized destination identity, and typed intent defined by ADR-0008. Document-adoption boundaries invalidate prior work; explicit Save drains autosave before capturing its durable revision; and stale completion is state-neutral.
 
