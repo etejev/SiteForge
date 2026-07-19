@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=${0:A:h}
-DERIVED_DATA="$ROOT/.build/DerivedData"
+DERIVED_DATA=${SITEFORGE_DERIVED_DATA:-${TMPDIR%/}/SiteForge/DerivedData}
 SCHEME=${SITEFORGE_SCHEME:-SiteForge}
 DESTINATION=${SITEFORGE_DESTINATION:-platform=macOS}
 CODEX_BIN=${SITEFORGE_CODEX_BIN:-}
@@ -28,7 +28,8 @@ resolve_container() {
   fi
 
   local workspace project
-  workspace=$(find "$ROOT" -maxdepth 2 -name '*.xcworkspace' -not -path '*/.build/*' -print -quit)
+  workspace=$(find "$ROOT" -maxdepth 2 -name '*.xcworkspace' \
+    -not -path '*/.build/*' -not -path '*.xcodeproj/*' -print -quit)
   if [[ -n "$workspace" ]]; then
     CONTAINER_ARGS=(-workspace "$workspace")
     return
@@ -80,7 +81,7 @@ SiteForge local commands
 
 Optional environment variables:
   SITEFORGE_SCHEME, SITEFORGE_WORKSPACE, SITEFORGE_PROJECT,
-  SITEFORGE_DESTINATION, SITEFORGE_CODEX_BIN
+  SITEFORGE_DESTINATION, SITEFORGE_DERIVED_DATA, SITEFORGE_CODEX_BIN
 EOF
 }
 

@@ -56,6 +56,20 @@ State the recommended default, alternatives, tradeoffs, affected requirements, d
 - Never silently weaken a test, performance budget, security boundary, or requirement.
 - Never commit credentials, certificates, private keys, derived data, release archives, or local machine paths.
 
+## GitHub and authentication boundary
+
+Work locally unless the owner explicitly requests an external GitHub action.
+
+- Do not push branches or commits to GitHub.
+- Do not create, modify, merge, or close pull requests.
+- Do not create tags, GitHub Releases, deployment records, or published artifacts.
+- Do not request or use the owner's GitHub password, MFA code, recovery code, personal access token, SSH private key, or browser session.
+- Do not change repository visibility, collaborators, permissions, branch protection, secrets, variables, Actions settings, or Pages settings.
+- Local file edits, builds, tests, verification, documentation updates, and status inspection are allowed.
+- Create local commits only when the owner explicitly asks for a commit. Otherwise leave verified changes uncommitted for review in GitHub Desktop.
+
+The owner reviews changes and performs all GitHub authentication, pushes, pull requests, merges, and releases manually through GitHub Desktop or GitHub's website.
+
 ## Documentation discipline
 
 After each meaningful change:
@@ -73,4 +87,3 @@ Run `./sf verify` before reporting completion. If it fails, diagnose and fix it.
 ## Release safety
 
 `./sf release-local` may create a local unsigned alpha artifact. Never publish a GitHub Release, upload to Apple, sign with a distribution identity, notarize, or modify production update feeds without explicit owner authorization.
-

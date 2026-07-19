@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=${0:A:h:h}
-DERIVED_DATA="$ROOT/.build/DerivedData"
+DERIVED_DATA=${SITEFORGE_DERIVED_DATA:-${TMPDIR%/}/SiteForge/DerivedData}
 OUT="$ROOT/.build/local-alpha"
 
 cd "$ROOT"
@@ -20,4 +20,3 @@ shasum -a 256 "$archive" > "$archive.sha256"
 print "Created local unsigned alpha:"
 print "$archive"
 print "This artifact was not published, Developer ID signed, or notarized."
-

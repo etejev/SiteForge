@@ -1,5 +1,6 @@
 .DS_Store
 .build/
+Tests/Fixtures/.tmp/
 DerivedData/
 xcuserdata/
 *.xcuserstate
@@ -13,4 +14,3 @@ xcuserdata/
 *.pem
 *.dmg
 *.zip
-

@@ -2477,6 +2477,8 @@ Module code  0303
 
 Defines pages, folders, route segments, home and error pages, dynamic routes, redirects, and navigation metadata.
 
+Approved blank-project baseline (`OD-003`, 2026-07-19): create Home at `/`, followed by Not Found at `/404`; assign the home and error-page roles respectively; give each page exactly one minimum valid root node; and add no sample text, sections, or template content. Creation of this structure is one clean project baseline and remains distinct from template creation.
+
 #### Scope and Outcomes
 
 - Primary objects: page, folder, route, slug, redirect, locale, route parameter.
@@ -26931,7 +26933,7 @@ Work packet: Bounded implementation assignment containing requirement IDs, allow
 | --- | --- | --- | --- | --- |
 | OD-001 | Minimum supported macOS release and reference hardware tiers | Platform | Before Milestone 0 exit | Assume current and previous two major macOS releases; Apple silicon primary |
 | OD-002 | Persistence store and project package representation | Architecture | Architecture runway | Prototype append-only journal plus versioned structured snapshots |
-| OD-003 | Canvas technology split among SwiftUI, AppKit, Metal/Core Animation | Architecture | Architecture runway | Use native controls for chrome; benchmark canvas alternatives against budgets |
+| OD-003 | Blank-project default page set | Product | Approved 2026-07-19 | Home `/`, then Not Found `/404`; one minimum root each; no sample content |
 | OD-004 | Layout engine implementation versus embedding an existing standards engine | Architecture | Before Milestone 1 | Prototype deterministic subset and validate export parity |
 | OD-005 | Managed hosting scope and business model | Product | Before Milestone 4 planning | Portable local export is mandatory; hosting remains an adapter |
 | OD-006 | Collaboration service scope and conflict algorithm | Product/Architecture | Before Milestone 5 | Local snapshots and comments first; real-time collaboration optional |
@@ -26939,3 +26941,4 @@ Work packet: Bounded implementation assignment containing requirement IDs, allow
 | OD-008 | Telemetry default by region and distribution channel | Privacy | Before external alpha | Content-free diagnostics; consent and legal review determine default |
 | OD-009 | Supported browser matrix for generated output | Web platform | Before Milestone 3 exit | Versioned targets based on user needs and feature compatibility |
 | OD-010 | Component library package registry and offline distribution | Architecture | Before Milestone 2 exit | File-based signed packages with pinned versions and local cache |
+| OD-011 | Canvas technology split among SwiftUI, AppKit, Metal/Core Animation | Architecture | Architecture runway | Use native controls for chrome; benchmark canvas alternatives against budgets |

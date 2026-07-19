@@ -1,0 +1,243 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000001 /* SiteForgeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* SiteForgeApp.swift */; };
+		100000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* ContentView.swift */; };
+		100000000000000000000003 /* AppMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* AppMetadataTests.swift */; };
+		100000000000000000000004 /* SiteForgeLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* SiteForgeLaunchTests.swift */; };
+		100000000000000000000005 /* WorkspaceShellModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000008 /* WorkspaceShellModel.swift */; };
+		100000000000000000000006 /* WorkspaceShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000009 /* WorkspaceShellView.swift */; };
+		100000000000000000000007 /* DocumentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000010 /* DocumentModel.swift */; };
+		100000000000000000000008 /* CommandKernel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000011 /* CommandKernel.swift */; };
+		100000000000000000000009 /* CommandKernelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000012 /* CommandKernelTests.swift */; };
+		100000000000000000000010 /* ProjectPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000013 /* ProjectPackage.swift */; };
+		100000000000000000000011 /* ProjectPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000014 /* ProjectPackageTests.swift */; };
+		100000000000000000000012 /* DocumentLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000015 /* DocumentLifecycle.swift */; };
+		100000000000000000000013 /* DocumentLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000016 /* DocumentLifecycleTests.swift */; };
+		100000000000000000000014 /* PersistedHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000017 /* PersistedHistory.swift */; };
+		100000000000000000000015 /* PersistedHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000018 /* PersistedHistoryTests.swift */; };
+		100000000000000000000016 /* BlankProjectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000019 /* BlankProjectTests.swift */; };
+		100000000000000000000017 /* LaunchExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000020 /* LaunchExperience.swift */; };
+		100000000000000000000018 /* LaunchExperienceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000021 /* LaunchExperienceTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		300000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 900000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 800000000000000000000001;
+			remoteInfo = SiteForge;
+		};
+		300000000000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 900000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 800000000000000000000001;
+			remoteInfo = SiteForge;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000001 /* SiteForgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteForgeApp.swift; sourceTree = "<group>"; };
+		200000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		200000000000000000000003 /* AppMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMetadataTests.swift; sourceTree = "<group>"; };
+		200000000000000000000004 /* SiteForgeLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteForgeLaunchTests.swift; sourceTree = "<group>"; };
+		200000000000000000000005 /* SiteForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SiteForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000006 /* SiteForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SiteForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000007 /* SiteForgeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SiteForgeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000008 /* WorkspaceShellModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceShellModel.swift; sourceTree = "<group>"; };
+		200000000000000000000009 /* WorkspaceShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceShellView.swift; sourceTree = "<group>"; };
+		200000000000000000000010 /* DocumentModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentModel.swift; sourceTree = "<group>"; };
+		200000000000000000000011 /* CommandKernel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandKernel.swift; sourceTree = "<group>"; };
+		200000000000000000000012 /* CommandKernelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandKernelTests.swift; sourceTree = "<group>"; };
+		200000000000000000000013 /* ProjectPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectPackage.swift; sourceTree = "<group>"; };
+		200000000000000000000014 /* ProjectPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectPackageTests.swift; sourceTree = "<group>"; };
+		200000000000000000000015 /* DocumentLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentLifecycle.swift; sourceTree = "<group>"; };
+		200000000000000000000016 /* DocumentLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentLifecycleTests.swift; sourceTree = "<group>"; };
+		200000000000000000000017 /* PersistedHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedHistory.swift; sourceTree = "<group>"; };
+		200000000000000000000018 /* PersistedHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedHistoryTests.swift; sourceTree = "<group>"; };
+		200000000000000000000019 /* BlankProjectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlankProjectTests.swift; sourceTree = "<group>"; };
+		200000000000000000000020 /* LaunchExperience.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchExperience.swift; sourceTree = "<group>"; };
+		200000000000000000000021 /* LaunchExperienceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchExperienceTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		400000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		400000000000000000000002 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		400000000000000000000003 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		500000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				500000000000000000000002 /* SiteForge */,
+				500000000000000000000003 /* Tests */,
+				500000000000000000000006 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		500000000000000000000002 /* SiteForge */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000001 /* SiteForgeApp.swift */,
+				200000000000000000000002 /* ContentView.swift */,
+				200000000000000000000008 /* WorkspaceShellModel.swift */,
+				200000000000000000000009 /* WorkspaceShellView.swift */,
+				200000000000000000000010 /* DocumentModel.swift */,
+				200000000000000000000011 /* CommandKernel.swift */,
+				200000000000000000000013 /* ProjectPackage.swift */,
+				200000000000000000000015 /* DocumentLifecycle.swift */,
+				200000000000000000000017 /* PersistedHistory.swift */,
+				200000000000000000000020 /* LaunchExperience.swift */,
+			);
+			path = SiteForge;
+			sourceTree = "<group>";
+		};
+		500000000000000000000003 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				500000000000000000000004 /* SiteForgeTests */,
+				500000000000000000000005 /* SiteForgeUITests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		500000000000000000000004 /* SiteForgeTests */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000003 /* AppMetadataTests.swift */,
+				200000000000000000000012 /* CommandKernelTests.swift */,
+				200000000000000000000014 /* ProjectPackageTests.swift */,
+				200000000000000000000016 /* DocumentLifecycleTests.swift */,
+				200000000000000000000018 /* PersistedHistoryTests.swift */,
+				200000000000000000000019 /* BlankProjectTests.swift */,
+				200000000000000000000021 /* LaunchExperienceTests.swift */,
+			);
+			path = SiteForgeTests;
+			sourceTree = "<group>";
+		};
+		500000000000000000000005 /* SiteForgeUITests */ = {
+			isa = PBXGroup;
+			children = (200000000000000000000004 /* SiteForgeLaunchTests.swift */,);
+			path = SiteForgeUITests;
+			sourceTree = "<group>";
+		};
+		500000000000000000000006 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000005 /* SiteForge.app */,
+				200000000000000000000006 /* SiteForgeTests.xctest */,
+				200000000000000000000007 /* SiteForgeUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		800000000000000000000001 /* SiteForge */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 700000000000000000000002 /* Build configuration list for PBXNativeTarget "SiteForge" */;
+			buildPhases = (600000000000000000000001 /* Sources */, 400000000000000000000001 /* Frameworks */, 600000000000000000000004 /* Resources */);
+			buildRules = ();
+			dependencies = ();
+			name = SiteForge;
+			productName = SiteForge;
+			productReference = 200000000000000000000005 /* SiteForge.app */;
+			productType = "com.apple.product-type.application";
+		};
+		800000000000000000000002 /* SiteForgeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 700000000000000000000003 /* Build configuration list for PBXNativeTarget "SiteForgeTests" */;
+			buildPhases = (600000000000000000000002 /* Sources */, 400000000000000000000002 /* Frameworks */, 600000000000000000000005 /* Resources */);
+			buildRules = ();
+			dependencies = (300000000000000000000003 /* PBXTargetDependency */,);
+			name = SiteForgeTests;
+			productName = SiteForgeTests;
+			productReference = 200000000000000000000006 /* SiteForgeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		800000000000000000000003 /* SiteForgeUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 700000000000000000000004 /* Build configuration list for PBXNativeTarget "SiteForgeUITests" */;
+			buildPhases = (600000000000000000000003 /* Sources */, 400000000000000000000003 /* Frameworks */, 600000000000000000000006 /* Resources */);
+			buildRules = ();
+			dependencies = (300000000000000000000004 /* PBXTargetDependency */,);
+			name = SiteForgeUITests;
+			productName = SiteForgeUITests;
+			productReference = 200000000000000000000007 /* SiteForgeUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		900000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					800000000000000000000001 = {CreatedOnToolsVersion = 27.0;};
+					800000000000000000000002 = {CreatedOnToolsVersion = 27.0; TestTargetID = 800000000000000000000001;};
+					800000000000000000000003 = {CreatedOnToolsVersion = 27.0; TestTargetID = 800000000000000000000001;};
+				};
+			};
+			buildConfigurationList = 700000000000000000000001 /* Build configuration list for PBXProject "SiteForge" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = 500000000000000000000001;
+			productRefGroup = 500000000000000000000006 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (800000000000000000000001 /* SiteForge */, 800000000000000000000002 /* SiteForgeTests */, 800000000000000000000003 /* SiteForgeUITests */);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		600000000000000000000004 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000005 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000006 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		600000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001 /* SiteForgeApp.swift in Sources */, 100000000000000000000002 /* ContentView.swift in Sources */, 100000000000000000000005 /* WorkspaceShellModel.swift in Sources */, 100000000000000000000006 /* WorkspaceShellView.swift in Sources */, 100000000000000000000007 /* DocumentModel.swift in Sources */, 100000000000000000000008 /* CommandKernel.swift in Sources */, 100000000000000000000010 /* ProjectPackage.swift in Sources */, 100000000000000000000012 /* DocumentLifecycle.swift in Sources */, 100000000000000000000014 /* PersistedHistory.swift in Sources */, 100000000000000000000017 /* LaunchExperience.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000002 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000003 /* AppMetadataTests.swift in Sources */, 100000000000000000000009 /* CommandKernelTests.swift in Sources */, 100000000000000000000011 /* ProjectPackageTests.swift in Sources */, 100000000000000000000013 /* DocumentLifecycleTests.swift in Sources */, 100000000000000000000015 /* PersistedHistoryTests.swift in Sources */, 100000000000000000000016 /* BlankProjectTests.swift in Sources */, 100000000000000000000018 /* LaunchExperienceTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000003 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000004 /* SiteForgeLaunchTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		300000000000000000000003 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = 800000000000000000000001 /* SiteForge */; targetProxy = 300000000000000000000001 /* PBXContainerItemProxy */; };
+		300000000000000000000004 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = 800000000000000000000001 /* SiteForge */; targetProxy = 300000000000000000000002 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CODE_SIGNING_ALLOWED = YES; CODE_SIGNING_REQUIRED = YES; CODE_SIGN_IDENTITY = "-"; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0;}; name = Debug; };
+		A00000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0;}; name = Release; };
+		A00000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CURRENT_PROJECT_VERSION = 1; ENABLE_HARDENED_RUNTIME = NO; ENABLE_TESTABILITY = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = SiteForge; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForge; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone";}; name = Debug; };
+		A00000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CURRENT_PROJECT_VERSION = 1; ENABLE_HARDENED_RUNTIME = NO; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = SiteForge; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForge; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES;}; name = Release; };
+		A00000000000000000000005 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForgeTests; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SiteForge.app/Contents/MacOS/SiteForge";}; name = Debug; };
+		A00000000000000000000006 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForgeTests; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SiteForge.app/Contents/MacOS/SiteForge";}; name = Release; };
+		A00000000000000000000007 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForgeUITests; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_TARGET_NAME = SiteForge;}; name = Debug; };
+		A00000000000000000000008 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = app.siteforge.SiteForgeUITests; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_TARGET_NAME = SiteForge;}; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		700000000000000000000001 /* Build configuration list for PBXProject "SiteForge" */ = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000001 /* Debug */, A00000000000000000000002 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		700000000000000000000002 /* Build configuration list for PBXNativeTarget "SiteForge" */ = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000003 /* Debug */, A00000000000000000000004 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		700000000000000000000003 /* Build configuration list for PBXNativeTarget "SiteForgeTests" */ = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000005 /* Debug */, A00000000000000000000006 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		700000000000000000000004 /* Build configuration list for PBXNativeTarget "SiteForgeUITests" */ = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000007 /* Debug */, A00000000000000000000008 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = 900000000000000000000001 /* Project object */;
+}
