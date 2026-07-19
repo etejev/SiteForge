@@ -15,6 +15,7 @@ enum DocumentLifecyclePhase: String, Equatable, Sendable {
 enum DocumentLifecycleFailure: Error, Equatable, LocalizedError, Sendable {
     case permissionDenied, staleSecurityScope, externalModification, conflict
     case malformedPackage, incompatiblePackage, malformedRecovery, ioFailure
+    case unsafeFileMetadata, recoveryArtifactConflict, recoveryDeletionFailed
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +26,9 @@ enum DocumentLifecycleFailure: Error, Equatable, LocalizedError, Sendable {
         case .malformedPackage: "The project could not be validated. The current document is unchanged."
         case .incompatiblePackage: "This project was created by an incompatible SiteForge version. Choose another project or update SiteForge."
         case .malformedRecovery: "Recovery data is invalid. Discard it or continue with the last saved project."
+        case .unsafeFileMetadata: "The file has unsupported ownership or security metadata. Choose another location."
+        case .recoveryArtifactConflict: "The recovery location contains an artifact SiteForge does not own. It was preserved; inspect the recovery folder and try again."
+        case .recoveryDeletionFailed: "The recovery artifact could not be removed. It remains available; correct access and retry Discard."
         case .ioFailure: "The project could not be read or written. Check access and free space, then try again."
         }
     }
@@ -44,10 +48,6 @@ struct LifecycleDiagnostic: Equatable, Sendable {
 actor DocumentLifecycleDiagnostics {
     private(set) var records: [LifecycleDiagnostic] = []
     func append(_ record: LifecycleDiagnostic) { records.append(record) }
-}
-
-struct PackageFingerprint: Equatable, Sendable {
-    let digest: String
 }
 
 struct LoadedProject: Sendable {
@@ -91,23 +91,50 @@ actor DocumentLifecycleBackend {
             try Task.checkCancellation()
             await progress?(.readingPackage)
             if delayNanoseconds > 0 { try await Task.sleep(nanoseconds: delayNanoseconds) }
-            let package = try await store.read(from: url)
+            let read = try await store.readSnapshot(from: url)
             try Task.checkCancellation()
             await progress?(.validatingCanonicalDocument)
-            let fingerprint = try Self.fingerprint(url)
             try Task.checkCancellation()
             await progress?(.validatingHistory)
-            let history = await historyStore.load(from: package)
+            let history = await historyStore.load(from: read.package)
             try Task.checkCancellation()
             await progress?(.preparingWorkspace)
-            await record(operation, package.projectID, start, .success, nil)
-            return LoadedProject(package: package, fingerprint: fingerprint, history: history)
+            await record(operation, read.package.projectID, start, .success, nil)
+            return LoadedProject(package: read.package, fingerprint: read.file.fingerprint, history: history)
         } catch is CancellationError {
             await record(operation, nil, start, .cancelled, nil)
             throw CancellationError()
         } catch {
             let failure = Self.map(error)
             await record(operation, nil, start, .failure, failure)
+            throw failure
+        }
+    }
+
+    func readRecovery(
+        from url: URL,
+        expectedProjectID: ProjectID? = nil
+    ) async throws -> LoadedProject {
+        let start = ContinuousClock.now
+        do {
+            try throwFault()
+            try Task.checkCancellation()
+            if delayNanoseconds > 0 { try await Task.sleep(nanoseconds: delayNanoseconds) }
+            let read = try await store.readOwnedRecoverySnapshot(
+                from: url,
+                expectedProjectID: expectedProjectID
+            )
+            try Task.checkCancellation()
+            let history = await historyStore.load(from: read.package)
+            try Task.checkCancellation()
+            await record(.open, read.package.projectID, start, .success, nil)
+            return LoadedProject(package: read.package, fingerprint: read.file.fingerprint, history: history)
+        } catch is CancellationError {
+            await record(.open, nil, start, .cancelled, nil)
+            throw CancellationError()
+        } catch {
+            let failure = Self.map(error)
+            await record(.open, nil, start, .failure, failure)
             throw failure
         }
     }
@@ -119,11 +146,6 @@ actor DocumentLifecycleBackend {
             try throwFault()
             if delayNanoseconds > 0 { try await Task.sleep(nanoseconds: delayNanoseconds) }
             guard generation >= newestGeneration else { throw DocumentLifecycleFailure.conflict }
-            if let expected {
-                guard FileManager.default.fileExists(atPath: url.path), try Self.fingerprint(url) == expected else {
-                    throw DocumentLifecycleFailure.externalModification
-                }
-            }
             let historySnapshot: PersistedHistorySnapshot
             if let recoveryBoundary {
                 historySnapshot = await historyStore.recoverySnapshot(history, durableRevision: recoveryBoundary)
@@ -131,8 +153,19 @@ actor DocumentLifecycleBackend {
                 historySnapshot = history
             }
             let packageWithHistory = try await historyStore.package(package, with: historySnapshot)
-            try await store.write(packageWithHistory, to: url)
-            let fingerprint = try Self.fingerprint(url)
+            let policy: ProjectPackageArtifactPolicy = operation == .autosave ? .recovery(package.projectID) : .durable
+            let replacementExpectation: PackageFingerprint?
+            if operation == .autosave {
+                replacementExpectation = try await ownedRecoveryExpectation(at: url, projectID: package.projectID)
+            } else {
+                replacementExpectation = expected
+            }
+            let fingerprint = try await store.write(
+                packageWithHistory,
+                to: url,
+                expected: replacementExpectation,
+                policy: policy
+            )
             await record(operation, package.projectID, start, .success, nil)
             return fingerprint
         } catch {
@@ -142,22 +175,32 @@ actor DocumentLifecycleBackend {
         }
     }
 
-    func remove(_ url: URL) async throws {
-        do { if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) } }
-        catch { throw Self.map(error) }
-    }
-
-    func prepareRecoveryDirectory(_ directory: URL) throws {
+    func removeRecovery(
+        _ url: URL,
+        projectID: ProjectID,
+        expected: PackageFingerprint? = nil
+    ) async throws {
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try await store.removeOwnedRecovery(at: url, projectID: projectID, expected: expected)
+        } catch let error as ProjectPackageError where error == .packageUnavailable {
+            return
         } catch {
             throw Self.map(error)
         }
     }
 
-    func recoveryURLs(in directory: URL) throws -> [URL] {
+    func prepareRecoveryDirectory(_ directory: URL) async throws {
+        do {
+            try await store.prepareRecoveryDirectory(directory)
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
+    func recoveryURLs(in directory: URL) async throws -> [URL] {
         do {
             guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+            try await store.validateRecoveryDirectory(directory)
             return try FileManager.default.contentsOfDirectory(
                 at: directory,
                 includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
@@ -183,19 +226,29 @@ actor DocumentLifecycleBackend {
         }
     }
 
-    private nonisolated static func fingerprint(_ url: URL) throws -> PackageFingerprint {
+    private func ownedRecoveryExpectation(
+        at url: URL,
+        projectID: ProjectID
+    ) async throws -> PackageFingerprint? {
         do {
-            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-            return PackageFingerprint(digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
-        } catch let error as CocoaError where error.code == .fileReadNoPermission || error.code == .fileWriteNoPermission {
-            throw DocumentLifecycleFailure.permissionDenied
-        } catch { throw DocumentLifecycleFailure.ioFailure }
+            let read = try await store.readOwnedRecoverySnapshot(
+                from: url,
+                expectedProjectID: projectID
+            )
+            return read.file.fingerprint
+        } catch let error as ProjectPackageError where error == .packageUnavailable {
+            return nil
+        }
     }
 
     private nonisolated static func map(_ error: Error) -> DocumentLifecycleFailure {
         if let error = error as? DocumentLifecycleFailure { return error }
         if let error = error as? ProjectPackageError {
             switch error {
+            case .fileIdentityChanged: return .externalModification
+            case .unsafeFileMetadata: return .unsafeFileMetadata
+            case .unsafeRecoveryArtifact: return .recoveryArtifactConflict
+            case .recoveryDeletionFailed: return .recoveryDeletionFailed
             case .ioFailure, .packageUnavailable: return .ioFailure
             case .unsupportedPackageVersion, .unsupportedDocumentSchema, .incompatibleReaderVersion:
                 return .incompatiblePackage
@@ -224,6 +277,7 @@ struct RecoveryCandidate: Equatable, Sendable {
     let url: URL
     let durableURL: URL?
     let history: PersistedHistoryLoadResult
+    let fingerprint: PackageFingerprint
     var summary: String { "Revision \(package.document.revision), newer than the durable revision." }
 }
 
@@ -295,7 +349,8 @@ final class DocumentLifecycleController: ObservableObject {
         "SF-0203-004", "SF-0203-005", "SF-0203-006",
         "SF-0301-002", "SF-0301-004", "SF-0301-005", "SF-0301-006", "SF-0301-008",
         "SF-0306-001", "SF-0306-002", "SF-0306-003", "SF-0306-004", "SF-0306-005", "SF-0306-006", "SF-0306-008",
-        "SF-1504-001", "SF-1504-004", "SF-1504-006", "SF-1504-008",
+        "SF-1504-001", "SF-1504-003", "SF-1504-004", "SF-1504-006", "SF-1504-008",
+        "SF-1603-004", "SF-1604-004", "SF-1702-004",
         "SF-1902-004", "SF-1902-005", "SF-1902-006",
     ]
 
@@ -543,8 +598,18 @@ final class DocumentLifecycleController: ObservableObject {
 
     func discardRecovery() async {
         guard let candidate = recoveryCandidate else { return }
-        try? await backend.remove(candidate.url)
-        recoveryCandidate = nil; failure = nil; phase = .clean; hasUnsavedChanges = false
+        do {
+            try await backend.removeRecovery(
+                candidate.url,
+                projectID: candidate.package.projectID,
+                expected: candidate.fingerprint
+            )
+            recoveryCandidate = nil; failure = nil; phase = .clean; hasUnsavedChanges = false
+        } catch let error as DocumentLifecycleFailure {
+            setFailure(error)
+        } catch {
+            setFailure(.recoveryDeletionFailed)
+        }
     }
 
     func consumeCloseAuthorization() -> Bool {
@@ -608,12 +673,33 @@ final class DocumentLifecycleController: ObservableObject {
         let recoveryURL = recoveryURL(for: project.projectID)
         guard FileManager.default.fileExists(atPath: recoveryURL.path) else { recoveryCandidate = nil; return }
         do {
-            let loaded = try await backend.read(from: recoveryURL, operation: .open)
+            let loaded = try await backend.readRecovery(
+                from: recoveryURL,
+                expectedProjectID: project.projectID
+            )
             guard loaded.package.projectID == project.projectID,
                   loaded.package.document.revision > project.document.revision else {
-                try? await backend.remove(recoveryURL); recoveryCandidate = nil; return
+                if loaded.package.projectID == project.projectID {
+                    try? await backend.removeRecovery(
+                        recoveryURL,
+                        projectID: project.projectID,
+                        expected: loaded.fingerprint
+                    )
+                } else {
+                    setFailure(.recoveryArtifactConflict)
+                }
+                recoveryCandidate = nil; return
             }
-            recoveryCandidate = RecoveryCandidate(package: loaded.package, url: recoveryURL, durableURL: fileURL, history: loaded.history)
+            recoveryCandidate = RecoveryCandidate(
+                package: loaded.package,
+                url: recoveryURL,
+                durableURL: fileURL,
+                history: loaded.history,
+                fingerprint: loaded.fingerprint
+            )
+        } catch let error as DocumentLifecycleFailure {
+            recoveryCandidate = nil
+            setFailure(error == .recoveryArtifactConflict ? error : .malformedRecovery)
         } catch {
             recoveryCandidate = nil; setFailure(.malformedRecovery)
         }
@@ -626,13 +712,14 @@ final class DocumentLifecycleController: ObservableObject {
             var candidates: [RecoveryCandidate] = []
             for url in urls {
                 do {
-                    let loaded = try await backend.read(from: url, operation: .open)
+                    let loaded = try await backend.readRecovery(from: url)
                     guard loaded.package.document.revision > 0 else { continue }
                     candidates.append(RecoveryCandidate(
                         package: loaded.package,
                         url: url,
                         durableURL: nil,
-                        history: loaded.history
+                        history: loaded.history,
+                        fingerprint: loaded.fingerprint
                     ))
                 } catch {
                     continue
@@ -714,7 +801,7 @@ final class DocumentLifecycleController: ObservableObject {
     }
 
     private func removeRecovery(for projectID: ProjectID) async {
-        try? await backend.remove(recoveryURL(for: projectID))
+        try? await backend.removeRecovery(recoveryURL(for: projectID), projectID: projectID)
     }
 
     private func setFailure(_ error: DocumentLifecycleFailure) {

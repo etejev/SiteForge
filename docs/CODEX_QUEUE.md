@@ -4,13 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-CORRECTION-002` Make package reads, conditional replacement, and recovery artifacts one identity-bound filesystem boundary.
-  - Severity: `P0` (`M0-P0-02` through `M0-P0-04`) plus security hardening in `M0-P1-06` and recovery-state correction `M0-P2-14`.
-  - Requirements: `SF-0301-004`, `SF-0301-005`, `SF-0306-003`, `SF-0306-004`, `SF-1504-003`, `SF-1504-004`, `SF-1603-004`, `SF-1604-004`, and `SF-1702-004`.
-  - Acceptance: an opened package and its durable fingerprint come from the same validated file object; expected-fingerprint validation and replacement are coordinated at commit; path and symlink swaps cannot redirect I/O; replacement preserves an intentional ownership/permission/ACL policy; recovery storage is app-owned or cryptographically/structurally ownership-validated and never overwrites or deletes an unrelated file.
-  - Evidence and tests required: barrier-controlled source/destination/ancestor swaps, concurrent external replacement/deletion/recreation, inode identity, permission/ACL preservation, recovery-name collision and mismatched-sidecar preservation, interruption, and byte-for-byte preservation after every rejected operation.
-  - Dependencies: none. Complete before another lifecycle or persistence feature.
-
 - [ ] `SF-CORRECTION-003` Scope asynchronous lifecycle work by document epoch, destination, revision, and intent.
   - Severity: `P1` (`M0-P1-01` and `M0-P1-02`).
   - Requirements: `SF-0301-002`, `SF-0301-004`, `SF-0301-005`; `SF-0306-003`, `SF-0306-004`, `SF-0306-005`; `SF-1504-004`; and `SF-1902-004`.
@@ -62,6 +55,13 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-CORRECTION-002` Make package reads, conditional replacement, and recovery artifacts one identity-bound filesystem boundary.
+  - Severity: `P0` (`M0-P0-02` through `M0-P0-04`) plus the filesystem portion of `M0-P1-06`, bounded-fingerprint correction `M0-P2-10`, and recovery-state correction `M0-P2-14`.
+  - Requirements: `SF-0301-004`, `SF-0301-005`, `SF-0306-003`, `SF-0306-004`, `SF-1504-003`, `SF-1504-004`, `SF-1603-004`, `SF-1604-004`, and `SF-1702-004`; supporting diagnostic/accessibility evidence also maps to `SF-0301-007`, `SF-0306-006`, `SF-0306-008`, `SF-1504-007`, and `SF-1603-007`.
+  - Plan: introduce one no-follow descriptor-based package I/O boundary that returns validated bytes, digest, bounded metadata, and stable device/inode identity from one read; stage deterministic bytes with secure metadata and conditionally commit by exclusive create or atomic swap plus post-swap identity verification and rollback; preserve current ownership, mode, extended ACL, and an explicit approved-xattr allowlist without broadening new-file permissions; validate app-owned recovery directory/file ownership before replacement or deletion; retain typed candidate state when deletion fails; and prove source, destination, inode, symlink, ancestor, size, sparse-file, metadata, collision, deletion, interruption, and unchanged-state behavior with controllable asynchronous checkpoints.
+  - Evidence: `./sf verify` passed on 2026-07-19 with 104 unit tests and 14 UI tests. Eleven new barrier-controlled unit/integration tests use no timing sleeps and cover a source replaced by a symlink after snapshot capture; destination replacement; delete/recreate with identical bytes and a new inode; destination and ancestor symlink swaps; same-inode external writes before commit and after atomic swap; rollback of a changed displaced object; oversized sparse files; hard links and owner policy; mode, extended ACL, and approved-xattr preservation; mismatched and malformed recovery collisions; deletion failure with retained candidate and successful retry; and exact canonical/disk preservation after a lifecycle conflict. Existing interrupted-write and static-symlink tests remain green. ADR-0007 records the identity-bound commit and metadata policy.
+  - Dependencies: none. Completed before another lifecycle or persistence feature.
 
 - [x] `SF-CORRECTION-001` Guard every destructive document transition and recover untitled work.
   - Severity: `P0` (`M0-P0-01`) with the related untitled-recovery gap (`M0-P1-03`).

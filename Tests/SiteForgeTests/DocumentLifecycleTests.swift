@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import SiteForge
 
@@ -152,6 +153,7 @@ final class DocumentLifecycleTests: XCTestCase {
         XCTAssertNil(reader.recoveryCandidate)
 
         try Data("bad recovery".utf8).write(to: recoveryURL(for: reader))
+        XCTAssertEqual(Darwin.chmod(recoveryURL(for: reader).path, mode_t(0o600)), 0)
         let secondOpen = await reader.requestOpen(url)
         XCTAssertEqual(secondOpen, .completed)
         XCTAssertNil(reader.recoveryCandidate)
@@ -425,7 +427,8 @@ final class DocumentLifecycleTests: XCTestCase {
         ["SF-0203-004", "SF-0203-005", "SF-0203-006",
          "SF-0301-002", "SF-0301-004", "SF-0301-005", "SF-0301-006", "SF-0301-008",
          "SF-0306-001", "SF-0306-002", "SF-0306-003", "SF-0306-004", "SF-0306-005", "SF-0306-006", "SF-0306-008",
-         "SF-1504-001", "SF-1504-004", "SF-1504-006", "SF-1504-008",
+         "SF-1504-001", "SF-1504-003", "SF-1504-004", "SF-1504-006", "SF-1504-008",
+         "SF-1603-004", "SF-1604-004", "SF-1702-004",
          "SF-1902-004", "SF-1902-005", "SF-1902-006"]
     }
 }

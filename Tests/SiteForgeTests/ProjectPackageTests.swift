@@ -101,8 +101,9 @@ final class ProjectPackageTests: XCTestCase {
         let destination = directory.appendingPathComponent("Project.siteforge")
         let store = ProjectPackageStore()
         try await store.write(package(pageName: "Before"), to: destination)
+        let expected = try await store.readSnapshot(from: destination).file.fingerprint
 
-        try await store.write(package(pageName: "After"), to: destination)
+        try await store.write(package(pageName: "After"), to: destination, expected: expected)
 
         let loaded = try await store.read(from: destination)
         XCTAssertEqual(loaded.document.pages[0].name, "After")
@@ -116,12 +117,14 @@ final class ProjectPackageTests: XCTestCase {
         let destination = try fixtureDirectory().appendingPathComponent("Project.siteforge")
         let store = ProjectPackageStore()
         try await store.write(package(pageName: "Committed"), to: destination)
+        let expected = try await store.readSnapshot(from: destination).file.fingerprint
         let before = try Data(contentsOf: destination)
 
         await XCTAssertThrowsProjectPackageError(.interrupted) {
             try await store.write(
                 package(pageName: "Interrupted"),
                 to: destination,
+                expected: expected,
                 interruption: .beforeReplacement
             )
         }
@@ -290,7 +293,10 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(
             ProjectPackageStore.requirementIDs,
             [
-                "SF-0301-001", "SF-0301-003", "SF-0301-004", "SF-0301-008",
+                "SF-0301-001", "SF-0301-003", "SF-0301-004", "SF-0301-005", "SF-0301-008",
+                "SF-0306-003", "SF-0306-004",
+                "SF-1504-003", "SF-1504-004",
+                "SF-1603-004", "SF-1604-004",
                 "SF-1702-001", "SF-1702-004", "SF-1702-008",
             ]
         )

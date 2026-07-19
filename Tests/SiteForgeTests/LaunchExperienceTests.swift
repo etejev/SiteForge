@@ -118,6 +118,7 @@ final class LaunchExperienceTests: XCTestCase {
         await controller.openProjectAndWait(url)
         XCTAssertEqual(controller.state.kind, .failure)
 
+        try FileManager.default.removeItem(at: url)
         try await writePackage(to: url)
         controller.retry()
         try await waitUntil { controller.state == .workspace }

@@ -30,6 +30,8 @@ This file records user-visible behavior during development. It is not a substitu
 - Privacy-preserving launch diagnostics, VoiceOver state announcements, deterministic focus targets, a static Reduce Motion progress alternative, and native opaque fallbacks for Reduce Transparency and increased contrast.
 - Centralized native macOS material policy for navigator, inspector, unified toolbar/title bar, viewport controls, status, recovery, and launch surfaces, rendered with pass-through `NSVisualEffectView` instances rather than simulated glass.
 - Retained visual-regression fixtures for light, dark, Reduce Transparency, Increased Contrast, inactive-window policy, default/minimum sizing, and 10,000-page scrolling.
+- Identity-bound package I/O that captures validated bytes, bounded SHA-256 fingerprint, device/inode identity, and security metadata from one no-follow descriptor snapshot, with deterministic barrier-controlled race coverage.
+- App-owned recovery validation and typed deletion failures that preserve mismatched artifacts and retain a recovery candidate when deletion must be retried.
 
 ### Changed
 
@@ -45,12 +47,14 @@ This file records user-visible behavior during development. It is not a substitu
 - Opening a project publishes actual loading stages and checks cancellation before the single validated adoption boundary; the prior canonical document remains active after cancellation or failure.
 - Chrome appearance now resolves native material, opaque accessibility fallback, separator strength, and active-window emphasis from one shared policy while leaving canonical document state and canvas hit testing unchanged.
 - The bounded canvas placeholder now adapts to the available viewport so its empty-state copy remains readable at the supported minimum window size.
+- Existing package replacement now requires the exact previously validated digest, byte count, device, and inode; same-directory staging commits with exclusive create or an identity-checked atomic swap and preserves owner, group, mode, extended ACL, and approved extended attributes.
 
 ### Fixed
 
 - Direct or transactional removal can no longer leave a project with an invalid empty page list, and duplicate published routes are rejected before commit.
 - New, Open, Revert, recovery Restore, and window Close now share one native Save/Discard/Cancel decision boundary; cancellation and failed saves preserve the exact active document, history, identity, location, fingerprint, and lifecycle presentation.
 - Modified untitled projects now autosave to app-owned, project-identity-keyed recovery storage and can be discovered, restored, saved durably, or discarded after relaunch without writing beside user project files.
+- Opening no longer rereads a path to fingerprint validated content, and concurrent replacement, delete/recreate, same-inode modification, hard-link, source/destination/ancestor symlink, sparse-input, recovery-collision, and deletion-failure cases preserve the last committed document and external bytes.
 
 ### Known limitations
 

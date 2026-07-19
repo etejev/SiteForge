@@ -105,6 +105,10 @@ enum ProjectPackageError: Error, Equatable, LocalizedError, Sendable {
     case packageUnavailable
     case packageIsSymbolicLink
     case unsafeDestination
+    case fileIdentityChanged
+    case unsafeFileMetadata
+    case unsafeRecoveryArtifact
+    case recoveryDeletionFailed
     case malformedContainer
     case duplicateMember
     case invalidMemberPath
@@ -127,6 +131,10 @@ enum ProjectPackageError: Error, Equatable, LocalizedError, Sendable {
         case .packageUnavailable: "The project package is unavailable. Locate it and try again."
         case .packageIsSymbolicLink: "Symbolic-link project packages are not accepted. Choose the original package."
         case .unsafeDestination: "The project destination contains an unsafe symbolic link or unsupported item."
+        case .fileIdentityChanged: "The project changed on disk before the operation could commit. Reopen it or use Save As."
+        case .unsafeFileMetadata: "The project file has unsupported ownership or security metadata. Choose another location."
+        case .unsafeRecoveryArtifact: "The recovery artifact is not owned by this SiteForge project and was preserved."
+        case .recoveryDeletionFailed: "The recovery artifact could not be removed. It remains available; correct access and retry."
         case .malformedContainer: "The project package container is malformed. Restore a valid copy."
         case .duplicateMember: "The project package contains a duplicate member."
         case .invalidMemberPath: "The project package contains an unsafe member path."
@@ -188,9 +196,17 @@ enum ProjectPackageWriteInterruption: Sendable {
     case beforeReplacement
 }
 
+struct ValidatedProjectPackageRead: Equatable, Sendable {
+    let package: ProjectPackage
+    let file: ValidatedPackageFileSnapshot
+}
+
 actor ProjectPackageStore {
     static let requirementIDs: Set<String> = [
-        "SF-0301-001", "SF-0301-003", "SF-0301-004", "SF-0301-008",
+        "SF-0301-001", "SF-0301-003", "SF-0301-004", "SF-0301-005", "SF-0301-008",
+        "SF-0306-003", "SF-0306-004",
+        "SF-1504-003", "SF-1504-004",
+        "SF-1603-004", "SF-1604-004",
         "SF-1702-001", "SF-1702-004", "SF-1702-008",
     ]
 
@@ -202,9 +218,14 @@ actor ProjectPackageStore {
     private static let manifestPath = "manifest.json"
     private static let documentPath = "document.json"
     private let diagnostics: ProjectPackageDiagnostics
+    private let fileSystem: IdentityBoundPackageFileSystem
 
-    init(diagnostics: ProjectPackageDiagnostics = ProjectPackageDiagnostics()) {
+    init(
+        diagnostics: ProjectPackageDiagnostics = ProjectPackageDiagnostics(),
+        ioObserver: (any ProjectPackageIOObserving)? = nil
+    ) {
         self.diagnostics = diagnostics
+        fileSystem = IdentityBoundPackageFileSystem(observer: ioObserver)
     }
 
     func encode(_ package: ProjectPackage) async throws -> Data {
@@ -231,30 +252,30 @@ actor ProjectPackageStore {
         }
     }
 
+    @discardableResult
     func write(
         _ package: ProjectPackage,
         to destination: URL,
+        expected: PackageFingerprint? = nil,
+        policy: ProjectPackageArtifactPolicy = .durable,
         interruption: ProjectPackageWriteInterruption = .none
-    ) async throws {
+    ) async throws -> PackageFingerprint {
         let started = ContinuousClock.now
-        let stagingURL = destination
-            .deletingLastPathComponent()
-            .appendingPathComponent(".siteforge-stage-\(UUID().uuidString)", isDirectory: false)
         do {
-            try Self.validateDestination(destination)
-            let data = try Self.makeContainer(for: package)
-            try data.write(to: stagingURL, options: [])
-            let handle = try FileHandle(forWritingTo: stagingURL)
-            try handle.synchronize()
-            try handle.close()
-
-            guard interruption == .none else { throw ProjectPackageError.interrupted }
-            guard Darwin.rename(stagingURL.path, destination.path) == 0 else {
-                throw ProjectPackageError.ioFailure
+            if case .recovery(let owner) = policy, owner != package.projectID {
+                throw ProjectPackageError.unsafeRecoveryArtifact
             }
+            let data = try Self.makeContainer(for: package)
+            let fingerprint = try await fileSystem.replace(
+                bytes: data,
+                at: destination,
+                expected: expected,
+                policy: policy,
+                interruption: interruption
+            )
             await record(.write, projectID: package.projectID, started: started, error: nil)
+            return fingerprint
         } catch {
-            try? FileManager.default.removeItem(at: stagingURL)
             let typed = Self.mapIOError(error)
             await record(.write, projectID: package.projectID, started: started, error: typed)
             throw typed
@@ -262,22 +283,67 @@ actor ProjectPackageStore {
     }
 
     func read(from source: URL) async throws -> ProjectPackage {
+        try await readSnapshot(from: source).package
+    }
+
+    func readSnapshot(from source: URL) async throws -> ValidatedProjectPackageRead {
+        try await readSnapshot(from: source, recoveryOwner: nil, isRecovery: false)
+    }
+
+    func readOwnedRecoverySnapshot(
+        from source: URL,
+        expectedProjectID: ProjectID? = nil
+    ) async throws -> ValidatedProjectPackageRead {
+        try await readSnapshot(from: source, recoveryOwner: expectedProjectID, isRecovery: true)
+    }
+
+    private func readSnapshot(
+        from source: URL,
+        recoveryOwner: ProjectID?,
+        isRecovery: Bool
+    ) async throws -> ValidatedProjectPackageRead {
         let started = ContinuousClock.now
         do {
-            try Self.validateReadableFile(source)
-            let attributes = try FileManager.default.attributesOfItem(atPath: source.path)
-            guard let size = attributes[.size] as? NSNumber,
-                  size.intValue <= Self.maximumPackageBytes else {
-                throw ProjectPackageError.oversizedInput
+            let file: ValidatedPackageFileSnapshot
+            if isRecovery {
+                file = try await fileSystem.readOwnedRecoverySnapshot(
+                    from: source,
+                    maximumBytes: Self.maximumPackageBytes
+                )
+            } else {
+                file = try await fileSystem.readSnapshot(from: source, maximumBytes: Self.maximumPackageBytes)
             }
-            let package = try Self.parseContainer(Data(contentsOf: source, options: [.mappedIfSafe]))
+            let package = try Self.parseContainer(file.bytes)
+            if let recoveryOwner, package.projectID != recoveryOwner {
+                throw ProjectPackageError.unsafeRecoveryArtifact
+            }
             await record(.read, projectID: package.projectID, started: started, error: nil)
-            return package
+            return ValidatedProjectPackageRead(package: package, file: file)
         } catch {
             let typed = Self.mapIOError(error)
             await record(.read, projectID: nil, started: started, error: typed)
             throw typed
         }
+    }
+
+    func prepareRecoveryDirectory(_ directory: URL) throws {
+        try fileSystem.prepareOwnedRecoveryDirectory(directory)
+    }
+
+    func validateRecoveryDirectory(_ directory: URL) throws {
+        try fileSystem.validateOwnedRecoveryDirectory(directory)
+    }
+
+    func removeOwnedRecovery(
+        at url: URL,
+        projectID: ProjectID,
+        expected: PackageFingerprint? = nil
+    ) async throws {
+        let read = try await readOwnedRecoverySnapshot(from: url, expectedProjectID: projectID)
+        guard expected == nil || read.file.fingerprint == expected else {
+            throw ProjectPackageError.unsafeRecoveryArtifact
+        }
+        try await fileSystem.removeOwnedRecovery(at: url, expected: read.file.fingerprint)
     }
 }
 
@@ -477,42 +543,6 @@ private extension ProjectPackageStore {
         }
     }
 
-    static func validateReadableFile(_ url: URL) throws {
-        var info = stat()
-        guard lstat(url.path, &info) == 0 else { throw ProjectPackageError.packageUnavailable }
-        guard (info.st_mode & S_IFMT) != S_IFLNK else {
-            throw ProjectPackageError.packageIsSymbolicLink
-        }
-        guard (info.st_mode & S_IFMT) == S_IFREG else { throw ProjectPackageError.packageUnavailable }
-    }
-
-    static func validateDestination(_ url: URL) throws {
-        let parent = url.deletingLastPathComponent()
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: parent.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else { throw ProjectPackageError.unsafeDestination }
-        try rejectSymbolicLinks(in: parent)
-
-        var info = stat()
-        if lstat(url.path, &info) == 0 {
-            guard (info.st_mode & S_IFMT) == S_IFREG else {
-                throw ProjectPackageError.unsafeDestination
-            }
-        }
-    }
-
-    static func rejectSymbolicLinks(in url: URL) throws {
-        var current = url.standardizedFileURL
-        while current.path != "/" {
-            var info = stat()
-            guard lstat(current.path, &info) == 0,
-                  (info.st_mode & S_IFMT) != S_IFLNK else {
-                throw ProjectPackageError.unsafeDestination
-            }
-            current.deleteLastPathComponent()
-        }
-    }
-
     static func checksum(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
@@ -549,7 +579,9 @@ private extension ProjectPackageStore {
             return .compatibility
         case .memberIntegrityFailure, .corruptDocument, .corruptManifest:
             return .integrity
-        case .invalidMemberPath, .duplicateMember, .packageIsSymbolicLink, .unsafeDestination:
+        case .invalidMemberPath, .duplicateMember, .packageIsSymbolicLink, .unsafeDestination,
+             .fileIdentityChanged, .unsafeFileMetadata, .unsafeRecoveryArtifact,
+             .recoveryDeletionFailed:
             return .security
         case .interrupted:
             return .interruption

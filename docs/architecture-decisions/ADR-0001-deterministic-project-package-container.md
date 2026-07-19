@@ -28,7 +28,7 @@ The foundation needs a portable package that can preserve canonical document ide
 
 Package version 1 is a single regular file beginning with an eight-byte SiteForge magic value and a bounded sequence of length-prefixed, lexically ordered members. It requires `manifest.json` and `document.json`. The canonical sorted-key manifest declares package and schema versions, project identity, RFC 3339 creation and modification timestamps, reader compatibility minima, and each non-manifest member's role, length, and SHA-256 digest. Unknown members declared as optional or resource data remain opaque and are preserved byte-for-byte.
 
-The actor-isolated store validates every member and the canonical document before returning a package. Writes create and synchronize a same-directory staging file, then use one atomic filesystem replacement. Symbolic-link sources, destinations, and destination ancestors are rejected.
+The actor-isolated store validates every member and the canonical document before returning a package. ADR-0007 defines the byte-level filesystem contract: one bounded no-follow descriptor snapshot supplies package bytes, fingerprint, identity, and security metadata; writes synchronize a same-directory staging file and use identity-checked exclusive creation or atomic conditional replacement.
 
 ## Consequences
 
@@ -47,7 +47,7 @@ The actor-isolated store validates every member and the canonical document befor
 
 ## Verification
 
-Unit tests compare deterministic bytes and cover round trips, replacement, simulated interruption, opaque members, missing/corrupt members, compatibility, metadata, integrity, traversal, symbolic links, duplicates, size limits, unchanged state, diagnostics, and requirement mapping. `./sf verify` runs the package tests with the existing app and UI suites.
+Unit tests compare deterministic bytes and cover round trips, replacement, simulated interruption, opaque members, missing/corrupt members, compatibility, metadata, integrity, traversal, symbolic links, duplicates, size limits, unchanged state, diagnostics, and requirement mapping. ADR-0007's barrier-controlled suite additionally verifies conditional replacement, inode and ancestor identity, metadata preservation, sparse input, and recovery ownership. `./sf verify` runs the package tests with the existing app and UI suites.
 
 ## Reversal
 

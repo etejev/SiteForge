@@ -151,7 +151,8 @@ final class PersistedHistoryTests: XCTestCase {
             in: fixtureDirectory.appendingPathComponent("recovery", isDirectory: true)
         )
         let packageStore = ProjectPackageStore()
-        let recoveryPackage = try await packageStore.read(from: recoveryURL)
+        let recoverySnapshot = try await packageStore.readSnapshot(from: recoveryURL)
+        let recoveryPackage = recoverySnapshot.package
         let history = recoveryPackage.optionalMembers.first { $0.path == PersistedHistoryStore.memberPath }!
         let unsupported = try mutate(history.data) { $0["schemaVersion"] = 99 }
         var members = recoveryPackage.optionalMembers.filter { $0.path != PersistedHistoryStore.memberPath }
@@ -160,7 +161,7 @@ final class PersistedHistoryTests: XCTestCase {
             projectID: recoveryPackage.projectID, createdAt: recoveryPackage.createdAt,
             modifiedAt: recoveryPackage.modifiedAt, document: recoveryPackage.document,
             optionalMembers: members, compatibility: recoveryPackage.compatibility
-        ), to: recoveryURL)
+        ), to: recoveryURL, expected: recoverySnapshot.file.fingerprint)
 
         let reopened = makeController()
         let openResult = await reopened.requestOpen(url)
