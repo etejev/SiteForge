@@ -4,12 +4,16 @@ import XCTest
 
 @MainActor
 final class DocumentLifecycleTests: XCTestCase {
-    nonisolated(unsafe) private var fixtureURLs: [URL] = []
+    nonisolated(unsafe) private var fixtureLease: RepositoryTestFixture!
 
-    nonisolated override func tearDown() {
-        for url in fixtureURLs { try? FileManager.default.removeItem(at: url) }
-        fixtureURLs.removeAll()
-        super.tearDown()
+    nonisolated override func setUpWithError() throws {
+        try super.setUpWithError()
+        fixtureLease = try RepositoryTestFixture.create("lifecycle")
+    }
+
+    nonisolated override func tearDownWithError() throws {
+        try fixtureLease.cleanup()
+        try super.tearDownWithError()
     }
 
     func testNewDocumentHasCleanUntitledStateAndCommands() async {
@@ -441,14 +445,8 @@ final class DocumentLifecycleTests: XCTestCase {
     }
 
     private func fixture(_ name: String, isDirectory: Bool = false) -> URL {
-        let repository = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let directory = repository
-            .appendingPathComponent(".siteforge-test-fixtures", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if !fixtureURLs.contains(directory) { fixtureURLs.append(directory) }
-        let url = directory.appendingPathComponent(name, isDirectory: isDirectory)
-        if isDirectory { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        let url = fixtureLease.url.appendingPathComponent(name, isDirectory: isDirectory)
+        if isDirectory { try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
         return url
     }
 

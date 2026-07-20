@@ -1442,17 +1442,6 @@ final class DocumentLifecycleController: ObservableObject {
         phase = error == .externalModification || error == .conflict ? .conflicted : .failed
     }
 
-    func presentOpenPanel() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.siteForgeProject]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "Open a validated SiteForge project."
-        panel.accessoryView = nil
-        guard panel.runModal() == .OK, let url = panel.url else { noteCancellation(); return }
-        Task { _ = await requestOpen(url, userSelected: true) }
-    }
-
     func presentSavePanel() {
         guard let url = saveDestinationProvider(suggestedSaveFilename) else { noteCancellation(); return }
         Task { _ = await save(to: url, userSelected: true) }

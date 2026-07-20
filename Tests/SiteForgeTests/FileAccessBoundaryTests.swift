@@ -2,12 +2,16 @@ import XCTest
 @testable import SiteForge
 
 final class FileAccessBoundaryTests: XCTestCase {
-    private var fixtureURLs: [URL] = []
+    private var fixtureLease: RepositoryTestFixture!
 
-    override func tearDown() {
-        for url in fixtureURLs.reversed() { try? FileManager.default.removeItem(at: url) }
-        fixtureURLs.removeAll()
-        super.tearDown()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        fixtureLease = try RepositoryTestFixture.create("file-access")
+    }
+
+    override func tearDownWithError() throws {
+        try fixtureLease.cleanup()
+        try super.tearDownWithError()
     }
 
     // SF-1504-001, SF-1504-002, SF-1504-005, SF-1504-008
@@ -327,9 +331,8 @@ final class FileAccessBoundaryTests: XCTestCase {
     }
 
     private func fixtureDirectory() -> URL {
-        let url = repositoryRoot.appendingPathComponent(".siteforge-test-fixtures/\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        fixtureURLs.append(url)
+        let url = fixtureLease.url.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 

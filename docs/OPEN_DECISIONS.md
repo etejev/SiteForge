@@ -14,9 +14,9 @@ Status: Open
 
 Status: Approved — 2026-07-19
 
-- Decision: use the deterministic versioned single-file project-package container defined by ADR-0001, with bounded persisted history from ADR-0003 and identity-bound atomic replacement from ADR-0007.
+- Decision: use the deterministic versioned single-file control container defined by ADR-0001, with bounded persisted history from ADR-0003, identity-bound atomic replacement from ADR-0007, and versioned content-addressed resource storage from ADR-0012.
 - Reversibility: a later package version may adopt a directory or standard archive while retaining an explicit migration reader for package v1.
-- Scale boundary: package v1 remains limited to 8 MiB total and 4 MiB per member; the 500-asset authoring fixture requires a later measured resource-storage decision and is not represented by current performance evidence.
+- Scale boundary: package-v1 control data remains limited to 8 MiB total and 4 MiB per member. Resource-index v1 retains those limits and bounds its immutable sidecar to 2,000 resources, 16 MiB per resource, and 2 GiB total; native move/copy integration remains downstream authoring work.
 - Affected requirements: `SF-0301-001`, `SF-0301-003`, `SF-0301-004`, `SF-1702-001`, `SF-1702-004`, and `SF-1702-008`.
 
 ## OD-012 — Publisher identity and bundle identifier

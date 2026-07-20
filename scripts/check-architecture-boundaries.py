@@ -13,6 +13,7 @@ ENGINE_SLICE = [
     "SiteForge/CommandKernel.swift",
     "SiteForge/IdentityBoundFileSystem.swift",
     "SiteForge/ProjectPackage.swift",
+    "SiteForge/ProjectResources.swift",
     "SiteForge/PersistedHistory.swift",
 ]
 HEADLESS_FORBIDDEN = {"SwiftUI", "AppKit", "Metal", "WebKit"}
@@ -69,5 +70,24 @@ for source in (ROOT / "SiteForge").glob("*.swift"):
     text = source.read_text()
     if "ProcessInfo.processInfo.arguments" in text:
         fail(f"{source.relative_to(ROOT)} bypasses the centralized Debug composition seam.")
+
+open_panel_owners = []
+for source in (ROOT / "SiteForge").glob("*.swift"):
+    if "NSOpenPanel()" in source.read_text():
+        open_panel_owners.append(source.relative_to(ROOT).as_posix())
+if open_panel_owners != ["SiteForge/LaunchExperience.swift"]:
+    fail(f"Native Open panel ownership must remain singular: {open_panel_owners}")
+
+fixture_root_owners = []
+for source in (ROOT / "Tests").rglob("*.swift"):
+    if ".siteforge-test-fixtures" in source.read_text():
+        fixture_root_owners.append(source.relative_to(ROOT).as_posix())
+if fixture_root_owners != ["Tests/Support/RepositoryTestFixtures.swift"]:
+    fail(f"Test fixture-root construction must remain centralized: {fixture_root_owners}")
+if "RepositoryTestFixtures.swift in Sources" not in project:
+    fail("The shared repository fixture allocator is not compiled into test targets.")
+sf_script = (ROOT / "sf").read_text()
+if "trap cleanup_test_fixtures EXIT" not in sf_script or sf_script.count("cleanup_test_fixtures") < 4:
+    fail("Test fixture cleanup must run on success, failure, and interruption.")
 
 print("Architecture boundary checks passed.")

@@ -26932,7 +26932,7 @@ Work packet: Bounded implementation assignment containing requirement IDs, allow
 | ID | Decision | Owner | Due | Safe default |
 | --- | --- | --- | --- | --- |
 | OD-001 | Minimum supported macOS release and reference hardware tiers | Platform | Before Milestone 0 exit | Assume current and previous two major macOS releases; Apple silicon primary |
-| OD-002 | Persistence store and project package representation | Architecture | Architecture runway | Prototype append-only journal plus versioned structured snapshots |
+| OD-002 | Persistence store and project package representation | Architecture | Approved 2026-07-19 | Deterministic package-v1 control file plus bounded history, identity-bound replacement, and versioned content-addressed resource storage; see ADR-0001/0003/0007/0012 |
 | OD-003 | Blank-project default page set | Product | Approved 2026-07-19 | Home `/`, then Not Found `/404`; one minimum root each; no sample content |
 | OD-004 | Layout engine implementation versus embedding an existing standards engine | Architecture | Before Milestone 1 | Prototype deterministic subset and validate export parity |
 | OD-005 | Managed hosting scope and business model | Product | Before Milestone 4 planning | Portable local export is mandatory; hosting remains an adapter |

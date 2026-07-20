@@ -57,6 +57,30 @@ final class AppMetadataTests: XCTestCase {
         XCTAssertEqual(state.documentSession.document, canonicalDocument)
     }
 
+    // SF-0201-006, SF-0303-006, SF-1505-006
+    func testShellFocusTraversalIsCompleteBidirectionalAndSceneLocal() {
+        let first = PageID(UUID(uuidString: "30000000-0000-0000-0000-000000000001")!)
+        let second = PageID(UUID(uuidString: "30000000-0000-0000-0000-000000000002")!)
+        let order = ShellFocusTraversal.order(pageIDs: [first, second])
+        XCTAssertEqual(order, [
+            .navigatorPages, .navigatorLayers, .navigatorPage(first),
+            .navigatorPage(second), .viewportPreset, .viewportZoomOut, .viewportZoomIn,
+            .inspectorLayout, .inspectorStyle, .inspectorAdvanced, .inspectorAccessibility,
+        ])
+        for (index, value) in order.enumerated() {
+            XCTAssertEqual(
+                ShellFocusTraversal.adjacent(to: value, direction: .forward, pageIDs: [first, second]),
+                order[(index + 1) % order.count]
+            )
+            XCTAssertEqual(
+                ShellFocusTraversal.adjacent(to: value, direction: .reverse, pageIDs: [first, second]),
+                order[(index - 1 + order.count) % order.count]
+            )
+        }
+        XCTAssertEqual(ShellFocusTraversal.adjacent(to: nil, direction: .forward, pageIDs: [first]), .navigatorPages)
+        XCTAssertEqual(ShellFocusTraversal.adjacent(to: nil, direction: .reverse, pageIDs: [second]), .inspectorAccessibility)
+    }
+
     // SF-0201-008, SF-0203-008, SF-1902-008
     @MainActor
     func testShellRequirementTraceabilityIsComplete() {

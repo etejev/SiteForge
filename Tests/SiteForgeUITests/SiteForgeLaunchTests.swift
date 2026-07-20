@@ -2,14 +2,21 @@ import XCTest
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
-    private lazy var fixtureRoot: URL = {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".siteforge-test-fixtures/ui-\(UUID())", isDirectory: true)
-    }()
-    private lazy var recoveryDirectory: URL = {
+    private var fixtureLease: RepositoryTestFixture!
+    private var fixtureRoot: URL { fixtureLease.url }
+    private var recoveryDirectory: URL {
         fixtureRoot.appendingPathComponent("recovery", isDirectory: true)
-    }()
+    }
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        // The launched Debug app owns creation; the UI runner's sandbox only reserves the path.
+        fixtureLease = try RepositoryTestFixture.reserve("ui")
+    }
+
+    override func tearDownWithError() throws {
+        try super.tearDownWithError()
+    }
 
     private func launchWorkspace() -> XCUIApplication {
         continueAfterFailure = false
@@ -59,6 +66,19 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     private func hasKeyboardFocus(_ element: XCUIElement) -> Bool {
         (element.value(forKey: "hasKeyboardFocus") as? Bool) == true
+    }
+
+    private func pageRows(in application: XCUIApplication) -> [XCUIElement] {
+        application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "navigator.page."))
+            .allElementsBoundByAccessibilityElement
+    }
+
+    private func pageRow(named name: String, in application: XCUIApplication) -> XCUIElement {
+        application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@",
+            "navigator.page.", name
+        )).firstMatch
     }
 
     private func attachScreenshot(named name: String) {
@@ -115,8 +135,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.buttons["navigator.tab.pages"].exists)
         XCTAssertTrue(application.buttons["navigator.tab.layers"].exists)
         XCTAssertTrue(application.descendants(matching: .any)["navigator.pages.list"].exists)
-        XCTAssertTrue(application.descendants(matching: .any)["navigator.page.home"].exists)
-        XCTAssertTrue(application.descendants(matching: .any)["navigator.page.notFound"].exists)
+        XCTAssertEqual(pageRows(in: application).count, 2)
         XCTAssertTrue(application.descendants(matching: .any)["canvas.viewport.controls"].exists)
         XCTAssertTrue(application.buttons["inspector.tab.layout"].exists)
         XCTAssertTrue(application.buttons["inspector.tab.style"].exists)
@@ -133,8 +152,8 @@ final class SiteForgeLaunchTests: XCTestCase {
     @MainActor
     func testPagesNavigatorExposesApprovedOrderLabelsSelectionAndArrowNavigation() throws {
         let application = launchWorkspace()
-        let home = application.descendants(matching: .any)["navigator.page.home"]
-        let notFound = application.descendants(matching: .any)["navigator.page.notFound"]
+        let home = pageRow(named: "Home", in: application)
+        let notFound = pageRow(named: "Not Found", in: application)
 
         XCTAssertTrue(home.exists)
         XCTAssertTrue(notFound.exists)
@@ -143,10 +162,30 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertLessThan(home.frame.minY, notFound.frame.minY)
 
         home.click()
-        XCTAssertEqual(home.value as? String, "Selected")
+        XCTAssertEqual(home.value as? String, "Home page; Selected")
         application.typeKey(.downArrow, modifierFlags: [])
-        XCTAssertEqual(notFound.value as? String, "Selected")
+        XCTAssertEqual(notFound.value as? String, "Not Found page; Selected")
         XCTAssertTrue(hasKeyboardFocus(notFound))
+    }
+
+    // SF-0202-006, SF-0202-008, SF-0303-006, SF-0303-008
+    @MainActor
+    func testPageRowIdentifiersAreTypedUniqueAndRoleIsSeparate() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeWorkspaceFixture", "standard",
+        ])
+        let rows = pageRows(in: application)
+        XCTAssertGreaterThanOrEqual(rows.count, 3)
+        let identifiers = rows.map(\.identifier)
+        XCTAssertEqual(Set(identifiers).count, identifiers.count)
+        let pattern = try NSRegularExpression(pattern: #"^navigator\.page\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"#)
+        for row in rows.prefix(12) {
+            let range = NSRange(row.identifier.startIndex..., in: row.identifier)
+            XCTAssertNotNil(pattern.firstMatch(in: row.identifier, range: range), row.identifier)
+        }
+        XCTAssertEqual(pageRow(named: "Home", in: application).value as? String, "Home page; Selected")
+        XCTAssertTrue((pageRow(named: "Not Found", in: application).value as? String)?.hasPrefix("Not Found page;") == true)
+        XCTAssertTrue(rows.contains { ($0.value as? String)?.hasPrefix("Standard page;") == true })
     }
 
     // SF-0201-006, SF-0203-006, SF-0203-008
@@ -164,27 +203,47 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.buttons["toolbar.tool.frame"].click()
         XCTAssertTrue(application.staticTexts["Tool: Frame"].waitForExistence(timeout: 2))
 
+        application.typeKey("t", modifierFlags: [])
+        XCTAssertTrue(application.staticTexts["Tool: Text"].waitForExistence(timeout: 2))
+
         application.buttons["toolbar.preview"].click()
         XCTAssertTrue(application.descendants(matching: .any)["preview.placeholder"].waitForExistence(timeout: 2))
         application.buttons["preview.done"].click()
+        XCTAssertTrue(hasKeyboardFocus(application.buttons["navigator.tab.pages"]))
     }
 
     // SF-0201-006, SF-0602-006, SF-1902-006
     @MainActor
-    func testKeyboardFocusMovesThroughNavigatorBeforeViewportControls() throws {
+    func testKeyboardFocusTraversesWorkspaceForwardAndReverse() throws {
         let application = launchWorkspace()
         let pages = application.buttons["navigator.tab.pages"]
-        let layers = application.buttons["navigator.tab.layers"]
-        let viewport = application.descendants(matching: .any)["canvas.viewport.preset"]
+        let accessibility = application.buttons["inspector.tab.accessibility"]
 
         pages.click()
         XCTAssertTrue(hasKeyboardFocus(pages))
-
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(layers))
-
+        XCTAssertTrue(hasKeyboardFocus(application.buttons["navigator.tab.layers"]))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(viewport))
+        XCTAssertTrue(hasKeyboardFocus(pageRow(named: "Home", in: application)))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(pageRow(named: "Not Found", in: application)))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(application.popUpButtons["canvas.viewport.preset"]))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(application.buttons["canvas.zoom.out"]))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(application.buttons["canvas.zoom.in"]))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(application.buttons["inspector.tab.layout"]))
+
+        accessibility.click()
+        XCTAssertTrue(hasKeyboardFocus(accessibility))
+        application.typeKey("\t", modifierFlags: .shift)
+        XCTAssertTrue(hasKeyboardFocus(application.buttons["inspector.tab.advanced"]))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(accessibility))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(pages))
     }
 
     // SF-0301-006, SF-0306-006, SF-1504-006
@@ -293,7 +352,7 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         var application = launchIntegrationOpen(project, base64Fixture: valid)
         XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
-        XCTAssertTrue(application.descendants(matching: .any)["navigator.page.home"].exists)
+        XCTAssertTrue(pageRow(named: "Home", in: application).exists)
         application.terminate()
 
         application = launchIntegrationOpen(

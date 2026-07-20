@@ -14,3 +14,11 @@ xcuserdata/
 *.pem
 *.dmg
 *.zip
+.env
+.env.*
+!.env.example
+credentials.json
+service-account*.json
+id_rsa
+id_ed25519
+.siteforge-test-fixtures/

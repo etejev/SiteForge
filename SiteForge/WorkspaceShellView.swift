@@ -50,7 +50,9 @@ struct WorkspaceShellView: View {
             WorkspaceToolbar(state: state)
         }
         .sheet(isPresented: $state.isPreviewPresented) {
-            PreviewPlaceholderView()
+            PreviewPlaceholderView {
+                focusedControl = .navigatorPages
+            }
         }
         .sheet(isPresented: Binding(
             get: { state.lifecycle.isRecoveryDetailsPresented },
@@ -68,9 +70,13 @@ struct WorkspaceShellView: View {
             .padding(24).frame(minWidth: 420)
             .accessibilityIdentifier("recovery.details")
         }
-        .onKeyPress(.tab) {
-            guard focusedControl == .navigatorLayers else { return .ignored }
-            focusedControl = .viewportPreset
+        .onKeyPress(keys: [.tab], phases: .down) { press in
+            let direction: ShellFocusDirection = press.modifiers.contains(.shift) ? .reverse : .forward
+            focusedControl = ShellFocusTraversal.adjacent(
+                to: focusedControl,
+                direction: direction,
+                pageIDs: state.pages.map(\.id)
+            )
             return .handled
         }
     }
@@ -324,10 +330,10 @@ private struct NavigatorPageRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(page.name), route \(page.route.rawValue)")
-        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityValue("\(NavigatorPageAccessibility.roleValue(for: page.role)); \(isSelected ? "Selected" : "Not selected")")
         .accessibilityHint("Use Up and Down Arrow to navigate pages")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityIdentifier("navigator.page.\(page.role.rawValue)")
+        .accessibilityIdentifier(NavigatorPageAccessibility.identifier(for: page.id))
     }
 }
 
@@ -408,6 +414,8 @@ private struct ViewportControlsView: View {
             }
             .labelStyle(.iconOnly)
             .disabled(state.zoomPercent == 25)
+            .focusable()
+            .focused(focus, equals: .viewportZoomOut)
             .accessibilityIdentifier("canvas.zoom.out")
 
             Text("\(state.zoomPercent)%")
@@ -420,6 +428,8 @@ private struct ViewportControlsView: View {
             }
             .labelStyle(.iconOnly)
             .disabled(state.zoomPercent == 200)
+            .focusable()
+            .focused(focus, equals: .viewportZoomIn)
             .accessibilityIdentifier("canvas.zoom.in")
         }
         .controlSize(.small)
@@ -514,6 +524,7 @@ private struct StatusBarView: View {
 
 private struct PreviewPlaceholderView: View {
     @Environment(\.dismiss) private var dismiss
+    let onDismiss: () -> Void
 
     var body: some View {
         VStack(spacing: 16) {
@@ -524,7 +535,10 @@ private struct PreviewPlaceholderView: View {
                 .font(.title2)
             Text("Live preview is intentionally deferred to a later milestone.")
                 .foregroundStyle(.secondary)
-            Button("Done") { dismiss() }
+            Button("Done") {
+                dismiss()
+                onDismiss()
+            }
                 .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("preview.done")
         }

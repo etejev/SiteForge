@@ -44,7 +44,7 @@ The actor-isolated store validates every member and the canonical document befor
 
 - The container is SiteForge-specific and needs dedicated tooling rather than generic ZIP inspection.
 - Package and document migrations must retain explicit version handling.
-- Version 1 limits packages to 8 MiB, individual members to 4 MiB, and 256 members; later resource scaling requires a versioned increase or external-resource design.
+- Version 1 limits control packages to 8 MiB, individual inline members to 4 MiB, and 256 members. ADR-0012 adds a versioned bounded content-addressed resource sidecar without relaxing those parser limits.
 
 ## Verification
 

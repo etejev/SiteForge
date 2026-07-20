@@ -40,6 +40,10 @@ This file records user-visible behavior during development. It is not a substitu
 - Real production-loader UI regression journeys for valid and malformed packages, Retry, recovery discovery, keyboard Restore, and Discard, plus an injectable native accessibility-announcement boundary.
 - Scene-owned workspace document contexts with independent canonical sessions, lifecycle/recovery state, history, and convenience state for every native window.
 - Verification-enforced headless canonical-model and command/persistence source slices, plus one Debug-only composition seam for automation fixtures and appearance overrides.
+- Deterministic bidirectional workspace focus traversal, Preview focus restoration, toolbar shortcut coverage, and PageID-derived navigator-row identifiers with role exposed separately.
+- Versioned deterministic resource-index v1 and a bounded content-addressed project resource store with streamed integrity validation, cooperative cancellation, legacy compatibility, and a representative 500-asset fixture without relaxing package parser limits.
+- A redacting repository credential scanner with runtime-assembled synthetic positives, a tracked negative fixture, broader token/key/environment-file coverage, binary/document exclusions, private temporary-fixture cleanup, and local/CI verification enforcement.
+- One shared repository-local XCTest fixture allocator with throwing cleanup and verification-level residue removal, plus an enforced single native project Open-panel owner.
 
 ### Changed
 
@@ -62,6 +66,7 @@ This file records user-visible behavior during development. It is not a substitu
 - Current canonical schema v2 now requires every document and page field and never applies legacy defaults; schema-v1 compatibility uses a separate explicit migration adapter.
 - Project open, revert, Save, and Save As now pass through one balanced security-scope and file-coordination owner; bookmarks remain machine-local app state rather than portable package content.
 - File and Edit commands now resolve the focused window's document context instead of application-global state; Release builds ignore all automation-only process arguments.
+- Accessibility evidence now distinguishes semantic automation from OS-level manual inspection and records the real environment and limitations without claiming unperformed VoiceOver speech or accessibility-setting exercise.
 
 ### Fixed
 

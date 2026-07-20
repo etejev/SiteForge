@@ -21,10 +21,8 @@ for required_path in "${required[@]}"; do
   fi
 done
 
-if rg -n --hidden \
-  -g '!**/.git/**' -g '!**/.build/**' \
-  '(BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY|APPLE_ID_PASSWORD\s*=|NOTARY_PASSWORD\s*=|ghp_[A-Za-z0-9]{20,})' .; then
-  print -u2 "Potential credential material was found. Remove it before continuing."
+if ! scripts/test-secret-scanner.py || ! scripts/scan-repository-secrets.py .; then
+  print -u2 "Repository credential/artifact scanning failed."
   failed=1
 fi
 

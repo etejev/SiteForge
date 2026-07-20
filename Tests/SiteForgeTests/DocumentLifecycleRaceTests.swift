@@ -3,12 +3,16 @@ import XCTest
 
 @MainActor
 final class DocumentLifecycleRaceTests: XCTestCase {
-    nonisolated(unsafe) private var fixtureRoots: [URL] = []
+    nonisolated(unsafe) private var fixtureLease: RepositoryTestFixture!
 
-    nonisolated override func tearDown() {
-        for root in fixtureRoots { try? FileManager.default.removeItem(at: root) }
-        fixtureRoots.removeAll()
-        super.tearDown()
+    nonisolated override func setUpWithError() throws {
+        try super.setUpWithError()
+        fixtureLease = try RepositoryTestFixture.create("lifecycle-races")
+    }
+
+    nonisolated override func tearDownWithError() throws {
+        try fixtureLease.cleanup()
+        try super.tearDownWithError()
     }
 
     // SF-0301-002, SF-0301-004, SF-0306-004, SF-1902-004
@@ -483,16 +487,9 @@ final class DocumentLifecycleRaceTests: XCTestCase {
     }
 
     private func fixture(_ name: String, isDirectory: Bool = false) -> URL {
-        let repository = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let root = repository.appendingPathComponent(
-            ".siteforge-test-fixtures/lifecycle-races-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        fixtureRoots.append(root)
-        let url = root.appendingPathComponent(name, isDirectory: isDirectory)
-        if isDirectory { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        let uniqueName = "\(UUID().uuidString)-\(name)"
+        let url = fixtureLease.url.appendingPathComponent(uniqueName, isDirectory: isDirectory)
+        if isDirectory { try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
         return url
     }
 }

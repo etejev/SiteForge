@@ -3,6 +3,18 @@ import CryptoKit
 import Foundation
 import SwiftUI
 
+@MainActor
+enum NativeProjectOpenPanel {
+    static func chooseProject() -> URL? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.siteForgeProject]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose a SiteForge project to validate before opening."
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+}
+
 enum ProjectLoadUpdate: String, CaseIterable, Equatable, Sendable {
     case readingPackage
     case validatingCanonicalDocument
@@ -339,12 +351,7 @@ final class LaunchExperienceController: ObservableObject {
     }
 
     func presentOpenPanel() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.siteForgeProject]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "Choose a SiteForge project to validate before opening."
-        guard panel.runModal() == .OK, let url = panel.url else {
+        guard let url = NativeProjectOpenPanel.chooseProject() else {
             lifecycle.noteCancellation()
             return
         }

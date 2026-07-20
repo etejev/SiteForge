@@ -1,0 +1,6 @@
+# Representative harmless source and documentation examples.
+API_TOKEN=${API_TOKEN}
+password=<redacted>
+client_secret=example
+sha256=b5a46c3ddc705b978324e17a5e0b9912155950b2a7c05b36e07117bae4d98576
+app.siteforge.SiteForge

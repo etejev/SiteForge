@@ -4,19 +4,18 @@ import XCTest
 @MainActor
 final class PersistedHistoryTests: XCTestCase {
     nonisolated(unsafe) private var fixtureDirectory: URL!
+    nonisolated(unsafe) private var fixtureLease: RepositoryTestFixture!
 
-    nonisolated override func setUp() {
-        super.setUp()
-        let repository = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        fixtureDirectory = repository.appendingPathComponent(".siteforge-history-fixtures", isDirectory: true)
-        try? FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+    nonisolated override func setUpWithError() throws {
+        try super.setUpWithError()
+        fixtureLease = try RepositoryTestFixture.create("history")
+        fixtureDirectory = fixtureLease.url
     }
 
-    nonisolated override func tearDown() {
-        try? FileManager.default.removeItem(at: fixtureDirectory)
+    nonisolated override func tearDownWithError() throws {
+        try fixtureLease.cleanup()
         fixtureDirectory = nil
-        super.tearDown()
+        try super.tearDownWithError()
     }
 
     func testRequirementMappingAndTransactionMetadataAreStableAndSanitized() throws {

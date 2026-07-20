@@ -7,18 +7,18 @@ final class ProjectPackageTests: XCTestCase {
     private let documentID = DocumentID(UUID(uuidString: "20000000-0000-0000-0000-000000000001")!)
     private let pageID = PageID(UUID(uuidString: "30000000-0000-0000-0000-000000000001")!)
 
-    private var fixtureRoot: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/.tmp", isDirectory: true)
+    private var fixtures: [RepositoryTestFixture] = []
+
+    override func tearDownWithError() throws {
+        for fixture in fixtures.reversed() { try fixture.cleanup() }
+        fixtures.removeAll()
+        try super.tearDownWithError()
     }
 
     private func fixtureDirectory() throws -> URL {
-        let directory = fixtureRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        return directory
+        let fixture = try RepositoryTestFixture.create("packages")
+        fixtures.append(fixture)
+        return fixture.url
     }
 
     private func package(

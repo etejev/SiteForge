@@ -4,18 +4,11 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-CORRECTION-008` Close the residual accessibility, stable-row identity, repository scanning, asset-capacity, and fixture-hygiene findings.
-  - Severity: residual `P2`/`P3` work (`M0-P2-03`, `M0-P2-08`, `M0-P2-11`, `M0-P2-12`, `M0-P3-01`, and `M0-P3-02`).
-  - Requirements: `SF-0201-006`, `SF-0202-006`, `SF-0202-008`, `SF-0303-001`, `SF-0303-006`, `SF-0303-008`, `SF-1505-006`, `SF-1602-006`, `SF-1605-006`, `SF-1702-008`, and `SF-2002-008`.
-  - Acceptance: complete forward/reverse keyboard traversal and retained accessibility evidence; PageID-derived stable row identifiers; repository-wide credential/artifact scanning with safe exclusions; a versioned secure resource-capacity decision and representative 500-asset fixture without weakening package limits; one native open-panel path; and centralized, residue-free test-fixture construction.
-  - Evidence and tests required: behavioral keyboard/VoiceOver and stable-ID tests, seeded scanner positives/negatives, deterministic resource-capacity tests or an approved bounded persistence decision, dead-path removal checks, and fixture-cleanup tests on success/failure/interruption.
-  - Dependencies: `SF-CORRECTION-007` provides the composition and fixture seams. Complete before `SF-AUTHORING-000`.
-
 - [ ] `SF-AUTHORING-000` Produce the missing measured authoring-engine architecture runway and resolve `OD-004`/`OD-011`.
   - Severity: `P1` prerequisite gap (`M0-P1-07`).
   - Requirements: `SF-1901-001` through `SF-1901-008`; downstream `SF-0401-001` through `SF-0401-008`, `SF-0407-001` through `SF-0407-008`, `SF-0501-001` through `SF-0501-008`, and `SF-1903-001` through `SF-1903-008`.
   - Acceptance: isolated production-representative prototypes compare SwiftUI, AppKit/Core Animation, and Metal as appropriate; a typed deterministic layout subset is compared with an isolated standards-engine oracle and HTML/CSS/browser output; methodology, commands, hardware/software, warm-up, P50/P95, memory, limitations, and raw results are retained; ADRs resolve or explicitly keep `OD-004` and `OD-011` open without making a browser the canonical model.
-  - Evidence and tests required: coordinate conversion, pan/zoom, incremental render/update, hit testing, overlay isolation, accessibility-tree cost, native-material compatibility, layout determinism, preview/export parity, memory, main-thread stalls, and 100-/10,000-object fixtures; explicitly record that the current 8 MiB package cannot represent the specification's 500-asset large fixture.
+  - Evidence and tests required: coordinate conversion, pan/zoom, incremental render/update, hit testing, overlay isolation, accessibility-tree cost, native-material compatibility, layout determinism, preview/export parity, memory, main-thread stalls, and 100-/10,000-object fixtures; use the verified resource-index-v1 layer for the specification's 500-asset fixture while measuring renderer behavior separately.
   - Dependencies: `SF-CORRECTION-001` through `SF-CORRECTION-008`. Do not start production canvas/layout work first.
 
 ## IN PROGRESS
@@ -27,6 +20,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-CORRECTION-008` Close the residual accessibility, stable-row identity, repository scanning, asset-capacity, and fixture-hygiene findings.
+  - Severity: residual `P2`/`P3` work (`M0-P2-03`, `M0-P2-08`, `M0-P2-11`, `M0-P2-12`, `M0-P3-01`, and `M0-P3-02`).
+  - Requirements: `SF-0201-006`, `SF-0202-006`, `SF-0202-008`, `SF-0303-001`, `SF-0303-006`, `SF-0303-008`, `SF-0407-007`, `SF-0501-007`, `SF-1505-006`, `SF-1601-007`, `SF-1602-006`, `SF-1605-006`, `SF-1702-008`, `SF-1901-007`, `SF-1903-007`, and `SF-2002-008`.
+  - Acceptance: complete forward/reverse keyboard traversal and retained accessibility evidence; PageID-derived stable row identifiers; repository-wide credential/artifact scanning with safe exclusions; a versioned secure resource-capacity decision and representative 500-asset fixture without weakening package limits; one native open-panel path; and centralized, residue-free test-fixture construction.
+  - Plan: define one deterministic forward/reverse shell focus order with PageID-derived navigator-row identifiers and role exposed independently; consolidate native project selection behind one panel adapter and retain truthful accessibility inspection evidence; add a redacting repository scanner with runtime-assembled synthetic positives and a safe tracked negative fixture to local and CI verification; introduce a versioned deterministic resource index plus immutable content-addressed sidecar blobs so a realistic 500-asset project remains portable without relaxing the package control-plane bounds; centralize repository-local XCTest fixture allocation/cleanup and verify residue handling; then run the complete verification suite and reconcile every residual audit row and requirement-evidence claim.
+  - Evidence: `./sf verify` passed on 2026-07-19 with 145 unit tests and 17 UI tests, zero failures. Behavioral tests prove complete forward/reverse pane traversal, shortcuts, Escape/default actions, Preview focus restoration, scene-local focus, stable PageID-derived row identity and separate role semantics. Seven resource tests exercise 500 non-empty 32-KiB assets, deterministic index/package round trips, legacy no-index compatibility, bounded streamed validation, one-resource lazy read, cancellation, restrictive store/blob/link metadata, recovery, version/capacity/metadata rejection, and missing/corrupt resource preservation without changing the control package. Repository verification exercises eight runtime-assembled synthetic patterns across seven credential categories plus four sensitive-name policies, leaves no contiguous positive value tracked, proves private temporary-fixture cleanup on success/failure/interruption, produces zero negative/binary-fixture findings, and keeps the production scan clean; it also proves singular Open-panel ownership, headless resource compilation, and centralized fixture construction. ADR-0012 records the versioned resource boundary; retained accessibility evidence names the real environment, settings, observations, and limitations without claiming VoiceOver speech or OS-setting exercise that did not occur.
+  - Dependencies: completed after `SF-CORRECTION-007`; `SF-AUTHORING-000` is now first READY.
 
 - [x] `SF-CORRECTION-007` Establish enforceable core, command, persistence, and application test seams before authoring growth.
   - Severity: necessary `P2` architecture correction (`M0-P2-06` and `M0-P2-07`).

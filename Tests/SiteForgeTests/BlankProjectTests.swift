@@ -118,4 +118,24 @@ final class BlankProjectTests: XCTestCase {
         XCTAssertEqual(state.effectiveSelectedPageID, notFoundID)
         XCTAssertEqual(state.adjacentPage(to: notFoundID, offset: -1), homeID)
     }
+
+    // SF-0202-006, SF-0202-008, SF-0303-001, SF-0303-006, SF-0303-008
+    func testNavigatorAccessibilityIdentityComesOnlyFromStablePageIdentity() throws {
+        var document = ProjectCreation.blank()
+        document.pages.append(DocumentPage(name: "Home Alternate", route: PageRoute(rawValue: "/alternate"), role: .standard))
+        let before = Dictionary(uniqueKeysWithValues: document.pages.map {
+            ($0.id, NavigatorPageAccessibility.identifier(for: $0.id))
+        })
+        XCTAssertEqual(Set(before.values).count, document.pages.count)
+        XCTAssertTrue(before.values.allSatisfy { $0.hasPrefix("navigator.page.") })
+        XCTAssertEqual(NavigatorPageAccessibility.roleValue(for: .home), "Home page")
+        XCTAssertEqual(NavigatorPageAccessibility.roleValue(for: .notFound), "Not Found page")
+        XCTAssertEqual(NavigatorPageAccessibility.roleValue(for: .standard), "Standard page")
+
+        document.pages.reverse()
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(document))
+        for page in reopened.pages {
+            XCTAssertEqual(NavigatorPageAccessibility.identifier(for: page.id), before[page.id])
+        }
+    }
 }

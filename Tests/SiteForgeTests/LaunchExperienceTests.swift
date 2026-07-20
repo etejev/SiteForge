@@ -4,18 +4,17 @@ import XCTest
 @MainActor
 final class LaunchExperienceTests: XCTestCase {
     nonisolated(unsafe) private var fixtureDirectory: URL!
+    nonisolated(unsafe) private var fixtureLease: RepositoryTestFixture!
 
-    nonisolated override func setUp() {
-        super.setUp()
-        let repository = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        fixtureDirectory = repository.appendingPathComponent(".siteforge-test-fixtures/launch-\(UUID())", isDirectory: true)
-        try? FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+    nonisolated override func setUpWithError() throws {
+        try super.setUpWithError()
+        fixtureLease = try RepositoryTestFixture.create("launch")
+        fixtureDirectory = fixtureLease.url
     }
 
-    nonisolated override func tearDown() {
-        try? FileManager.default.removeItem(at: fixtureDirectory)
-        super.tearDown()
+    nonisolated override func tearDownWithError() throws {
+        try fixtureLease.cleanup()
+        try super.tearDownWithError()
     }
 
     func testRequirementMappingAndEveryOpenTransition() async throws {

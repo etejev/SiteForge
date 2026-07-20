@@ -6,20 +6,18 @@ import XCTest
 @MainActor
 final class IdentityBoundFileSystemTests: XCTestCase {
     nonisolated(unsafe) private var fixtureDirectory: URL!
+    nonisolated(unsafe) private var fixtureLease: RepositoryTestFixture!
 
     override func setUpWithError() throws {
-        let repository = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        fixtureDirectory = repository.appendingPathComponent(
-            ".siteforge-test-fixtures/identity-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        try super.setUpWithError()
+        fixtureLease = try RepositoryTestFixture.create("identity")
+        fixtureDirectory = fixtureLease.url
     }
 
     override func tearDownWithError() throws {
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixtureDirectory.path)
-        try? FileManager.default.removeItem(at: fixtureDirectory)
+        try fixtureLease.cleanup()
+        try super.tearDownWithError()
     }
 
     // SF-0301-005, SF-1504-003, SF-1702-004

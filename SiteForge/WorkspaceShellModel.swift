@@ -82,10 +82,56 @@ enum ShellFocus: Hashable {
     case navigatorLayers
     case navigatorPage(PageID)
     case viewportPreset
+    case viewportZoomOut
+    case viewportZoomIn
     case inspectorLayout
     case inspectorStyle
     case inspectorAdvanced
     case inspectorAccessibility
+}
+
+enum ShellFocusDirection {
+    case forward
+    case reverse
+}
+
+enum ShellFocusTraversal {
+    static func order(pageIDs: [PageID]) -> [ShellFocus] {
+        [
+            .navigatorPages, .navigatorLayers,
+        ] + pageIDs.map(ShellFocus.navigatorPage) + [
+            .viewportPreset, .viewportZoomOut, .viewportZoomIn,
+            .inspectorLayout, .inspectorStyle, .inspectorAdvanced, .inspectorAccessibility,
+        ]
+    }
+
+    static func adjacent(
+        to current: ShellFocus?,
+        direction: ShellFocusDirection,
+        pageIDs: [PageID]
+    ) -> ShellFocus? {
+        let values = order(pageIDs: pageIDs)
+        guard !values.isEmpty else { return nil }
+        guard let current, let index = values.firstIndex(of: current) else {
+            return direction == .forward ? values.first : values.last
+        }
+        let offset = direction == .forward ? 1 : -1
+        return values[(index + offset + values.count) % values.count]
+    }
+}
+
+enum NavigatorPageAccessibility {
+    static func identifier(for pageID: PageID) -> String {
+        "navigator.page.\(pageID.description)"
+    }
+
+    static func roleValue(for role: PageRole) -> String {
+        switch role {
+        case .home: "Home page"
+        case .notFound: "Not Found page"
+        case .standard: "Standard page"
+        }
+    }
 }
 
 enum WorkspaceMetrics {
