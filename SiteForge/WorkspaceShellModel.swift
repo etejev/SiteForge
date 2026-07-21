@@ -84,6 +84,9 @@ enum ShellFocus: Hashable {
     case viewportPreset
     case viewportZoomOut
     case viewportZoomIn
+    case viewportReset
+    case viewportFit
+    case viewportCanvas
     case inspectorLayout
     case inspectorStyle
     case inspectorAdvanced
@@ -101,6 +104,7 @@ enum ShellFocusTraversal {
             .navigatorPages, .navigatorLayers,
         ] + pageIDs.map(ShellFocus.navigatorPage) + [
             .viewportPreset, .viewportZoomOut, .viewportZoomIn,
+            .viewportReset, .viewportFit, .viewportCanvas,
             .inspectorLayout, .inspectorStyle, .inspectorAdvanced, .inspectorAccessibility,
         ]
     }
@@ -193,31 +197,56 @@ final class WorkspaceShellState: ObservableObject {
         "SF-0602-006",
         "SF-1902-006",
         "SF-1902-008",
+        "SF-0401-001", "SF-0401-002", "SF-0401-003", "SF-0401-004",
+        "SF-0401-005", "SF-0401-006", "SF-0401-007", "SF-0401-008",
     ]
 
     @Published var selectedTool: CanvasTool = .select
     @Published var navigatorTab: NavigatorTab = .pages
     @Published var selectedPageID: PageID?
     @Published var inspectorTab: InspectorTab = .layout
-    @Published var viewportPreset: ViewportPreset = .desktop
-    @Published private(set) var zoomPercent = 100
+    @Published var viewportPreset: ViewportPreset = .desktop {
+        didSet {
+            guard viewportPreset != oldValue else { return }
+            updateViewportContentBounds()
+        }
+    }
+    @Published private(set) var viewportState: CanvasViewportState
+    @Published private(set) var preparedViewportScene: PreparedCanvasViewportScene?
+    @Published private(set) var viewportFailure: CanvasViewportError?
+    @Published private(set) var lastViewportAnnouncement = "Canvas viewport at 100 percent"
     @Published private(set) var canvasInteractionCount = 0
     @Published var isPreviewPresented = false
     let documentSession: DocumentSession
     let lifecycle: DocumentLifecycleController
     private var documentSessionObservation: AnyCancellable?
+    private let viewportRegistry = CanvasViewportCommandRegistry()
+    private let viewportPreparer: CanvasViewportScenePreparer
+    let viewportDiagnostics: CanvasViewportDiagnostics
+    private let announcementPoster: AccessibilityAnnouncementPoster
+    private var viewportDocumentID: DocumentID
+    private var preparationTask: Task<Void, Never>?
 
     init(
         documentSession: DocumentSession = DocumentSession(),
-        lifecycle: DocumentLifecycleController? = nil
+        lifecycle: DocumentLifecycleController? = nil,
+        viewportPreparer: CanvasViewportScenePreparer = CanvasViewportScenePreparer(),
+        viewportDiagnostics: CanvasViewportDiagnostics = CanvasViewportDiagnostics(),
+        announcementPoster: AccessibilityAnnouncementPoster = .native
     ) {
         self.documentSession = documentSession
+        viewportState = try! CanvasViewportState()
+        viewportDocumentID = documentSession.document.id
+        self.viewportPreparer = viewportPreparer
+        self.viewportDiagnostics = viewportDiagnostics
+        self.announcementPoster = announcementPoster
         selectedPageID = documentSession.document.pages.first?.id
         let lifecycle = lifecycle ?? DocumentLifecycleController(session: documentSession)
         precondition(lifecycle.session === documentSession, "Workspace state and lifecycle must own the same session")
         self.lifecycle = lifecycle
-        documentSessionObservation = documentSession.objectWillChange.sink { [weak self] _ in
+        documentSessionObservation = documentSession.$document.dropFirst().sink { [weak self] document in
             self?.objectWillChange.send()
+            self?.synchronizeViewportDocumentBoundary(document)
         }
     }
 
@@ -252,8 +281,118 @@ final class WorkspaceShellState: ObservableObject {
         return pages[destination].id
     }
 
+    var zoomPercent: Int { viewportState.zoom.percent }
+
+    var viewportAccessibilityValue: String {
+        String(
+            format: "Zoom %d percent; origin %.1f, %.1f; interactions %d",
+            zoomPercent,
+            viewportState.worldOrigin.x,
+            viewportState.worldOrigin.y,
+            canvasInteractionCount
+        )
+    }
+
     func adjustZoom(by delta: Int) {
-        zoomPercent = min(200, max(25, zoomPercent + delta))
+        let command: CanvasViewportCommandName = delta < 0 ? .zoomOut : .zoomIn
+        let steps = max(1, abs(delta) / 25)
+        for _ in 0..<steps { performViewportCommand(CanvasViewportCommand(command)) }
+    }
+
+    func performViewportCommand(_ command: CanvasViewportCommand) {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let committed = viewportState
+        do {
+            try viewportRegistry.apply(command, to: &viewportState)
+            viewportFailure = nil
+            announceViewport(command.name)
+            recordViewportDiagnostic(command.name, start: start, result: .success, failure: nil)
+            scheduleScenePreparation()
+        } catch let error as CanvasViewportError {
+            viewportState = committed
+            viewportFailure = error
+            recordViewportDiagnostic(command.name, start: start, result: .failure, failure: String(describing: error))
+        } catch {
+            viewportState = committed
+        }
+    }
+
+    func zoom(to value: Double, around anchor: ViewportPoint) {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let committed = viewportState
+        let operation: CanvasViewportCommandName = value >= committed.zoom.value ? .zoomIn : .zoomOut
+        do {
+            try viewportState.zoom(to: value, around: anchor)
+            viewportFailure = nil
+            announceViewport(operation)
+            recordViewportDiagnostic(operation, start: start, result: .success, failure: nil)
+            scheduleScenePreparation()
+        } catch let error as CanvasViewportError {
+            viewportState = committed
+            viewportFailure = error
+            recordViewportDiagnostic(operation, start: start, result: .failure, failure: String(describing: error))
+        } catch {
+            viewportState = committed
+        }
+    }
+
+    func magnify(by factor: Double, around anchor: ViewportPoint) {
+        zoom(to: viewportState.zoom.value * factor, around: anchor)
+    }
+
+    func panViewport(by delta: ViewportVector) {
+        let committed = viewportState
+        do {
+            try viewportState.pan(by: delta)
+            viewportFailure = nil
+            scheduleScenePreparation()
+        } catch let error as CanvasViewportError {
+            viewportState = committed
+            viewportFailure = error
+        } catch {
+            viewportState = committed
+        }
+    }
+
+    func resizeViewport(to size: ViewportSize, pixelRatio: Double) {
+        guard size != viewportState.viewportSize || pixelRatio != viewportState.pixelRatio.value else { return }
+        let committed = viewportState
+        do {
+            try viewportState.resize(to: size, pixelRatio: pixelRatio)
+            viewportFailure = nil
+            scheduleScenePreparation()
+        } catch let error as CanvasViewportError {
+            viewportState = committed
+            viewportFailure = error
+        } catch {
+            viewportState = committed
+        }
+    }
+
+    func cancelViewportPreparation() {
+        preparationTask?.cancel()
+        preparationTask = nil
+    }
+
+    func prepareViewportScene(objects: [CanvasViewportSceneObject]) async throws -> PreparedCanvasViewportScene {
+        let identity = currentViewportOperationIdentity
+        let request = CanvasViewportPreparationRequest(identity: identity, viewport: viewportState, objects: objects)
+        let result = try await viewportPreparer.prepare(
+            request,
+            cancellation: CanvasViewportCancellation(isCancelled: { Task.isCancelled })
+        )
+        try CanvasViewportAdoptionGate().validate(result, expected: currentViewportOperationIdentity)
+        preparedViewportScene = result
+        return result
+    }
+
+    var currentViewportOperationIdentity: CanvasViewportOperationIdentity {
+        CanvasViewportOperationIdentity(
+            documentID: documentSession.document.id,
+            revision: documentSession.document.revision,
+            sceneID: viewportState.sceneID,
+            generation: viewportState.generation
+        )
     }
 
     func noteCanvasInteraction() {
@@ -267,4 +406,85 @@ final class WorkspaceShellState: ObservableObject {
     func redo() {
         try? documentSession.redo()
     }
+
+    private func updateViewportContentBounds() {
+        let bounds = WorldRect(
+            origin: WorldPoint(x: 0, y: 0),
+            size: WorldSize(width: Double(viewportPreset.width), height: 900)
+        )
+        try? viewportState.setContentBounds(bounds)
+        scheduleScenePreparation()
+    }
+
+    private func synchronizeViewportDocumentBoundary(_ document: CanonicalDocument) {
+        guard document.id != viewportDocumentID else {
+            scheduleScenePreparation()
+            return
+        }
+        cancelViewportPreparation()
+        viewportDocumentID = document.id
+        viewportState = try! CanvasViewportState(
+            viewportSize: viewportState.viewportSize,
+            contentBounds: WorldRect(
+                origin: WorldPoint(x: 0, y: 0),
+                size: WorldSize(width: Double(viewportPreset.width), height: 900)
+            ),
+            pixelRatio: viewportState.pixelRatio
+        )
+        preparedViewportScene = nil
+        viewportFailure = nil
+        lastViewportAnnouncement = "Canvas viewport reset for the opened document"
+        announcementPoster.post(lastViewportAnnouncement)
+        scheduleScenePreparation()
+    }
+
+    private func scheduleScenePreparation() {
+        preparationTask?.cancel()
+        let objects = documentSession.document.pages.flatMap(\.nodes).map {
+            CanvasViewportSceneObject(id: $0.id, bounds: viewportState.contentBounds)
+        }
+        preparationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await prepareViewportScene(objects: objects)
+            } catch CanvasViewportError.cancelled {
+                // Cancellation and stale completion are deliberately state neutral.
+            } catch CanvasViewportError.staleResult {
+                // A newer generation owns adoption.
+            } catch let error as CanvasViewportError {
+                viewportFailure = error
+            } catch {}
+        }
+    }
+
+    private func announceViewport(_ operation: CanvasViewportCommandName) {
+        switch operation {
+        case .zoomIn, .zoomOut, .actualSize, .fitDocument, .fitWidth:
+            lastViewportAnnouncement = String(format: "Canvas zoom %d percent", zoomPercent)
+        case .panLeft, .panRight, .panUp, .panDown:
+            lastViewportAnnouncement = "Canvas panned " + operation.rawValue
+        }
+        announcementPoster.post(lastViewportAnnouncement)
+    }
+
+    private func recordViewportDiagnostic(
+        _ operation: CanvasViewportCommandName,
+        start: UInt64,
+        result: CanvasViewportDiagnosticResult,
+        failure: String?
+    ) {
+        let elapsed = DispatchTime.now().uptimeNanoseconds - start
+        let sceneIdentifier = String(viewportState.sceneID.description.prefix(8))
+        let record = CanvasViewportDiagnosticRecord(
+            requirementID: "SF-0401-008",
+            operation: operation,
+            sceneIdentifier: sceneIdentifier,
+            generation: viewportState.generation,
+            durationMilliseconds: Double(elapsed) / 1_000_000,
+            result: result,
+            failureCategory: failure
+        )
+        Task { await viewportDiagnostics.append(record) }
+    }
+
 }

@@ -3939,6 +3939,8 @@ Verification  Unit tests cover resolution and invalid inputs; integration tests 
 
 Priority / milestone  MUST. Release blocking for the first milestone in which this module is enabled; later refinements may be separately scoped only when the mandatory path remains complete.
 
+Implementation evidence note (2026-07-21): `SF-AUTHORING-001` implements the bounded production viewport portion of SF-0401 using typed Foundation world/viewport/device geometry and one noncanonical scene-owned AppKit viewport. Canonical authored world-point editing, selection fit, real rendering, overlays, export parity, and release-level performance/accessibility acceptance remain Partial and are assigned to later authoring slices; see ADR-0014 and `docs/REQUIREMENT_EVIDENCE.json`.
+
 #### Module Acceptance Checklist
 
 ☐ A new user can complete: zoom around cursor; pan smoothly; fit selection; convert coordinates correctly.

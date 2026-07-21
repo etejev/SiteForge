@@ -234,6 +234,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(hasKeyboardFocus(application.buttons["canvas.zoom.in"]))
         application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(application.buttons["canvas.zoom.reset"]))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(application.buttons["canvas.zoom.fit"]))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(hasKeyboardFocus(application.descendants(matching: .any)["canvas.interaction"]))
+        application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(hasKeyboardFocus(application.buttons["inspector.tab.layout"]))
 
         accessibility.click()
@@ -244,6 +250,30 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(hasKeyboardFocus(accessibility))
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(hasKeyboardFocus(pages))
+    }
+
+    // SF-0401-001, SF-0401-002, SF-0401-006, SF-0401-008
+    @MainActor
+    func testViewportCommandsAreKeyboardAndAccessibilityOperable() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"]
+        XCTAssertTrue(canvas.exists)
+        XCTAssertEqual(canvas.label, "Canvas viewport")
+        XCTAssertTrue((canvas.value as? String)?.contains("Zoom 100 percent") == true)
+
+        application.buttons["canvas.zoom.in"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "Zoom 125 percent"))
+        application.typeKey("0", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(canvas, containing: "Zoom 100 percent"))
+
+        let beforePan = try XCTUnwrap(canvas.value as? String)
+        application.typeKey(.rightArrow, modifierFlags: .option)
+        XCTAssertTrue(waitForValueToChange(canvas, from: beforePan))
+
+        application.buttons["canvas.zoom.fit"].click()
+        XCTAssertTrue((canvas.value as? String)?.contains("Zoom") == true)
+        XCTAssertTrue(application.buttons["canvas.zoom.reset"].isHittable)
+        XCTAssertTrue(application.descendants(matching: .any)["canvas.viewport.surface"].exists)
     }
 
     // SF-0301-006, SF-0306-006, SF-1504-006
@@ -429,12 +459,32 @@ final class SiteForgeLaunchTests: XCTestCase {
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(canvas.exists)
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        XCTAssertEqual(canvas.value as? String, "Interactions: 1")
+        XCTAssertTrue((canvas.value as? String)?.contains("interactions 1") == true)
 
         application.buttons["navigator.tab.layers"].click()
         XCTAssertTrue(application.descendants(matching: .any)["navigator.empty"].exists)
         application.buttons["navigator.tab.pages"].click()
         XCTAssertTrue(application.descendants(matching: .any)["navigator.pages.list"].exists)
+    }
+
+    private func waitForValue(_ element: XCUIElement, containing text: String) -> Bool {
+        let predicate = NSPredicate { object, _ in
+            ((object as? XCUIElement)?.value as? String)?.contains(text) == true
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
+            timeout: 2
+        ) == .completed
+    }
+
+    private func waitForValueToChange(_ element: XCUIElement, from value: String) -> Bool {
+        let predicate = NSPredicate { object, _ in
+            ((object as? XCUIElement)?.value as? String) != value
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
+            timeout: 2
+        ) == .completed
     }
 
     // SF-0201-003, SF-0201-006, SF-0201-008

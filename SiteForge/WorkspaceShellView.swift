@@ -347,34 +347,37 @@ private struct CanvasPlaceholderView: View {
             Divider()
 
             GeometryReader { geometry in
-                ScrollView([.horizontal, .vertical]) {
-                    let availableWidth = max(360, geometry.size.width - 96)
-                    let availableHeight = max(300, geometry.size.height - 96)
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(.background)
-                        .stroke(.separator, lineWidth: 1)
-                        .frame(width: min(680, availableWidth), height: min(440, availableHeight))
-                        .overlay {
-                            ContentUnavailableView(
-                                "Canvas Ready",
-                                systemImage: "rectangle.dashed",
-                                description: Text("The rendering engine will connect here in a later milestone.")
-                            )
-                            .padding(20)
-                            .accessibilityIdentifier("canvas.empty")
-                        }
-                        .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
-                        .padding(48)
-                        .contentShape(Rectangle())
-                        .onTapGesture { state.noteCanvasInteraction() }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Canvas interaction area")
-                        .accessibilityValue("Interactions: \(state.canvasInteractionCount)")
-                        .accessibilityAction { state.noteCanvasInteraction() }
-                        .accessibilityIdentifier("canvas.interaction")
+                ZStack {
+                    NativeCanvasViewport(
+                        state: state,
+                        isKeyboardFocused: focus.wrappedValue == .viewportCanvas
+                    )
+                        .focusable()
+                        .focused(focus, equals: .viewportCanvas)
+
+                    VStack(spacing: 8) {
+                        Image(systemName: "viewfinder")
+                            .font(.title)
+                        Text("Viewport Foundation")
+                            .font(.headline)
+                        Text("Rendering and selection connect in later authoring slices.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(16)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 }
-                .accessibilityIdentifier("canvas.scroll")
                 .background(Color(nsColor: .underPageBackgroundColor))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("canvas.viewport.surface")
+                .onAppear {
+                    state.resizeViewport(
+                        to: ViewportSize(width: geometry.size.width, height: geometry.size.height),
+                        pixelRatio: Double(NSScreen.main?.backingScaleFactor ?? 2)
+                    )
+                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -410,7 +413,7 @@ private struct ViewportControlsView: View {
             Spacer(minLength: 8)
 
             Button("Zoom out", systemImage: "minus") {
-                state.adjustZoom(by: -25)
+                state.performViewportCommand(CanvasViewportCommand(.zoomOut))
             }
             .labelStyle(.iconOnly)
             .disabled(state.zoomPercent == 25)
@@ -424,13 +427,29 @@ private struct ViewportControlsView: View {
                 .accessibilityIdentifier("canvas.zoom.value")
 
             Button("Zoom in", systemImage: "plus") {
-                state.adjustZoom(by: 25)
+                state.performViewportCommand(CanvasViewportCommand(.zoomIn))
             }
             .labelStyle(.iconOnly)
-            .disabled(state.zoomPercent == 200)
+            .disabled(state.viewportState.zoom == .maximum)
             .focusable()
             .focused(focus, equals: .viewportZoomIn)
             .accessibilityIdentifier("canvas.zoom.in")
+
+            Button("Actual size", systemImage: "1.magnifyingglass") {
+                state.performViewportCommand(CanvasViewportCommand(.actualSize))
+            }
+            .labelStyle(.iconOnly)
+            .focusable()
+            .focused(focus, equals: .viewportReset)
+            .accessibilityIdentifier("canvas.zoom.reset")
+
+            Button("Fit document", systemImage: "arrow.up.left.and.arrow.down.right") {
+                state.performViewportCommand(CanvasViewportCommand(.fitDocument))
+            }
+            .labelStyle(.iconOnly)
+            .focusable()
+            .focused(focus, equals: .viewportFit)
+            .accessibilityIdentifier("canvas.zoom.fit")
         }
         .controlSize(.small)
         .padding(.horizontal, 12)
@@ -484,6 +503,7 @@ private struct StatusBarView: View {
     var body: some View {
         HStack(spacing: 14) {
             Label("Zoom \(state.zoomPercent)%", systemImage: "magnifyingglass")
+                .accessibilityValue(state.viewportAccessibilityValue)
                 .accessibilityIdentifier("status.zoom")
             Divider().frame(height: 14)
             Label(state.viewportPreset.title, systemImage: "rectangle.split.3x1")
@@ -611,5 +631,192 @@ struct SiteForgeCommands: Commands {
             .keyboardShortcut("p", modifiers: [.command, .shift])
             .disabled(state == nil)
         }
+
+        CommandGroup(after: .toolbar) {
+            Divider()
+            Button("Zoom In") { state?.performViewportCommand(CanvasViewportCommand(.zoomIn)) }
+                .keyboardShortcut("+", modifiers: .command)
+                .disabled(state?.zoomPercent == CanvasZoom.maximum.percent)
+            Button("Zoom Out") { state?.performViewportCommand(CanvasViewportCommand(.zoomOut)) }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(state?.zoomPercent == CanvasZoom.minimum.percent)
+            Button("Actual Size") { state?.performViewportCommand(CanvasViewportCommand(.actualSize)) }
+                .keyboardShortcut("0", modifiers: .command)
+            Button("Fit Document") { state?.performViewportCommand(CanvasViewportCommand(.fitDocument)) }
+                .keyboardShortcut("1", modifiers: .command)
+            Divider()
+            Button("Pan Left") { state?.performViewportCommand(CanvasViewportCommand(.panLeft)) }
+                .keyboardShortcut(.leftArrow, modifiers: .option)
+            Button("Pan Right") { state?.performViewportCommand(CanvasViewportCommand(.panRight)) }
+                .keyboardShortcut(.rightArrow, modifiers: .option)
+            Button("Pan Up") { state?.performViewportCommand(CanvasViewportCommand(.panUp)) }
+                .keyboardShortcut(.upArrow, modifiers: .option)
+            Button("Pan Down") { state?.performViewportCommand(CanvasViewportCommand(.panDown)) }
+                .keyboardShortcut(.downArrow, modifiers: .option)
+        }
+    }
+}
+
+private struct NativeCanvasViewport: NSViewRepresentable {
+    @ObservedObject var state: WorkspaceShellState
+    let isKeyboardFocused: Bool
+
+    func makeNSView(context: Context) -> NativeCanvasViewportView {
+        let view = NativeCanvasViewportView()
+        configure(view)
+        return view
+    }
+
+    func updateNSView(_ view: NativeCanvasViewportView, context: Context) {
+        configure(view)
+        view.viewportState = state.viewportState
+        view.accessibilityViewportValue = state.viewportAccessibilityValue
+        view.needsDisplay = true
+        let width = Double(view.bounds.width)
+        let height = Double(view.bounds.height)
+        let scale = Double(view.window?.backingScaleFactor ?? 2)
+        if isKeyboardFocused, view.window?.firstResponder !== view {
+            DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+        }
+        guard width > 0, height > 0 else { return }
+        DispatchQueue.main.async {
+            state.resizeViewport(to: ViewportSize(width: width, height: height), pixelRatio: scale)
+        }
+    }
+
+    private func configure(_ view: NativeCanvasViewportView) {
+        view.setAccessibilityIdentifier("canvas.interaction")
+        view.viewportState = state.viewportState
+        view.onInteraction = { state.noteCanvasInteraction() }
+        view.onPan = { state.panViewport(by: $0) }
+        view.onMagnify = { factor, anchor in state.magnify(by: factor, around: anchor) }
+        view.onResize = { size, scale in state.resizeViewport(to: size, pixelRatio: scale) }
+        view.onZoomIn = { state.performViewportCommand(CanvasViewportCommand(.zoomIn)) }
+        view.onZoomOut = { state.performViewportCommand(CanvasViewportCommand(.zoomOut)) }
+        view.onReset = { state.performViewportCommand(CanvasViewportCommand(.actualSize)) }
+    }
+}
+
+private final class NativeCanvasViewportView: NSView {
+    var viewportState = try! CanvasViewportState()
+    var accessibilityViewportValue = "Zoom 100 percent"
+    var onInteraction: (() -> Void)?
+    var onPan: ((ViewportVector) -> Void)?
+    var onMagnify: ((Double, ViewportPoint) -> Void)?
+    var onResize: ((ViewportSize, Double) -> Void)?
+    var onZoomIn: (() -> Void)?
+    var onZoomOut: (() -> Void)?
+    var onReset: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+    override var isFlipped: Bool { true }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityLabel() -> String? { "Canvas viewport" }
+    override func accessibilityValue() -> Any? { accessibilityViewportValue }
+    override func accessibilityHelp() -> String? {
+        "Scroll to pan. Pinch to zoom around the pointer. Use the View menu for keyboard controls."
+    }
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        [
+            NSAccessibilityCustomAction(name: "Zoom In") { [weak self] in self?.onZoomIn?(); return true },
+            NSAccessibilityCustomAction(name: "Zoom Out") { [weak self] in self?.onZoomOut?(); return true },
+            NSAccessibilityCustomAction(name: "Reset View") { [weak self] in self?.onReset?(); return true },
+        ]
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        needsDisplay = true
+        return super.becomeFirstResponder()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        needsDisplay = true
+        return super.resignFirstResponder()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        notifyResize()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        notifyResize()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        onInteraction?()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        onPan?(ViewportVector(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY))
+    }
+
+    override func magnify(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        onMagnify?(pow(2, event.magnification), ViewportPoint(x: point.x, y: point.y))
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let command: CanvasViewportCommandName?
+        switch event.keyCode {
+        case 123: command = .panLeft
+        case 124: command = .panRight
+        case 125: command = .panDown
+        case 126: command = .panUp
+        default: command = nil
+        }
+        if let command {
+            let vector: ViewportVector
+            switch command {
+            case .panLeft: vector = ViewportVector(dx: CanvasViewportState.keyboardPanStep, dy: 0)
+            case .panRight: vector = ViewportVector(dx: -CanvasViewportState.keyboardPanStep, dy: 0)
+            case .panUp: vector = ViewportVector(dx: 0, dy: CanvasViewportState.keyboardPanStep)
+            case .panDown: vector = ViewportVector(dx: 0, dy: -CanvasViewportState.keyboardPanStep)
+            default: return
+            }
+            onPan?(vector)
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.underPageBackgroundColor.setFill()
+        dirtyRect.fill()
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        context.saveGState()
+        defer { context.restoreGState() }
+
+        let transform = viewportState.transform
+        let artboardOrigin = (try? transform.worldToViewport(viewportState.contentBounds.origin))
+            ?? ViewportPoint(x: 0, y: 0)
+        let artboard = CGRect(
+            x: artboardOrigin.x,
+            y: artboardOrigin.y,
+            width: viewportState.contentBounds.size.width * viewportState.zoom.value,
+            height: viewportState.contentBounds.size.height * viewportState.zoom.value
+        )
+        context.setShadow(offset: CGSize(width: 0, height: 2), blur: 8, color: NSColor.black.withAlphaComponent(0.12).cgColor)
+        context.setFillColor(NSColor.textBackgroundColor.cgColor)
+        context.fill(artboard)
+        context.setShadow(offset: .zero, blur: 0)
+        context.setStrokeColor(NSColor.separatorColor.cgColor)
+        context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
+        context.stroke(artboard)
+        if window?.firstResponder === self {
+            context.setStrokeColor(NSColor.keyboardFocusIndicatorColor.cgColor)
+            context.setLineWidth(3)
+            context.stroke(bounds.insetBy(dx: 2, dy: 2))
+        }
+    }
+
+    private func notifyResize() {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let size = ViewportSize(width: bounds.width, height: bounds.height)
+        let scale = Double(window?.backingScaleFactor ?? 2)
+        DispatchQueue.main.async { [weak self] in self?.onResize?(size, scale) }
     }
 }

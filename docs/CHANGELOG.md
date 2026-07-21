@@ -6,6 +6,10 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- A production canvas viewport foundation with compile-time-separated world, viewport, and device geometry; deterministic precision and error policies; Retina-aware reversible transforms; 25–800% cursor-anchored zoom; bounded pan; resize, reset, fit-document, and fit-width behavior.
+- A native AppKit viewport input and accessibility surface embedded in the existing material-aware SwiftUI shell, with keyboard/menu commands, focus traversal, semantic values/actions, announcements, and scene-owned noncanonical state.
+- Actor-isolated immutable viewport-scene preparation tagged by document, revision, scene, and viewport generation, including cancellation/stale-result rejection and deterministic 100-/10,000-object coverage.
+
 - A reproducible isolated authoring-engine runway with typed coordinate, hit-test, deterministic layout, HTML/CSS parity, native renderer, accessibility, material, and production 500-asset probes at 100- and 10,000-object scale, retaining raw samples, environment, memory fields, commands, and limitations.
 - ADR-0013 selecting a SiteForge-owned deterministic canonical layout engine with an isolated WebKit standards oracle, and ADR-0014 selecting SwiftUI chrome with an AppKit viewport, bounded Core Animation composition, and an optional future Metal backend.
 

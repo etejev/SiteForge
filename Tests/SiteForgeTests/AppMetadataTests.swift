@@ -52,8 +52,8 @@ final class AppMetadataTests: XCTestCase {
 
         for _ in 0..<10 { state.adjustZoom(by: -25) }
         XCTAssertEqual(state.zoomPercent, 25)
-        for _ in 0..<10 { state.adjustZoom(by: 25) }
-        XCTAssertEqual(state.zoomPercent, 200)
+        for _ in 0..<20 { state.adjustZoom(by: 25) }
+        XCTAssertEqual(state.zoomPercent, 800)
         XCTAssertEqual(state.documentSession.document, canonicalDocument)
     }
 
@@ -65,6 +65,7 @@ final class AppMetadataTests: XCTestCase {
         XCTAssertEqual(order, [
             .navigatorPages, .navigatorLayers, .navigatorPage(first),
             .navigatorPage(second), .viewportPreset, .viewportZoomOut, .viewportZoomIn,
+            .viewportReset, .viewportFit, .viewportCanvas,
             .inspectorLayout, .inspectorStyle, .inspectorAdvanced, .inspectorAccessibility,
         ])
         for (index, value) in order.enumerated() {
@@ -92,6 +93,8 @@ final class AppMetadataTests: XCTestCase {
                 "SF-0201-002", "SF-0201-004", "SF-0201-006", "SF-0201-008",
                 "SF-0203-006", "SF-0203-008", "SF-0602-002", "SF-0602-006",
                 "SF-1902-006", "SF-1902-008",
+                "SF-0401-001", "SF-0401-002", "SF-0401-003", "SF-0401-004",
+                "SF-0401-005", "SF-0401-006", "SF-0401-007", "SF-0401-008",
             ]
         )
     }

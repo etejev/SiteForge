@@ -66,3 +66,9 @@ The native-material pass-through check preserved canvas hit testing. Content dig
 The canvas renderer is an adapter over typed scene snapshots. A Metal backend can replace content-tile rasterization while AppKit retains viewport/input/accessibility ownership and Core Animation retains composition.
 
 Build a production Metal comparison before adoption if display-link evidence on owner-approved reference hardware shows repeated frame misses during pan/zoom or incremental edits; if tile/cache memory exceeds its budget; if required effects cannot be expressed efficiently with native drawing/Core Animation; or if stress fixtures exceed the practical limit. Revisit SwiftUI canvas rendering only if framework changes produce equivalent incremental invalidation, event, accessibility, material, and 10,000-object evidence.
+
+## Production checkpoint: SF-AUTHORING-001
+
+The first production slice implements the decision's coordinate and viewport boundary without pulling the later renderer forward. `CanvasViewport.swift` is a Foundation-only typed geometry/state layer. Each `WorkspaceDocumentContext` owns an independent, nonpersistent viewport; an AppKit `NSView` owns native scroll, magnification, keyboard, focus, accessibility, and bounded placeholder drawing. Immutable preparation results carry document, revision, scene, and generation identity and are adopted only when all fields still match.
+
+Core Animation tiles, real scene rendering, hit testing, editor overlays, and accessibility virtualization remain `SF-AUTHORING-003`. Metal remains absent. This checkpoint preserves the renderer seam and validates deterministic 100-/10,000-object preparation rather than claiming renderer frame pacing.

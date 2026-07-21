@@ -4,12 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-AUTHORING-001` Implement the deterministic canvas coordinate system and viewport.
-  - Requirements: `SF-0401-001` through `SF-0401-008`.
-  - Acceptance: production typed world/view/device transforms, cursor-anchored zoom, bounded pan, viewport resizing, deterministic conversion and precision behavior, revision-scoped off-main scene preparation, native focus/input/accessibility semantics, and stale/cancelled-result rejection are integrated into the existing shell without adding editing tools or a real renderer.
-  - Evidence and tests required: reversible coordinate conversions across scale factors and negative/large coordinates; zoom anchoring; pan/resize; keyboard and accessibility behavior; cancellation/stale adoption; minimum-window behavior; and deterministic 100-/10,000-object viewport fixtures.
-  - Dependencies: `SF-AUTHORING-000`; follow ADR-0014 and keep renderer, layout, and editor overlays behind bounded interfaces.
-
 - [ ] `SF-AUTHORING-002` Implement the deterministic layout-engine foundation subset.
   - Requirements: `SF-0501-001` through `SF-0501-008`.
   - Acceptance: a production UI-independent, revision-scoped engine implements the approved fixed/intrinsic/fill, min/max, padding, gap, alignment, stack, nesting, overflow, and responsive-width subset; unsupported and invalid semantics fail explicitly; HTML/CSS parity remains an adapter/oracle boundary rather than canonical state.
@@ -31,6 +25,12 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-AUTHORING-001` Implement the deterministic canvas coordinate system and viewport.
+  - Requirements: `SF-0401-001` through `SF-0401-008` (bounded viewport slice; canonical authored world-point editing remains Partial).
+  - Plan: introduce Foundation-only phantom-typed world/viewport/device geometry and deterministic transform rules; keep one scene-owned viewport outside canonical project content; route zoom/reset/fit/pan through a typed registry; host native AppKit pointer, magnification, keyboard, drawing, focus, and accessibility semantics inside the existing SwiftUI shell; prepare immutable revision/generation-tagged scene inputs in an actor; reject cancellation and stale adoption; exercise scale, precision, fit, resize, lifecycle, accessibility, and 100-/10,000-object boundaries without adding layout, editing, selection, overlays, or a production renderer.
+  - Evidence: `CanvasViewportTests` provides 11 deterministic tests for typed conversion, invalid/overflow input, Retina scales, cursor anchoring from 25–800%, bounded pan, resize, reset/fit, 10,000 repeated conversions, per-window ownership, document/revision/scene/generation identity, cancellation/stale adoption, accessibility announcements, redacted diagnostics, and deterministic 100-/10,000-object preparation. UI coverage exercises native commands, values/actions, bidirectional focus, minimum layout, material/appearance compatibility, and launch/loading regressions. `scripts/check-architecture-boundaries.py` headlessly type-checks the production viewport with no UI-framework import. `./sf verify` passed on 2026-07-21 with 161 unit tests and 18 UI tests, zero failures. Retained inspection records default/minimum sizes, 100%/125% zoom, positive/negative pan, light/dark, Retina scale, Reduce Motion, and active/inactive policy states.
+  - Dependencies: completed after `SF-AUTHORING-000`; follows ADR-0014. Renderer, layout, hit testing, editor overlays, selection, insertion, snapping, transforms, and export remain outside this item.
 
 - [x] `SF-AUTHORING-000` Produce the missing measured authoring-engine architecture runway and resolve `OD-004`/`OD-011`.
   - Severity: `P1` prerequisite gap (`M0-P1-07`).
