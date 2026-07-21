@@ -6,6 +6,9 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- A reproducible isolated authoring-engine runway with typed coordinate, hit-test, deterministic layout, HTML/CSS parity, native renderer, accessibility, material, and production 500-asset probes at 100- and 10,000-object scale, retaining raw samples, environment, memory fields, commands, and limitations.
+- ADR-0013 selecting a SiteForge-owned deterministic canonical layout engine with an isolated WebKit standards oracle, and ADR-0014 selecting SwiftUI chrome with an AppKit viewport, bounded Core Animation composition, and an optional future Metal backend.
+
 - Repository control layer with local build, test, verification, watch, packaging, and bounded Codex work-loop commands.
 - Native Swift 6 macOS application project with a shared `SiteForge` scheme, reversible development bundle identifier, and unit and UI test targets.
 - Foundation launch screen and smoke coverage for product metadata and application-window startup.

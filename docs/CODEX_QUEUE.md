@@ -4,12 +4,23 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-AUTHORING-000` Produce the missing measured authoring-engine architecture runway and resolve `OD-004`/`OD-011`.
-  - Severity: `P1` prerequisite gap (`M0-P1-07`).
-  - Requirements: `SF-1901-001` through `SF-1901-008`; downstream `SF-0401-001` through `SF-0401-008`, `SF-0407-001` through `SF-0407-008`, `SF-0501-001` through `SF-0501-008`, and `SF-1903-001` through `SF-1903-008`.
-  - Acceptance: isolated production-representative prototypes compare SwiftUI, AppKit/Core Animation, and Metal as appropriate; a typed deterministic layout subset is compared with an isolated standards-engine oracle and HTML/CSS/browser output; methodology, commands, hardware/software, warm-up, P50/P95, memory, limitations, and raw results are retained; ADRs resolve or explicitly keep `OD-004` and `OD-011` open without making a browser the canonical model.
-  - Evidence and tests required: coordinate conversion, pan/zoom, incremental render/update, hit testing, overlay isolation, accessibility-tree cost, native-material compatibility, layout determinism, preview/export parity, memory, main-thread stalls, and 100-/10,000-object fixtures; use the verified resource-index-v1 layer for the specification's 500-asset fixture while measuring renderer behavior separately.
-  - Dependencies: `SF-CORRECTION-001` through `SF-CORRECTION-008`. Do not start production canvas/layout work first.
+- [ ] `SF-AUTHORING-001` Implement the deterministic canvas coordinate system and viewport.
+  - Requirements: `SF-0401-001` through `SF-0401-008`.
+  - Acceptance: production typed world/view/device transforms, cursor-anchored zoom, bounded pan, viewport resizing, deterministic conversion and precision behavior, revision-scoped off-main scene preparation, native focus/input/accessibility semantics, and stale/cancelled-result rejection are integrated into the existing shell without adding editing tools or a real renderer.
+  - Evidence and tests required: reversible coordinate conversions across scale factors and negative/large coordinates; zoom anchoring; pan/resize; keyboard and accessibility behavior; cancellation/stale adoption; minimum-window behavior; and deterministic 100-/10,000-object viewport fixtures.
+  - Dependencies: `SF-AUTHORING-000`; follow ADR-0014 and keep renderer, layout, and editor overlays behind bounded interfaces.
+
+- [ ] `SF-AUTHORING-002` Implement the deterministic layout-engine foundation subset.
+  - Requirements: `SF-0501-001` through `SF-0501-008`.
+  - Acceptance: a production UI-independent, revision-scoped engine implements the approved fixed/intrinsic/fill, min/max, padding, gap, alignment, stack, nesting, overflow, and responsive-width subset; unsupported and invalid semantics fail explicitly; HTML/CSS parity remains an adapter/oracle boundary rather than canonical state.
+  - Evidence and tests required: deterministic frames and digests, nested/responsive cases, invalid and unsupported input, cancellation/stale results, 100-/10,000-node behavior, representative text/intrinsic boundaries, and browser-oracle geometry parity at declared widths.
+  - Dependencies: `SF-AUTHORING-001`; follow ADR-0013.
+
+- [ ] `SF-AUTHORING-003` Implement the AppKit/Core Animation canvas renderer and editor-overlay boundary.
+  - Requirements: `SF-0407-001` through `SF-0407-008`.
+  - Acceptance: an AppKit viewport renders immutable layout/scene snapshots through bounded Core Animation tiles or surfaces; hit testing, selection overlays, focus, accessibility virtualization, and preview/export exclusion remain separate; pan/zoom and incremental edits avoid full-scene rerasterization; Metal remains an optional backend.
+  - Evidence and tests required: rendering/hit-test/overlay isolation, dirty-region and compositor-transform behavior, native-material compatibility, accessibility identity, keyboard input, resize/scroll, cancellation/stale adoption, display-link/signpost evidence, bounded cache/memory, and 100-/10,000-object fixtures.
+  - Dependencies: `SF-AUTHORING-001` and `SF-AUTHORING-002`; follow ADR-0014.
 
 ## IN PROGRESS
 
@@ -20,6 +31,13 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-AUTHORING-000` Produce the missing measured authoring-engine architecture runway and resolve `OD-004`/`OD-011`.
+  - Severity: `P1` prerequisite gap (`M0-P1-07`).
+  - Requirements: `SF-1901-001` through `SF-1901-008`; bounded downstream evidence for `SF-0401-001` through `SF-0401-008`, `SF-0407-001` through `SF-0407-008`, `SF-0501-001` through `SF-0501-008`, and `SF-1903-001` through `SF-1903-008`.
+  - Plan: keep all experiments outside the production application; build a Foundation-only typed coordinate/layout core with deterministic 100-/10,000-object fixtures, cancellation and stale-result seams, then compare real SwiftUI rasterization, AppKit drawing, Core Animation layers, and bounded Metal command/buffer work in a standalone macOS harness; use isolated WebKit only as an exported HTML/CSS geometry oracle; benchmark the existing resource-index-v1 store independently with 500 non-empty assets; retain raw JSON, environment, methodology, commands, percentiles, memory/stall limitations, and a concise comparison; record OD-004/OD-011 in separate ADRs, reconcile bounded evidence, and queue three production slices without implementing them.
+  - Evidence: `./sf verify` passed on 2026-07-21 with 150 unit tests and 17 UI tests, zero failures. The reproducible optimized harness retained 25 raw measurement series plus environment and correctness records. On the named Mac16,13 run, AppKit dirty raster and Core Animation incremental transactions stayed below 0.11 ms P95 at 10,000 objects while full AppKit/Core Animation rasters crossed the 16.67 ms reference interval and SwiftUI Canvas full reraster reached 36.574 ms P95. The deterministic layout subset measured 2.657 ms P95 at 10,000 nodes and matched exported WebKit geometry exactly on the retained fixtures; the real resource store exercised 500 non-empty assets. Five focused unit tests cover coordinates, layout, cancellation/stale results, invalid/unsupported semantics, hit testing, and overlay isolation. `docs/evidence/authoring-engine-runway/` retains raw samples, method, commands, environment, memory fields, and limitations. ADR-0013 resolves OD-004; ADR-0014 resolves OD-011.
+  - Dependencies: completed after `SF-CORRECTION-001` through `SF-CORRECTION-008`; no production authoring implementation is included.
 
 - [x] `SF-CORRECTION-008` Close the residual accessibility, stable-row identity, repository scanning, asset-capacity, and fixture-hygiene findings.
   - Severity: residual `P2`/`P3` work (`M0-P2-03`, `M0-P2-08`, `M0-P2-11`, `M0-P2-12`, `M0-P3-01`, and `M0-P3-02`).

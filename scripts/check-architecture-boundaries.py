@@ -16,6 +16,10 @@ ENGINE_SLICE = [
     "SiteForge/ProjectResources.swift",
     "SiteForge/PersistedHistory.swift",
 ]
+RUNWAY_HEADLESS_SLICE = [
+    "Benchmarks/AuthoringEngineRunway/RunwayCore.swift",
+    "Benchmarks/AuthoringEngineRunway/RunwayHTMLExport.swift",
+]
 HEADLESS_FORBIDDEN = {"SwiftUI", "AppKit", "Metal", "WebKit"}
 
 
@@ -36,17 +40,31 @@ def typecheck(name: str, sources: list[str]) -> None:
         fail(f"Headless {name} slice failed to type-check:\n{result.stdout}{result.stderr}")
 
 
-for source in dict.fromkeys(MODEL_SLICE + ENGINE_SLICE):
+for source in dict.fromkeys(MODEL_SLICE + ENGINE_SLICE + RUNWAY_HEADLESS_SLICE):
     forbidden = imports(source) & HEADLESS_FORBIDDEN
     if forbidden:
         fail(f"{source} imports forbidden UI framework(s): {', '.join(sorted(forbidden))}")
 
 typecheck("canonical-model", MODEL_SLICE)
 typecheck("command-and-persistence", ENGINE_SLICE)
+typecheck("authoring-runway", RUNWAY_HEADLESS_SLICE)
 
 project = (ROOT / "SiteForge.xcodeproj/project.pbxproj").read_text()
 if "WorkspaceSceneComposition.swift in Sources" not in project:
     fail("WorkspaceSceneComposition.swift is not compiled into the application target.")
+app_sources = re.search(
+    r"600000000000000000000001 /\* Sources \*/ = .*?files = \((.*?)\);",
+    project,
+    re.DOTALL,
+)
+if not app_sources:
+    fail("The application Sources phase could not be resolved.")
+for prototype in ["RunwayCore.swift", "RunwayHTMLExport.swift", "RunwayCanvasBenchmarks.swift", "RunwayBrowserOracle.swift"]:
+    if prototype in app_sources.group(1):
+        fail(f"Prototype source leaked into the production application target: {prototype}")
+for prototype in ["RunwayCore.swift in Sources", "RunwayHTMLExport.swift in Sources"]:
+    if prototype not in project:
+        fail(f"Headless runway source is not compiled into the unit-test target: {prototype}")
 
 app = (ROOT / "SiteForge/SiteForgeApp.swift").read_text()
 if "@StateObject" in app or "WorkspaceSceneRoot(composition:" not in app:

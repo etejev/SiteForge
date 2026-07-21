@@ -26934,13 +26934,13 @@ Work packet: Bounded implementation assignment containing requirement IDs, allow
 | OD-001 | Minimum supported macOS release and reference hardware tiers | Platform | Before Milestone 0 exit | Assume current and previous two major macOS releases; Apple silicon primary |
 | OD-002 | Persistence store and project package representation | Architecture | Approved 2026-07-19 | Deterministic package-v1 control file plus bounded history, identity-bound replacement, and versioned content-addressed resource storage; see ADR-0001/0003/0007/0012 |
 | OD-003 | Blank-project default page set | Product | Approved 2026-07-19 | Home `/`, then Not Found `/404`; one minimum root each; no sample content |
-| OD-004 | Layout engine implementation versus embedding an existing standards engine | Architecture | Before Milestone 1 | Prototype deterministic subset and validate export parity |
+| OD-004 | Layout engine implementation versus embedding an existing standards engine | Architecture | Approved 2026-07-21 | SiteForge-owned deterministic engine; HTML/CSS adapter and isolated standards oracle; see ADR-0013 |
 | OD-005 | Managed hosting scope and business model | Product | Before Milestone 4 planning | Portable local export is mandatory; hosting remains an adapter |
 | OD-006 | Collaboration service scope and conflict algorithm | Product/Architecture | Before Milestone 5 | Local snapshots and comments first; real-time collaboration optional |
 | OD-007 | Plugin signing and public marketplace governance | Security/Product | Before SDK beta | Private signed distribution first; public review process later |
 | OD-008 | Telemetry default by region and distribution channel | Privacy | Before external alpha | Content-free diagnostics; consent and legal review determine default |
 | OD-009 | Supported browser matrix for generated output | Web platform | Before Milestone 3 exit | Versioned targets based on user needs and feature compatibility |
 | OD-010 | Component library package registry and offline distribution | Architecture | Before Milestone 2 exit | File-based signed packages with pinned versions and local cache |
-| OD-011 | Canvas technology split among SwiftUI, AppKit, Metal/Core Animation | Architecture | Architecture runway | Use native controls for chrome; benchmark canvas alternatives against budgets |
+| OD-011 | Canvas technology split among SwiftUI, AppKit, Metal/Core Animation | Architecture | Approved 2026-07-21 | SwiftUI chrome, AppKit viewport/input/accessibility, bounded Core Animation composition, optional Metal backend; see ADR-0014 |
 | OD-012 | Publisher identity, public product name, and bundle identifier | Owner/Product | Before first distributable build | Keep `app.siteforge.SiteForge` local and reversible; do not register or publish |
 | OD-013 | Initial distribution trust level and channels | Owner/Product/Security | Before external distribution | Local unsigned development only until signing/notarization/channel decisions are approved |
