@@ -39,6 +39,11 @@ SELECTION_MODEL_SLICE = [
     "SiteForge/CanvasRendererCore.swift",
     "SiteForge/SelectionModel.swift",
 ]
+INSERTION_MODEL_SLICE = list(dict.fromkeys(ENGINE_SLICE + [
+    "SiteForge/CanvasViewport.swift",
+    "SiteForge/LayoutEngine.swift",
+    "SiteForge/InsertionModel.swift",
+]))
 HEADLESS_FORBIDDEN = {"SwiftUI", "AppKit", "Metal", "WebKit"}
 
 
@@ -60,7 +65,7 @@ def typecheck(name: str, sources: list[str]) -> None:
 
 
 for source in dict.fromkeys(
-    MODEL_SLICE + ENGINE_SLICE + RUNWAY_HEADLESS_SLICE + CANVAS_VIEWPORT_SLICE + LAYOUT_ENGINE_SLICE + CANVAS_RENDERER_SLICE + SELECTION_MODEL_SLICE
+    MODEL_SLICE + ENGINE_SLICE + RUNWAY_HEADLESS_SLICE + CANVAS_VIEWPORT_SLICE + LAYOUT_ENGINE_SLICE + CANVAS_RENDERER_SLICE + SELECTION_MODEL_SLICE + INSERTION_MODEL_SLICE
 ):
     forbidden = imports(source) & HEADLESS_FORBIDDEN
     if forbidden:
@@ -73,6 +78,7 @@ typecheck("canvas-viewport", CANVAS_VIEWPORT_SLICE)
 typecheck("deterministic-layout", LAYOUT_ENGINE_SLICE)
 typecheck("canvas-renderer-contract", CANVAS_RENDERER_SLICE)
 typecheck("selection-model-contract", SELECTION_MODEL_SLICE)
+typecheck("insertion-model-contract", INSERTION_MODEL_SLICE)
 
 project = (ROOT / "SiteForge.xcodeproj/project.pbxproj").read_text()
 if "WorkspaceSceneComposition.swift in Sources" not in project:
@@ -85,10 +91,15 @@ if "CanvasRendererCore.swift in Sources" not in project:
     fail("The headless canvas renderer contract is not compiled into the application target.")
 if "SelectionModel.swift in Sources" not in project or "SelectionModelTests.swift in Sources" not in project:
     fail("The headless selection model and its behavioral tests must be compiled into their targets.")
+if "InsertionModel.swift in Sources" not in project or "InsertionModelTests.swift in Sources" not in project:
+    fail("The headless insertion model and its behavioral tests must be compiled into their targets.")
 
 selection_source = (ROOT / "SiteForge/SelectionModel.swift").read_text()
 if re.search(r"(?:struct|class)\s+SelectionState\s*:\s*[^\n]*(?:Codable|Encodable|Decodable)", selection_source):
     fail("Selection convenience state must not become canonical serialized project content.")
+insertion_source = (ROOT / "SiteForge/InsertionModel.swift").read_text()
+if re.search(r"(?:struct|class)\s+InsertionSession\s*:\s*[^\n]*(?:Codable|Encodable|Decodable)", insertion_source):
+    fail("Insertion preview/session state must not become canonical serialized project content.")
 app_sources = re.search(
     r"600000000000000000000001 /\* Sources \*/ = .*?files = \((.*?)\);",
     project,

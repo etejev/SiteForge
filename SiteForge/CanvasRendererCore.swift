@@ -37,6 +37,27 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     let style: CanvasPaintStyle
     let isVisible: Bool
     let accessibilityLabel: String
+    let plainText: String?
+
+    init(
+        id: NodeID,
+        frame: WorldRect,
+        clipRect: WorldRect?,
+        paintOrder: Int,
+        style: CanvasPaintStyle,
+        isVisible: Bool,
+        accessibilityLabel: String,
+        plainText: String? = nil
+    ) {
+        self.id = id
+        self.frame = frame
+        self.clipRect = clipRect
+        self.paintOrder = paintOrder
+        self.style = style
+        self.isVisible = isVisible
+        self.accessibilityLabel = accessibilityLabel
+        self.plainText = plainText
+    }
 }
 
 struct CanvasEditorOverlay: Codable, Hashable, Sendable {
@@ -331,9 +352,7 @@ struct CanvasRendererCore: Sendable {
     private func invalidation(previous: CanvasRenderSceneSnapshot?, next: CanvasRenderSceneSnapshot) -> CanvasInvalidationKind {
         guard let previous else { return .initial }
         guard previous.identity.documentID == next.identity.documentID,
-              previous.identity.revision == next.identity.revision,
               previous.identity.sceneID == next.identity.sceneID,
-              previous.identity.sceneGeneration == next.identity.sceneGeneration,
               previous.identity.scale == next.identity.scale else { return .fullRaster }
         return previous.objects == next.objects ? .compositorOnly : .dirtyRegions
     }

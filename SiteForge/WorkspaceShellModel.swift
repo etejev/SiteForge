@@ -6,6 +6,10 @@ private enum CanvasRendererSignposts {
     static let log = OSLog(subsystem: "app.siteforge.SiteForge", category: "canvas-renderer")
 }
 
+private enum InsertionSignposts {
+    static let log = OSLog(subsystem: "app.siteforge.SiteForge", category: "insertion")
+}
+
 enum CanvasTool: String, CaseIterable, Identifiable {
     case select
     case frame
@@ -231,6 +235,8 @@ final class WorkspaceShellState: ObservableObject {
         "SF-0401-005", "SF-0401-006", "SF-0401-007", "SF-0401-008",
         "SF-0402-001", "SF-0402-002", "SF-0402-003", "SF-0402-004",
         "SF-0402-005", "SF-0402-006", "SF-0402-007", "SF-0402-008",
+        "SF-0405-001", "SF-0405-002", "SF-0405-003", "SF-0405-004",
+        "SF-0405-005", "SF-0405-006", "SF-0405-007", "SF-0405-008",
     ]
 
     @Published var selectedTool: CanvasTool = .select
@@ -251,10 +257,17 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var selectionOverlayPlan: SelectionOverlayPlan?
     @Published private(set) var selectionFailure: SelectionCommandError?
     @Published private(set) var lastSelectionAnnouncement = "No object selected"
+    @Published private(set) var insertionSession = InsertionSession()
+    @Published private(set) var insertionFailure: InsertionError?
+    @Published private(set) var lastInsertionAnnouncement = "Insertion inactive"
     @Published private(set) var viewportFailure: CanvasViewportError?
     @Published private(set) var lastViewportAnnouncement = "Canvas viewport at 100 percent"
     @Published private(set) var canvasInteractionCount = 0
-    @Published var isPreviewPresented = false
+    @Published var isPreviewPresented = false {
+        didSet {
+            if isPreviewPresented { cancelInsertion(resetTool: true) }
+        }
+    }
     let documentSession: DocumentSession
     let lifecycle: DocumentLifecycleController
     private var documentSessionObservation: AnyCancellable?
@@ -263,9 +276,11 @@ final class WorkspaceShellState: ObservableObject {
     private let renderWorker = CanvasRenderWorker()
     private let selectionRegistry = SelectionCommandRegistry()
     private let selectionOverlayPlanner = SelectionOverlayPlanner()
+    private let insertionRegistry = InsertionCommandRegistry()
     private let renderSurfaceID = CanvasRenderSurfaceID()
     let canvasRenderDiagnostics = CanvasRenderDiagnostics()
     let selectionDiagnostics = SelectionDiagnostics()
+    let insertionDiagnostics = InsertionDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
     private let announcementPoster: AccessibilityAnnouncementPoster
     private var viewportDocumentID: DocumentID
@@ -273,6 +288,7 @@ final class WorkspaceShellState: ObservableObject {
     private var renderTask: Task<Void, Never>?
     private var previousRenderScene: CanvasRenderSceneSnapshot?
     private var selectionScene: SelectionSceneSnapshot?
+    private var pendingSelectionAfterInsertion: NodeID?
 
     init(
         documentSession: DocumentSession = DocumentSession(),
@@ -303,7 +319,13 @@ final class WorkspaceShellState: ObservableObject {
     var redoDisabledReason: String? { documentSession.redoAvailability.disabledReason }
 
     func selectTool(_ tool: CanvasTool) {
+        if selectedTool != tool { cancelInsertion(resetTool: false) }
         selectedTool = tool
+        switch tool {
+        case .frame: armInsertion(.frame)
+        case .text: armInsertion(.text)
+        default: insertionSession.deactivate()
+        }
     }
 
     var pages: [DocumentPage] { documentSession.document.pages }
@@ -317,8 +339,10 @@ final class WorkspaceShellState: ObservableObject {
 
     func selectPage(_ pageID: PageID) {
         guard pages.contains(where: { $0.id == pageID }) else { return }
+        cancelInsertion(resetTool: true)
         selectedPageID = pageID
         refreshSelectionScene(boundary: .pageSwitch)
+        scheduleScenePreparation()
     }
 
     func adjacentPage(to pageID: PageID, offset: Int) -> PageID? {
@@ -450,7 +474,14 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     var layerTargets: [SelectionTargetSnapshot] {
-        selectionScene?.orderedSelectableTargets ?? []
+        guard let scene = selectionScene else { return [] }
+        return scene.targets
+            .filter { $0.pageID == scene.activePageID && $0.isAvailable }
+            .sorted {
+                $0.paintOrder == $1.paintOrder
+                    ? $0.id.description < $1.id.description
+                    : $0.paintOrder < $1.paintOrder
+            }
     }
 
     var selectionSummary: String {
@@ -509,6 +540,14 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func selectCanvasPoint(_ point: WorldPoint, modifier: SelectionPointerModifier) {
+        if selectedTool == .frame {
+            commitInsertion(.frame, at: point, provenance: .pointer)
+            return
+        }
+        if selectedTool == .text {
+            commitInsertion(.text, at: point, provenance: .pointer)
+            return
+        }
         guard selectedTool == .select, let plan = canvasRenderPlan, let scene = selectionScene,
               plan.identity == scene.identity else { return }
         let eligible = Set(scene.orderedSelectableTargets.map(\.id))
@@ -525,6 +564,18 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func selectLayer(_ id: NodeID, modifier: SelectionPointerModifier = .replace) {
+        if let scene = selectionScene,
+           let target = scene.targets.first(where: { $0.id == id }),
+           target.parentID != scene.activeContainerID {
+            let scoped = SelectionSceneSnapshot(
+                identity: scene.identity,
+                activePageID: scene.activePageID,
+                activeContainerID: target.parentID,
+                targets: scene.targets
+            )
+            _ = try? selectionRegistry.adopt(scoped, boundary: .rendererGeneration, state: &selectionState)
+            selectionScene = scoped
+        }
         let command: SelectionCommandName = switch modifier {
         case .replace: .replace
         case .add: .add
@@ -533,12 +584,286 @@ final class WorkspaceShellState: ObservableObject {
         performSelectionCommand(command, targetID: id, provenance: .layersNavigator)
     }
 
+    var insertionPreviewOverlay: CanvasEditorOverlay? {
+        let preview: InsertionPreview
+        switch insertionSession.phase {
+        case .previewing(let value), .committing(let value): preview = value
+        default: return nil
+        }
+        return CanvasEditorOverlay(
+            id: CanvasOverlayID(preview.nodeID.rawValue),
+            objectID: preview.nodeID,
+            frame: preview.geometry.frame,
+            kind: "insertion-preview-\(preview.kind.rawValue)"
+        )
+    }
+
+    var insertionStatus: String {
+        switch insertionSession.phase {
+        case .inactive: "Insertion inactive"
+        case .armed(let kind): "\(kind.rawValue.capitalized) tool armed"
+        case .previewing(let value): "Previewing \(value.kind.rawValue)"
+        case .committing(let value): "Inserting \(value.kind.rawValue)…"
+        case .cancelled: "Insertion cancelled"
+        case .failed(let error): error.localizedDescription
+        }
+    }
+
+    func insertionAvailability(_ kind: InsertionKind) -> InsertionAvailability {
+        guard let command = makeInsertionCommand(
+            kind,
+            at: defaultInsertionPoint,
+            provenance: .menu,
+            nodeID: NodeID()
+        ) else { return .disabled("The active page has no valid frame destination.") }
+        return insertionRegistry.availability(
+            for: command,
+            in: documentSession.document,
+            context: insertionValidationContext
+        )
+    }
+
+    func previewInsertion(at point: WorldPoint) {
+        guard selectedTool == .frame || selectedTool == .text,
+              insertionValidationContext.isLifecycleAvailable else { return }
+        insertionSession.preview(at: point)
+        objectWillChange.send()
+    }
+
+    func performDefaultInsertion(_ kind: InsertionKind, provenance: InsertionProvenance) {
+        if selectedTool != (kind == .frame ? .frame : .text) {
+            selectedTool = kind == .frame ? .frame : .text
+            armInsertion(kind)
+        }
+        commitInsertion(kind, at: defaultInsertionPoint, provenance: provenance)
+    }
+
+    func cancelInsertion(resetTool: Bool) {
+        let wasActive: Bool
+        switch insertionSession.phase {
+        case .inactive, .cancelled: wasActive = false
+        default: wasActive = true
+        }
+        insertionSession.cancel()
+        insertionFailure = nil
+        if resetTool, selectedTool == .frame || selectedTool == .text { selectedTool = .select }
+        if wasActive {
+            lastInsertionAnnouncement = "Insertion cancelled"
+            announcementPoster.post(lastInsertionAnnouncement)
+        }
+        objectWillChange.send()
+    }
+
+    func performEscape() {
+        switch insertionSession.phase {
+        case .armed, .previewing, .committing, .failed:
+            cancelInsertion(resetTool: true)
+        case .inactive, .cancelled:
+            performSelectionCommand(.escape, provenance: .keyboard)
+        }
+    }
+
+    private var defaultInsertionPoint: WorldPoint {
+        let visible = viewportState.visibleWorldRect
+        let size = selectedTool == .text
+            ? WorldSize(width: 120, height: 24)
+            : WorldSize(width: 240, height: 160)
+        return WorldPoint(
+            x: visible.origin.x + max(0, (visible.size.width - size.width) / 2),
+            y: visible.origin.y + max(0, (visible.size.height - size.height) / 2)
+        )
+    }
+
+    private var insertionValidationContext: InsertionValidationContext {
+        let page = pages.first(where: { $0.id == effectiveSelectedPageID })
+        let available = selectionScene.map { Set($0.targets.filter(\.isAvailable).map(\.id)) }
+        let lifecycleAvailable: Bool
+        let reason: String?
+        if isPreviewPresented {
+            lifecycleAvailable = false
+            reason = "Close Preview before inserting content."
+        } else {
+            switch lifecycle.phase {
+            case .saving, .autosaving:
+                lifecycleAvailable = false
+                reason = "Wait for the current save operation to finish."
+            case .conflicted:
+                lifecycleAvailable = false
+                reason = "Resolve the file conflict before inserting content."
+            case .clean, .modified, .failed, .recovered:
+                lifecycleAvailable = true
+                reason = nil
+            }
+        }
+        return InsertionValidationContext(
+            activePageID: page?.id ?? PageID(),
+            activeRoute: page?.route ?? PageRoute(rawValue: "/unavailable"),
+            operationGeneration: insertionSession.generation,
+            availableNodeIDs: available,
+            isLifecycleAvailable: lifecycleAvailable,
+            lifecycleDisabledReason: reason
+        )
+    }
+
+    private func armInsertion(_ kind: InsertionKind) {
+        guard let pageID = effectiveSelectedPageID else { return }
+        insertionSession.arm(
+            kind: kind,
+            documentID: documentSession.document.id,
+            pageID: pageID,
+            revision: documentSession.document.revision
+        )
+        insertionFailure = nil
+        lastInsertionAnnouncement = "\(kind.rawValue.capitalized) tool armed. Click the canvas or use Insert at Center."
+        announcementPoster.post(lastInsertionAnnouncement)
+    }
+
+    private var insertionParentID: NodeID? {
+        guard let page = pages.first(where: { $0.id == effectiveSelectedPageID }) else { return nil }
+        if let primaryID = selectionState.primaryID,
+           page.nodes.first(where: { $0.id == primaryID })?.kind == .frame {
+            return primaryID
+        }
+        return page.rootNodeIDs.first
+    }
+
+    private func makeInsertionCommand(
+        _ kind: InsertionKind,
+        at point: WorldPoint,
+        provenance: InsertionProvenance,
+        nodeID: NodeID
+    ) -> AuthoringInsertionCommand? {
+        guard let identity = insertionSession.identity,
+              let parentID = insertionParentID,
+              let page = pages.first(where: { $0.id == identity.pageID }),
+              let parent = page.nodes.first(where: { $0.id == parentID }) else { return nil }
+        let geometry = InsertionGeometry.defaultValue(for: kind, at: point)
+        if kind == .frame {
+            return .frame(FrameInsertionCommand(
+                identity: identity,
+                nodeID: nodeID,
+                parentID: parentID,
+                index: parent.childIDs.count,
+                geometry: geometry,
+                provenance: provenance
+            ))
+        }
+        return .text(TextInsertionCommand(
+            identity: identity,
+            nodeID: nodeID,
+            parentID: parentID,
+            index: parent.childIDs.count,
+            geometry: geometry,
+            text: InsertionPolicy.defaultText,
+            provenance: provenance
+        ))
+    }
+
+    private func commitInsertion(
+        _ kind: InsertionKind,
+        at point: WorldPoint,
+        provenance: InsertionProvenance
+    ) {
+        if insertionSession.identity == nil { armInsertion(kind) }
+        let nodeID: NodeID
+        let geometry: InsertionGeometry
+        if case .previewing(let preview) = insertionSession.phase, preview.kind == kind {
+            nodeID = preview.nodeID
+            geometry = preview.geometry
+        } else {
+            nodeID = NodeID()
+            geometry = .defaultValue(for: kind, at: point)
+        }
+        guard var command = makeInsertionCommand(kind, at: geometry.origin, provenance: provenance, nodeID: nodeID) else {
+            insertionSession.fail(.missingParent)
+            insertionFailure = .missingParent
+            return
+        }
+        // Preserve the exact preview geometry rather than regenerating it after a gesture.
+        if kind == .frame, case .frame(let value) = command {
+            command = .frame(FrameInsertionCommand(
+                identity: value.identity, nodeID: value.nodeID, parentID: value.parentID,
+                index: value.index, geometry: geometry, provenance: value.provenance
+            ))
+        } else if kind == .text, case .text(let value) = command {
+            command = .text(TextInsertionCommand(
+                identity: value.identity, nodeID: value.nodeID, parentID: value.parentID,
+                index: value.index, geometry: geometry, text: value.text, provenance: value.provenance
+            ))
+        }
+        let parentRevision = documentSession.document.revision
+        let start = DispatchTime.now().uptimeNanoseconds
+        let preview = InsertionPreview(kind: kind, nodeID: nodeID, geometry: geometry)
+        insertionSession.beginCommit(preview)
+        let signpost = OSSignpostID(log: InsertionSignposts.log)
+        os_signpost(.begin, log: InsertionSignposts.log, name: "InsertionCommit", signpostID: signpost)
+        defer { os_signpost(.end, log: InsertionSignposts.log, name: "InsertionCommit", signpostID: signpost) }
+        do {
+            let prepared = try insertionRegistry.prepare(
+                command,
+                in: documentSession.document,
+                context: insertionValidationContext
+            )
+            _ = try documentSession.execute(prepared.documentCommand)
+            insertionFailure = nil
+            pendingSelectionAfterInsertion = prepared.node.id
+            lastInsertionAnnouncement = "Inserted \(kind.rawValue)"
+            announcementPoster.post(lastInsertionAnnouncement)
+            recordInsertionDiagnostic(
+                command, start: start, parentRevision: parentRevision,
+                resultRevision: documentSession.document.revision, result: .success, failure: nil
+            )
+            armInsertion(kind)
+        } catch let error as InsertionError {
+            insertionSession.fail(error)
+            insertionFailure = error
+            recordInsertionDiagnostic(
+                command, start: start, parentRevision: parentRevision,
+                resultRevision: nil,
+                result: error == .cancelled ? .cancelled : error == .staleDocument || error == .staleRevision || error == .staleGeneration ? .stale : .failure,
+                failure: error
+            )
+        } catch let error as CommandExecutionError {
+            let insertionError: InsertionError = error == .cancelled ? .cancelled : .staleRevision
+            insertionSession.fail(insertionError)
+            insertionFailure = insertionError
+            recordInsertionDiagnostic(
+                command, start: start, parentRevision: parentRevision,
+                resultRevision: nil, result: error == .cancelled ? .cancelled : .failure,
+                failure: insertionError
+            )
+        } catch {}
+    }
+
+    private func recordInsertionDiagnostic(
+        _ command: AuthoringInsertionCommand,
+        start: UInt64,
+        parentRevision: UInt64,
+        resultRevision: UInt64?,
+        result: InsertionDiagnosticResult,
+        failure: InsertionError?
+    ) {
+        let record = InsertionDiagnosticFactory.make(
+            kind: command.kind,
+            nodeID: command.nodeID,
+            parentID: command.parentID,
+            durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+            parentRevision: parentRevision,
+            resultRevision: resultRevision,
+            result: result,
+            failure: failure
+        )
+        Task { await insertionDiagnostics.append(record) }
+    }
+
     func undo() {
+        cancelInsertion(resetTool: true)
         try? documentSession.undo()
         refreshSelectionScene(boundary: .undo)
     }
 
     func redo() {
+        cancelInsertion(resetTool: true)
         try? documentSession.redo()
         refreshSelectionScene(boundary: .redo)
     }
@@ -553,6 +878,12 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private func synchronizeViewportDocumentBoundary(_ document: CanonicalDocument) {
+        if case .committing = insertionSession.phase {
+            // The synchronous transaction owns this revision transition.
+        } else if let identity = insertionSession.identity,
+                  identity.documentID != document.id || identity.revision != document.revision {
+            cancelInsertion(resetTool: true)
+        }
         guard document.id != viewportDocumentID else {
             scheduleScenePreparation()
             return
@@ -573,6 +904,9 @@ final class WorkspaceShellState: ObservableObject {
         selectionState = SelectionState()
         selectionScene = nil
         selectionOverlayPlan = nil
+        insertionSession.deactivate()
+        insertionFailure = nil
+        pendingSelectionAfterInsertion = nil
         canvasRendererFailure = nil
         viewportFailure = nil
         lastViewportAnnouncement = "Canvas viewport reset for the opened document"
@@ -582,7 +916,8 @@ final class WorkspaceShellState: ObservableObject {
 
     private func scheduleScenePreparation() {
         preparationTask?.cancel()
-        let objects = documentSession.document.pages.flatMap(\.nodes).map {
+        let activeNodes = documentSession.document.pages.first(where: { $0.id == effectiveSelectedPageID })?.nodes ?? []
+        let objects = activeNodes.map {
             CanvasViewportSceneObject(id: $0.id, bounds: viewportState.contentBounds)
         }
         preparationTask = Task { @MainActor [weak self] in
@@ -611,20 +946,30 @@ final class WorkspaceShellState: ObservableObject {
             viewportGeneration: viewportState.generation,
             scale: viewportState.pixelRatio
         )
-        let objects = documentSession.document.pages.flatMap(\.nodes).enumerated().map { index, node in
+        let activeNodes = documentSession.document.pages.first(where: { $0.id == effectiveSelectedPageID })?.nodes ?? []
+        let objects = activeNodes.enumerated().map { index, node in
             let column = index % 10
             let row = index / 10
+            let fallback = WorldRect(
+                origin: WorldPoint(x: 48 + Double(column * 120), y: 48 + Double(row * 88)),
+                size: WorldSize(width: 104, height: 68)
+            )
+            let frame = node.insertionGeometry?.frame ?? fallback
+            let style: CanvasPaintStyle = switch node.kind {
+            case .frame: node.parent == .page(effectiveSelectedPageID ?? PageID()) ? .page : .container
+            case .text: .textPlaceholder
+            case .image: .imagePlaceholder
+            case .component: .container
+            }
             return CanvasRenderObject(
                 id: node.id,
-                frame: WorldRect(
-                    origin: WorldPoint(x: 48 + Double(column * 120), y: 48 + Double(row * 88)),
-                    size: WorldSize(width: 104, height: 68)
-                ),
+                frame: frame,
                 clipRect: viewportState.contentBounds,
                 paintOrder: index,
-                style: index.isMultiple(of: 3) ? .container : .page,
+                style: style,
                 isVisible: !node.selectionBooleanProperty("hidden"),
-                accessibilityLabel: node.name
+                accessibilityLabel: node.kind == .text ? "Text object" : node.name,
+                plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil
             )
         }
         guard !objects.isEmpty else { return }
@@ -734,13 +1079,38 @@ final class WorkspaceShellState: ObservableObject {
         from plan: CanvasRenderPlan,
         boundary: SelectionLifecycleBoundary
     ) {
-        guard let scene = makeSelectionScene(from: plan) else { return }
+        guard var scene = makeSelectionScene(from: plan) else { return }
+        if let pending = pendingSelectionAfterInsertion,
+           let target = scene.targets.first(where: { $0.id == pending }) {
+            scene = SelectionSceneSnapshot(
+                identity: scene.identity,
+                activePageID: scene.activePageID,
+                activeContainerID: target.parentID,
+                targets: scene.targets
+            )
+        }
         let prior = selectionState
         do {
             let repair = try selectionRegistry.adopt(scene, boundary: boundary, state: &selectionState)
             selectionScene = scene
             selectionFailure = nil
             rebuildSelectionOverlay()
+            if let pending = pendingSelectionAfterInsertion,
+               scene.orderedSelectableTargets.contains(where: { $0.id == pending }) {
+                _ = try selectionRegistry.apply(
+                    SelectionCommand(
+                        .replace,
+                        targetID: pending,
+                        expectedIdentity: scene.identity,
+                        provenance: .lifecycleRepair
+                    ),
+                    to: &selectionState,
+                    scene: scene
+                )
+                pendingSelectionAfterInsertion = nil
+                rebuildSelectionOverlay()
+                announceSelection()
+            }
             if selectionState != prior || repair != .none { announceSelection() }
         } catch let error as SelectionCommandError {
             selectionState = prior

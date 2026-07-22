@@ -6,6 +6,11 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Transactional frame and bounded plain-text insertion using stable typed node identities, exact parent/page/order ownership, deterministic `.defaulted` geometry/content, one atomic command/inverse, and exact undo/redo restoration.
+- One scene-owned editor-only insertion session with inactive, armed, previewing, committing, cancelled, and failed states; unified toolbar, pointer, keyboard, menu, contextual, accessibility, and automation command routing; cancellation and failure preserve canonical state and prior selection.
+- Post-commit selection plus Layers, inspector/status, accessibility, layout, renderer, hit-test, package, persisted-history, autosave, and recovery integration, while previews remain excluded from canonical persistence, history, preview/export snapshots, and authored render content.
+- Reproducible 100-/10,000-object insertion, layout, and renderer capacity evidence with raw samples, environment, memory, methodology, and explicit performance limitations, plus a running-app insertion/cancellation/undo/redo journey.
+
 - A deterministic scene/window-owned selection model with stable ordered node identities, primary and anchor selection, page/container scope, typed provenance, exact renderer-generation validation, and state-neutral cancellation/stale rejection.
 - Unified replacement, Shift-add, Command-toggle, Escape, next/previous, pointer, menu, contextual, Layers navigator, and accessibility selection paths with synchronized inspector and status summaries.
 - Editor-only primary/secondary and locked inspection outlines with bounded old/new dirty-region invalidation, compositor-aligned pan/zoom/resize/Retina updates, and structural exclusion from authored content, persistence, history, preview, and export boundaries.
@@ -65,6 +70,10 @@ This file records user-visible behavior during development. It is not a substitu
 - One shared repository-local XCTest fixture allocator with throwing cleanup and verification-level residue removal, plus an enforced single native project Open-panel owner.
 
 ### Changed
+
+- Canonical schema v2 now uses the existing ordered property/provenance representation for frame geometry, initial style, and bounded plain text without a format-version change; supported schema-v1 packages continue through the strict migration adapter.
+- Canonical graph validation now uses precomputed child membership and iterative traversal, avoiding quadratic membership checks and recursive-stack growth on bounded large documents.
+- Renderer scene revision/generation changes can retain bounded dirty-region planning when authored object identity and surface identity remain compatible, instead of forcing an unrelated full authored-scene raster.
 
 - Local project discovery ignores Xcode workspaces nested inside `.xcodeproj` bundles, and build products use a portable temporary Derived Data location by default.
 - Debug builds use credential-free local ad-hoc signing required to run hosted XCTest processes; Release distribution signing remains disabled.

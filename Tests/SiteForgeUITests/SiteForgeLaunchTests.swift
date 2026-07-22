@@ -2,12 +2,50 @@ import XCTest
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
+    // SF-0405-002 through SF-0405-007
+    func testFrameTextInsertionCancellationUndoRedoAndSelectionJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+
+        application.buttons["toolbar.tool.frame"].click()
+        XCTAssertTrue(application.descendants(matching: .any)["status.insertion"].exists)
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.35, dy: 0.35)).click()
+        XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
+        attachScreenshot(named: "SF-AUTHORING-005 inserted frame")
+
+        application.buttons["toolbar.tool.text"].click()
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.55, dy: 0.50)).click()
+        attachScreenshot(named: "SF-AUTHORING-005 inserted text")
+
+        application.buttons["toolbar.tool.frame"].click()
+        canvas.hover()
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
+        attachScreenshot(named: "SF-AUTHORING-005 cancelled preview")
+
+        application.buttons["toolbar.undo"].click()
+        XCTAssertTrue(application.buttons["toolbar.redo"].isEnabled)
+        application.buttons["toolbar.redo"].click()
+        XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
+
+        application.buttons["navigator.tab.layers"].click()
+        let layerQuery = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "navigator.layer."))
+        expectation(for: NSPredicate { _, _ in layerQuery.count >= 3 }, evaluatedWith: application)
+        waitForExpectations(timeout: 5)
+        let layers = layerQuery.allElementsBoundByAccessibilityElement
+        XCTAssertGreaterThanOrEqual(layers.count, 3)
+        XCTAssertEqual(Set(layers.map(\.identifier)).count, layers.count)
+    }
+
     func testNativeCanvasRendererAdoptsAuthoredObjectsAndPreservesInput() throws {
         let application = launchWorkspace()
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
         let rendered = NSPredicate { object, _ in
-            ((object as? XCUIElement)?.value as? String)?.contains("rendered objects 2") == true
+            // The renderer owns the active page only; the other blank-project page is not part of this scene.
+            ((object as? XCUIElement)?.value as? String)?.contains("rendered objects 1") == true
         }
         expectation(for: rendered, evaluatedWith: canvas)
         waitForExpectations(timeout: 5)
@@ -364,7 +402,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(application.buttons["Cancel"].waitForExistence(timeout: 2))
         application.typeKey(.escape, modifierFlags: [])
-        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].exists)
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 2))
 
         application.typeKey("n", modifierFlags: .command)
         XCTAssertTrue(application.buttons["documentTransition.discard"].waitForExistence(timeout: 2))

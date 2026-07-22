@@ -500,6 +500,7 @@ private extension DocumentPage {
         }
 
         let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        let childrenByParent = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, Set($0.childIDs)) })
         for rootID in rootNodeIDs {
             try checkpoint()
             guard let root = nodesByID[rootID] else { throw ModelValidationError.missingNode }
@@ -525,8 +526,8 @@ private extension DocumentPage {
             case .page(let pageID):
                 guard pageID == id else { throw ModelValidationError.invalidParent }
             case .node(let parentID):
-                guard let parent = nodesByID[parentID] else { throw ModelValidationError.invalidParent }
-                guard parent.childIDs.contains(node.id) else {
+                guard nodesByID[parentID] != nil else { throw ModelValidationError.invalidParent }
+                guard childrenByParent[parentID]?.contains(node.id) == true else {
                     throw ModelValidationError.inconsistentChildren
                 }
             }
@@ -558,19 +559,14 @@ private extension DocumentPage {
         }
 
         var visited = Set<NodeID>()
-        func visit(_ nodeID: NodeID) throws {
+        var pending = Array(rootNodeIDs.reversed())
+        while let nodeID = pending.popLast() {
             try checkpoint()
             guard visited.insert(nodeID).inserted else {
                 throw ModelValidationError.cyclicOrUnreachableTree
             }
             guard let node = nodesByID[nodeID] else { throw ModelValidationError.missingNode }
-            for childID in node.childIDs {
-                try visit(childID)
-            }
-        }
-        for rootID in rootNodeIDs {
-            try checkpoint()
-            try visit(rootID)
+            pending.append(contentsOf: node.childIDs.reversed())
         }
         guard visited == nodeIDs else { throw ModelValidationError.cyclicOrUnreachableTree }
     }

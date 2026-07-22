@@ -5,6 +5,7 @@ enum CommandName: String, CaseIterable, Codable, Sendable {
     case removePage = "document.page.remove"
     case renamePage = "document.page.rename"
     case insertNode = "document.node.insert"
+    case removeNode = "document.node.remove"
     case setProperty = "document.property.set"
     case removeProperty = "document.property.remove"
     case batch = "document.batch"
@@ -52,6 +53,11 @@ struct InsertNodeCommand: Codable, Equatable, Sendable {
     let index: Int
 }
 
+struct RemoveNodeCommand: Codable, Equatable, Sendable {
+    let pageID: PageID
+    let nodeID: NodeID
+}
+
 struct SetPropertyCommand: Codable, Equatable, Sendable {
     let pageID: PageID
     let nodeID: NodeID
@@ -82,6 +88,7 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case removePage(RemovePageCommand)
     case renamePage(RenamePageCommand)
     case insertNode(InsertNodeCommand)
+    case removeNode(RemoveNodeCommand)
     case setProperty(SetPropertyCommand)
     case removeProperty(RemovePropertyCommand)
     case batch([DocumentCommand])
@@ -92,6 +99,7 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
         case .removePage: .removePage
         case .renamePage: .renamePage
         case .insertNode: .insertNode
+        case .removeNode: .removeNode
         case .setProperty: .setProperty
         case .removeProperty: .removeProperty
         case .batch: .batch
@@ -108,6 +116,8 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
             [command.pageID.commandTarget]
         case .insertNode(let command):
             [command.pageID.commandTarget, command.node.id.commandTarget]
+        case .removeNode(let command):
+            [command.pageID.commandTarget, command.nodeID.commandTarget]
         case .setProperty(let command):
             [
                 command.pageID.commandTarget,
@@ -172,6 +182,7 @@ struct CommandRegistry {
             CommandDescriptor(name: .removePage, title: "Remove Page", mutatesDocument: true),
             CommandDescriptor(name: .renamePage, title: "Rename Page", mutatesDocument: true),
             CommandDescriptor(name: .insertNode, title: "Insert Node", mutatesDocument: true),
+            CommandDescriptor(name: .removeNode, title: "Remove Node", mutatesDocument: true),
             CommandDescriptor(name: .setProperty, title: "Set Property", mutatesDocument: true),
             CommandDescriptor(name: .removeProperty, title: "Remove Property", mutatesDocument: true),
             CommandDescriptor(name: .batch, title: "Grouped Edit", mutatesDocument: true),
@@ -235,6 +246,15 @@ struct CommandRegistry {
             }
             guard (0...childCount).contains(value.index) else {
                 return .disabled(reason: "The node insertion position is no longer valid.")
+            }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .removeNode(let value):
+            guard let node = document.node(pageID: value.pageID, nodeID: value.nodeID) else {
+                return .disabled(reason: "The node no longer exists on this page.")
+            }
+            guard node.childIDs.isEmpty else {
+                return .disabled(reason: "Remove child nodes before removing their parent.")
             }
             return validationAvailability(afterApplying: command, to: document)
 
@@ -361,7 +381,6 @@ struct CommandRegistry {
             guard let pageIndex = document.pageIndex(for: value.pageID) else {
                 throw CommandExecutionError.disabled("The owning page no longer exists.")
             }
-            let previousPage = document.pages[pageIndex]
             document.pages[pageIndex].nodes.append(value.node)
             switch value.node.parent {
             case .page:
@@ -374,13 +393,37 @@ struct CommandRegistry {
                 }
                 document.pages[pageIndex].nodes[parentIndex].childIDs.insert(value.node.id, at: value.index)
             }
-            // Node deletion is deliberately represented as restoration of the owning page so
-            // future subtree rules cannot make an inverse partially destructive.
             return CommandMutation(
-                inverse: .batch([
-                    .removePage(RemovePageCommand(pageID: value.pageID)),
-                    .insertPage(InsertPageCommand(page: previousPage, index: pageIndex)),
-                ])
+                inverse: .removeNode(RemoveNodeCommand(pageID: value.pageID, nodeID: value.node.id))
+            )
+
+        case .removeNode(let value):
+            guard let location = document.nodeLocation(pageID: value.pageID, nodeID: value.nodeID) else {
+                throw CommandExecutionError.disabled("The node no longer exists.")
+            }
+            let node = document.pages[location.page].nodes[location.node]
+            guard node.childIDs.isEmpty else {
+                throw CommandExecutionError.disabled("Remove child nodes before removing their parent.")
+            }
+            let index: Int
+            switch node.parent {
+            case .page:
+                guard let value = document.pages[location.page].rootNodeIDs.firstIndex(of: node.id) else {
+                    throw CommandExecutionError.disabled("The page no longer owns this node.")
+                }
+                index = value
+                document.pages[location.page].rootNodeIDs.remove(at: value)
+            case .node(let parentID):
+                guard let parentIndex = document.pages[location.page].nodes.firstIndex(where: { $0.id == parentID }),
+                      let value = document.pages[location.page].nodes[parentIndex].childIDs.firstIndex(of: node.id) else {
+                    throw CommandExecutionError.disabled("The parent no longer owns this node.")
+                }
+                index = value
+                document.pages[location.page].nodes[parentIndex].childIDs.remove(at: value)
+            }
+            document.pages[location.page].nodes.remove(at: location.node)
+            return CommandMutation(
+                inverse: .insertNode(InsertNodeCommand(pageID: value.pageID, node: node, index: index))
             )
 
         case .setProperty(let value):

@@ -82,7 +82,7 @@ struct WorkspaceShellView: View {
             return .handled
         }
         .onExitCommand {
-            state.performSelectionCommand(.escape, provenance: .keyboard)
+            state.performEscape()
         }
     }
 }
@@ -410,6 +410,15 @@ private struct CanvasPlaceholderView: View {
                         .focusable()
                         .focused(focus, equals: .viewportCanvas)
                         .contextMenu {
+                            Button("Insert Frame at Center") {
+                                state.performDefaultInsertion(.frame, provenance: .contextualMenu)
+                            }
+                            .disabled(!state.insertionAvailability(.frame).isEnabled)
+                            Button("Insert Text at Center") {
+                                state.performDefaultInsertion(.text, provenance: .contextualMenu)
+                            }
+                            .disabled(!state.insertionAvailability(.text).isEnabled)
+                            Divider()
                             Button("Select Next Object") {
                                 state.performSelectionCommand(.next, provenance: .contextualMenu)
                             }
@@ -596,6 +605,12 @@ private struct StatusBarView: View {
             Label(state.selectionState.isEmpty ? "No selection" : state.selectionState.count == 1 ? state.selectionSummary : "\(state.selectionState.count) selected", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                 .accessibilityLabel("Selection path: \(state.selectionPath)")
                 .accessibilityIdentifier("status.selectionPath")
+            if state.selectedTool == .frame || state.selectedTool == .text {
+                Divider().frame(height: 14)
+                Label(state.insertionStatus, systemImage: "plus.square.dashed")
+                    .accessibilityLabel(state.insertionStatus)
+                    .accessibilityIdentifier("status.insertion")
+            }
             Spacer()
             if state.lifecycle.phase == .saving || state.lifecycle.phase == .autosaving {
                 ProgressView().controlSize(.small).accessibilityLabel(state.lifecycle.statusText)
@@ -705,6 +720,17 @@ struct SiteForgeCommands: Commands {
                 }
                 .keyboardShortcut(tool.shortcut, modifiers: [])
             }
+            Divider()
+            Button("Insert Frame at Center") {
+                state?.performDefaultInsertion(.frame, provenance: .menu)
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(state?.insertionAvailability(.frame).isEnabled != true)
+            Button("Insert Text at Center") {
+                state?.performDefaultInsertion(.text, provenance: .menu)
+            }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .disabled(state?.insertionAvailability(.text).isEnabled != true)
         }
 
         CommandMenu("Selection") {
@@ -773,6 +799,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.viewportState = state.viewportState
         view.renderPlan = state.canvasRenderPlan
         view.selectionOverlayPlan = state.selectionOverlayPlan
+        view.insertionPreviewOverlay = state.insertionPreviewOverlay
         view.accessibilityViewportValue = state.viewportAccessibilityValue
         view.needsDisplay = true
         let width = Double(view.bounds.width)
@@ -792,12 +819,16 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.viewportState = state.viewportState
         view.renderPlan = state.canvasRenderPlan
         view.selectionOverlayPlan = state.selectionOverlayPlan
+        view.insertionPreviewOverlay = state.insertionPreviewOverlay
         view.onInteraction = { state.noteCanvasInteraction() }
         view.onPointerSelection = { point, modifier in state.selectCanvasPoint(point, modifier: modifier) }
+        view.onPointerPreview = { point in state.previewInsertion(at: point) }
         view.onSelectNext = { state.performSelectionCommand(.next, provenance: .keyboard) }
         view.onSelectPrevious = { state.performSelectionCommand(.previous, provenance: .keyboard) }
         view.onClearSelection = { state.performSelectionCommand(.clear, provenance: .keyboard) }
-        view.onEscape = { state.performSelectionCommand(.escape, provenance: .keyboard) }
+        view.onEscape = { state.performEscape() }
+        view.onInsertFrame = { state.performDefaultInsertion(.frame, provenance: .accessibility) }
+        view.onInsertText = { state.performDefaultInsertion(.text, provenance: .accessibility) }
         view.onPan = { state.panViewport(by: $0) }
         view.onMagnify = { factor, anchor in state.magnify(by: factor, around: anchor) }
         view.onResize = { size, scale in state.resizeViewport(to: size, pixelRatio: scale) }
@@ -824,13 +855,19 @@ private final class NativeCanvasViewportView: NSView {
             if let renderPlan { rebuildAccessibility(renderPlan) }
         }
     }
+    var insertionPreviewOverlay: CanvasEditorOverlay? {
+        didSet { rebuildOverlay() }
+    }
     var accessibilityViewportValue = "Zoom 100 percent"
     var onInteraction: (() -> Void)?
     var onPointerSelection: ((WorldPoint, SelectionPointerModifier) -> Void)?
+    var onPointerPreview: ((WorldPoint) -> Void)?
     var onSelectNext: (() -> Void)?
     var onSelectPrevious: (() -> Void)?
     var onClearSelection: (() -> Void)?
     var onEscape: (() -> Void)?
+    var onInsertFrame: (() -> Void)?
+    var onInsertText: (() -> Void)?
     var onPan: ((ViewportVector) -> Void)?
     var onMagnify: ((Double, ViewportPoint) -> Void)?
     var onResize: ((ViewportSize, Double) -> Void)?
@@ -842,6 +879,7 @@ private final class NativeCanvasViewportView: NSView {
     private var rasterViewportState: CanvasViewportState?
     private var virtualAccessibilityElements: [NSAccessibilityElement] = []
     private var focusedAccessibilityObjectID: NodeID?
+    private var pointerTrackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -876,7 +914,30 @@ private final class NativeCanvasViewportView: NSView {
             NSAccessibilityCustomAction(name: "Select Next Object") { [weak self] in self?.onSelectNext?(); return true },
             NSAccessibilityCustomAction(name: "Select Previous Object") { [weak self] in self?.onSelectPrevious?(); return true },
             NSAccessibilityCustomAction(name: "Clear Selection") { [weak self] in self?.onClearSelection?(); return true },
+            NSAccessibilityCustomAction(name: "Insert Frame at Center") { [weak self] in self?.onInsertFrame?(); return true },
+            NSAccessibilityCustomAction(name: "Insert Text at Center") { [weak self] in self?.onInsertText?(); return true },
         ]
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        pointerTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let world = try? viewportState.transform.viewportToWorld(
+            ViewportPoint(x: point.x, y: point.y)
+        ) else { return }
+        onPointerPreview?(world)
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -909,7 +970,7 @@ private final class NativeCanvasViewportView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         onInteraction?()
-        guard let plan = renderPlan else { return }
+        guard renderPlan != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
         guard let world = try? viewportState.transform.viewportToWorld(
             ViewportPoint(x: point.x, y: point.y)
@@ -1074,6 +1135,23 @@ private final class NativeCanvasViewportView: NSView {
                 if overlay.kind.contains("locked") { layer.lineDashPattern = [4, 3] }
                 overlayContainer.addSublayer(layer)
             }
+        }
+        if let preview = insertionPreviewOverlay,
+           let origin = try? viewportState.transform.worldToViewport(preview.frame.origin) {
+            let layer = CAShapeLayer()
+            layer.name = "renderer.overlay.insertion-preview"
+            layer.frame = CGRect(
+                x: origin.x,
+                y: origin.y,
+                width: preview.frame.size.width * viewportState.zoom.value,
+                height: preview.frame.size.height * viewportState.zoom.value
+            )
+            layer.path = CGPath(rect: layer.bounds.insetBy(dx: 1, dy: 1), transform: nil)
+            layer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+            layer.strokeColor = NSColor.controlAccentColor.cgColor
+            layer.lineWidth = 2
+            layer.lineDashPattern = [6, 4]
+            overlayContainer.addSublayer(layer)
         }
         let focus = CAShapeLayer()
         focus.name = "renderer.overlay.focus"
