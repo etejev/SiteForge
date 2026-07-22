@@ -86,6 +86,7 @@ enum ShellFocus: Hashable {
     case navigatorPages
     case navigatorLayers
     case navigatorPage(PageID)
+    case navigatorLayer(NodeID)
     case viewportPreset
     case viewportZoomOut
     case viewportZoomIn
@@ -104,10 +105,10 @@ enum ShellFocusDirection {
 }
 
 enum ShellFocusTraversal {
-    static func order(pageIDs: [PageID]) -> [ShellFocus] {
+    static func order(pageIDs: [PageID], layerIDs: [NodeID] = []) -> [ShellFocus] {
         [
             .navigatorPages, .navigatorLayers,
-        ] + pageIDs.map(ShellFocus.navigatorPage) + [
+        ] + pageIDs.map(ShellFocus.navigatorPage) + layerIDs.map(ShellFocus.navigatorLayer) + [
             .viewportPreset, .viewportZoomOut, .viewportZoomIn,
             .viewportReset, .viewportFit, .viewportCanvas,
             .inspectorLayout, .inspectorStyle, .inspectorAdvanced, .inspectorAccessibility,
@@ -117,9 +118,10 @@ enum ShellFocusTraversal {
     static func adjacent(
         to current: ShellFocus?,
         direction: ShellFocusDirection,
-        pageIDs: [PageID]
+        pageIDs: [PageID],
+        layerIDs: [NodeID] = []
     ) -> ShellFocus? {
-        let values = order(pageIDs: pageIDs)
+        let values = order(pageIDs: pageIDs, layerIDs: layerIDs)
         guard !values.isEmpty else { return nil }
         guard let current, let index = values.firstIndex(of: current) else {
             return direction == .forward ? values.first : values.last
@@ -189,6 +191,29 @@ enum WorkspaceFixtureScale: String {
     }
 }
 
+enum WorkspaceSelectionFixture: String {
+    case multiple
+
+    static func from(composition: DebugTestComposition = .current()) -> Self? {
+        composition.value(after: "-SiteForgeSelectionFixture").flatMap(Self.init)
+    }
+
+    func document() -> CanonicalDocument {
+        var document = ProjectCreation.blank()
+        guard var page = document.pages.first else { return document }
+        let extraIDs = [
+            NodeID(UUID(uuidString: "77777777-7777-4777-8777-777777777701")!),
+            NodeID(UUID(uuidString: "77777777-7777-4777-8777-777777777702")!),
+        ]
+        page.rootNodeIDs.append(contentsOf: extraIDs)
+        page.nodes.append(contentsOf: extraIDs.enumerated().map { offset, id in
+            DocumentNode(id: id, kind: .frame, name: "Fixture Layer \(offset + 2)", parent: .page(page.id))
+        })
+        document.pages[0] = page
+        return document
+    }
+}
+
 @MainActor
 final class WorkspaceShellState: ObservableObject {
     static let requirementIDs: Set<String> = [
@@ -204,6 +229,8 @@ final class WorkspaceShellState: ObservableObject {
         "SF-1902-008",
         "SF-0401-001", "SF-0401-002", "SF-0401-003", "SF-0401-004",
         "SF-0401-005", "SF-0401-006", "SF-0401-007", "SF-0401-008",
+        "SF-0402-001", "SF-0402-002", "SF-0402-003", "SF-0402-004",
+        "SF-0402-005", "SF-0402-006", "SF-0402-007", "SF-0402-008",
     ]
 
     @Published var selectedTool: CanvasTool = .select
@@ -220,6 +247,10 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var preparedViewportScene: PreparedCanvasViewportScene?
     @Published private(set) var canvasRenderPlan: CanvasRenderPlan?
     @Published private(set) var canvasRendererFailure: CanvasRendererError?
+    @Published private(set) var selectionState = SelectionState()
+    @Published private(set) var selectionOverlayPlan: SelectionOverlayPlan?
+    @Published private(set) var selectionFailure: SelectionCommandError?
+    @Published private(set) var lastSelectionAnnouncement = "No object selected"
     @Published private(set) var viewportFailure: CanvasViewportError?
     @Published private(set) var lastViewportAnnouncement = "Canvas viewport at 100 percent"
     @Published private(set) var canvasInteractionCount = 0
@@ -230,14 +261,18 @@ final class WorkspaceShellState: ObservableObject {
     private let viewportRegistry = CanvasViewportCommandRegistry()
     private let viewportPreparer: CanvasViewportScenePreparer
     private let renderWorker = CanvasRenderWorker()
+    private let selectionRegistry = SelectionCommandRegistry()
+    private let selectionOverlayPlanner = SelectionOverlayPlanner()
     private let renderSurfaceID = CanvasRenderSurfaceID()
     let canvasRenderDiagnostics = CanvasRenderDiagnostics()
+    let selectionDiagnostics = SelectionDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
     private let announcementPoster: AccessibilityAnnouncementPoster
     private var viewportDocumentID: DocumentID
     private var preparationTask: Task<Void, Never>?
     private var renderTask: Task<Void, Never>?
     private var previousRenderScene: CanvasRenderSceneSnapshot?
+    private var selectionScene: SelectionSceneSnapshot?
 
     init(
         documentSession: DocumentSession = DocumentSession(),
@@ -283,6 +318,7 @@ final class WorkspaceShellState: ObservableObject {
     func selectPage(_ pageID: PageID) {
         guard pages.contains(where: { $0.id == pageID }) else { return }
         selectedPageID = pageID
+        refreshSelectionScene(boundary: .pageSwitch)
     }
 
     func adjacentPage(to pageID: PageID, offset: Int) -> PageID? {
@@ -413,12 +449,98 @@ final class WorkspaceShellState: ObservableObject {
         canvasInteractionCount += 1
     }
 
+    var layerTargets: [SelectionTargetSnapshot] {
+        selectionScene?.orderedSelectableTargets ?? []
+    }
+
+    var selectionSummary: String {
+        switch selectionState.count {
+        case 0: "Nothing selected"
+        case 1:
+            layerTargets.first(where: { $0.id == selectionState.primaryID })?.name ?? "One object selected"
+        default: "\(selectionState.count) objects selected"
+        }
+    }
+
+    var selectionPath: String {
+        guard let pageID = effectiveSelectedPageID,
+              let page = pages.first(where: { $0.id == pageID }) else { return "No selection" }
+        guard !selectionState.isEmpty else { return "\(page.name) / No selection" }
+        if selectionState.count > 1 { return "\(page.name) / \(selectionState.count) objects" }
+        return "\(page.name) / \(selectionSummary)"
+    }
+
+    func selectionAvailability(_ name: SelectionCommandName) -> SelectionCommandAvailability {
+        guard let scene = selectionScene else { return .disabled("The canvas scene is not ready.") }
+        return selectionRegistry.availability(
+            for: SelectionCommand(name, expectedIdentity: scene.identity, provenance: .menu),
+            state: selectionState,
+            scene: scene
+        )
+    }
+
+    func performSelectionCommand(
+        _ name: SelectionCommandName,
+        targetID: NodeID? = nil,
+        provenance: SelectionProvenance
+    ) {
+        guard let scene = selectionScene else { return }
+        let start = DispatchTime.now().uptimeNanoseconds
+        let prior = selectionState
+        do {
+            let command = SelectionCommand(
+                name, targetID: targetID,
+                expectedIdentity: scene.identity,
+                provenance: provenance
+            )
+            _ = try selectionRegistry.apply(command, to: &selectionState, scene: scene)
+            selectionFailure = nil
+            rebuildSelectionOverlay()
+            announceSelection()
+            recordSelectionDiagnostic(name, start: start, result: .success, repair: nil, failure: nil)
+        } catch let error as SelectionCommandError {
+            selectionState = prior
+            selectionFailure = error
+            let result: SelectionDiagnosticResult = error == .staleScene ? .stale : .failure
+            recordSelectionDiagnostic(name, start: start, result: result, repair: nil, failure: String(describing: error))
+        } catch {
+            selectionState = prior
+        }
+    }
+
+    func selectCanvasPoint(_ point: WorldPoint, modifier: SelectionPointerModifier) {
+        guard selectedTool == .select, let plan = canvasRenderPlan, let scene = selectionScene,
+              plan.identity == scene.identity else { return }
+        let eligible = Set(scene.orderedSelectableTargets.map(\.id))
+        guard let id = CanvasRendererCore().hitTest(point, in: plan, eligibleIDs: eligible) else {
+            if !selectionState.isEmpty { performSelectionCommand(.clear, provenance: .pointer) }
+            return
+        }
+        let command: SelectionCommandName = switch modifier {
+        case .replace: .replace
+        case .add: .add
+        case .toggle: .toggle
+        }
+        performSelectionCommand(command, targetID: id, provenance: .pointer)
+    }
+
+    func selectLayer(_ id: NodeID, modifier: SelectionPointerModifier = .replace) {
+        let command: SelectionCommandName = switch modifier {
+        case .replace: .replace
+        case .add: .add
+        case .toggle: .toggle
+        }
+        performSelectionCommand(command, targetID: id, provenance: .layersNavigator)
+    }
+
     func undo() {
         try? documentSession.undo()
+        refreshSelectionScene(boundary: .undo)
     }
 
     func redo() {
         try? documentSession.redo()
+        refreshSelectionScene(boundary: .redo)
     }
 
     private func updateViewportContentBounds() {
@@ -448,6 +570,9 @@ final class WorkspaceShellState: ObservableObject {
         preparedViewportScene = nil
         canvasRenderPlan = nil
         previousRenderScene = nil
+        selectionState = SelectionState()
+        selectionScene = nil
+        selectionOverlayPlan = nil
         canvasRendererFailure = nil
         viewportFailure = nil
         lastViewportAnnouncement = "Canvas viewport reset for the opened document"
@@ -498,8 +623,8 @@ final class WorkspaceShellState: ObservableObject {
                 clipRect: viewportState.contentBounds,
                 paintOrder: index,
                 style: index.isMultiple(of: 3) ? .container : .page,
-                isVisible: true,
-                accessibilityLabel: "Canvas object \(index + 1)"
+                isVisible: !node.selectionBooleanProperty("hidden"),
+                accessibilityLabel: node.name
             )
         }
         guard !objects.isEmpty else { return }
@@ -545,6 +670,7 @@ final class WorkspaceShellState: ObservableObject {
                 previousRenderScene = scene
                 canvasRenderPlan = plan
                 canvasRendererFailure = nil
+                adoptSelectionScene(from: plan, boundary: .rendererGeneration)
                 await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
                     operation: "prepare", plan: plan, identity: identity, surfaceID: renderSurfaceID,
                     durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
@@ -571,6 +697,111 @@ final class WorkspaceShellState: ObservableObject {
                 ))
             } catch {}
         }
+    }
+
+    private func makeSelectionScene(from plan: CanvasRenderPlan) -> SelectionSceneSnapshot? {
+        guard let pageID = effectiveSelectedPageID else { return nil }
+        let rendered = Dictionary(uniqueKeysWithValues: plan.authoredObjects.map { ($0.id, $0) })
+        var fallbackOrder = plan.authoredObjects.count
+        let targets = documentSession.document.pages.flatMap { page in
+            page.nodes.map { node -> SelectionTargetSnapshot in
+                let object = rendered[node.id]
+                defer { fallbackOrder += 1 }
+                let parentID: NodeID? = if case .node(let id) = node.parent { id } else { nil }
+                return SelectionTargetSnapshot(
+                    id: node.id,
+                    pageID: page.id,
+                    parentID: parentID,
+                    name: node.name,
+                    frame: object?.frame ?? viewportState.contentBounds,
+                    clipRect: object?.clipRect,
+                    paintOrder: object?.paintOrder ?? fallbackOrder,
+                    isVisible: object?.isVisible == true,
+                    isLocked: node.selectionBooleanProperty("locked"),
+                    isAvailable: object != nil
+                )
+            }
+        }
+        return SelectionSceneSnapshot(
+            identity: plan.identity,
+            activePageID: pageID,
+            activeContainerID: selectionState.activeContainerID,
+            targets: targets
+        )
+    }
+
+    private func adoptSelectionScene(
+        from plan: CanvasRenderPlan,
+        boundary: SelectionLifecycleBoundary
+    ) {
+        guard let scene = makeSelectionScene(from: plan) else { return }
+        let prior = selectionState
+        do {
+            let repair = try selectionRegistry.adopt(scene, boundary: boundary, state: &selectionState)
+            selectionScene = scene
+            selectionFailure = nil
+            rebuildSelectionOverlay()
+            if selectionState != prior || repair != .none { announceSelection() }
+        } catch let error as SelectionCommandError {
+            selectionState = prior
+            selectionFailure = error
+        } catch {
+            selectionState = prior
+        }
+    }
+
+    private func refreshSelectionScene(boundary: SelectionLifecycleBoundary) {
+        guard let plan = canvasRenderPlan else {
+            selectionState = SelectionState()
+            selectionScene = nil
+            selectionOverlayPlan = nil
+            return
+        }
+        adoptSelectionScene(from: plan, boundary: boundary)
+    }
+
+    private func rebuildSelectionOverlay() {
+        guard let scene = selectionScene, let plan = canvasRenderPlan else {
+            selectionOverlayPlan = nil
+            return
+        }
+        do {
+            selectionOverlayPlan = try selectionOverlayPlanner.plan(
+                selection: selectionState,
+                scene: scene,
+                renderPlan: plan,
+                previous: selectionOverlayPlan
+            )
+        } catch let error as SelectionCommandError {
+            selectionFailure = error
+        } catch {}
+    }
+
+    private func announceSelection() {
+        lastSelectionAnnouncement = selectionState.isEmpty
+            ? "Selection cleared"
+            : selectionState.count == 1
+                ? "Selected \(selectionSummary)"
+                : "Selected \(selectionState.count) objects"
+        announcementPoster.post(lastSelectionAnnouncement)
+    }
+
+    private func recordSelectionDiagnostic(
+        _ operation: SelectionCommandName,
+        start: UInt64,
+        result: SelectionDiagnosticResult,
+        repair: SelectionRepairCategory?,
+        failure: String?
+    ) {
+        let record = SelectionDiagnosticFactory.make(
+            operation: operation,
+            state: selectionState,
+            durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+            result: result,
+            repair: repair,
+            failure: failure
+        )
+        Task { await selectionDiagnostics.append(record) }
     }
 
     private func announceViewport(_ operation: CanvasViewportCommandName) {

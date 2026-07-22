@@ -16,6 +16,40 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue((canvas.value as? String)?.contains("interactions 1") == true)
     }
 
+    // SF-0402-001 through SF-0402-008
+    func testSelectionEmptySingleMultipleLayersKeyboardAndAccessibilityParity() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeSelectionFixture", "multiple",
+        ])
+        application.buttons["navigator.tab.layers"].click()
+        let layers = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "navigator.layer."))
+            .allElementsBoundByAccessibilityElement
+        XCTAssertEqual(layers.count, 3)
+        XCTAssertEqual(Set(layers.map(\.identifier)).count, 3)
+        XCTAssertTrue((application.descendants(matching: .any)["status.selectionPath"].value as? String)?.contains("No selection") == true)
+        attachScreenshot(named: "SF-AUTHORING-004 empty selection")
+
+        layers[0].click()
+        XCTAssertTrue((layers[0].value as? String)?.contains("Primary selection") == true)
+        XCTAssertTrue((application.descendants(matching: .any)["status.selectionPath"].label).contains("Fixture") == false)
+        attachScreenshot(named: "SF-AUTHORING-004 single selection")
+
+        XCUIElement.perform(withKeyModifiers: .shift) { layers[1].click() }
+        XCTAssertTrue((layers[1].value as? String)?.contains("Primary selection") == true)
+        let multipleStatus = application.descendants(matching: .any)["status.selectionPath"]
+        XCTAssertTrue(multipleStatus.label.contains("2") || ((multipleStatus.value as? String)?.contains("2") == true))
+        attachScreenshot(named: "SF-AUTHORING-004 multiple selection")
+
+        application.typeKey(.escape, modifierFlags: [])
+        let emptyStatus = application.descendants(matching: .any)["status.selectionPath"]
+        XCTAssertTrue(emptyStatus.label.contains("No selection") || ((emptyStatus.value as? String)?.contains("No selection") == true))
+        application.typeKey("]", modifierFlags: .command)
+        XCTAssertTrue((layers[0].value as? String)?.contains("Primary selection") == true)
+        application.typeKey("[", modifierFlags: .command)
+        XCTAssertTrue((layers[2].value as? String)?.contains("Primary selection") == true)
+    }
+
     private var fixtureLease: RepositoryTestFixture!
     private var fixtureRoot: URL { fixtureLease.url }
     private var recoveryDirectory: URL {
@@ -476,7 +510,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue((canvas.value as? String)?.contains("interactions 1") == true)
 
         application.buttons["navigator.tab.layers"].click()
-        XCTAssertTrue(application.descendants(matching: .any)["navigator.empty"].exists)
+        XCTAssertTrue(application.descendants(matching: .any)["navigator.layers.list"].exists)
+        XCTAssertFalse(application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "navigator.layer."))
+            .allElementsBoundByAccessibilityElement.isEmpty)
         application.buttons["navigator.tab.pages"].click()
         XCTAssertTrue(application.descendants(matching: .any)["navigator.pages.list"].exists)
     }

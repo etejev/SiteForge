@@ -4,11 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-AUTHORING-004` Implement the deterministic selection model and renderer-overlay integration.
-  - Requirements: `SF-0402-001` through `SF-0402-008` (bounded selection slice).
-  - Acceptance: stable ordered selection, primary/anchor identity, pointer and keyboard selection commands, hidden/locked/removed-node repair, undo-neutral convenience state, separate selection overlays, accessibility semantics, and save/reopen document-boundary behavior integrate with the renderer without adding transforms.
-  - Dependencies: `SF-AUTHORING-003`; follow ADR-0014.
-
 - [ ] `SF-AUTHORING-005` Implement transactional insertion foundations for frame and text nodes.
   - Requirements: `SF-0405-001` through `SF-0405-008` (bounded frame/text insertion slice).
   - Acceptance: central typed commands create stable nodes through one atomic transaction, validate parent/route/layout ownership, cancel without mutation, persist/restore/undo/redo, select the committed node, and render it without adding resize, snapping, media, or component authoring.
@@ -28,6 +23,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-AUTHORING-004` Implement the deterministic selection model and renderer-overlay integration.
+  - Requirements: `SF-0402-001` through `SF-0402-008` (bounded selection slice; the normative module remains Partial overall).
+  - Plan: add a Foundation-only, scene/window-owned selection snapshot and central typed registry keyed by stable `NodeID`, exact renderer identity, active page/container scope, ordered identities, primary/anchor identity, and provenance; define replacement/add/toggle/clear/traversal/Escape semantics, typed availability and state-neutral rejection, and deterministic lifecycle repair without adding `Codable`, document commands, history, or package members; plan selection-only old/new overlay invalidation separately from authored render plans and connect the existing AppKit viewport, Layers navigator, inspector/status summaries, menu/contextual/keyboard/accessibility paths through that one registry; retain 100-/10,000-object timing/memory evidence and running-app empty/single/multiple visual evidence while keeping transforms, insertion, inspector editing, export generation, and release budgets explicitly outside the slice.
+  - Supported: stable ordered single/multiple selection with primary and anchor identity; replacement, Shift-add, Command-toggle, clear, Escape, and cyclic next/previous traversal; exact renderer-generation adoption; document/page/save/reopen/autosave/recovery/undo/redo repair; hidden/clipped/unavailable rejection; locked inspection selection; reverse-paint-order pointer hits; synchronized canvas/Layers/inspector/status/menu/contextual/accessibility adapters; primary/secondary editor outlines; bounded old/new overlay invalidation; noncanonical, undo-neutral selection.
+  - Explicitly unsupported: authored selection persistence, marquee, component drill-in UI, insertion, transforms, handles, snapping/guides, inspector editing, text shaping, image decoding, component authoring, export generation, publishing/plugins, interactive Instruments budgets, and OS-level VoiceOver/settings acceptance.
+  - Evidence: eight `SelectionModelTests`, one actual-app UI journey with retained empty/single/multiple screenshots, headless architecture enforcement, and four retained optimized measurements cover identity/order, command parity, invalid/stale/cancelled inputs, lifecycle repair, canonical/history/preview/export exclusion, overlay isolation, diagnostics, and 100-/10,000-object scale. On Mac16,13, selection-command P95 was 0.073/3.803 ms and overlay-planning P95 was 0.014/0.958 ms at 100/10,000 objects; process high-water memory was 61,177,856 bytes. These are capacity measurements, not final incremental or release-budget acceptance. `./sf build`, `./sf test`, and `./sf verify` passed on 2026-07-21 with 191 unit tests and 20 UI tests, zero failures.
+  - Dependencies: completed after `SF-AUTHORING-003`; follows ADR-0014. `SF-AUTHORING-005` is next READY.
 
 - [x] `SF-AUTHORING-003` Implement the AppKit/Core Animation canvas renderer and editor-overlay boundary.
   - Requirements: `SF-0407-001` through `SF-0407-008` (bounded renderer slice; the normative module remains Partial overall).

@@ -1,0 +1,129 @@
+{
+  "environment" : {
+    "hardware" : "Mac16,13",
+    "os" : "Version 27.0 (Build 26A5378n)",
+    "processor" : "Apple M4",
+    "swift" : "Swift 6 optimized (-O)"
+  },
+  "limitations" : [
+    "These headless measurements do not establish final interactive frame pacing, Instruments allocations, or owner-approved release budgets.",
+    "The 10,000-object fixture measures bounded full-snapshot validation; later incremental indexing may be required.",
+    "Visual overlay drawing, production text shaping, image decoding, transforms, and export generation are outside SF-AUTHORING-004."
+  ],
+  "maximumResidentBytes" : 61177856,
+  "measurements" : [
+    {
+      "name" : "selection-command",
+      "objectCount" : 100,
+      "p95" : 0.072583,
+      "samples" : [
+        0.072583,
+        0.06275,
+        0.060083,
+        0.063458,
+        0.058333,
+        0.060625,
+        0.058209,
+        0.058916,
+        0.058584,
+        0.058375,
+        0.058458,
+        0.05825,
+        0.05825,
+        0.058167,
+        0.057833
+      ],
+      "unit" : "milliseconds"
+    },
+    {
+      "name" : "selection-overlay-plan",
+      "objectCount" : 100,
+      "p95" : 0.013542,
+      "samples" : [
+        0.012334,
+        0.011833,
+        0.011917,
+        0.01175,
+        0.011834,
+        0.011708,
+        0.012042,
+        0.013542,
+        0.011958,
+        0.0115,
+        0.011542,
+        0.013333,
+        0.011542,
+        0.011542,
+        0.011375
+      ],
+      "unit" : "milliseconds"
+    },
+    {
+      "name" : "selection-command",
+      "objectCount" : 10000,
+      "p95" : 3.802542,
+      "samples" : [
+        3.663166,
+        3.737084,
+        3.614667,
+        3.580209,
+        3.555875,
+        3.710792,
+        3.633709,
+        3.802542,
+        3.5305,
+        3.574583,
+        3.724459,
+        3.62375,
+        3.718709,
+        3.550833,
+        3.761875
+      ],
+      "unit" : "milliseconds"
+    },
+    {
+      "name" : "selection-overlay-plan",
+      "objectCount" : 10000,
+      "p95" : 0.958459,
+      "samples" : [
+        0.833333,
+        0.825709,
+        0.757208,
+        0.873709,
+        0.82225,
+        0.814,
+        0.824584,
+        0.947083,
+        0.958459,
+        0.832375,
+        0.858833,
+        0.873291,
+        0.8265,
+        0.802667,
+        0.892917
+      ],
+      "unit" : "milliseconds"
+    }
+  ],
+  "methodology" : [
+    "Production SelectionCommandRegistry and SelectionOverlayPlanner compiled with -O.",
+    "Two warm-up iterations followed by 15 monotonic-clock samples per operation and fixture size.",
+    "Fixtures use non-overlapping, non-empty stable selection targets and the production renderer plan.",
+    "P95 uses nearest-rank ordering; resident memory is the process high-water mark after both fixtures."
+  ],
+  "requirementIDs" : [
+    "SF-0402-001",
+    "SF-0402-002",
+    "SF-0402-003",
+    "SF-0402-004",
+    "SF-0402-005",
+    "SF-0402-006",
+    "SF-0402-007",
+    "SF-0402-008"
+  ],
+  "schemaVersion" : 1,
+  "stableDigests" : [
+    "88888888-8888-4888-8888-000000000011",
+    "88888888-8888-4888-8888-000000000011"
+  ]
+}

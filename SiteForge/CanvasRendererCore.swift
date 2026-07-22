@@ -226,8 +226,15 @@ struct CanvasRendererCore: Sendable {
     }
 
     func hitTest(_ point: WorldPoint, in plan: CanvasRenderPlan) -> NodeID? {
+        hitTest(point, in: plan, eligibleIDs: nil)
+    }
+
+    func hitTest(_ point: WorldPoint, in plan: CanvasRenderPlan, eligibleIDs: Set<NodeID>?) -> NodeID? {
         plan.authoredObjects.reversed().first { object in
-            object.isVisible && contains(object.frame, point) && isInsideClip(object, point: point)
+            (eligibleIDs?.contains(object.id) ?? true)
+                && object.isVisible
+                && contains(object.frame, point)
+                && isInsideClip(object, point: point)
         }?.id
     }
 

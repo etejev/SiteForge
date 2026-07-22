@@ -6,6 +6,11 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- A deterministic scene/window-owned selection model with stable ordered node identities, primary and anchor selection, page/container scope, typed provenance, exact renderer-generation validation, and state-neutral cancellation/stale rejection.
+- Unified replacement, Shift-add, Command-toggle, Escape, next/previous, pointer, menu, contextual, Layers navigator, and accessibility selection paths with synchronized inspector and status summaries.
+- Editor-only primary/secondary and locked inspection outlines with bounded old/new dirty-region invalidation, compositor-aligned pan/zoom/resize/Retina updates, and structural exclusion from authored content, persistence, history, preview, and export boundaries.
+- Retained running-app empty/single/multiple selection screenshots and reproducible optimized 100-/10,000-object command/overlay timing, memory, methodology, and limitation evidence.
+
 - A production AppKit/Core Animation canvas renderer foundation with immutable identity-tagged scenes, bounded content tiles, structurally separate editor overlays, deterministic paint/clipping/visibility rules, reverse-order hit testing, dirty-region invalidation, and compositor-only pan/zoom.
 - Stable virtual canvas accessibility identities and focus repair, bounded deterministic cache policy, cancellation/stale-result protection, overlay-free preview snapshots, privacy-preserving renderer signposts and diagnostics, and retained 100-/10,000-object timing/memory/display-link evidence.
 

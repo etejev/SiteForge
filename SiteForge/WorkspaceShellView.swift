@@ -76,9 +76,13 @@ struct WorkspaceShellView: View {
             focusedControl = ShellFocusTraversal.adjacent(
                 to: focusedControl,
                 direction: direction,
-                pageIDs: state.pages.map(\.id)
+                pageIDs: state.pages.map(\.id),
+                layerIDs: state.navigatorTab == .layers ? state.layerTargets.map(\.id) : []
             )
             return .handled
+        }
+        .onExitCommand {
+            state.performSelectionCommand(.escape, provenance: .keyboard)
         }
     }
 }
@@ -266,24 +270,74 @@ private struct NavigatorView: View {
                 .accessibilityLabel("Pages navigator")
                 .accessibilityIdentifier("navigator.pages.list")
             } else {
-                ContentUnavailableView {
-                    Label("No Layers Yet", systemImage: "square.3.layers.3d")
-                } description: {
-                    Text("Layers will appear here when document editing is implemented.")
-                } actions: {
-                    Button("Add Layer") {}
-                        .disabled(true)
-                        .help("Available after the document editing interface is implemented")
-                        .accessibilityIdentifier("navigator.empty.action")
+                if state.layerTargets.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Selectable Layers", systemImage: "square.3.layers.3d")
+                    } description: {
+                        Text("The active page has no visible selectable objects.")
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("navigator.empty")
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 4) {
+                            ForEach(state.layerTargets, id: \.id) { target in
+                                NavigatorLayerRow(target: target, state: state, focus: focus)
+                            }
+                        }
+                    }
+                    .accessibilityLabel("Layers navigator")
+                    .accessibilityIdentifier("navigator.layers.list")
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityIdentifier("navigator.empty")
             }
         }
         .padding(10)
         .workspaceChrome(.navigator)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.navigator.rawValue)
+    }
+}
+
+private struct NavigatorLayerRow: View {
+    let target: SelectionTargetSnapshot
+    @ObservedObject var state: WorkspaceShellState
+    let focus: FocusState<ShellFocus?>.Binding
+
+    private var isSelected: Bool { state.selectionState.orderedIDs.contains(target.id) }
+    private var isPrimary: Bool { state.selectionState.primaryID == target.id }
+
+    var body: some View {
+        Button {
+            let flags = NSEvent.modifierFlags
+            let modifier: SelectionPointerModifier = flags.contains(.command)
+                ? .toggle : flags.contains(.shift) ? .add : .replace
+            state.selectLayer(target.id, modifier: modifier)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: target.isLocked ? "lock.fill" : "square.dashed")
+                    .frame(width: 16)
+                Text(target.name).lineLimit(1)
+                Spacer(minLength: 4)
+                if isPrimary { Text("Primary").font(.caption2).foregroundStyle(.secondary) }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .focusable()
+        .focused(focus, equals: .navigatorLayer(target.id))
+        .onMoveCommand { direction in
+            if direction == .down { state.performSelectionCommand(.next, provenance: .keyboard) }
+            if direction == .up { state.performSelectionCommand(.previous, provenance: .keyboard) }
+        }
+        .accessibilityLabel(target.name)
+        .accessibilityValue("\(target.isLocked ? "Locked; " : "")\(isPrimary ? "Primary selection" : isSelected ? "Selected" : "Not selected")")
+        .accessibilityHint("Press Return to select. Use Up and Down Arrow to traverse objects.")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("navigator.layer.\(target.id.description)")
     }
 }
 
@@ -355,6 +409,19 @@ private struct CanvasPlaceholderView: View {
                     )
                         .focusable()
                         .focused(focus, equals: .viewportCanvas)
+                        .contextMenu {
+                            Button("Select Next Object") {
+                                state.performSelectionCommand(.next, provenance: .contextualMenu)
+                            }
+                            Button("Select Previous Object") {
+                                state.performSelectionCommand(.previous, provenance: .contextualMenu)
+                            }
+                            Divider()
+                            Button("Clear Selection") {
+                                state.performSelectionCommand(.clear, provenance: .contextualMenu)
+                            }
+                            .disabled(state.selectionState.isEmpty)
+                        }
 
                     if state.canvasRenderPlan == nil {
                         ProgressView("Preparing canvas…")
@@ -476,13 +543,35 @@ private struct InspectorView: View {
                 }
             )
 
-            ContentUnavailableView(
-                "Nothing Selected",
-                systemImage: "slider.horizontal.3",
-                description: Text("Select an object to inspect its \(state.inspectorTab.title.lowercased()) properties.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityIdentifier("inspector.empty")
+            if state.selectionState.isEmpty {
+                ContentUnavailableView(
+                    "Nothing Selected",
+                    systemImage: "slider.horizontal.3",
+                    description: Text("Select an object to inspect its \(state.inspectorTab.title.lowercased()) summary.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("inspector.empty")
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label(state.selectionSummary, systemImage: state.selectionState.count > 1 ? "square.stack.3d.up" : "selection.pin.in.out")
+                        .font(.headline)
+                    Text(state.selectionState.count == 1 ? "Primary selection" : "Multiple selection")
+                        .foregroundStyle(.secondary)
+                    if state.layerTargets.first(where: { $0.id == state.selectionState.primaryID })?.isLocked == true {
+                        Label("Locked — inspection only", systemImage: "lock.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Editable properties are intentionally deferred to a later authoring slice.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Inspector selection summary")
+                .accessibilityValue(state.selectionSummary)
+                .accessibilityIdentifier("inspector.selection.summary")
+            }
         }
         .padding(10)
         .workspaceChrome(.inspector)
@@ -504,8 +593,8 @@ private struct StatusBarView: View {
                 .accessibilityLabel("Active breakpoint: \(state.viewportPreset.title)")
                 .accessibilityIdentifier("status.breakpoint")
             Divider().frame(height: 14)
-            Label("No selection", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                .accessibilityLabel("Selection path: No selection")
+            Label(state.selectionState.isEmpty ? "No selection" : state.selectionState.count == 1 ? state.selectionSummary : "\(state.selectionState.count) selected", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                .accessibilityLabel("Selection path: \(state.selectionPath)")
                 .accessibilityIdentifier("status.selectionPath")
             Spacer()
             if state.lifecycle.phase == .saving || state.lifecycle.phase == .autosaving {
@@ -618,6 +707,24 @@ struct SiteForgeCommands: Commands {
             }
         }
 
+        CommandMenu("Selection") {
+            Button("Select Next Object") {
+                state?.performSelectionCommand(.next, provenance: .menu)
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(state?.selectionAvailability(.next).isEnabled != true)
+            Button("Select Previous Object") {
+                state?.performSelectionCommand(.previous, provenance: .menu)
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .disabled(state?.selectionAvailability(.previous).isEnabled != true)
+            Divider()
+            Button("Clear Selection") {
+                state?.performSelectionCommand(.clear, provenance: .menu)
+            }
+            .disabled(state?.selectionAvailability(.clear).isEnabled != true)
+        }
+
         CommandMenu("Preview") {
             Button("Open Preview") {
                 state?.isPreviewPresented = true
@@ -665,6 +772,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         configure(view)
         view.viewportState = state.viewportState
         view.renderPlan = state.canvasRenderPlan
+        view.selectionOverlayPlan = state.selectionOverlayPlan
         view.accessibilityViewportValue = state.viewportAccessibilityValue
         view.needsDisplay = true
         let width = Double(view.bounds.width)
@@ -683,7 +791,13 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.setAccessibilityIdentifier("canvas.interaction")
         view.viewportState = state.viewportState
         view.renderPlan = state.canvasRenderPlan
+        view.selectionOverlayPlan = state.selectionOverlayPlan
         view.onInteraction = { state.noteCanvasInteraction() }
+        view.onPointerSelection = { point, modifier in state.selectCanvasPoint(point, modifier: modifier) }
+        view.onSelectNext = { state.performSelectionCommand(.next, provenance: .keyboard) }
+        view.onSelectPrevious = { state.performSelectionCommand(.previous, provenance: .keyboard) }
+        view.onClearSelection = { state.performSelectionCommand(.clear, provenance: .keyboard) }
+        view.onEscape = { state.performSelectionCommand(.escape, provenance: .keyboard) }
         view.onPan = { state.panViewport(by: $0) }
         view.onMagnify = { factor, anchor in state.magnify(by: factor, around: anchor) }
         view.onResize = { size, scale in state.resizeViewport(to: size, pixelRatio: scale) }
@@ -695,13 +809,28 @@ private struct NativeCanvasViewport: NSViewRepresentable {
 
 private final class NativeCanvasViewportView: NSView {
     var viewportState = try! CanvasViewportState() {
-        didSet { applyCompositorTransformIfPossible() }
+        didSet {
+            applyCompositorTransformIfPossible()
+            rebuildOverlay()
+            if let renderPlan { rebuildAccessibility(renderPlan) }
+        }
     }
     var renderPlan: CanvasRenderPlan? {
         didSet { adoptRenderPlan() }
     }
+    var selectionOverlayPlan: SelectionOverlayPlan? {
+        didSet {
+            rebuildOverlay()
+            if let renderPlan { rebuildAccessibility(renderPlan) }
+        }
+    }
     var accessibilityViewportValue = "Zoom 100 percent"
     var onInteraction: (() -> Void)?
+    var onPointerSelection: ((WorldPoint, SelectionPointerModifier) -> Void)?
+    var onSelectNext: (() -> Void)?
+    var onSelectPrevious: (() -> Void)?
+    var onClearSelection: (() -> Void)?
+    var onEscape: (() -> Void)?
     var onPan: ((ViewportVector) -> Void)?
     var onMagnify: ((Double, ViewportPoint) -> Void)?
     var onResize: ((ViewportSize, Double) -> Void)?
@@ -744,6 +873,9 @@ private final class NativeCanvasViewportView: NSView {
             NSAccessibilityCustomAction(name: "Zoom In") { [weak self] in self?.onZoomIn?(); return true },
             NSAccessibilityCustomAction(name: "Zoom Out") { [weak self] in self?.onZoomOut?(); return true },
             NSAccessibilityCustomAction(name: "Reset View") { [weak self] in self?.onReset?(); return true },
+            NSAccessibilityCustomAction(name: "Select Next Object") { [weak self] in self?.onSelectNext?(); return true },
+            NSAccessibilityCustomAction(name: "Select Previous Object") { [weak self] in self?.onSelectPrevious?(); return true },
+            NSAccessibilityCustomAction(name: "Clear Selection") { [weak self] in self?.onClearSelection?(); return true },
         ]
     }
 
@@ -782,7 +914,11 @@ private final class NativeCanvasViewportView: NSView {
         guard let world = try? viewportState.transform.viewportToWorld(
             ViewportPoint(x: point.x, y: point.y)
         ) else { return }
-        _ = CanvasRendererCore().hitTest(world, in: plan)
+        let modifier: SelectionPointerModifier
+        if event.modifierFlags.contains(.command) { modifier = .toggle }
+        else if event.modifierFlags.contains(.shift) { modifier = .add }
+        else { modifier = .replace }
+        onPointerSelection?(world, modifier)
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -795,6 +931,18 @@ private final class NativeCanvasViewportView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            onEscape?()
+            return
+        }
+        if event.modifierFlags.contains(.command), event.keyCode == 30 {
+            onSelectNext?()
+            return
+        }
+        if event.modifierFlags.contains(.command), event.keyCode == 33 {
+            onSelectPrevious?()
+            return
+        }
         let command: CanvasViewportCommandName?
         switch event.keyCode {
         case 123: command = .panLeft
@@ -908,6 +1056,25 @@ private final class NativeCanvasViewportView: NSView {
 
     private func rebuildOverlay() {
         overlayContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        if let selectionOverlayPlan {
+            for overlay in selectionOverlayPlan.overlays {
+                guard let origin = try? viewportState.transform.worldToViewport(overlay.frame.origin) else { continue }
+                let layer = CAShapeLayer()
+                layer.name = "renderer.overlay.selection.\(overlay.objectID.description)"
+                layer.frame = CGRect(
+                    x: origin.x,
+                    y: origin.y,
+                    width: overlay.frame.size.width * viewportState.zoom.value,
+                    height: overlay.frame.size.height * viewportState.zoom.value
+                )
+                layer.path = CGPath(rect: layer.bounds.insetBy(dx: 1, dy: 1), transform: nil)
+                layer.fillColor = nil
+                layer.strokeColor = NSColor.controlAccentColor.cgColor
+                layer.lineWidth = overlay.kind.contains("primary") ? 3 : 1.5
+                if overlay.kind.contains("locked") { layer.lineDashPattern = [4, 3] }
+                overlayContainer.addSublayer(layer)
+            }
+        }
         let focus = CAShapeLayer()
         focus.name = "renderer.overlay.focus"
         focus.frame = bounds
@@ -926,6 +1093,7 @@ private final class NativeCanvasViewportView: NSView {
         )
         let focusChanged = repairedFocus != focusedAccessibilityObjectID
         focusedAccessibilityObjectID = repairedFocus
+        let selectedIDs = Set(selectionOverlayPlan?.overlays.map(\.objectID) ?? [])
         virtualAccessibilityElements = plan.accessibilityElements.map { item in
             let local = CGPoint(x: item.frame.origin.x, y: item.frame.origin.y)
             let screenOrigin = window?.convertPoint(toScreen: convert(local, to: nil)) ?? .zero
@@ -940,6 +1108,7 @@ private final class NativeCanvasViewportView: NSView {
             element.setAccessibilityLabel(item.label)
             element.setAccessibilityParent(self)
             element.setAccessibilityIdentifier("canvas.object.\(item.objectID.description)")
+            element.setAccessibilitySelected(selectedIDs.contains(item.objectID))
             return element
         }
         NSAccessibility.post(element: self, notification: .layoutChanged)

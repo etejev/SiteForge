@@ -63,7 +63,9 @@ struct WorkspaceSceneComposition {
         let overrides = DebugTestComposition.current(arguments: arguments)
         return WorkspaceSceneComposition {
             let fixture = WorkspaceFixtureScale.from(composition: overrides)
-            let session = fixture.map { DocumentSession(document: $0.document()) } ?? DocumentSession()
+            let selectionFixture = WorkspaceSelectionFixture.from(composition: overrides)
+            let fixtureDocument = selectionFixture?.document() ?? fixture?.document()
+            let session = fixtureDocument.map { DocumentSession(document: $0) } ?? DocumentSession()
             let recoveryDirectory = overrides.value(after: "-SiteForgeRecoveryDirectory")
                 .map { URL(fileURLWithPath: $0, isDirectory: true) }
                 ?? DocumentLifecycleController.productionRecoveryDirectory
