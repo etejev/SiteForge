@@ -1,0 +1,214 @@
+{
+  "configuration" : {
+    "browser10000Repetitions" : "3",
+    "browser100Repetitions" : "5",
+    "browserParityTolerancePoints" : "0.51",
+    "layoutPolicyMaximumDepth" : "256",
+    "layoutPolicyMaximumNodes" : "20000",
+    "productionRepetitions" : "30",
+    "productionWarmups" : "5"
+  },
+  "correctness" : {
+    "browserParityMaximumPointError" : 0,
+    "browserParityWidths" : [
+      320,
+      768,
+      1440
+    ],
+    "cancellationObserved" : true,
+    "largeFixtureBrowserParityMaximumPointError" : {
+      "100" : 0,
+      "10000" : 0
+    },
+    "repeatedDigestsStable" : true,
+    "staleResultRejected" : true,
+    "webKitExcludedFromProductionCore" : true
+  },
+  "environment" : {
+    "architecture" : "arm64",
+    "buildConfiguration" : "swiftc -O -swift-version 6",
+    "hardwareModel" : "Mac16,13",
+    "macOSVersion" : "27.0",
+    "physicalMemoryBytes" : 17179869184,
+    "sdkVersion" : "27.0",
+    "swiftVersion" : "Apple Swift version 6.4 (swiftlang-6.4.0.20.104 clang-2100.3.20.102); Target: arm64-apple-macosx27.0.0",
+    "xcodeVersion" : "Xcode 27.0; Build version 27A5194q"
+  },
+  "generatedAt" : "2026-07-21T23:42:32Z",
+  "limitations" : [
+    "Measurements describe one named machine and toolchain; OD-001 still blocks release budgets.",
+    "Resident-memory values are process samples and the process peak is shared across sequential scenarios.",
+    "WebKit measurements include process launch, navigation, style/layout, IPC, and geometry extraction.",
+    "Browser parity covers geometry for the declared deterministic subset, not typography, pixels, colors, or unsupported CSS.",
+    "Intrinsic text sizes are immutable adapter inputs; production text shaping and fallback remain later work.",
+    "The engine is not yet wired to canonical layout-property mutations, inspector UI, rendering, preview, or export UI."
+  ],
+  "measurements" : [
+    {
+      "alternative" : "Production deterministic layout core",
+      "deterministicDigest" : "b84b0da7665241e94f9405b7969d2e2ab5c979c0384cab21bb4b3fc47f035307",
+      "domain" : "layout",
+      "fixtureCount" : 100,
+      "notes" : [
+        "Optimized Foundation-only production source; fixture construction excluded.",
+        "Timing and memory describe the named host and do not establish a release hardware budget."
+      ],
+      "operation" : "validate graph and compute immutable frames",
+      "processPeakResidentBytes" : 10354688,
+      "repetitionCount" : 30,
+      "residentBytesAfter" : 10354688,
+      "residentBytesBefore" : 10174464,
+      "samplesMilliseconds" : [
+        0.219,
+        0.225458,
+        0.216041,
+        0.2315,
+        0.232167,
+        0.233125,
+        0.220292,
+        0.215375,
+        0.217041,
+        0.219417,
+        0.215125,
+        0.21525,
+        0.214541,
+        0.215,
+        0.214583,
+        0.214541,
+        0.213917,
+        0.216084,
+        0.214334,
+        0.220959,
+        0.214959,
+        0.217625,
+        0.219417,
+        0.2145,
+        0.21425,
+        0.213875,
+        0.21525,
+        0.216042,
+        0.218542,
+        0.214041
+      ],
+      "samplesOver16_67Milliseconds" : 0,
+      "timing" : {
+        "maximumMilliseconds" : 0.233125,
+        "minimumMilliseconds" : 0.213875,
+        "p50Milliseconds" : 0.215375,
+        "p95Milliseconds" : 0.232167
+      },
+      "warmupCount" : 5
+    },
+    {
+      "alternative" : "Ephemeral WebKit HTML/CSS geometry oracle",
+      "domain" : "layout-oracle",
+      "fixtureCount" : 100,
+      "notes" : [
+        "WebKit is benchmark/evidence-only and never canonical authoring state."
+      ],
+      "operation" : "load exported adapter document and read frames",
+      "processPeakResidentBytes" : 74121216,
+      "repetitionCount" : 5,
+      "residentBytesAfter" : 73547776,
+      "residentBytesBefore" : 68730880,
+      "samplesMilliseconds" : [
+        114.523292,
+        53.751666,
+        50.0215,
+        50.429,
+        48.048542
+      ],
+      "samplesOver16_67Milliseconds" : 5,
+      "timing" : {
+        "maximumMilliseconds" : 114.523292,
+        "minimumMilliseconds" : 48.048542,
+        "p50Milliseconds" : 50.429,
+        "p95Milliseconds" : 114.523292
+      },
+      "warmupCount" : 1
+    },
+    {
+      "alternative" : "Production deterministic layout core",
+      "deterministicDigest" : "53a3fc443d0990d06e11188da7a4e54377829d20af0e6a73bd2b71743e8e539d",
+      "domain" : "layout",
+      "fixtureCount" : 10000,
+      "notes" : [
+        "Optimized Foundation-only production source; fixture construction excluded.",
+        "Timing and memory describe the named host and do not establish a release hardware budget."
+      ],
+      "operation" : "validate graph and compute immutable frames",
+      "processPeakResidentBytes" : 82608128,
+      "repetitionCount" : 30,
+      "residentBytesAfter" : 82608128,
+      "residentBytesBefore" : 82345984,
+      "samplesMilliseconds" : [
+        22.289708,
+        20.061625,
+        23.783333,
+        20.085625,
+        20.203625,
+        20.654208,
+        19.6005,
+        20.441084,
+        20.325584,
+        19.48175,
+        20.059292,
+        19.553958,
+        19.940208,
+        19.786417,
+        19.3525,
+        20.666292,
+        19.743792,
+        20.15175,
+        20.339417,
+        19.403125,
+        20.448834,
+        19.5915,
+        19.56,
+        19.871917,
+        19.427833,
+        20.721834,
+        20.057291,
+        19.77325,
+        19.404208,
+        19.512791
+      ],
+      "samplesOver16_67Milliseconds" : 30,
+      "timing" : {
+        "maximumMilliseconds" : 23.783333,
+        "minimumMilliseconds" : 19.3525,
+        "p50Milliseconds" : 19.940208,
+        "p95Milliseconds" : 22.289708
+      },
+      "warmupCount" : 5
+    },
+    {
+      "alternative" : "Ephemeral WebKit HTML/CSS geometry oracle",
+      "domain" : "layout-oracle",
+      "fixtureCount" : 10000,
+      "notes" : [
+        "WebKit is benchmark/evidence-only and never canonical authoring state."
+      ],
+      "operation" : "load exported adapter document and read frames",
+      "processPeakResidentBytes" : 99270656,
+      "repetitionCount" : 3,
+      "residentBytesAfter" : 96780288,
+      "residentBytesBefore" : 96305152,
+      "samplesMilliseconds" : [
+        96.48075,
+        96.175625,
+        95.9835
+      ],
+      "samplesOver16_67Milliseconds" : 3,
+      "timing" : {
+        "maximumMilliseconds" : 96.48075,
+        "minimumMilliseconds" : 95.9835,
+        "p50Milliseconds" : 96.175625,
+        "p95Milliseconds" : 96.48075
+      },
+      "warmupCount" : 1
+    }
+  ],
+  "schemaVersion" : 1,
+  "sourceBaseRevision" : "f98316456a8b491dec277c5cecd865ab004a8eb9"
+}

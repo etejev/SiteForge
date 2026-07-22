@@ -55,6 +55,10 @@ if ! scripts/check-authoring-runway.py; then
   failed=1
 fi
 
+if ! scripts/check-layout-foundation-evidence.py; then
+  failed=1
+fi
+
 entitlement_value() {
   /usr/libexec/PlistBuddy -c "Print :$1" SiteForge/SiteForge.entitlements 2>/dev/null
 }

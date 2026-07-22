@@ -57,6 +57,14 @@ The measurements are not release budgets. Their environment, raw samples, memory
 
 Each failure requires a regression fixture before expanding the supported subset.
 
+## Production checkpoint: SF-AUTHORING-002
+
+`SiteForge/LayoutEngine.swift` implements the first production subset as a Foundation-only source boundary. A versioned flat snapshot keyed by canonical `NodeID` is fully validated as one rooted, ordered, acyclic ownership graph before any frame result can be returned. Immutable results carry document identity, revision, request generation, and viewport width; adoption requires an exact identity match. Intrinsic measurement is an immutable catalog seam, so platform text APIs and mutable UI state never enter canonical computation.
+
+The retained schema-v1 evidence in `docs/evidence/deterministic-layout-foundation/` compiles the production source with optimization and links WebKit only into a standalone oracle executable. On the named Mac16,13 run, production P95 was 0.232 ms at 100 nodes and 22.290 ms at 10,000 nodes. Browser frames matched at 0-point maximum observed error for widths 320, 768, and 1,440 and for the complete 100-/10,000-node fixtures. The 10,000-node result exceeds one 16.67 ms interval, so it demonstrates bounded off-main capacity, not final incremental-layout, renderer, or release performance.
+
+Canonical authored layout-property commands and persistence, inspector/accessibility UI, production text shaping, incremental invalidation, renderer integration, and preview/export UI remain outside this checkpoint. Percentage/automatic sizing, baseline alignment, scrolling overflow, and broader CSS stay typed unsupported cases until deliberately versioned with parity and migration evidence.
+
 ## Reversibility and revisit triggers
 
 The engine and browser adapter are protocol boundaries. A future embedded engine can replace or supplement computation for a versioned subset without changing canonical document identity, provided deterministic migration and parity evidence exist.

@@ -4,12 +4,6 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-AUTHORING-002` Implement the deterministic layout-engine foundation subset.
-  - Requirements: `SF-0501-001` through `SF-0501-008`.
-  - Acceptance: a production UI-independent, revision-scoped engine implements the approved fixed/intrinsic/fill, min/max, padding, gap, alignment, stack, nesting, overflow, and responsive-width subset; unsupported and invalid semantics fail explicitly; HTML/CSS parity remains an adapter/oracle boundary rather than canonical state.
-  - Evidence and tests required: deterministic frames and digests, nested/responsive cases, invalid and unsupported input, cancellation/stale results, 100-/10,000-node behavior, representative text/intrinsic boundaries, and browser-oracle geometry parity at declared widths.
-  - Dependencies: `SF-AUTHORING-001`; follow ADR-0013.
-
 - [ ] `SF-AUTHORING-003` Implement the AppKit/Core Animation canvas renderer and editor-overlay boundary.
   - Requirements: `SF-0407-001` through `SF-0407-008`.
   - Acceptance: an AppKit viewport renders immutable layout/scene snapshots through bounded Core Animation tiles or surfaces; hit testing, selection overlays, focus, accessibility virtualization, and preview/export exclusion remain separate; pan/zoom and incremental edits avoid full-scene rerasterization; Metal remains an optional backend.
@@ -25,6 +19,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-AUTHORING-002` Implement the deterministic layout-engine foundation subset.
+  - Requirements: `SF-0501-001` through `SF-0501-008` (bounded engine slice; the requirements remain Partial overall).
+  - Plan: add a Foundation-only production layout snapshot and engine keyed by canonical typed identities; validate the complete bounded graph before computing immutable revision/generation/viewport-tagged frames and provenance; define exact fixed/intrinsic/fill, constraints, stack, nesting, alignment, gap, padding, overflow, and responsive-width rules with explicit unsupported cases and resource limits; isolate deterministic intrinsic measurements and HTML/CSS browser-oracle adapters from canonical state; exercise cancellation, stale adoption, diagnostics, repeated determinism, 100-/10,000-node scale, and representative browser parity; retain named-environment measurements and enforce the headless dependency boundary without integrating renderer, editor, or inspector behavior.
+  - Supported semantics: fixed, immutable-catalog intrinsic, and fill sizing; min/max constraints with recorded provenance; nonnegative padding and gap; start/center/end/stretch cross-axis alignment; horizontal and vertical stacks; bounded nesting; visible and clip overflow; deterministic child order; and responsive containing-block widths. Rooted graph validation rejects duplicates, missing nodes, multiple parents, cycles, orphans, excessive depth/count, nonfinite values, contradictory constraints, missing intrinsic measurements, arithmetic overflow, cancellation, and stale document/revision/generation/viewport identity.
+  - Explicitly unsupported: percentage and automatic sizing, baseline alignment, scrolling overflow, children without a stack axis, platform text shaping/fallback, CSS grid, absolute positioning, wrapping, transforms, and browser-specific fallback behavior. Unsupported values return typed errors and are never approximated.
+  - Evidence: 11 `LayoutEngineTests` cover stable serialization/identity, exact frames and provenance, fixed/intrinsic/fill, min/max, padding, gap, alignment, both stack axes, nesting, overflow, responsive widths, graph/schema/value rejection, cancellation, stale revision/generation adoption, actor responsiveness, diagnostics redaction, repeated digests, and 100-/10,000-node fixtures. `scripts/check-architecture-boundaries.py` type-checks the production core headlessly with no SwiftUI, AppKit, WebKit, or Metal imports. Retained optimized evidence on Mac16,13 records 0.232 ms production P95 at 100 nodes and 22.290 ms at 10,000 nodes, raw samples and memory, exact WebKit-oracle geometry parity at widths 320/768/1,440 and for both scale fixtures, plus stable digests/cancellation/stale gates. The 10,000-node result exceeds one 60 Hz interval and is not a renderer, incremental-layout, or release-budget pass. `./sf build`, `./sf test`, and `./sf verify` passed on 2026-07-21 with 172 unit tests and 18 UI tests, zero failures.
+  - Dependencies: completed after `SF-AUTHORING-001`; follows ADR-0013. Canonical layout-property commands/persistence, inspector/accessibility UI, production text shaping, renderer integration, incremental layout, preview/export UI, and owner-approved hardware budgets remain later work.
 
 - [x] `SF-AUTHORING-001` Implement the deterministic canvas coordinate system and viewport.
   - Requirements: `SF-0401-001` through `SF-0401-008` (bounded viewport slice; canonical authored world-point editing remains Partial).

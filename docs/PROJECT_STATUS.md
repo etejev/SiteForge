@@ -2,7 +2,7 @@
 
 Last updated: 2026-07-21.
 
-Milestone 0 feature work and audit corrections are complete. The bounded authoring runway is accepted, and `SF-AUTHORING-001` now supplies the first production Milestone 1 viewport foundation.
+Milestone 0 feature work and audit corrections are complete. The bounded authoring runway is accepted; `SF-AUTHORING-001` and `SF-AUTHORING-002` now supply the production viewport and deterministic layout foundations for Milestone 1.
 
 - Bounded verified foundation slices: native app/test targets, native shell, canonical command model, deterministic project packages, open/save/autosave/recovery, persisted bounded history, approved blank-project defaults, and native launch/loading behavior. This is not an aggregate Milestone 0 release-verification claim.
 - Current blank baseline: Home `/`, then Not Found `/404`; one minimum root per page; no sample content; one clean non-undoable creation baseline.
@@ -14,8 +14,10 @@ Milestone 0 feature work and audit corrections are complete. The bounded authori
 - File access: panel-selected projects receive app-scoped bookmarks in restrictive app-owned storage; subsequent open/revert/save resolves and repairs access, balances security-scope lifetime, coordinates actual package I/O, and detects external change/move/delete without replacing canonical content. The unsigned Release candidate declares App Sandbox and user-selected read/write; Debug/XCTest remains credential-free.
 - Authoring runway: isolated native prototypes and a deterministic layout subset retain 25 raw measurement series at 100/10,000 objects, exact browser-geometry parity on the supported subset, a real 500-asset storage exercise, environment/memory/limitations, and five focused behavioral tests. ADR-0013 selects a SiteForge-owned layout engine with an isolated standards oracle; ADR-0014 selects SwiftUI chrome plus an AppKit viewport and bounded Core Animation composition, with Metal optional.
 - Canvas viewport: Foundation-only typed world/viewport/device geometry drives a scene-owned AppKit viewport with 25–800% cursor-anchored zoom, bounded pan, deterministic fit/resize, Retina-aware conversion, keyboard and accessibility commands, and revision/generation-scoped actor preparation. Viewport convenience state does not enter canonical project persistence.
-- Verification: `./sf verify` passed on 2026-07-21 with 161 unit tests and 18 UI tests, zero failures.
-- Next READY item: `SF-AUTHORING-002`, the deterministic layout-engine foundation subset, followed by the native renderer/overlay slice.
+- Deterministic layout: the Foundation-only production engine validates one bounded stable-ID graph and computes immutable revision/generation/viewport-tagged frames and provenance for fixed/intrinsic/fill sizing, min/max constraints, padding, gap, alignment, horizontal/vertical stacks, nesting, visible/clip overflow, and responsive widths. Percentage/automatic sizing, baseline alignment, scrolling overflow, unbounded or cyclic graphs, and browser fallback are typed unsupported states rather than approximations. WebKit remains isolated to the evidence/export-oracle adapter.
+- Layout evidence: optimized named-host measurements retain raw samples and memory. Production P95 was 0.232 ms at 100 nodes and 22.290 ms at 10,000 nodes; browser geometry matched exactly at 320/768/1,440 points and across the complete 100-/10,000-node fixtures. The large result exceeds one 60 Hz interval and is off-main capacity evidence, not an incremental-layout, renderer, or release-budget pass.
+- Verification: `./sf build`, `./sf test`, and `./sf verify` passed on 2026-07-21 with 172 unit tests and 18 UI tests, zero failures.
+- Next READY item: `SF-AUTHORING-003`, the AppKit/Core Animation canvas renderer and editor-overlay boundary.
 - Open platform decision: minimum supported macOS and reference hardware (`OD-001`). Persistence representation (`OD-002`) is resolved by ADR-0001/0003/0007. Open release decisions are publisher/public bundle identity (`OD-012`) and distribution trust level (`OD-013`). No publishing, distribution signing, or notarization is authorized.
 
 Detailed requirement evidence remains in `IMPLEMENTATION_STATUS.md`; ordered work remains in `CODEX_QUEUE.md`.

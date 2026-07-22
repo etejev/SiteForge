@@ -24,6 +24,10 @@ CANVAS_VIEWPORT_SLICE = [
     "SiteForge/DocumentModel.swift",
     "SiteForge/CanvasViewport.swift",
 ]
+LAYOUT_ENGINE_SLICE = [
+    "SiteForge/DocumentModel.swift",
+    "SiteForge/LayoutEngine.swift",
+]
 HEADLESS_FORBIDDEN = {"SwiftUI", "AppKit", "Metal", "WebKit"}
 
 
@@ -44,7 +48,9 @@ def typecheck(name: str, sources: list[str]) -> None:
         fail(f"Headless {name} slice failed to type-check:\n{result.stdout}{result.stderr}")
 
 
-for source in dict.fromkeys(MODEL_SLICE + ENGINE_SLICE + RUNWAY_HEADLESS_SLICE + CANVAS_VIEWPORT_SLICE):
+for source in dict.fromkeys(
+    MODEL_SLICE + ENGINE_SLICE + RUNWAY_HEADLESS_SLICE + CANVAS_VIEWPORT_SLICE + LAYOUT_ENGINE_SLICE
+):
     forbidden = imports(source) & HEADLESS_FORBIDDEN
     if forbidden:
         fail(f"{source} imports forbidden UI framework(s): {', '.join(sorted(forbidden))}")
@@ -53,12 +59,15 @@ typecheck("canonical-model", MODEL_SLICE)
 typecheck("command-and-persistence", ENGINE_SLICE)
 typecheck("authoring-runway", RUNWAY_HEADLESS_SLICE)
 typecheck("canvas-viewport", CANVAS_VIEWPORT_SLICE)
+typecheck("deterministic-layout", LAYOUT_ENGINE_SLICE)
 
 project = (ROOT / "SiteForge.xcodeproj/project.pbxproj").read_text()
 if "WorkspaceSceneComposition.swift in Sources" not in project:
     fail("WorkspaceSceneComposition.swift is not compiled into the application target.")
 if "CanvasViewport.swift in Sources" not in project:
     fail("The headless canvas viewport is not compiled into the application target.")
+if "LayoutEngine.swift in Sources" not in project:
+    fail("The headless deterministic layout engine is not compiled into the application target.")
 app_sources = re.search(
     r"600000000000000000000001 /\* Sources \*/ = .*?files = \((.*?)\);",
     project,

@@ -6,6 +6,10 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- A production, Foundation-only deterministic layout-engine foundation with stable typed node identity, versioned immutable snapshots, revision/generation/viewport-scoped results, exact frame provenance, bounded graph validation, cooperative cancellation, stale-result rejection, and privacy-preserving diagnostics.
+- Explicit fixed, intrinsic, and fill sizing; min/max constraints; padding; gap; start/center/end/stretch alignment; horizontal/vertical stacks; nesting; visible/clip overflow; and responsive-width semantics, with percentage/automatic sizing, baseline alignment, and scroll overflow rejected instead of approximated.
+- Reproducible optimized 100-/10,000-node layout and isolated WebKit geometry-oracle evidence with raw timings, memory samples, exact declared-width parity, environment, and limitations.
+
 - A production canvas viewport foundation with compile-time-separated world, viewport, and device geometry; deterministic precision and error policies; Retina-aware reversible transforms; 25–800% cursor-anchored zoom; bounded pan; resize, reset, fit-document, and fit-width behavior.
 - A native AppKit viewport input and accessibility surface embedded in the existing material-aware SwiftUI shell, with keyboard/menu commands, focus traversal, semantic values/actions, announcements, and scene-owned noncanonical state.
 - Actor-isolated immutable viewport-scene preparation tagged by document, revision, scene, and viewport generation, including cancellation/stale-result rejection and deterministic 100-/10,000-object coverage.

@@ -5449,6 +5449,8 @@ Module code  0501
 
 Defines boxes, intrinsic sizes, containing blocks, formatting contexts, constraints, and deterministic layout.
 
+Implementation note (2026-07-21): `SF-AUTHORING-002` verifies a bounded production engine subset for `SF-0501-001` through `SF-0501-008`: headless versioned stable-ID snapshots, fixed/intrinsic/fill sizing, min/max, padding, gap, start/center/end/stretch alignment, horizontal/vertical stacks, nesting, visible/clip overflow, responsive widths, typed validation, cancellation/stale-result rejection, deterministic digests, and isolated browser-oracle parity. The normative requirements remain Partial overall because canonical authored property commands/persistence, inspector and accessibility UI, renderer integration, production text shaping, incremental layout, preview/export UI, and owner-approved hardware budgets are not part of this slice.
+
 #### Scope and Outcomes
 
 - Primary objects: layout box, containing block, intrinsic size, constraint, fragment, baseline.
