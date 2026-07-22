@@ -2,6 +2,20 @@ import XCTest
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
+    func testNativeCanvasRendererAdoptsAuthoredObjectsAndPreservesInput() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        let rendered = NSPredicate { object, _ in
+            ((object as? XCUIElement)?.value as? String)?.contains("rendered objects 2") == true
+        }
+        expectation(for: rendered, evaluatedWith: canvas)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(canvas.label, "Canvas viewport")
+        canvas.click()
+        XCTAssertTrue((canvas.value as? String)?.contains("interactions 1") == true)
+    }
+
     private var fixtureLease: RepositoryTestFixture!
     private var fixtureRoot: URL { fixtureLease.url }
     private var recoveryDirectory: URL {
@@ -343,17 +357,17 @@ final class SiteForgeLaunchTests: XCTestCase {
     @MainActor
     func testDeterminateIndeterminateAndNonCancelableLoadingSurfaces() throws {
         let indeterminate = launchScenario("loadingIndeterminate")
-        XCTAssertTrue(indeterminate.descendants(matching: .any)["launch.progress.indeterminate"].exists)
-        XCTAssertTrue(indeterminate.buttons["launch.cancel"].exists)
+        XCTAssertTrue(indeterminate.descendants(matching: .any)["launch.progress.indeterminate"].waitForExistence(timeout: 5))
+        XCTAssertTrue(indeterminate.buttons["launch.cancel"].waitForExistence(timeout: 5))
         indeterminate.terminate()
 
         let determinate = launchScenario("loadingDeterminate")
-        XCTAssertTrue(determinate.descendants(matching: .any)["launch.progress.determinate"].exists)
-        XCTAssertTrue(determinate.staticTexts["Restoring document history…"].exists)
+        XCTAssertTrue(determinate.descendants(matching: .any)["launch.progress.determinate"].waitForExistence(timeout: 5))
+        XCTAssertTrue(determinate.staticTexts["Restoring document history…"].waitForExistence(timeout: 5))
         determinate.terminate()
 
         let nonCancelable = launchScenario("loadingNonCancelable")
-        XCTAssertTrue(nonCancelable.descendants(matching: .any)["launch.nonCancelable"].exists)
+        XCTAssertTrue(nonCancelable.descendants(matching: .any)["launch.nonCancelable"].waitForExistence(timeout: 5))
         XCTAssertFalse(nonCancelable.buttons["launch.cancel"].exists)
     }
 

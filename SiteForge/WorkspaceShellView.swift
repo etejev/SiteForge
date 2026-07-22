@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import QuartzCore
 
 struct WorkspaceShellView: View {
     @ObservedObject var state: WorkspaceShellState
@@ -355,19 +356,12 @@ private struct CanvasPlaceholderView: View {
                         .focusable()
                         .focused(focus, equals: .viewportCanvas)
 
-                    VStack(spacing: 8) {
-                        Image(systemName: "viewfinder")
-                            .font(.title)
-                        Text("Viewport Foundation")
-                            .font(.headline)
-                        Text("Rendering and selection connect in later authoring slices.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    if state.canvasRenderPlan == nil {
+                        ProgressView("Preparing canvas…")
+                            .controlSize(.small)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
-                    .padding(16)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
                 }
                 .background(Color(nsColor: .underPageBackgroundColor))
                 .accessibilityElement(children: .contain)
@@ -670,6 +664,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
     func updateNSView(_ view: NativeCanvasViewportView, context: Context) {
         configure(view)
         view.viewportState = state.viewportState
+        view.renderPlan = state.canvasRenderPlan
         view.accessibilityViewportValue = state.viewportAccessibilityValue
         view.needsDisplay = true
         let width = Double(view.bounds.width)
@@ -687,6 +682,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
     private func configure(_ view: NativeCanvasViewportView) {
         view.setAccessibilityIdentifier("canvas.interaction")
         view.viewportState = state.viewportState
+        view.renderPlan = state.canvasRenderPlan
         view.onInteraction = { state.noteCanvasInteraction() }
         view.onPan = { state.panViewport(by: $0) }
         view.onMagnify = { factor, anchor in state.magnify(by: factor, around: anchor) }
@@ -698,7 +694,12 @@ private struct NativeCanvasViewport: NSViewRepresentable {
 }
 
 private final class NativeCanvasViewportView: NSView {
-    var viewportState = try! CanvasViewportState()
+    var viewportState = try! CanvasViewportState() {
+        didSet { applyCompositorTransformIfPossible() }
+    }
+    var renderPlan: CanvasRenderPlan? {
+        didSet { adoptRenderPlan() }
+    }
     var accessibilityViewportValue = "Zoom 100 percent"
     var onInteraction: (() -> Void)?
     var onPan: ((ViewportVector) -> Void)?
@@ -707,13 +708,34 @@ private final class NativeCanvasViewportView: NSView {
     var onZoomIn: (() -> Void)?
     var onZoomOut: (() -> Void)?
     var onReset: (() -> Void)?
+    private let contentContainer = CALayer()
+    private let overlayContainer = CALayer()
+    private var rasterViewportState: CanvasViewportState?
+    private var virtualAccessibilityElements: [NSAccessibilityElement] = []
+    private var focusedAccessibilityObjectID: NodeID?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        contentContainer.name = "renderer.authored-content"
+        overlayContainer.name = "renderer.editor-overlays"
+        contentContainer.masksToBounds = true
+        overlayContainer.masksToBounds = true
+        layer?.addSublayer(contentContainer)
+        layer?.addSublayer(overlayContainer)
+    }
+
+    required init?(coder: NSCoder) { nil }
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .group }
     override func accessibilityLabel() -> String? { "Canvas viewport" }
-    override func accessibilityValue() -> Any? { accessibilityViewportValue }
+    override func accessibilityValue() -> Any? {
+        "\(accessibilityViewportValue); rendered objects \(renderPlan?.authoredObjects.count ?? 0)"
+    }
+    override func accessibilityChildren() -> [Any]? { virtualAccessibilityElements }
     override func accessibilityHelp() -> String? {
         "Scroll to pan. Pinch to zoom around the pointer. Use the View menu for keyboard controls."
     }
@@ -727,11 +749,13 @@ private final class NativeCanvasViewportView: NSView {
 
     override func becomeFirstResponder() -> Bool {
         needsDisplay = true
+        rebuildOverlay()
         return super.becomeFirstResponder()
     }
 
     override func resignFirstResponder() -> Bool {
         needsDisplay = true
+        rebuildOverlay()
         return super.resignFirstResponder()
     }
 
@@ -742,12 +766,23 @@ private final class NativeCanvasViewportView: NSView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        contentContainer.frame = bounds
+        overlayContainer.frame = bounds
+        CATransaction.commit()
         notifyResize()
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         onInteraction?()
+        guard let plan = renderPlan else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let world = try? viewportState.transform.viewportToWorld(
+            ViewportPoint(x: point.x, y: point.y)
+        ) else { return }
+        _ = CanvasRendererCore().hitTest(world, in: plan)
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -818,5 +853,145 @@ private final class NativeCanvasViewportView: NSView {
         let size = ViewportSize(width: bounds.width, height: bounds.height)
         let scale = Double(window?.backingScaleFactor ?? 2)
         DispatchQueue.main.async { [weak self] in self?.onResize?(size, scale) }
+    }
+
+    private func adoptRenderPlan() {
+        guard let plan = renderPlan else { return }
+        if plan.invalidation == .compositorOnly, rasterViewportState != nil {
+            applyCompositorTransformIfPossible()
+            rebuildAccessibility(plan)
+            return
+        }
+        let objectMap = Dictionary(uniqueKeysWithValues: plan.authoredObjects.map { ($0.id, $0) })
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        contentContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        for tile in plan.tiles {
+            let scale = viewportState.pixelRatio.value
+            let tileLayer = CanvasContentTileLayer()
+            tileLayer.name = "renderer.tile.\(tile.id.column).\(tile.id.row)"
+            tileLayer.contentsScale = scale
+            tileLayer.frame = CGRect(
+                x: tile.deviceFrame.origin.x / scale,
+                y: tile.deviceFrame.origin.y / scale,
+                width: tile.deviceFrame.size.width / scale,
+                height: tile.deviceFrame.size.height / scale
+            )
+            tileLayer.viewportState = viewportState
+            tileLayer.objects = tile.objectIDs.compactMap { objectMap[$0] }
+            tileLayer.tileOrigin = tileLayer.frame.origin
+            tileLayer.setNeedsDisplay()
+            contentContainer.addSublayer(tileLayer)
+        }
+        contentContainer.setAffineTransform(.identity)
+        rasterViewportState = viewportState
+        rebuildOverlay()
+        rebuildAccessibility(plan)
+        CATransaction.commit()
+    }
+
+    private func applyCompositorTransformIfPossible() {
+        guard let raster = rasterViewportState else { return }
+        let ratio = viewportState.zoom.value / raster.zoom.value
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        contentContainer.setAffineTransform(CGAffineTransform(
+            a: ratio,
+            b: 0,
+            c: 0,
+            d: ratio,
+            tx: (raster.worldOrigin.x - viewportState.worldOrigin.x) * viewportState.zoom.value,
+            ty: (raster.worldOrigin.y - viewportState.worldOrigin.y) * viewportState.zoom.value
+        ))
+        CATransaction.commit()
+    }
+
+    private func rebuildOverlay() {
+        overlayContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        let focus = CAShapeLayer()
+        focus.name = "renderer.overlay.focus"
+        focus.frame = bounds
+        focus.path = CGPath(rect: bounds.insetBy(dx: 2, dy: 2), transform: nil)
+        focus.fillColor = nil
+        focus.strokeColor = NSColor.keyboardFocusIndicatorColor.cgColor
+        focus.lineWidth = 3
+        focus.isHidden = window?.firstResponder !== self
+        overlayContainer.addSublayer(focus)
+    }
+
+    private func rebuildAccessibility(_ plan: CanvasRenderPlan) {
+        let repairedFocus = CanvasAccessibilityFocusPolicy.repairedFocus(
+            previousObjectID: focusedAccessibilityObjectID,
+            elements: plan.accessibilityElements
+        )
+        let focusChanged = repairedFocus != focusedAccessibilityObjectID
+        focusedAccessibilityObjectID = repairedFocus
+        virtualAccessibilityElements = plan.accessibilityElements.map { item in
+            let local = CGPoint(x: item.frame.origin.x, y: item.frame.origin.y)
+            let screenOrigin = window?.convertPoint(toScreen: convert(local, to: nil)) ?? .zero
+            let element = NSAccessibilityElement()
+            element.setAccessibilityRole(.group)
+            element.setAccessibilityFrame(NSRect(
+                x: screenOrigin.x,
+                y: screenOrigin.y,
+                width: item.frame.size.width,
+                height: item.frame.size.height
+            ))
+            element.setAccessibilityLabel(item.label)
+            element.setAccessibilityParent(self)
+            element.setAccessibilityIdentifier("canvas.object.\(item.objectID.description)")
+            return element
+        }
+        NSAccessibility.post(element: self, notification: .layoutChanged)
+        if focusChanged,
+           let focusedAccessibilityObjectID,
+           let focusedIndex = plan.accessibilityElements.firstIndex(where: {
+               $0.objectID == focusedAccessibilityObjectID
+           }) {
+            let focusedElement = virtualAccessibilityElements[focusedIndex]
+            NSAccessibility.post(element: focusedElement, notification: .focusedUIElementChanged)
+        }
+    }
+}
+
+private final class CanvasContentTileLayer: CALayer {
+    var viewportState: CanvasViewportState?
+    var objects: [CanvasRenderObject] = []
+    var tileOrigin = CGPoint.zero
+
+    override func draw(in context: CGContext) {
+        guard let viewportState else { return }
+        for object in objects where object.isVisible {
+            guard let origin = try? viewportState.transform.worldToViewport(object.frame.origin) else { continue }
+            let rect = CGRect(
+                x: origin.x - tileOrigin.x,
+                y: origin.y - tileOrigin.y,
+                width: object.frame.size.width * viewportState.zoom.value,
+                height: object.frame.size.height * viewportState.zoom.value
+            )
+            context.saveGState()
+            if let clip = object.clipRect,
+               let clipOrigin = try? viewportState.transform.worldToViewport(clip.origin) {
+                context.clip(to: CGRect(
+                    x: clipOrigin.x - tileOrigin.x,
+                    y: clipOrigin.y - tileOrigin.y,
+                    width: clip.size.width * viewportState.zoom.value,
+                    height: clip.size.height * viewportState.zoom.value
+                ))
+            }
+            let color: NSColor = switch object.style {
+            case .canvas: .underPageBackgroundColor
+            case .page: .controlAccentColor.withAlphaComponent(0.16)
+            case .container: .controlAccentColor.withAlphaComponent(0.28)
+            case .imagePlaceholder: .systemPurple.withAlphaComponent(0.22)
+            case .textPlaceholder: .labelColor.withAlphaComponent(0.12)
+            }
+            context.setFillColor(color.cgColor)
+            context.fill(rect)
+            context.setStrokeColor(NSColor.separatorColor.cgColor)
+            context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
+            context.stroke(rect)
+            context.restoreGState()
+        }
     }
 }

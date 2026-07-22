@@ -4,11 +4,20 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-AUTHORING-003` Implement the AppKit/Core Animation canvas renderer and editor-overlay boundary.
-  - Requirements: `SF-0407-001` through `SF-0407-008`.
-  - Acceptance: an AppKit viewport renders immutable layout/scene snapshots through bounded Core Animation tiles or surfaces; hit testing, selection overlays, focus, accessibility virtualization, and preview/export exclusion remain separate; pan/zoom and incremental edits avoid full-scene rerasterization; Metal remains an optional backend.
-  - Evidence and tests required: rendering/hit-test/overlay isolation, dirty-region and compositor-transform behavior, native-material compatibility, accessibility identity, keyboard input, resize/scroll, cancellation/stale adoption, display-link/signpost evidence, bounded cache/memory, and 100-/10,000-object fixtures.
-  - Dependencies: `SF-AUTHORING-001` and `SF-AUTHORING-002`; follow ADR-0014.
+- [ ] `SF-AUTHORING-004` Implement the deterministic selection model and renderer-overlay integration.
+  - Requirements: `SF-0402-001` through `SF-0402-008` (bounded selection slice).
+  - Acceptance: stable ordered selection, primary/anchor identity, pointer and keyboard selection commands, hidden/locked/removed-node repair, undo-neutral convenience state, separate selection overlays, accessibility semantics, and save/reopen document-boundary behavior integrate with the renderer without adding transforms.
+  - Dependencies: `SF-AUTHORING-003`; follow ADR-0014.
+
+- [ ] `SF-AUTHORING-005` Implement transactional insertion foundations for frame and text nodes.
+  - Requirements: `SF-0405-001` through `SF-0405-008` (bounded frame/text insertion slice).
+  - Acceptance: central typed commands create stable nodes through one atomic transaction, validate parent/route/layout ownership, cancel without mutation, persist/restore/undo/redo, select the committed node, and render it without adding resize, snapping, media, or component authoring.
+  - Dependencies: `SF-AUTHORING-004`, canonical command/persistence foundations, and the layout/renderer slices.
+
+- [ ] `SF-AUTHORING-006` Implement deterministic geometry-transform sessions for selected nodes.
+  - Requirements: `SF-0403-001` through `SF-0403-008` (bounded move/resize slice).
+  - Acceptance: draft/preview/commit move and resize sessions use stable identity, keyboard and pointer parity, one transaction/inverse per gesture, cancellation and stale-result neutrality, bounded handles, accessible numeric operation, and renderer dirty-region updates; snapping/guides remain later work.
+  - Dependencies: `SF-AUTHORING-004` and `SF-AUTHORING-005`.
 
 ## IN PROGRESS
 
@@ -19,6 +28,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-AUTHORING-003` Implement the AppKit/Core Animation canvas renderer and editor-overlay boundary.
+  - Requirements: `SF-0407-001` through `SF-0407-008` (bounded renderer slice; the normative module remains Partial overall).
+  - Plan: define a Foundation-only immutable render-scene contract with typed object/surface/overlay/accessibility/request identities, deterministic paint and clip rules, reverse-order hit testing, bounded tiling/cache/virtualization, dirty-region diffing, compositor-only viewport updates, typed failures, cancellation, exact adoption gates, and redacted diagnostics; adapt the existing AppKit viewport to bounded Core Animation content-tile and editor-overlay containers while keeping SwiftUI as chrome and keeping preview/export inputs structurally overlay-free; exercise the real running surface plus 100-/10,000-object fixtures, retain named-environment timing/memory/frame/stall and visual-inspection evidence, and preserve later canonical editing, selection, export generation, and Metal work as explicit exclusions.
+  - Supported: immutable document/revision/scene/scene-generation/viewport-generation/scale-tagged scenes; stable object/surface/overlay/accessibility identities; deterministic paint order; visibility and clipping; reverse paint-order hit testing; bounded 512-device-pixel tile membership; two-generation/96-MiB cache policy; 256-element visible accessibility virtualization; old/new dirty regions; compositor-only pan/zoom; Retina scale invalidation; separate authored and editor Core Animation trees; overlay-free preview snapshots; cancellation, typed failure, exact stale adoption, last-valid display preservation, keyboard/pointer focus, native-material pass-through, and redacted diagnostics.
+  - Explicitly unsupported: canonical render-pass properties or history, element selection/editing, insertion, transforms, snapping/guides, inspector mutations, text shaping, image/resource decoding, effects, export generation, Metal, offscreen accessibility navigation policy, and owner-approved release budgets. The 10,000-object full/dirty planner exceeds one 60 Hz interval and therefore remains a later incremental-indexing optimization.
+  - Evidence: 11 `CanvasRendererTests`, one actual-app UI renderer journey, headless architecture enforcement, and schema-v1 retained evidence cover deterministic rendering/hit-test/overlay/accessibility separation, focus preservation and deterministic repair, invalid/cancelled/stale inputs, cache/tile/virtualization bounds, main-actor responsiveness, 100-/10,000-object scale, raw timing/memory, and an idle display-link cadence probe. P95 was 1.084/75.980 ms for full 100/10,000-object plans, 1.172/113.634 ms for one-object dirty plans, and 0.001/0.107 ms for hit tests; all 10,000-object planning samples missed 16.67 ms. `./sf build`, `./sf test`, and `./sf verify` passed on 2026-07-21 with 183 unit tests and 19 UI tests, zero failures.
+  - Dependencies: completed after `SF-AUTHORING-001` and `SF-AUTHORING-002`; follows ADR-0014. `SF-AUTHORING-004` is next READY.
 
 - [x] `SF-AUTHORING-002` Implement the deterministic layout-engine foundation subset.
   - Requirements: `SF-0501-001` through `SF-0501-008` (bounded engine slice; the requirements remain Partial overall).

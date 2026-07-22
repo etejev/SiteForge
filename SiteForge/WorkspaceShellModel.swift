@@ -1,5 +1,10 @@
 import Combine
+import os
 import SwiftUI
+
+private enum CanvasRendererSignposts {
+    static let log = OSLog(subsystem: "app.siteforge.SiteForge", category: "canvas-renderer")
+}
 
 enum CanvasTool: String, CaseIterable, Identifiable {
     case select
@@ -213,6 +218,8 @@ final class WorkspaceShellState: ObservableObject {
     }
     @Published private(set) var viewportState: CanvasViewportState
     @Published private(set) var preparedViewportScene: PreparedCanvasViewportScene?
+    @Published private(set) var canvasRenderPlan: CanvasRenderPlan?
+    @Published private(set) var canvasRendererFailure: CanvasRendererError?
     @Published private(set) var viewportFailure: CanvasViewportError?
     @Published private(set) var lastViewportAnnouncement = "Canvas viewport at 100 percent"
     @Published private(set) var canvasInteractionCount = 0
@@ -222,10 +229,15 @@ final class WorkspaceShellState: ObservableObject {
     private var documentSessionObservation: AnyCancellable?
     private let viewportRegistry = CanvasViewportCommandRegistry()
     private let viewportPreparer: CanvasViewportScenePreparer
+    private let renderWorker = CanvasRenderWorker()
+    private let renderSurfaceID = CanvasRenderSurfaceID()
+    let canvasRenderDiagnostics = CanvasRenderDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
     private let announcementPoster: AccessibilityAnnouncementPoster
     private var viewportDocumentID: DocumentID
     private var preparationTask: Task<Void, Never>?
+    private var renderTask: Task<Void, Never>?
+    private var previousRenderScene: CanvasRenderSceneSnapshot?
 
     init(
         documentSession: DocumentSession = DocumentSession(),
@@ -372,6 +384,8 @@ final class WorkspaceShellState: ObservableObject {
     func cancelViewportPreparation() {
         preparationTask?.cancel()
         preparationTask = nil
+        renderTask?.cancel()
+        renderTask = nil
     }
 
     func prepareViewportScene(objects: [CanvasViewportSceneObject]) async throws -> PreparedCanvasViewportScene {
@@ -432,6 +446,9 @@ final class WorkspaceShellState: ObservableObject {
             pixelRatio: viewportState.pixelRatio
         )
         preparedViewportScene = nil
+        canvasRenderPlan = nil
+        previousRenderScene = nil
+        canvasRendererFailure = nil
         viewportFailure = nil
         lastViewportAnnouncement = "Canvas viewport reset for the opened document"
         announcementPoster.post(lastViewportAnnouncement)
@@ -447,12 +464,111 @@ final class WorkspaceShellState: ObservableObject {
             guard let self else { return }
             do {
                 _ = try await prepareViewportScene(objects: objects)
+                scheduleRendererPreparation()
             } catch CanvasViewportError.cancelled {
                 // Cancellation and stale completion are deliberately state neutral.
             } catch CanvasViewportError.staleResult {
                 // A newer generation owns adoption.
             } catch let error as CanvasViewportError {
                 viewportFailure = error
+            } catch {}
+        }
+    }
+
+    private func scheduleRendererPreparation() {
+        renderTask?.cancel()
+        let start = DispatchTime.now().uptimeNanoseconds
+        let identity = CanvasRenderRequestIdentity(
+            documentID: documentSession.document.id,
+            revision: documentSession.document.revision,
+            sceneID: viewportState.sceneID,
+            sceneGeneration: documentSession.document.revision,
+            viewportGeneration: viewportState.generation,
+            scale: viewportState.pixelRatio
+        )
+        let objects = documentSession.document.pages.flatMap(\.nodes).enumerated().map { index, node in
+            let column = index % 10
+            let row = index / 10
+            return CanvasRenderObject(
+                id: node.id,
+                frame: WorldRect(
+                    origin: WorldPoint(x: 48 + Double(column * 120), y: 48 + Double(row * 88)),
+                    size: WorldSize(width: 104, height: 68)
+                ),
+                clipRect: viewportState.contentBounds,
+                paintOrder: index,
+                style: index.isMultiple(of: 3) ? .container : .page,
+                isVisible: true,
+                accessibilityLabel: "Canvas object \(index + 1)"
+            )
+        }
+        guard !objects.isEmpty else { return }
+        let scene = CanvasRenderSceneSnapshot(identity: identity, surfaceID: renderSurfaceID, objects: objects)
+        let overlays = CanvasEditorOverlaySnapshot(identity: identity, overlays: [])
+        let viewport = viewportState
+        let previous = previousRenderScene
+        let signpostID = OSSignpostID(log: CanvasRendererSignposts.log)
+        os_signpost(
+            .begin,
+            log: CanvasRendererSignposts.log,
+            name: "CanvasRenderPrepare",
+            signpostID: signpostID,
+            "generation=%{public}llu",
+            identity.viewportGeneration
+        )
+        renderTask = Task { @MainActor [weak self] in
+            defer {
+                os_signpost(
+                    .end,
+                    log: CanvasRendererSignposts.log,
+                    name: "CanvasRenderPrepare",
+                    signpostID: signpostID
+                )
+            }
+            guard let self else { return }
+            do {
+                let plan = try await renderWorker.prepare(
+                    scene: scene,
+                    overlays: overlays,
+                    viewport: viewport,
+                    previous: previous
+                )
+                let expected = CanvasRenderRequestIdentity(
+                    documentID: documentSession.document.id,
+                    revision: documentSession.document.revision,
+                    sceneID: viewportState.sceneID,
+                    sceneGeneration: documentSession.document.revision,
+                    viewportGeneration: viewportState.generation,
+                    scale: viewportState.pixelRatio
+                )
+                try CanvasRenderAdoptionGate().validate(plan, expected: expected)
+                previousRenderScene = scene
+                canvasRenderPlan = plan
+                canvasRendererFailure = nil
+                await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
+                    operation: "prepare", plan: plan, identity: identity, surfaceID: renderSurfaceID,
+                    durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+                    result: .success
+                ))
+            } catch CanvasRendererError.cancelled {
+                await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
+                    operation: "prepare", plan: nil, identity: identity, surfaceID: renderSurfaceID,
+                    durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+                    result: .cancelled, failureCategory: "cancelled"
+                ))
+            } catch CanvasRendererError.staleResult {
+                await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
+                    operation: "adopt", plan: nil, identity: identity, surfaceID: renderSurfaceID,
+                    durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+                    result: .stale, failureCategory: "stale-result"
+                ))
+            } catch let error as CanvasRendererError {
+                canvasRendererFailure = error
+                await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
+                    operation: "prepare", plan: nil, identity: identity, surfaceID: renderSurfaceID,
+                    durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+                    result: .failure, failureCategory: String(describing: error)
+                ))
             } catch {}
         }
     }

@@ -59,6 +59,10 @@ if ! scripts/check-layout-foundation-evidence.py; then
   failed=1
 fi
 
+if ! scripts/check-canvas-renderer-evidence.py; then
+  failed=1
+fi
+
 entitlement_value() {
   /usr/libexec/PlistBuddy -c "Print :$1" SiteForge/SiteForge.entitlements 2>/dev/null
 }
@@ -67,6 +71,11 @@ if [[ "$(entitlement_value com.apple.security.app-sandbox)" != true ]] ||
    [[ "$(entitlement_value com.apple.security.files.user-selected.read-write)" != true ]] ||
    [[ "$(entitlement_value com.apple.security.files.bookmarks.app-scope)" != true ]]; then
   print -u2 "The Release-candidate sandbox entitlement policy is incomplete."
+  failed=1
+fi
+
+if ! cmp -s SiteForge/SiteForge.entitlements Tests/Fixtures/DistributionPolicy.entitlements; then
+  print -u2 "The bundled distribution-policy test fixture has drifted from SiteForge.entitlements."
   failed=1
 fi
 

@@ -6,6 +6,9 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- A production AppKit/Core Animation canvas renderer foundation with immutable identity-tagged scenes, bounded content tiles, structurally separate editor overlays, deterministic paint/clipping/visibility rules, reverse-order hit testing, dirty-region invalidation, and compositor-only pan/zoom.
+- Stable virtual canvas accessibility identities and focus repair, bounded deterministic cache policy, cancellation/stale-result protection, overlay-free preview snapshots, privacy-preserving renderer signposts and diagnostics, and retained 100-/10,000-object timing/memory/display-link evidence.
+
 - A production, Foundation-only deterministic layout-engine foundation with stable typed node identity, versioned immutable snapshots, revision/generation/viewport-scoped results, exact frame provenance, bounded graph validation, cooperative cancellation, stale-result rejection, and privacy-preserving diagnostics.
 - Explicit fixed, intrinsic, and fill sizing; min/max constraints; padding; gap; start/center/end/stretch alignment; horizontal/vertical stacks; nesting; visible/clip overflow; and responsive-width semantics, with percentage/automatic sizing, baseline alignment, and scroll overflow rejected instead of approximated.
 - Reproducible optimized 100-/10,000-node layout and isolated WebKit geometry-oracle evidence with raw timings, memory samples, exact declared-width parity, environment, and limitations.

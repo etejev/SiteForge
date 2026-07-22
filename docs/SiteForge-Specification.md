@@ -4890,6 +4890,8 @@ Module code  0407
 
 Defines render passes for content, selection, guides, drop targets, comments, presence, and diagnostics.
 
+Implementation note (2026-07-21): `SF-AUTHORING-003` verifies a bounded production renderer subset for `SF-0407-001` through `SF-0407-008`: immutable exact-identity scenes, deterministic paint/clipping/visibility and reverse-order hit testing, bounded tile/cache/accessibility virtualization, dirty regions, compositor-only viewport updates, separate authored/editor Core Animation trees, overlay-free preview snapshots, cancellation/stale preservation, AppKit keyboard/pointer/accessibility integration, and retained scale evidence. The normative requirements remain Partial overall because canonical render-pass commands/persistence/history, selection/editing, production text/image/effects, export generation, offscreen accessibility navigation, incremental indexing, interactive reference-hardware performance, and OD-001 budgets are not part of this slice.
+
 #### Scope and Outcomes
 
 - Primary objects: render pass, overlay, invalidation region, tile, cache, occlusion.
