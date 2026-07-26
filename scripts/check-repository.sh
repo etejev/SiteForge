@@ -71,6 +71,11 @@ if ! scripts/check-insertion-foundation-evidence.py; then
   failed=1
 fi
 
+if ! scripts/select-test-scope.py --self-test; then
+  print -u2 "Test-level selection checks failed."
+  failed=1
+fi
+
 entitlement_value() {
   /usr/libexec/PlistBuddy -c "Print :$1" SiteForge/SiteForge.entitlements 2>/dev/null
 }

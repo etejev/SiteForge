@@ -7,6 +7,7 @@ SCHEME=${SITEFORGE_SCHEME:-SiteForge}
 DESTINATION=${SITEFORGE_DESTINATION:-platform=macOS}
 CODEX_BIN=${SITEFORGE_CODEX_BIN:-}
 TEST_FIXTURE_ROOT="$ROOT/.siteforge-test-fixtures"
+TEST_SCOPE_SELECTOR="$ROOT/scripts/select-test-scope.py"
 
 if [[ -z "$CODEX_BIN" ]]; then
   if command -v codex >/dev/null 2>&1; then
@@ -52,10 +53,50 @@ build_app() {
 }
 
 test_app() {
+  local level=${1:-full}
+  local base=${2:-${SITEFORGE_TEST_BASE:-origin/main}}
+  typeset -a test_arguments
+
+  case "$level" in
+    full|all)
+      level=full
+      ;;
+    half|core)
+      level=half
+      test_arguments=(-only-testing:SiteForgeTests)
+      ;;
+    quick|smoke)
+      level=quick
+      test_arguments=(
+        -only-testing:SiteForgeTests/AppMetadataTests
+        -only-testing:SiteForgeTests/ArchitectureBoundaryTests
+      )
+      ;;
+    changed|impacted)
+      level=changed
+      local selection
+      selection=$("$TEST_SCOPE_SELECTOR" --root "$ROOT" --base "$base")
+      if [[ "$selection" != FULL ]]; then
+        local selector
+        for selector in "${(@f)selection}"; do
+          [[ -n "$selector" ]] && test_arguments+=("-only-testing:$selector")
+        done
+      else
+        level="changed → full"
+      fi
+      ;;
+    *)
+      print -u2 "Unknown test level: $level"
+      print -u2 "Choose quick, changed, half, or full."
+      return 2
+      ;;
+  esac
+
+  print "Running SiteForge test level: $level"
   resolve_container
   cleanup_test_fixtures
   trap cleanup_test_fixtures EXIT
-  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" test
+  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" test "${test_arguments[@]}"
   cleanup_test_fixtures
   trap - EXIT
 }
@@ -82,7 +123,7 @@ SiteForge local commands
 
   ./sf dev             Build and launch SiteForge locally
   ./sf build           Build the macOS app
-  ./sf test            Run the test suite
+  ./sf test [level]    Run quick, changed, half, or full tests (default full)
   ./sf verify          Run repository checks, build, and tests
   ./sf watch           Re-run verification when source files change
   ./sf next            Ask Codex to complete the next ready queue item
@@ -92,7 +133,8 @@ SiteForge local commands
 
 Optional environment variables:
   SITEFORGE_SCHEME, SITEFORGE_WORKSPACE, SITEFORGE_PROJECT,
-  SITEFORGE_DESTINATION, SITEFORGE_DERIVED_DATA, SITEFORGE_CODEX_BIN
+  SITEFORGE_DESTINATION, SITEFORGE_DERIVED_DATA, SITEFORGE_CODEX_BIN,
+  SITEFORGE_TEST_BASE (default origin/main for the changed level)
 EOF
 }
 
@@ -105,12 +147,12 @@ case ${1:-help} in
     build_app
     ;;
   test)
-    test_app
+    test_app "${2:-full}" "${3:-${SITEFORGE_TEST_BASE:-origin/main}}"
     ;;
   verify)
     "$ROOT/scripts/check-repository.sh"
     build_app
-    test_app
+    test_app full
     ;;
   watch)
     exec "$ROOT/scripts/watch-and-verify.sh"

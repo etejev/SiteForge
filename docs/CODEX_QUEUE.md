@@ -19,6 +19,11 @@ None.
 
 ## DONE
 
+- [x] `SF-TOOLING-001` Add explicit local test levels for efficient development feedback.
+  - Requirements: bounded workflow support for `SF-1902-007` and `SF-1902-008`.
+  - Plan: preserve `./sf verify` and bare `./sf test` as full unit/UI gates; add named quick, changed, half, and full levels; map changed production files conservatively to dependent test classes; escalate unknown, project, and orchestration changes to the full suite; self-test the selector during repository verification; and document that narrower levels are feedback rather than completion evidence.
+  - Evidence: `scripts/select-test-scope.py --self-test` covers subsystem, UI, direct-test, documentation-only, and full-fallback decisions. `./sf test quick`, `./sf test half`, and authoritative `./sf verify` passed on 2026-07-26; full verification executed 202 unit tests and 21 UI tests with zero failures. `./sf verify` and CI remain unconditionally full.
+
 - [x] `SF-CI-001` Stabilize deterministic macOS UI verification before authoring continues.
   - Requirements: `SF-0201-006`, `SF-0201-008`, `SF-0203-006`, `SF-0203-008`, `SF-1505-006`, `SF-1505-008`, `SF-1602-006`, `SF-1602-008`, `SF-1605-006`, `SF-1605-008`, `SF-1902-006`, and `SF-1902-008`.
   - Plan: preserve the five failed UI journeys as behavioral regressions; make launch/workspace readiness, progress semantics, toolbar hittability, and keyboard-focus transitions observable through stable accessibility state; constrain and center Debug-only UI-test windows within the available screen; terminate every launched test application deterministically; retain Release isolation for all test injection; upgrade supported checkout actions; and preserve the single `./sf verify` pipeline while uploading redacted failure logs and XCTest result bundles for diagnosis.
