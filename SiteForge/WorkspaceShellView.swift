@@ -446,6 +446,33 @@ private struct CanvasPlaceholderView: View {
                                 state.performSelectionCommand(.clear, provenance: .contextualMenu)
                             }
                             .disabled(state.selectionState.isEmpty)
+                            Divider()
+                            Button("Move Right 1 px") {
+                                state.performTransform(
+                                    .move(delta: .init(dx: 1, dy: 0), constraint: .horizontal),
+                                    provenance: .contextualMenu
+                                )
+                            }
+                            .disabled(!state.transformAvailability(
+                                .move(delta: .init(dx: 1, dy: 0), constraint: .horizontal)
+                            ).isEnabled)
+                            Button("Increase Width 1 px") {
+                                state.performTransform(
+                                    .resize(
+                                        handle: .right,
+                                        delta: .init(dx: 1, dy: 0),
+                                        constraint: .horizontal
+                                    ),
+                                    provenance: .contextualMenu
+                                )
+                            }
+                            .disabled(!state.transformAvailability(
+                                .resize(
+                                    handle: .right,
+                                    delta: .init(dx: 1, dy: 0),
+                                    constraint: .horizontal
+                                )
+                            ).isEnabled)
                         }
 
                     if state.canvasRenderPlan == nil {
@@ -1139,15 +1166,46 @@ private struct InspectorView: View {
                         Label("Locked — inspection only", systemImage: "lock.fill")
                             .foregroundStyle(.secondary)
                     }
-                    Text("Editable properties are intentionally deferred to a later authoring slice.")
+                    Text(state.transformGeometrySummary)
+                        .monospacedDigit()
+                        .accessibilityLabel("Selection geometry")
+                        .accessibilityValue(state.transformGeometrySummary)
+                        .accessibilityIdentifier("inspector.transform.geometry")
+                    Text("Broader editable properties are intentionally deferred to a later authoring slice.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if state.selectionState.count == 1 {
+                        HStack {
+                            Button("Move Right 1 px") {
+                                state.performTransform(
+                                    .move(
+                                        delta: .init(dx: 1, dy: 0),
+                                        constraint: .horizontal
+                                    ),
+                                    provenance: .accessibility
+                                )
+                            }
+                            .accessibilityIdentifier("inspector.transform.moveRight")
+                            Button("Increase Width 1 px") {
+                                state.performTransform(
+                                    .resize(
+                                        handle: .right,
+                                        delta: .init(dx: 1, dy: 0),
+                                        constraint: .horizontal
+                                    ),
+                                    provenance: .accessibility
+                                )
+                            }
+                            .accessibilityIdentifier("inspector.transform.increaseWidth")
+                        }
+                        .controlSize(.small)
+                    }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .accessibilityElement(children: .combine)
+                .accessibilityElement(children: .contain)
                 .accessibilityLabel("Inspector selection summary")
-                .accessibilityValue(state.selectionSummary)
+                .accessibilityValue("\(state.selectionSummary); \(state.transformGeometrySummary)")
                 .accessibilityIdentifier("inspector.selection.summary")
             }
         }
@@ -1179,6 +1237,11 @@ private struct StatusBarView: View {
                 Label(state.insertionStatus, systemImage: "plus.square.dashed")
                     .accessibilityLabel(state.insertionStatus)
                     .accessibilityIdentifier("status.insertion")
+            }
+            if state.transformSession.phase != .inactive {
+                Divider().frame(height: 14)
+                Label(state.transformStatus, systemImage: "arrow.up.left.and.arrow.down.right")
+                    .accessibilityIdentifier("status.transform")
             }
             Spacer()
             if state.lifecycle.phase == .saving || state.lifecycle.phase == .autosaving {
@@ -1349,6 +1412,34 @@ struct SiteForgeCommands: Commands {
                 .keyboardShortcut(.upArrow, modifiers: .option)
             Button("Pan Down") { state?.performViewportCommand(CanvasViewportCommand(.panDown)) }
                 .keyboardShortcut(.downArrow, modifiers: .option)
+            Divider()
+            Button("Move Selection Right 1 px") {
+                state?.performTransform(
+                    .move(delta: .init(dx: 1, dy: 0), constraint: .horizontal),
+                    provenance: .menu
+                )
+            }
+            .keyboardShortcut(.rightArrow, modifiers: .control)
+            .disabled(state?.transformAvailability(
+                .move(delta: .init(dx: 1, dy: 0), constraint: .horizontal)
+            ).isEnabled != true)
+            Button("Increase Selection Width 1 px") {
+                state?.performTransform(
+                    .resize(
+                        handle: .right,
+                        delta: .init(dx: 1, dy: 0),
+                        constraint: .horizontal
+                    ),
+                    provenance: .menu
+                )
+            }
+            .disabled(state?.transformAvailability(
+                .resize(
+                    handle: .right,
+                    delta: .init(dx: 1, dy: 0),
+                    constraint: .horizontal
+                )
+            ).isEnabled != true)
         }
     }
 }
@@ -1370,6 +1461,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.renderPlan = state.canvasRenderPlan
         view.selectionOverlayPlan = state.selectionOverlayPlan
         view.insertionPreviewOverlay = state.insertionPreviewOverlay
+        view.transformOverlays = state.transformOverlays
         view.accessibilityViewportValue = state.viewportAccessibilityValue
         view.needsDisplay = true
         let width = Double(view.bounds.width)
@@ -1390,9 +1482,23 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.renderPlan = state.canvasRenderPlan
         view.selectionOverlayPlan = state.selectionOverlayPlan
         view.insertionPreviewOverlay = state.insertionPreviewOverlay
+        view.transformOverlays = state.transformOverlays
         view.onInteraction = { state.noteCanvasInteraction() }
         view.onPointerSelection = { point, modifier in state.selectCanvasPoint(point, modifier: modifier) }
         view.onPointerPreview = { point in state.previewInsertion(at: point) }
+        view.onPointerTransformStart = { point in state.beginPointerTransform(at: point) }
+        view.onPointerTransformUpdate = { delta, constrain in
+            state.updatePointerTransform(delta: delta, constrainAxis: constrain)
+        }
+        view.onPointerTransformCommit = { state.commitPointerTransform() }
+        view.onPointerTransformCancel = { state.cancelTransform() }
+        view.onKeyboardMove = { delta in
+            let constraint: TransformAxisConstraint = delta.dx == 0 ? .vertical : .horizontal
+            let operation = TransformOperation.move(delta: delta, constraint: constraint)
+            guard state.transformAvailability(operation).isEnabled else { return false }
+            state.performTransform(operation, provenance: .keyboard)
+            return true
+        }
         view.onSelectNext = { state.performSelectionCommand(.next, provenance: .keyboard) }
         view.onSelectPrevious = { state.performSelectionCommand(.previous, provenance: .keyboard) }
         view.onClearSelection = { state.performSelectionCommand(.clear, provenance: .keyboard) }
@@ -1429,10 +1535,18 @@ private final class NativeCanvasViewportView: NSView {
     var insertionPreviewOverlay: CanvasEditorOverlay? {
         didSet { rebuildOverlay() }
     }
+    var transformOverlays: [CanvasEditorOverlay] = [] {
+        didSet { rebuildOverlay() }
+    }
     var accessibilityViewportValue = "Zoom 100 percent"
     var onInteraction: (() -> Void)?
     var onPointerSelection: ((WorldPoint, SelectionPointerModifier) -> Void)?
     var onPointerPreview: ((WorldPoint) -> Void)?
+    var onPointerTransformStart: ((WorldPoint) -> Bool)?
+    var onPointerTransformUpdate: ((WorldVector, Bool) -> Void)?
+    var onPointerTransformCommit: (() -> Void)?
+    var onPointerTransformCancel: (() -> Void)?
+    var onKeyboardMove: ((WorldVector) -> Bool)?
     var onSelectNext: (() -> Void)?
     var onSelectPrevious: (() -> Void)?
     var onClearSelection: (() -> Void)?
@@ -1450,8 +1564,11 @@ private final class NativeCanvasViewportView: NSView {
     private let overlayContainer = CALayer()
     private var rasterViewportState: CanvasViewportState?
     private var virtualAccessibilityElements: [NSAccessibilityElement] = []
+    private var transformHandleViews: [String: TransformHandleControlView] = [:]
     private var focusedAccessibilityObjectID: NodeID?
     private var pointerTrackingArea: NSTrackingArea?
+    private var transformPointerStart: WorldPoint?
+    private var transformDidDrag = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1474,7 +1591,11 @@ private final class NativeCanvasViewportView: NSView {
     override func accessibilityValue() -> Any? {
         "\(accessibilityViewportValue); rendered objects \(renderPlan?.authoredObjects.count ?? 0)"
     }
-    override func accessibilityChildren() -> [Any]? { virtualAccessibilityElements }
+    override func accessibilityChildren() -> [Any]? {
+        virtualAccessibilityElements + TransformHandle.allCases.compactMap {
+            transformHandleViews[$0.rawValue]
+        }
+    }
     override func accessibilityHelp() -> String? {
         "Scroll to pan. Pinch to zoom around the pointer. Use the View menu for keyboard controls."
     }
@@ -1488,6 +1609,12 @@ private final class NativeCanvasViewportView: NSView {
             NSAccessibilityCustomAction(name: "Clear Selection") { [weak self] in self?.onClearSelection?(); return true },
             NSAccessibilityCustomAction(name: "Insert Frame at Center") { [weak self] in self?.onInsertFrame?(); return true },
             NSAccessibilityCustomAction(name: "Insert Text at Center") { [weak self] in self?.onInsertText?(); return true },
+            NSAccessibilityCustomAction(name: "Move Right 1 px") { [weak self] in
+                self?.onKeyboardMove?(WorldVector(dx: 1, dy: 0)) ?? false
+            },
+            NSAccessibilityCustomAction(name: "Move Down 1 px") { [weak self] in
+                self?.onKeyboardMove?(WorldVector(dx: 0, dy: 1)) ?? false
+            },
         ]
     }
 
@@ -1540,6 +1667,7 @@ private final class NativeCanvasViewportView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if beginTransformGesture(with: event) { return }
         window?.makeFirstResponder(self)
         onInteraction?()
         guard renderPlan != nil else { return }
@@ -1552,6 +1680,55 @@ private final class NativeCanvasViewportView: NSView {
         else if event.modifierFlags.contains(.shift) { modifier = .add }
         else { modifier = .replace }
         onPointerSelection?(world, modifier)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard updateTransformGesture(with: event) else {
+            super.mouseDragged(with: event)
+            return
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if endTransformGesture() { return }
+        super.mouseUp(with: event)
+    }
+
+    fileprivate func beginTransformGesture(with event: NSEvent) -> Bool {
+        window?.makeFirstResponder(self)
+        guard renderPlan != nil else { return false }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let world = try? viewportState.transform.viewportToWorld(
+            ViewportPoint(x: point.x, y: point.y)
+        ), onPointerTransformStart?(world) == true else {
+            return false
+        }
+        onInteraction?()
+        transformPointerStart = world
+        transformDidDrag = false
+        return true
+    }
+
+    @discardableResult
+    fileprivate func updateTransformGesture(with event: NSEvent) -> Bool {
+        guard let start = transformPointerStart else { return false }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let world = try? viewportState.transform.viewportToWorld(
+            ViewportPoint(x: point.x, y: point.y)
+        ) else { return true }
+        let delta = WorldVector(dx: world.x - start.x, dy: world.y - start.y)
+        transformDidDrag = transformDidDrag || abs(delta.dx) > 0.25 || abs(delta.dy) > 0.25
+        onPointerTransformUpdate?(delta, event.modifierFlags.contains(.shift))
+        return true
+    }
+
+    @discardableResult
+    fileprivate func endTransformGesture() -> Bool {
+        guard transformPointerStart != nil else { return false }
+        transformDidDrag ? onPointerTransformCommit?() : onPointerTransformCancel?()
+        transformPointerStart = nil
+        transformDidDrag = false
+        return true
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -1587,6 +1764,19 @@ private final class NativeCanvasViewportView: NSView {
         case 125: command = .panDown
         case 126: command = .panUp
         default: command = nil
+        }
+        if let command, !event.modifierFlags.contains(.option) {
+            let step = event.modifierFlags.contains(.shift)
+                ? TransformPolicy.keyboardLargeStep
+                : TransformPolicy.keyboardStep
+            let delta: WorldVector = switch command {
+            case .panLeft: WorldVector(dx: -step, dy: 0)
+            case .panRight: WorldVector(dx: step, dy: 0)
+            case .panUp: WorldVector(dx: 0, dy: -step)
+            case .panDown: WorldVector(dx: 0, dy: step)
+            default: WorldVector(dx: 0, dy: 0)
+            }
+            if onKeyboardMove?(delta) == true { return }
         }
         if let command {
             let vector: ViewportVector
@@ -1693,6 +1883,7 @@ private final class NativeCanvasViewportView: NSView {
 
     private func rebuildOverlay() {
         overlayContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        var retainedHandleNames: Set<String> = []
         if let selectionOverlayPlan {
             for overlay in selectionOverlayPlan.overlays {
                 guard let origin = try? viewportState.transform.worldToViewport(overlay.frame.origin) else { continue }
@@ -1728,6 +1919,42 @@ private final class NativeCanvasViewportView: NSView {
             layer.lineWidth = 2
             layer.lineDashPattern = [6, 4]
             overlayContainer.addSublayer(layer)
+        }
+        for overlay in transformOverlays {
+            guard let origin = try? viewportState.transform.worldToViewport(overlay.frame.origin) else {
+                continue
+            }
+            let layer = CAShapeLayer()
+            layer.name = "renderer.overlay.\(overlay.kind)"
+            layer.frame = CGRect(
+                x: origin.x,
+                y: origin.y,
+                width: overlay.frame.size.width * viewportState.zoom.value,
+                height: overlay.frame.size.height * viewportState.zoom.value
+            )
+            layer.path = CGPath(rect: layer.bounds.insetBy(dx: 0.5, dy: 0.5), transform: nil)
+            layer.strokeColor = NSColor.controlAccentColor.cgColor
+            if overlay.kind.hasPrefix("transform-handle") {
+                layer.fillColor = NSColor.controlBackgroundColor.cgColor
+                layer.lineWidth = 1
+                let handleName = String(overlay.kind.dropFirst("transform-handle-".count))
+                retainedHandleNames.insert(handleName)
+                let control = transformHandleViews[handleName] ?? {
+                    let view = TransformHandleControlView(handleName: handleName, owner: self)
+                    transformHandleViews[handleName] = view
+                    addSubview(view)
+                    return view
+                }()
+                control.frame = layer.frame.insetBy(dx: -4, dy: -4)
+            } else {
+                layer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.08).cgColor
+                layer.lineWidth = 2
+                layer.lineDashPattern = overlay.kind == "transform-preview" ? [5, 3] : nil
+            }
+            overlayContainer.addSublayer(layer)
+        }
+        for name in Array(transformHandleViews.keys) where !retainedHandleNames.contains(name) {
+            transformHandleViews.removeValue(forKey: name)?.removeFromSuperview()
         }
         let focus = CAShapeLayer()
         focus.name = "renderer.overlay.focus"
@@ -1775,6 +2002,29 @@ private final class NativeCanvasViewportView: NSView {
             NSAccessibility.post(element: focusedElement, notification: .focusedUIElementChanged)
         }
     }
+
+}
+
+private final class TransformHandleControlView: NSView {
+    private let handleName: String
+    private weak var owner: NativeCanvasViewportView?
+
+    init(handleName: String, owner: NativeCanvasViewportView) {
+        self.handleName = handleName
+        self.owner = owner
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("\(handleName) resize handle")
+        setAccessibilityHelp("Drag to resize the selected object; numeric resize is available in the inspector.")
+        setAccessibilityIdentifier("canvas.transform.handle.\(handleName)")
+    }
+
+    required init?(coder: NSCoder) { nil }
+    override var isFlipped: Bool { true }
+    override func mouseDown(with event: NSEvent) { _ = owner?.beginTransformGesture(with: event) }
+    override func mouseDragged(with event: NSEvent) { owner?.updateTransformGesture(with: event) }
+    override func mouseUp(with event: NSEvent) { owner?.endTransformGesture() }
 }
 
 private final class CanvasContentTileLayer: CALayer {

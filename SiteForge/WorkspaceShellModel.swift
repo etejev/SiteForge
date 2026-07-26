@@ -350,6 +350,8 @@ final class WorkspaceShellState: ObservableObject {
         "SF-0401-005", "SF-0401-006", "SF-0401-007", "SF-0401-008",
         "SF-0402-001", "SF-0402-002", "SF-0402-003", "SF-0402-004",
         "SF-0402-005", "SF-0402-006", "SF-0402-007", "SF-0402-008",
+        "SF-0403-001", "SF-0403-002", "SF-0403-003", "SF-0403-004",
+        "SF-0403-005", "SF-0403-006", "SF-0403-007", "SF-0403-008",
         "SF-0405-001", "SF-0405-002", "SF-0405-003", "SF-0405-004",
         "SF-0405-005", "SF-0405-006", "SF-0405-007", "SF-0405-008",
     ]
@@ -375,12 +377,18 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var insertionSession = InsertionSession()
     @Published private(set) var insertionFailure: InsertionError?
     @Published private(set) var lastInsertionAnnouncement = "Insertion inactive"
+    @Published private(set) var transformSession = TransformSession()
+    @Published private(set) var transformFailure: TransformError?
+    @Published private(set) var lastTransformAnnouncement = "Transform inactive"
     @Published private(set) var viewportFailure: CanvasViewportError?
     @Published private(set) var lastViewportAnnouncement = "Canvas viewport at 100 percent"
     @Published private(set) var canvasInteractionCount = 0
     @Published var isPreviewPresented = false {
         didSet {
-            if isPreviewPresented { cancelInsertion(resetTool: true) }
+            if isPreviewPresented {
+                cancelInsertion(resetTool: true)
+                cancelTransform()
+            }
         }
     }
     let documentSession: DocumentSession
@@ -392,10 +400,12 @@ final class WorkspaceShellState: ObservableObject {
     private let selectionRegistry = SelectionCommandRegistry()
     private let selectionOverlayPlanner = SelectionOverlayPlanner()
     private let insertionRegistry = InsertionCommandRegistry()
+    private let transformRegistry = TransformCommandRegistry()
     private let renderSurfaceID = CanvasRenderSurfaceID()
     let canvasRenderDiagnostics = CanvasRenderDiagnostics()
     let selectionDiagnostics = SelectionDiagnostics()
     let insertionDiagnostics = InsertionDiagnostics()
+    let transformDiagnostics = TransformDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
     private let announcementPoster: AccessibilityAnnouncementPoster
     private var viewportDocumentID: DocumentID
@@ -434,7 +444,10 @@ final class WorkspaceShellState: ObservableObject {
     var redoDisabledReason: String? { documentSession.redoAvailability.disabledReason }
 
     func selectTool(_ tool: CanvasTool) {
-        if selectedTool != tool { cancelInsertion(resetTool: false) }
+        if selectedTool != tool {
+            cancelInsertion(resetTool: false)
+            cancelTransform()
+        }
         selectedTool = tool
         switch tool {
         case .frame: armInsertion(.frame)
@@ -455,6 +468,7 @@ final class WorkspaceShellState: ObservableObject {
     func selectPage(_ pageID: PageID) {
         guard pages.contains(where: { $0.id == pageID }) else { return }
         cancelInsertion(resetTool: true)
+        cancelTransform()
         selectedPageID = pageID
         refreshSelectionScene(boundary: .pageSwitch)
         scheduleScenePreparation()
@@ -616,6 +630,23 @@ final class WorkspaceShellState: ObservableObject {
         return "\(page.name) / \(selectionSummary)"
     }
 
+    var transformGeometrySummary: String {
+        guard let primaryID = selectionState.primaryID,
+              let geometry = documentSession.document.pages
+                .flatMap(\.nodes)
+                .first(where: { $0.id == primaryID })?
+                .insertionGeometry else {
+            return "Geometry unavailable"
+        }
+        return String(
+            format: "X %.0f, Y %.0f, Width %.0f, Height %.0f",
+            geometry.origin.x,
+            geometry.origin.y,
+            geometry.size.width,
+            geometry.size.height
+        )
+    }
+
     func selectionAvailability(_ name: SelectionCommandName) -> SelectionCommandAvailability {
         guard let scene = selectionScene else { return .disabled("The canvas scene is not ready.") }
         return selectionRegistry.availability(
@@ -631,6 +662,7 @@ final class WorkspaceShellState: ObservableObject {
         provenance: SelectionProvenance
     ) {
         guard let scene = selectionScene else { return }
+        cancelTransform()
         let start = DispatchTime.now().uptimeNanoseconds
         let prior = selectionState
         do {
@@ -697,6 +729,299 @@ final class WorkspaceShellState: ObservableObject {
         case .toggle: .toggle
         }
         performSelectionCommand(command, targetID: id, provenance: .layersNavigator)
+    }
+
+    var transformStatus: String {
+        switch transformSession.phase {
+        case .inactive: "Transform inactive"
+        case .drafting: "Preparing transform"
+        case .previewing(let preview): "Previewing \(preview.operation.name)"
+        case .committing(let preview): "Committing \(preview.operation.name)…"
+        case .cancelled: "Transform cancelled"
+        case .failed(let error): error.localizedDescription
+        }
+    }
+
+    var transformOverlays: [CanvasEditorOverlay] {
+        guard let plan = canvasRenderPlan else { return [] }
+        let preview: TransformPreview? = switch transformSession.phase {
+        case .previewing(let value), .committing(let value): value
+        default: nil
+        }
+        return TransformOverlayPlanner.overlays(
+            selection: selectionState,
+            renderPlan: plan,
+            preview: preview,
+            handleWorldSize: 8 / viewportState.zoom.value
+        )
+    }
+
+    func transformAvailability(_ operation: TransformOperation) -> TransformAvailability {
+        guard let plan = canvasRenderPlan,
+              let pageID = effectiveSelectedPageID,
+              !selectionState.isEmpty else {
+            return .disabled("Select a transformable object after the canvas is ready.")
+        }
+        let identity = TransformOperationIdentity(
+            sessionID: TransformSessionID(),
+            documentID: documentSession.document.id,
+            pageID: pageID,
+            revision: documentSession.document.revision,
+            sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration
+        )
+        let command = GeometryTransformCommand(
+            identity: identity,
+            orderedNodeIDs: selectionState.orderedIDs,
+            operation: operation,
+            provenance: .menu
+        )
+        return transformRegistry.availability(
+            for: command,
+            in: documentSession.document,
+            context: transformValidationContext
+        )
+    }
+
+    @discardableResult
+    func beginPointerTransform(at point: WorldPoint) -> Bool {
+        guard selectedTool == .select,
+              let plan = canvasRenderPlan,
+              let primaryID = selectionState.primaryID,
+              let frame = plan.authoredObjects.first(where: { $0.id == primaryID })?.frame else {
+            return false
+        }
+        let radius = TransformPolicy.handleHitRadius / viewportState.zoom.value
+        let operation: TransformOperation
+        if let handle = TransformOverlayPlanner.hitHandle(
+            at: point,
+            frame: frame,
+            worldRadius: radius
+        ) {
+            operation = .resize(
+                handle: handle,
+                delta: WorldVector(dx: 0, dy: 0),
+                constraint: .none
+            )
+        } else if point.x >= frame.minX, point.x <= frame.maxX,
+                  point.y >= frame.minY, point.y <= frame.maxY {
+            operation = .move(
+                delta: WorldVector(dx: 0, dy: 0),
+                constraint: .none
+            )
+        } else {
+            return false
+        }
+        return beginTransform(operation, provenance: .pointer)
+    }
+
+    func updatePointerTransform(delta: WorldVector, constrainAxis: Bool) {
+        let operation: TransformOperation
+        let constraint: TransformAxisConstraint = constrainAxis
+            ? (abs(delta.dx) >= abs(delta.dy) ? .horizontal : .vertical)
+            : .none
+        switch transformSession.phase {
+        case .previewing(let preview):
+            switch preview.operation {
+            case .move:
+                operation = .move(delta: delta, constraint: constraint)
+            case .resize(let handle, _, _):
+                operation = .resize(handle: handle, delta: delta, constraint: constraint)
+            }
+        case .drafting:
+            return
+        default:
+            return
+        }
+        updateTransformPreview(operation, provenance: .pointer)
+    }
+
+    func commitPointerTransform() {
+        commitTransform(provenance: .pointer)
+    }
+
+    func performTransform(_ operation: TransformOperation, provenance: TransformProvenance) {
+        guard beginTransform(operation, provenance: provenance) else { return }
+        commitTransform(provenance: provenance)
+    }
+
+    func cancelTransform() {
+        let active: Bool
+        switch transformSession.phase {
+        case .drafting, .previewing, .committing, .failed: active = true
+        case .inactive, .cancelled: active = false
+        }
+        guard active else { return }
+        transformSession.cancel()
+        transformFailure = nil
+        lastTransformAnnouncement = "Transform cancelled"
+        announcementPoster.post(lastTransformAnnouncement)
+        objectWillChange.send()
+    }
+
+    private var transformValidationContext: TransformValidationContext {
+        let lifecycleAvailable: Bool
+        let reason: String?
+        if isPreviewPresented {
+            lifecycleAvailable = false
+            reason = "Close Preview before transforming content."
+        } else {
+            switch lifecycle.phase {
+            case .saving, .autosaving:
+                lifecycleAvailable = false
+                reason = "Wait for the current save operation to finish."
+            case .conflicted:
+                lifecycleAvailable = false
+                reason = "Resolve the file conflict before transforming content."
+            case .clean, .modified, .failed, .recovered:
+                lifecycleAvailable = true
+                reason = nil
+            }
+        }
+        return TransformValidationContext(
+            activePageID: effectiveSelectedPageID ?? PageID(),
+            currentSceneID: canvasRenderPlan?.identity.sceneID ?? CanvasViewportSceneID(),
+            rendererGeneration: canvasRenderPlan?.identity.sceneGeneration ?? UInt64.max,
+            selectedNodeIDs: selectionState.orderedIDs,
+            availableNodeIDs: Set(selectionScene?.targets.filter(\.isAvailable).map(\.id) ?? []),
+            isLifecycleAvailable: lifecycleAvailable,
+            lifecycleDisabledReason: reason
+        )
+    }
+
+    @discardableResult
+    private func beginTransform(
+        _ operation: TransformOperation,
+        provenance: TransformProvenance
+    ) -> Bool {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else {
+            transformFailure = .staleRenderer
+            return false
+        }
+        let identity = transformSession.begin(
+            documentID: documentSession.document.id,
+            pageID: pageID,
+            revision: documentSession.document.revision,
+            sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration
+        )
+        return prepareTransformPreview(
+            operation,
+            identity: identity,
+            provenance: provenance
+        )
+    }
+
+    private func updateTransformPreview(
+        _ operation: TransformOperation,
+        provenance: TransformProvenance
+    ) {
+        guard let identity = transformSession.currentIdentity else { return }
+        _ = prepareTransformPreview(operation, identity: identity, provenance: provenance)
+    }
+
+    @discardableResult
+    private func prepareTransformPreview(
+        _ operation: TransformOperation,
+        identity: TransformOperationIdentity,
+        provenance: TransformProvenance
+    ) -> Bool {
+        let command = GeometryTransformCommand(
+            identity: identity,
+            orderedNodeIDs: selectionState.orderedIDs,
+            operation: operation,
+            provenance: provenance
+        )
+        do {
+            let prepared = try transformRegistry.prepare(
+                command,
+                in: documentSession.document,
+                context: transformValidationContext
+            )
+            transformSession.preview(TransformPreview(
+                identity: identity,
+                operation: operation,
+                geometries: prepared.geometries
+            ))
+            transformFailure = nil
+            objectWillChange.send()
+            return true
+        } catch let error as TransformError {
+            transformSession.fail(error)
+            transformFailure = error
+            objectWillChange.send()
+            return false
+        } catch {
+            return false
+        }
+    }
+
+    private func commitTransform(provenance: TransformProvenance) {
+        guard case .previewing(let preview) = transformSession.phase else { return }
+        let command = GeometryTransformCommand(
+            identity: preview.identity,
+            orderedNodeIDs: selectionState.orderedIDs,
+            operation: preview.operation,
+            provenance: provenance
+        )
+        let start = DispatchTime.now().uptimeNanoseconds
+        do {
+            let prepared = try transformRegistry.prepare(
+                command,
+                in: documentSession.document,
+                context: transformValidationContext
+            )
+            transformSession.beginCommit(preview)
+            _ = try documentSession.execute(prepared.documentCommand)
+            transformSession.complete()
+            transformFailure = nil
+            lastTransformAnnouncement = "\(preview.operation.name.capitalized) committed"
+            announcementPoster.post(lastTransformAnnouncement)
+            recordTransformDiagnostic(
+                command, start: start, revision: documentSession.document.revision,
+                result: .success, failure: nil
+            )
+        } catch let error as TransformError {
+            transformSession.fail(error)
+            transformFailure = error
+            recordTransformDiagnostic(
+                command, start: start, revision: nil,
+                result: error == .cancelled ? .cancelled
+                    : [.staleDocument, .staleRevision, .staleRenderer].contains(error) ? .stale : .failure,
+                failure: error
+            )
+        } catch let error as CommandExecutionError {
+            let mapped: TransformError = switch error {
+            case .cancelled: .cancelled
+            case .revisionExhausted: .revisionExhausted
+            case .disabled: .staleRevision
+            case .invalidResult: .invalidResult
+            }
+            transformSession.fail(mapped)
+            transformFailure = mapped
+            recordTransformDiagnostic(
+                command, start: start, revision: nil,
+                result: error == .cancelled ? .cancelled : .failure,
+                failure: mapped
+            )
+        } catch {}
+    }
+
+    private func recordTransformDiagnostic(
+        _ command: GeometryTransformCommand,
+        start: UInt64,
+        revision: UInt64?,
+        result: TransformDiagnosticResult,
+        failure: TransformError?
+    ) {
+        let record = TransformDiagnosticFactory.make(
+            command: command,
+            durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+            resultRevision: revision,
+            result: result,
+            failure: failure
+        )
+        Task { await transformDiagnostics.append(record) }
     }
 
     var insertionPreviewOverlay: CanvasEditorOverlay? {
@@ -770,6 +1095,13 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func performEscape() {
+        switch transformSession.phase {
+        case .drafting, .previewing, .committing, .failed:
+            cancelTransform()
+            return
+        case .inactive, .cancelled:
+            break
+        }
         switch insertionSession.phase {
         case .armed, .previewing, .committing, .failed:
             cancelInsertion(resetTool: true)
@@ -973,12 +1305,14 @@ final class WorkspaceShellState: ObservableObject {
 
     func undo() {
         cancelInsertion(resetTool: true)
+        cancelTransform()
         try? documentSession.undo()
         refreshSelectionScene(boundary: .undo)
     }
 
     func redo() {
         cancelInsertion(resetTool: true)
+        cancelTransform()
         try? documentSession.redo()
         refreshSelectionScene(boundary: .redo)
     }
@@ -998,6 +1332,12 @@ final class WorkspaceShellState: ObservableObject {
         } else if let identity = insertionSession.identity,
                   identity.documentID != document.id || identity.revision != document.revision {
             cancelInsertion(resetTool: true)
+        }
+        if case .committing = transformSession.phase {
+            // The synchronous transform transaction owns this exact revision transition.
+        } else if let identity = transformSession.currentIdentity,
+                  identity.documentID != document.id || identity.revision != document.revision {
+            cancelTransform()
         }
         guard document.id != viewportDocumentID else {
             scheduleScenePreparation()
@@ -1021,6 +1361,8 @@ final class WorkspaceShellState: ObservableObject {
         selectionOverlayPlan = nil
         insertionSession.deactivate()
         insertionFailure = nil
+        transformSession.deactivate()
+        transformFailure = nil
         pendingSelectionAfterInsertion = nil
         canvasRendererFailure = nil
         viewportFailure = nil

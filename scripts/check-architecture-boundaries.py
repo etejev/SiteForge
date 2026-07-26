@@ -44,6 +44,9 @@ INSERTION_MODEL_SLICE = list(dict.fromkeys(ENGINE_SLICE + [
     "SiteForge/LayoutEngine.swift",
     "SiteForge/InsertionModel.swift",
 ]))
+TRANSFORM_MODEL_SLICE = list(dict.fromkeys(
+    INSERTION_MODEL_SLICE + SELECTION_MODEL_SLICE + ["SiteForge/TransformModel.swift"]
+))
 HEADLESS_FORBIDDEN = {"SwiftUI", "AppKit", "Metal", "WebKit"}
 
 
@@ -65,7 +68,7 @@ def typecheck(name: str, sources: list[str]) -> None:
 
 
 for source in dict.fromkeys(
-    MODEL_SLICE + ENGINE_SLICE + RUNWAY_HEADLESS_SLICE + CANVAS_VIEWPORT_SLICE + LAYOUT_ENGINE_SLICE + CANVAS_RENDERER_SLICE + SELECTION_MODEL_SLICE + INSERTION_MODEL_SLICE
+    MODEL_SLICE + ENGINE_SLICE + RUNWAY_HEADLESS_SLICE + CANVAS_VIEWPORT_SLICE + LAYOUT_ENGINE_SLICE + CANVAS_RENDERER_SLICE + SELECTION_MODEL_SLICE + INSERTION_MODEL_SLICE + TRANSFORM_MODEL_SLICE
 ):
     forbidden = imports(source) & HEADLESS_FORBIDDEN
     if forbidden:
@@ -79,6 +82,7 @@ typecheck("deterministic-layout", LAYOUT_ENGINE_SLICE)
 typecheck("canvas-renderer-contract", CANVAS_RENDERER_SLICE)
 typecheck("selection-model-contract", SELECTION_MODEL_SLICE)
 typecheck("insertion-model-contract", INSERTION_MODEL_SLICE)
+typecheck("transform-model-contract", TRANSFORM_MODEL_SLICE)
 
 project = (ROOT / "SiteForge.xcodeproj/project.pbxproj").read_text()
 if "WorkspaceSceneComposition.swift in Sources" not in project:
@@ -93,6 +97,8 @@ if "SelectionModel.swift in Sources" not in project or "SelectionModelTests.swif
     fail("The headless selection model and its behavioral tests must be compiled into their targets.")
 if "InsertionModel.swift in Sources" not in project or "InsertionModelTests.swift in Sources" not in project:
     fail("The headless insertion model and its behavioral tests must be compiled into their targets.")
+if "TransformModel.swift in Sources" not in project or "TransformModelTests.swift in Sources" not in project:
+    fail("The headless transform model and its behavioral tests must be compiled into their targets.")
 
 selection_source = (ROOT / "SiteForge/SelectionModel.swift").read_text()
 if re.search(r"(?:struct|class)\s+SelectionState\s*:\s*[^\n]*(?:Codable|Encodable|Decodable)", selection_source):
@@ -100,6 +106,9 @@ if re.search(r"(?:struct|class)\s+SelectionState\s*:\s*[^\n]*(?:Codable|Encodabl
 insertion_source = (ROOT / "SiteForge/InsertionModel.swift").read_text()
 if re.search(r"(?:struct|class)\s+InsertionSession\s*:\s*[^\n]*(?:Codable|Encodable|Decodable)", insertion_source):
     fail("Insertion preview/session state must not become canonical serialized project content.")
+transform_source = (ROOT / "SiteForge/TransformModel.swift").read_text()
+if re.search(r"(?:struct|class)\s+TransformSession\s*:\s*[^\n]*(?:Codable|Encodable|Decodable)", transform_source):
+    fail("Transform preview/session state must not become canonical serialized project content.")
 app_sources = re.search(
     r"600000000000000000000001 /\* Sources \*/ = .*?files = \((.*?)\);",
     project,

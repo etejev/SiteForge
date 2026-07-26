@@ -71,6 +71,10 @@ if ! scripts/check-insertion-foundation-evidence.py; then
   failed=1
 fi
 
+if ! scripts/check-transform-foundation-evidence.py; then
+  failed=1
+fi
+
 if ! scripts/select-test-scope.py --self-test; then
   print -u2 "Test-level selection checks failed."
   failed=1

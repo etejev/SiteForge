@@ -6,6 +6,9 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Deterministic move and eight-handle resize sessions keyed by stable session, document, page, revision, renderer-generation, and selected-node identities, with exact axis constraints, typed validation/failure outcomes, editor-only previews, and one atomic transaction/inverse per completion.
+- Native accessible canvas resize handles plus shared pointer, keyboard, menu, contextual, inspector numeric, accessibility, and automation transform routing; compatible multiple selections move atomically while incompatible or multiple-resize requests are explicitly rejected.
+- Transform integration across undo/redo, deterministic package/history round trips, selection, Layers, layout, renderer, hit testing, bounded old/new dirty regions, autosave/recovery, and redacted diagnostics, with retained 100-/10,000-object timing/memory and running-app visual evidence.
 - Window-native mixed SwiftUI/AppKit Tab routing at the viewport-preset boundaries, scoped to each workspace window with genuine first-responder transfer, safe pass-through for editing and transient presentation contexts, deterministic teardown, and redacted responder diagnostics for hosted UI failures.
 - AppKit-deterministic viewport-preset focus and selection: the native popup preserves the existing layout and accessibility identity while synchronizing real first-responder state with the scene-owned traversal model, rejecting stale or wrong-window focus requests, and supporting pointer plus Up/Down keyboard preset selection.
 - Explicit `quick`, `changed`, `half`, and `full` local XCTest levels, with conservative changed-subsystem selection, automatic full-suite fallback for uncertain impact, and selector self-tests inside repository verification. Bare `./sf test`, `./sf verify`, and CI remain full regression gates.
@@ -74,6 +77,7 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Changed
 
+- Canonical schema v2 remains unchanged: move/resize commits author the existing stable `layout.x`, `layout.y`, `layout.width`, and `layout.height` properties, while transform sessions, pointer drafts, handles, and previews remain noncanonical and excluded from packages, history, preview, and export-facing snapshots.
 - Canonical schema v2 now uses the existing ordered property/provenance representation for frame geometry, initial style, and bounded plain text without a format-version change; supported schema-v1 packages continue through the strict migration adapter.
 - Canonical graph validation now uses precomputed child membership and iterative traversal, avoiding quadratic membership checks and recursive-stack growth on bounded large documents.
 - Renderer scene revision/generation changes can retain bounded dirty-region planning when authored object identity and surface identity remain compatible, instead of forcing an unrelated full authored-scene raster.

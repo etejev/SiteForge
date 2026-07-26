@@ -51,6 +51,81 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(Set(layers.map(\.identifier)).count, layers.count)
     }
 
+    // SF-0403-001 through SF-0403-008
+    func testGeometryTransformPointerKeyboardNumericUndoRedoAndAccessibilityJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+
+        application.buttons["toolbar.tool.frame"].click()
+        let insertion = canvas.coordinate(withNormalizedOffset: .init(dx: 0.35, dy: 0.35))
+        insertion.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        application.buttons["toolbar.tool.select"].click()
+
+        let geometry = application.descendants(matching: .any)["inspector.transform.geometry"]
+        XCTAssertTrue(geometry.waitForExistence(timeout: 5))
+        XCTAssertEqual(geometry.label, "Selection geometry")
+        let initial = try XCTUnwrap(geometry.value as? String)
+
+        let rightHandle = application.buttons["canvas.transform.handle.right"]
+        XCTAssertTrue(rightHandle.waitForExistence(timeout: 5))
+        XCTAssertEqual(rightHandle.label, "right resize handle")
+        let rightHandleCenter = rightHandle.coordinate(
+            withNormalizedOffset: .init(dx: 0.5, dy: 0.5)
+        )
+        let resizeDestination = rightHandleCenter.withOffset(.init(dx: 20, dy: 0))
+        rightHandleCenter.click(forDuration: 0.2, thenDragTo: resizeDestination)
+        let transformStatus = application.descendants(matching: .any)["status.transform"]
+        XCTAssertTrue(
+            waitForValueToChange(geometry, from: initial),
+            "transform status: \(transformStatus.label); canvas: \(String(describing: canvas.value))"
+        )
+        attachScreenshot(named: "SF-AUTHORING-006 pointer resize")
+
+        let moveButton = application.buttons["inspector.transform.moveRight"]
+        let resizeButton = application.buttons["inspector.transform.increaseWidth"]
+        XCTAssertTrue(moveButton.exists)
+        XCTAssertTrue(resizeButton.exists)
+        let afterPointerResize = try XCTUnwrap(geometry.value as? String)
+        moveButton.click()
+        XCTAssertTrue(waitForValueToChange(geometry, from: afterPointerResize))
+        let afterNumericMove = try XCTUnwrap(geometry.value as? String)
+        resizeButton.click()
+        XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericMove))
+        attachScreenshot(named: "SF-AUTHORING-006 numeric move and resize")
+
+        let objectCenter = resizeDestination.withOffset(.init(dx: -130, dy: 0))
+        let moveDestination = objectCenter.withOffset(.init(dx: 20, dy: -10))
+        let beforePointerMove = try XCTUnwrap(geometry.value as? String)
+        objectCenter.click(forDuration: 0.2, thenDragTo: moveDestination)
+        XCTAssertTrue(waitForValueToChange(geometry, from: beforePointerMove))
+        attachScreenshot(named: "SF-AUTHORING-006 pointer move")
+
+        moveDestination.click()
+        let beforeKeyboard = try XCTUnwrap(geometry.value as? String)
+        application.typeKey(.rightArrow, modifierFlags: [])
+        XCTAssertTrue(waitForValueToChange(geometry, from: beforeKeyboard))
+
+        let committed = try XCTUnwrap(geometry.value as? String)
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValueToChange(geometry, from: committed))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(geometry, containing: committed))
+
+        let beforeEscape = try XCTUnwrap(geometry.value as? String)
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.empty"].exists)
+        XCTAssertTrue(waitForKeyboardFocus(canvas, in: application))
+        application.buttons["navigator.tab.layers"].click()
+        XCTAssertTrue(application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "navigator.layer."))
+            .firstMatch.exists)
+        XCTAssertFalse(beforeEscape.isEmpty)
+        attachScreenshot(named: "SF-AUTHORING-006 cancelled selection scope")
+        XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
+    }
+
     func testNativeCanvasRendererAdoptsAuthoredObjectsAndPreservesInput() throws {
         let application = launchWorkspace()
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch

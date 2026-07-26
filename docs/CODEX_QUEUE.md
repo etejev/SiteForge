@@ -4,10 +4,10 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-AUTHORING-006` Implement deterministic geometry-transform sessions for selected nodes.
-  - Requirements: `SF-0403-001` through `SF-0403-008` (bounded move/resize slice).
-  - Acceptance: draft/preview/commit move and resize sessions use stable identity, keyboard and pointer parity, one transaction/inverse per gesture, cancellation and stale-result neutrality, bounded handles, accessible numeric operation, and renderer dirty-region updates; snapping/guides remain later work.
-  - Dependencies: `SF-AUTHORING-004` and `SF-AUTHORING-005`.
+- [ ] `SF-AUTHORING-007` Implement deterministic snapping, guides, rulers, and measurement foundations.
+  - Requirements: `SF-0404-001` through `SF-0404-008` (bounded snapping/measurement slice).
+  - Acceptance: build on the verified transform-session identities and preview boundary; keep snap candidates and transient measurements editor-only while persisting only explicitly authored guides through one typed transaction boundary; preserve pointer/keyboard/accessibility parity, deterministic conflict resolution, cancellation/stale neutrality, and bounded scale evidence.
+  - Dependencies: `SF-AUTHORING-006`.
 
 ## IN PROGRESS
 
@@ -18,6 +18,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-AUTHORING-006` Implement deterministic geometry-transform sessions for selected nodes.
+  - Requirements: `SF-0403-001` through `SF-0403-008` (bounded move/resize slice; the normative module remains Partial overall).
+  - Plan: retain canonical `layout.x`, `layout.y`, `layout.width`, and `layout.height` properties as the only authored geometry source; add a Foundation-only typed transform registry and scene-owned draft/validate/preview/commit session keyed by document, page, revision, renderer generation, session, and stable node identities; compile one compatible ordered selection into one atomic batch command with exact property inverses; route pointer, keyboard, menu, contextual, accessibility, and automation adapters through the same validation; render editor-only move/resize previews and bounded handles through the overlay layer; adopt committed revisions through the existing selection, layout, renderer, hit-test, dirty-region, persistence, autosave/recovery, and history boundaries; retain deterministic 100-/10,000-object measurements, UI evidence, architecture checks, and explicit unsupported semantics.
+  - Supported: exact move and eight-handle resize geometry; horizontal/vertical constraints; stable session/document/page/revision/renderer identities; ordered compatible multiple movement with explicit multiple-resize rejection; typed locked/hidden/unavailable/missing/cross-page/stale/invalid failures; pointer, keyboard, menu, contextual, accessibility, inspector numeric, and automation adapters; editor-only previews and native accessible handles; one atomic transaction and inverse; undo/redo and deterministic package/history round trips; selection/Layers/layout/renderer/hit-test/dirty-region adoption; redacted diagnostics.
+  - Explicitly unsupported: rotation, skew, snapping, guides, rich-text transforms, responsive breakpoint editing, broad inspector property-system editing, export generation, 10,000-object simultaneous selection, final incremental layout/render performance, OS-level VoiceOver/settings acceptance, and owner-approved release hardware budgets. Transform sessions and previews are noncanonical and non-`Codable`; schema v2 remains unchanged.
+  - Evidence: thirteen focused unit/integration tests plus one actual-app pointer/keyboard/numeric/undo/redo/accessibility journey; headless import/typecheck and non-`Codable` enforcement; deterministic package/history and schema-v1 regression coverage; retained native-handle/preview/commit screenshots; and two validated capacity measurements. On Mac16,13, preparation P95 was 0.629 ms in a 100-object project and 28.493 ms in a 10,000-object project, with 110,804,992-byte resident-memory high water. The large result exceeds one 60 Hz interval and is not an incremental or release-budget pass.
+  - Dependencies: completed after `SF-AUTHORING-004` and `SF-AUTHORING-005`. `SF-AUTHORING-007` is next READY.
 
 - [x] `SF-CI-005` Make mixed-framework Tab routing window-native.
   - Requirements: bounded regression coverage for `SF-0201-006`, `SF-0201-008`, `SF-0203-006`, `SF-0203-008`, `SF-0602-006`, `SF-1902-006`, and `SF-1902-008`.
