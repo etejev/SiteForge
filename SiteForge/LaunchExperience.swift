@@ -660,15 +660,22 @@ struct LaunchExperienceView: View {
                 ProgressView(value: progress)
                     .accessibilityValue("\(Int(progress * 100)) percent")
                     .accessibilityIdentifier("launch.progress.determinate")
-            } else if LaunchExperienceController.usesAnimatedIndeterminateProgress(reduceMotion: effectiveReduceMotion) {
-                ProgressView()
-                    .controlSize(.large)
-                    .accessibilityIdentifier("launch.progress.indeterminate")
             } else {
-                Image(systemName: "hourglass")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
+                Group {
+                    if LaunchExperienceController.usesAnimatedIndeterminateProgress(reduceMotion: effectiveReduceMotion) {
+                        ProgressView()
+                            .controlSize(.large)
+                    } else {
+                        Image(systemName: "hourglass")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(
+                    effectiveReduceMotion ? "Indeterminate progress, static" : "Indeterminate progress"
+                )
+                .accessibilityIdentifier("launch.progress.indeterminate")
             }
             Text(status.displayedTitle)
                 .font(.title3.weight(.semibold))

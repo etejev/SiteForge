@@ -163,8 +163,15 @@ enum WorkspaceMetrics {
     }
 
     static func requestedWindowSize(composition: DebugTestComposition = .current()) -> CGSize? {
-        guard composition.value(after: "-SiteForgeWindowSize") == "minimum" else { return nil }
+        guard composition.value(after: "-SiteForgeWindowSize") == "minimum"
+                || composition.boolValue(after: "-SiteForgeUITestMode") == true else { return nil }
         return minimumWindowSize
+    }
+
+    static func usesDeterministicUITestPlacement(
+        composition: DebugTestComposition = .current()
+    ) -> Bool {
+        composition.boolValue(after: "-SiteForgeUITestMode") == true
     }
 
     static func requestedWindowSize(arguments: [String]) -> CGSize? {

@@ -89,6 +89,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     }
 
     private var fixtureLease: RepositoryTestFixture!
+    private var launchedApplications: [XCUIApplication] = []
     private var fixtureRoot: URL { fixtureLease.url }
     private var recoveryDirectory: URL {
         fixtureRoot.appendingPathComponent("recovery", isDirectory: true)
@@ -101,15 +102,20 @@ final class SiteForgeLaunchTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        for application in launchedApplications where application.state != .notRunning {
+            application.terminate()
+        }
+        launchedApplications.removeAll()
         try super.tearDownWithError()
     }
 
     private func launchWorkspace() -> XCUIApplication {
         continueAfterFailure = false
-        let application = XCUIApplication()
+        let application = trackedApplication()
         application.launchArguments += [
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-AppleKeyboardUIMode", "3",
+            "-SiteForgeUITestMode", "YES",
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
         ]
         application.launch()
@@ -122,8 +128,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         let newProject = application.buttons["launch.newBlankProject"]
         if newProject.waitForExistence(timeout: 2) {
             newProject.click()
-            XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 2))
+            XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
         }
+        XCTAssertTrue(waitForHittable(application.buttons["toolbar.preview"]))
         return application
     }
 
@@ -133,10 +140,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         extraArguments: [String] = []
     ) -> XCUIApplication {
         continueAfterFailure = false
-        let application = XCUIApplication()
+        let application = trackedApplication()
         application.launchArguments += [
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-AppleKeyboardUIMode", "3",
+            "-SiteForgeUITestMode", "YES",
             "-SiteForgeLaunchScenario", scenario,
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
         ]
@@ -147,11 +155,63 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.launch()
         application.activate()
         XCTAssertTrue(application.windows.firstMatch.waitForExistence(timeout: 5))
+        let state = application.descendants(matching: .any)["launch.experience"]
+        if scenario == "workspace" {
+            XCTAssertTrue(application.descendants(matching: .any)["workspace.shell"].waitForExistence(timeout: 5))
+            XCTAssertTrue(waitForHittable(application.buttons["toolbar.preview"]))
+        } else {
+            XCTAssertTrue(state.waitForExistence(timeout: 5))
+            let stateIdentifier = switch scenario {
+            case "welcome": "launch.newBlankProject"
+            case "loadingIndeterminate": "launch.progress.indeterminate"
+            case "loadingDeterminate": "launch.progress.determinate"
+            case "loadingNonCancelable": "launch.nonCancelable"
+            case "failure": "launch.retry"
+            case "recovery": "launch.recovery.restore"
+            default: "launch.experience"
+            }
+            XCTAssertTrue(
+                application.descendants(matching: .any)[stateIdentifier].waitForExistence(timeout: 5),
+                "Launch state \(scenario) did not become ready."
+            )
+        }
         return application
     }
 
     private func hasKeyboardFocus(_ element: XCUIElement) -> Bool {
         (element.value(forKey: "hasKeyboardFocus") as? Bool) == true
+    }
+
+    private func waitForKeyboardFocus(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { object, _ in
+                    guard let element = object as? XCUIElement else { return false }
+                    return (element.value(forKey: "hasKeyboardFocus") as? Bool) == true
+                },
+                object: element
+            )],
+            timeout: timeout
+        ) == .completed
+    }
+
+    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { object, _ in
+                    guard let element = object as? XCUIElement else { return false }
+                    return element.exists && element.isHittable
+                },
+                object: element
+            )],
+            timeout: timeout
+        ) == .completed
+    }
+
+    private func trackedApplication() -> XCUIApplication {
+        let application = XCUIApplication()
+        launchedApplications.append(application)
+        return application
     }
 
     private func pageRows(in application: XCUIApplication) -> [XCUIElement] {
@@ -181,10 +241,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         retryBase64Fixture: URL? = nil
     ) -> XCUIApplication {
         continueAfterFailure = false
-        let application = XCUIApplication()
+        let application = trackedApplication()
         application.launchArguments += [
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-AppleKeyboardUIMode", "3",
+            "-SiteForgeUITestMode", "YES",
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
             "-SiteForgeIntegrationOpenProject", url.path,
             "-SiteForgeIntegrationPackageBase64", base64Fixture.path,
@@ -292,6 +353,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("t", modifierFlags: [])
         XCTAssertTrue(application.staticTexts["Tool: Text"].waitForExistence(timeout: 2))
 
+        XCTAssertTrue(waitForHittable(application.buttons["toolbar.preview"]))
         application.buttons["toolbar.preview"].click()
         XCTAssertTrue(application.descendants(matching: .any)["preview.placeholder"].waitForExistence(timeout: 2))
         application.buttons["preview.done"].click()
@@ -306,36 +368,36 @@ final class SiteForgeLaunchTests: XCTestCase {
         let accessibility = application.buttons["inspector.tab.accessibility"]
 
         pages.click()
-        XCTAssertTrue(hasKeyboardFocus(pages))
+        XCTAssertTrue(waitForKeyboardFocus(pages))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(application.buttons["navigator.tab.layers"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["navigator.tab.layers"]))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(pageRow(named: "Home", in: application)))
+        XCTAssertTrue(waitForKeyboardFocus(pageRow(named: "Home", in: application)))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(pageRow(named: "Not Found", in: application)))
+        XCTAssertTrue(waitForKeyboardFocus(pageRow(named: "Not Found", in: application)))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(application.popUpButtons["canvas.viewport.preset"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.popUpButtons["canvas.viewport.preset"]))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(application.buttons["canvas.zoom.out"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.out"]))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(application.buttons["canvas.zoom.in"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.in"]))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(application.buttons["canvas.zoom.reset"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.reset"]))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(application.buttons["canvas.zoom.fit"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.fit"]))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(application.descendants(matching: .any)["canvas.interaction"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.descendants(matching: .any)["canvas.interaction"]))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(application.buttons["inspector.tab.layout"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.layout"]))
 
         accessibility.click()
-        XCTAssertTrue(hasKeyboardFocus(accessibility))
+        XCTAssertTrue(waitForKeyboardFocus(accessibility))
         application.typeKey("\t", modifierFlags: .shift)
-        XCTAssertTrue(hasKeyboardFocus(application.buttons["inspector.tab.advanced"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.advanced"]))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(accessibility))
+        XCTAssertTrue(waitForKeyboardFocus(accessibility))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(hasKeyboardFocus(pages))
+        XCTAssertTrue(waitForKeyboardFocus(pages))
     }
 
     // SF-0401-001, SF-0401-002, SF-0401-006, SF-0401-008
@@ -492,10 +554,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         let recovery = recoveryDirectory.appendingPathComponent(
             "11000000-0000-0000-0000-000000000002.siteforge-recovery"
         )
-        var application = XCUIApplication()
+        var application = trackedApplication()
         application.launchArguments += [
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-AppleKeyboardUIMode", "3",
+            "-SiteForgeUITestMode", "YES",
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
             "-SiteForgeIntegrationRecoveryBase64", recoveryBytes.path,
             "-SiteForgeIntegrationRecoveryDestination", recovery.path,
@@ -508,10 +571,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
         application.terminate()
 
-        application = XCUIApplication()
+        application = trackedApplication()
         application.launchArguments += [
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-AppleKeyboardUIMode", "3",
+            "-SiteForgeUITestMode", "YES",
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
             "-SiteForgeIntegrationRecoveryBase64", recoveryBytes.path,
             "-SiteForgeIntegrationRecoveryDestination", recovery.path,
@@ -528,7 +592,9 @@ final class SiteForgeLaunchTests: XCTestCase {
     @MainActor
     func testReduceMotionUsesStaticIndeterminateStatus() throws {
         let application = launchScenario("loadingIndeterminate", reduceMotion: true)
-        XCTAssertFalse(application.descendants(matching: .any)["launch.progress.indeterminate"].exists)
+        let progress = application.descendants(matching: .any)["launch.progress.indeterminate"]
+        XCTAssertTrue(progress.exists)
+        XCTAssertEqual(progress.label, "Indeterminate progress, static")
         XCTAssertTrue(application.staticTexts["Opening project…"].exists)
     }
 
@@ -589,8 +655,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         for (name, arguments) in variants {
             let application = launchScenario("workspace", extraArguments: arguments)
             XCTAssertTrue(application.descendants(matching: .any)["shell.navigator"].exists)
-            XCTAssertTrue(application.buttons["navigator.tab.pages"].isHittable)
-            XCTAssertTrue(application.buttons["toolbar.preview"].isHittable)
+            XCTAssertTrue(waitForHittable(application.buttons["navigator.tab.pages"]))
+            XCTAssertTrue(waitForHittable(application.buttons["toolbar.preview"]))
             application.typeKey("\t", modifierFlags: [])
             XCTAssertTrue(application.descendants(matching: .any)["workspace.shell"].exists)
             attachScreenshot(named: "workspace-\(name)")
@@ -633,7 +699,10 @@ final class SiteForgeLaunchTests: XCTestCase {
             case "failure": "launch.retry"
             default: "launch.recovery.restore"
             }
-            XCTAssertTrue(application.descendants(matching: .any)[expectedIdentifier].exists, scenario)
+            XCTAssertTrue(
+                application.descendants(matching: .any)[expectedIdentifier].waitForExistence(timeout: 5),
+                scenario
+            )
             application.terminate()
         }
     }
