@@ -554,7 +554,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.layout"], in: application))
 
-        accessibility.click()
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.style"], in: application))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.advanced"], in: application))
+        application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(accessibility, in: application))
         application.typeKey("\t", modifierFlags: .shift)
         XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.advanced"], in: application))

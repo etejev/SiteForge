@@ -37,4 +37,4 @@ No assertion, traversal order, production minimum-window size, control layout, o
 
 ## Limitation
 
-Local tests prove the production routing behavior and monitor lifecycle on the named local environment. A new hosted execution of the pushed commit is still required to confirm the original Xcode 26.5 environment. If it fails, the new diagnostic probe makes the logical focus, responder class, window state, and last route outcome available without project content or file paths.
+Hosted run `30214993143` proved the corrected mixed-framework boundaries: forward traversal reached the native preset, continued to zoom out, and completed through the canvas to Inspector Layout. Its sole failure moved to the subsequent pointer click on Inspector Accessibility, whose frame began at x=1021 on the approximately 1024-point hosted display. The traversal journey now reaches Style, Advanced, and Accessibility with one real Tab per control and retains every actual-focus assertion, removing that unrelated offscreen pointer dependency while increasing forward-order coverage. A fresh hosted run of the follow-up commit remains required.
