@@ -35,6 +35,8 @@ Debug UI-test composition exposes a content-free diagnostic accessibility value 
 
 No assertion, traversal order, production minimum-window size, control layout, or timeout was weakened. No sleep, synthetic repeated Tab, coordinate click, or Debug-only focus behavior was introduced.
 
-## Limitation
+## Hosted acceptance
 
-Hosted run `30214993143` proved the corrected mixed-framework boundaries: forward traversal reached the native preset, continued to zoom out, and completed through the canvas to Inspector Layout. Its sole failure moved to the subsequent pointer click on Inspector Accessibility, whose frame began at x=1021 on the approximately 1024-point hosted display. The traversal journey now reaches Style, Advanced, and Accessibility with one real Tab per control and retains every actual-focus assertion, removing that unrelated offscreen pointer dependency while increasing forward-order coverage. A fresh hosted run of the follow-up commit remains required.
+Hosted run `30214993143` proved the corrected mixed-framework boundaries: forward traversal reached the native preset, continued to zoom out, and completed through the canvas to Inspector Layout. Its sole failure moved to the subsequent pointer click on Inspector Accessibility, whose frame began at x=1021 on the approximately 1024-point hosted display. The traversal journey now reaches Style, Advanced, and Accessibility with one real Tab per control and retains every actual-focus assertion, removing that unrelated offscreen pointer dependency while increasing forward-order coverage.
+
+Follow-up Actions run `30215756810` passed the complete repository gate on hosted Xcode 26.5 in 8 minutes 37 seconds at commit `a1328eab1372a9f5f91db3b65270871e44e01848`. This closes the hosted uncertainty for the mixed-framework boundary and the display-independent full keyboard journey.
