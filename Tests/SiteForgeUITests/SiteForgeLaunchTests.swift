@@ -2,6 +2,11 @@ import XCTest
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
+    private enum TestWindowAlignment: String {
+        case left
+        case right
+    }
+
     // SF-0405-002 through SF-0405-007
     func testFrameTextInsertionCancellationUndoRedoAndSelectionJourney() throws {
         let application = launchWorkspace()
@@ -109,13 +114,16 @@ final class SiteForgeLaunchTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    private func launchWorkspace() -> XCUIApplication {
+    private func launchWorkspace(
+        windowAlignment: TestWindowAlignment = .left
+    ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
         application.launchArguments += [
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-AppleKeyboardUIMode", "3",
             "-SiteForgeUITestMode", "YES",
+            "-SiteForgeUITestWindowAlignment", windowAlignment.rawValue,
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
         ]
         application.launch()
@@ -128,9 +136,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         let newProject = application.buttons["launch.newBlankProject"]
         if newProject.waitForExistence(timeout: 2) {
             newProject.click()
-            XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
         }
-        XCTAssertTrue(waitForHittable(application.buttons["toolbar.preview"]))
+        application.activate()
+        XCTAssertTrue(waitForWorkspaceReady(application))
         return application
     }
 
@@ -157,8 +165,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.windows.firstMatch.waitForExistence(timeout: 5))
         let state = application.descendants(matching: .any)["launch.experience"]
         if scenario == "workspace" {
-            XCTAssertTrue(application.descendants(matching: .any)["workspace.shell"].waitForExistence(timeout: 5))
-            XCTAssertTrue(waitForHittable(application.buttons["toolbar.preview"]))
+            application.activate()
+            XCTAssertTrue(waitForWorkspaceReady(application))
         } else {
             XCTAssertTrue(state.waitForExistence(timeout: 5))
             let stateIdentifier = switch scenario {
@@ -206,6 +214,41 @@ final class SiteForgeLaunchTests: XCTestCase {
             )],
             timeout: timeout
         ) == .completed
+    }
+
+    private func waitForWorkspaceReady(
+        _ application: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        application.activate()
+        let window = application.windows.firstMatch
+        let shell = application.descendants(matching: .any)["workspace.shell"]
+        let ready = NSPredicate { object, _ in
+            guard let element = object as? XCUIElement else { return false }
+            return element.exists && element.label == "SiteForge workspace"
+        }
+        let result = window.waitForExistence(timeout: timeout)
+            && XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(predicate: ready, object: shell)],
+                timeout: timeout
+            ) == .completed
+        if !result {
+            attachReadinessDiagnostics(for: application)
+        }
+        return result
+    }
+
+    private func attachReadinessDiagnostics(for application: XCUIApplication) {
+        attachScreenshot(named: "workspace-readiness-failure")
+        let redacted = application.debugDescription.replacingOccurrences(
+            of: #"(?:file://)?/(?:Users|private|var|Volumes)/[^\s,\]\)\}"]+"#,
+            with: "<redacted-path>",
+            options: .regularExpression
+        )
+        let hierarchy = XCTAttachment(string: redacted)
+        hierarchy.name = "workspace-readiness-accessibility-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
     }
 
     private func trackedApplication() -> XCUIApplication {
@@ -295,6 +338,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["status.document"].exists)
     }
 
+    // SF-0201-006, SF-0201-008, SF-1902-008
+    @MainActor
+    func testWorkspaceReadinessDoesNotDependOnPreviewPointerVisibility() throws {
+        let application = launchWorkspace()
+        let workspace = application.descendants(matching: .any)["workspace.shell"]
+
+        XCTAssertEqual(workspace.label, "SiteForge workspace")
+        XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].exists)
+        XCTAssertTrue(application.buttons["toolbar.preview"].exists)
+    }
+
     // SF-0301-006, SF-0303-006, SF-0303-008
     @MainActor
     func testPagesNavigatorExposesApprovedOrderLabelsSelectionAndArrowNavigation() throws {
@@ -353,11 +407,25 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("t", modifierFlags: [])
         XCTAssertTrue(application.staticTexts["Tool: Text"].waitForExistence(timeout: 2))
 
-        XCTAssertTrue(waitForHittable(application.buttons["toolbar.preview"]))
-        application.buttons["toolbar.preview"].click()
+        let preview = application.buttons["toolbar.preview"]
+        XCTAssertTrue(preview.exists)
+        XCTAssertTrue(preview.isEnabled)
+        XCTAssertEqual(preview.label, "Preview")
+        application.typeKey("p", modifierFlags: [.command, .shift])
         XCTAssertTrue(application.descendants(matching: .any)["preview.placeholder"].waitForExistence(timeout: 2))
         application.buttons["preview.done"].click()
         XCTAssertTrue(hasKeyboardFocus(application.buttons["navigator.tab.pages"]))
+    }
+
+    // SF-0201-006, SF-0201-008, SF-0203-006, SF-1902-008
+    @MainActor
+    func testPreviewPointerUsesRightAlignedTestWindow() throws {
+        let application = launchWorkspace(windowAlignment: .right)
+        let preview = application.buttons["toolbar.preview"]
+
+        XCTAssertTrue(waitForHittable(preview))
+        preview.click()
+        XCTAssertTrue(application.descendants(matching: .any)["preview.placeholder"].waitForExistence(timeout: 2))
     }
 
     // SF-0201-006, SF-0602-006, SF-1902-006
@@ -656,7 +724,10 @@ final class SiteForgeLaunchTests: XCTestCase {
             let application = launchScenario("workspace", extraArguments: arguments)
             XCTAssertTrue(application.descendants(matching: .any)["shell.navigator"].exists)
             XCTAssertTrue(waitForHittable(application.buttons["navigator.tab.pages"]))
-            XCTAssertTrue(waitForHittable(application.buttons["toolbar.preview"]))
+            XCTAssertEqual(
+                application.descendants(matching: .any)["workspace.shell"].label,
+                "SiteForge workspace"
+            )
             application.typeKey("\t", modifierFlags: [])
             XCTAssertTrue(application.descendants(matching: .any)["workspace.shell"].exists)
             attachScreenshot(named: "workspace-\(name)")

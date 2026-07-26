@@ -38,6 +38,7 @@ final class ArchitectureBoundaryTests: XCTestCase {
                 "SiteForge", "-SiteForgeWorkspaceFixture", "large",
                 "-SiteForgeWindowSize", "minimum", "-SiteForgeStartModified",
                 "-SiteForgeUITestMode", "YES",
+                "-SiteForgeUITestWindowAlignment", "right",
             ],
             enabled: false
         )
@@ -47,6 +48,7 @@ final class ArchitectureBoundaryTests: XCTestCase {
         XCTAssertNil(WorkspaceFixtureScale.from(composition: disabled))
         XCTAssertNil(WorkspaceMetrics.requestedWindowSize(composition: disabled))
         XCTAssertFalse(WorkspaceMetrics.usesDeterministicUITestPlacement(composition: disabled))
+        XCTAssertNil(WorkspaceMetrics.requestedUITestWindowAlignment(composition: disabled))
         XCTAssertNil(LaunchPreviewScenario.from(composition: disabled))
     }
 
@@ -57,6 +59,7 @@ final class ArchitectureBoundaryTests: XCTestCase {
                 "SiteForge", "-SiteForgeWorkspaceFixture", "standard",
                 "-SiteForgeWindowSize", "minimum",
                 "-SiteForgeUITestMode", "YES",
+                "-SiteForgeUITestWindowAlignment", "right",
                 "-SiteForgeLaunchScenario", "loadingDeterminate",
             ],
             enabled: true
@@ -65,6 +68,7 @@ final class ArchitectureBoundaryTests: XCTestCase {
         XCTAssertEqual(WorkspaceFixtureScale.from(composition: enabled), .standard)
         XCTAssertEqual(WorkspaceMetrics.requestedWindowSize(composition: enabled), WorkspaceMetrics.minimumWindowSize)
         XCTAssertTrue(WorkspaceMetrics.usesDeterministicUITestPlacement(composition: enabled))
+        XCTAssertEqual(WorkspaceMetrics.requestedUITestWindowAlignment(composition: enabled), .right)
         XCTAssertEqual(LaunchPreviewScenario.from(composition: enabled), .loadingDeterminate)
     }
 }

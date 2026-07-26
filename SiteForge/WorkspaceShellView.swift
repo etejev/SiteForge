@@ -38,6 +38,7 @@ struct WorkspaceShellView: View {
             minHeight: WorkspaceMetrics.minimumWindowSize.height
         )
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("SiteForge workspace")
         .accessibilityIdentifier("workspace.shell")
         .background {
             ZStack {

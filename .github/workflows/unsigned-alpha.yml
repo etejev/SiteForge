@@ -20,7 +20,7 @@ jobs:
       - name: Build, test, and package locally
         run: ./sf release-local
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: SiteForge-unsigned-alpha
           path: .build/local-alpha/*

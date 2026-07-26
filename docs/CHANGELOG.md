@@ -99,6 +99,9 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Fixed
 
+- Workspace UI-test readiness no longer depends on the far-right Preview toolbar control being pointer-visible. Shared launch helpers now wait for the accessible workspace shell, capture redacted hierarchy/screenshot diagnostics on failure, and use Debug-only deterministic edge placement solely for tests that need offscreen pointer targets; the 1100×700 production minimum is unchanged.
+- GitHub Actions failure artifacts now use the official Node 24-based upload-artifact major.
+
 - macOS UI verification now waits for explicit accessible launch/workspace readiness, keyboard-focus settlement, and toolbar hittability; reduced-motion loading keeps a stable static progress element, UI-test windows are deterministically visible, and launched applications are cleaned up after each journey.
 - GitHub Actions now uses checkout v5, records its macOS/Xcode environment, and retains the redacted verification log and XCTest result bundle on failure while keeping `./sf verify` as the sole authoritative pipeline.
 - Direct or transactional removal can no longer leave a project with an invalid empty page list, and duplicate published routes are rejected before commit.

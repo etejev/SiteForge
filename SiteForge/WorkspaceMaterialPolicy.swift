@@ -214,18 +214,12 @@ struct WorkspaceWindowConfigurator: NSViewRepresentable {
            window.contentLayoutRect.size != requestedSize {
             window.setContentSize(requestedSize)
         }
-        if WorkspaceMetrics.usesDeterministicUITestPlacement(),
+        if let alignment = WorkspaceMetrics.requestedUITestWindowAlignment(),
            let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
-            let frame = window.frame
-            let origin = CGPoint(
-                x: max(visibleFrame.minX, min(
-                    visibleFrame.midX - frame.width / 2,
-                    visibleFrame.maxX - frame.width
-                )),
-                y: max(visibleFrame.minY, min(
-                    visibleFrame.midY - frame.height / 2,
-                    visibleFrame.maxY - frame.height
-                ))
+            let origin = WorkspaceMetrics.uiTestWindowOrigin(
+                windowFrame: window.frame,
+                visibleFrame: visibleFrame,
+                alignment: alignment
             )
             window.setFrameOrigin(origin)
         }

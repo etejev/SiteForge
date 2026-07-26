@@ -99,7 +99,43 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
                 enabled: true
             )
         ))
+        XCTAssertEqual(
+            WorkspaceMetrics.requestedUITestWindowAlignment(composition: DebugTestComposition(
+                arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"],
+                enabled: true
+            )),
+            .left
+        )
         XCTAssertNil(WorkspaceMetrics.requestedWindowSize(arguments: ["SiteForge"]))
+    }
+
+    // SF-0201-008, SF-1605-008, SF-1902-008
+    func testConstrainedDisplayPlacementPreservesMinimumWindowAndExposesRequestedEdge() {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_024, height: 768)
+        let windowFrame = CGRect(
+            origin: .zero,
+            size: WorkspaceMetrics.minimumWindowSize
+        )
+
+        let left = WorkspaceMetrics.uiTestWindowOrigin(
+            windowFrame: windowFrame,
+            visibleFrame: visibleFrame,
+            alignment: .left
+        )
+        let right = WorkspaceMetrics.uiTestWindowOrigin(
+            windowFrame: windowFrame,
+            visibleFrame: visibleFrame,
+            alignment: .right
+        )
+
+        XCTAssertEqual(left, CGPoint(x: 16, y: 52))
+        XCTAssertEqual(right, CGPoint(x: -92, y: 52))
+        XCTAssertEqual(windowFrame.size, CGSize(width: 1_100, height: 700))
+        XCTAssertEqual(left.x, visibleFrame.minX + WorkspaceMetrics.uiTestScreenEdgeInset)
+        XCTAssertEqual(
+            right.x + windowFrame.width,
+            visibleFrame.maxX - WorkspaceMetrics.uiTestScreenEdgeInset
+        )
     }
 
     // SF-0201-007, SF-1505-007, SF-1605-007

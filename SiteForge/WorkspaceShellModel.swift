@@ -155,6 +155,7 @@ enum WorkspaceMetrics {
     static let navigatorWidth: ClosedRange<CGFloat> = 210...300
     static let inspectorWidth: ClosedRange<CGFloat> = 280...360
     static let minimumCanvasWidth: CGFloat = 500
+    static let uiTestScreenEdgeInset: CGFloat = 16
 
     static func supportsLayout(at size: CGSize) -> Bool {
         size.width >= minimumWindowSize.width
@@ -171,12 +172,44 @@ enum WorkspaceMetrics {
     static func usesDeterministicUITestPlacement(
         composition: DebugTestComposition = .current()
     ) -> Bool {
-        composition.boolValue(after: "-SiteForgeUITestMode") == true
+        requestedUITestWindowAlignment(composition: composition) != nil
+    }
+
+    static func requestedUITestWindowAlignment(
+        composition: DebugTestComposition = .current()
+    ) -> WorkspaceUITestWindowAlignment? {
+        guard composition.boolValue(after: "-SiteForgeUITestMode") == true else {
+            return nil
+        }
+        return composition.value(after: "-SiteForgeUITestWindowAlignment")
+            .flatMap(WorkspaceUITestWindowAlignment.init(rawValue:))
+            ?? .left
+    }
+
+    static func uiTestWindowOrigin(
+        windowFrame: CGRect,
+        visibleFrame: CGRect,
+        alignment: WorkspaceUITestWindowAlignment,
+        inset: CGFloat = uiTestScreenEdgeInset
+    ) -> CGPoint {
+        let x = switch alignment {
+        case .left: visibleFrame.minX + inset
+        case .right: visibleFrame.maxX - windowFrame.width - inset
+        }
+        return CGPoint(
+            x: x,
+            y: visibleFrame.maxY - windowFrame.height - inset
+        )
     }
 
     static func requestedWindowSize(arguments: [String]) -> CGSize? {
         requestedWindowSize(composition: .current(arguments: arguments))
     }
+}
+
+enum WorkspaceUITestWindowAlignment: String {
+    case left
+    case right
 }
 
 enum WorkspaceFixtureScale: String {

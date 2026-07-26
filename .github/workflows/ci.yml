@@ -35,7 +35,7 @@ jobs:
           ./sf verify 2>&1 | tee "$RUNNER_TEMP/siteforge-ci/verify.log"
       - name: Upload verification diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: siteforge-verify-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
