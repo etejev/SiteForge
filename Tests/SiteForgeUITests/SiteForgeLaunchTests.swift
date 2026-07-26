@@ -7,6 +7,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         case right
     }
 
+    private enum TestWindowGeometry {
+        static let safeScreenInset: CGFloat = 16
+    }
+
     // SF-0405-002 through SF-0405-007
     func testFrameTextInsertionCancellationUndoRedoAndSelectionJourney() throws {
         let application = launchWorkspace()
@@ -29,9 +33,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
         attachScreenshot(named: "SF-AUTHORING-005 cancelled preview")
 
-        application.buttons["toolbar.undo"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 3"))
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
         XCTAssertTrue(application.buttons["toolbar.redo"].isEnabled)
-        application.buttons["toolbar.redo"].click()
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 3"))
         XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
 
         application.buttons["navigator.tab.layers"].click()
@@ -190,17 +197,28 @@ final class SiteForgeLaunchTests: XCTestCase {
         (element.value(forKey: "hasKeyboardFocus") as? Bool) == true
     }
 
-    private func waitForKeyboardFocus(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
-        XCTWaiter.wait(
+    private func waitForKeyboardFocus(
+        _ element: XCUIElement,
+        in application: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        let focusedMatch = application.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "identifier == %@ AND hasKeyboardFocus == true",
+                element.identifier
+            ))
+            .firstMatch
+        let result = XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(
-                predicate: NSPredicate { object, _ in
-                    guard let element = object as? XCUIElement else { return false }
-                    return (element.value(forKey: "hasKeyboardFocus") as? Bool) == true
-                },
-                object: element
+                predicate: NSPredicate(format: "exists == true"),
+                object: focusedMatch
             )],
             timeout: timeout
         ) == .completed
+        if !result {
+            attachFocusDiagnostics(expected: element.identifier, application: application)
+        }
+        return result
     }
 
     private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
@@ -240,15 +258,50 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     private func attachReadinessDiagnostics(for application: XCUIApplication) {
         attachScreenshot(named: "workspace-readiness-failure")
-        let redacted = application.debugDescription.replacingOccurrences(
+        let hierarchy = XCTAttachment(string: redactedAccessibilityHierarchy(for: application))
+        hierarchy.name = "workspace-readiness-accessibility-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+    }
+
+    private func attachFocusDiagnostics(
+        expected identifier: String,
+        application: XCUIApplication
+    ) {
+        let focused = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasKeyboardFocus == true"))
+            .firstMatch
+        let currentIdentifier: String
+        if focused.exists, !focused.identifier.isEmpty {
+            currentIdentifier = focused.identifier
+        } else {
+            currentIdentifier = "<unavailable>"
+        }
+        let details = """
+        Expected accessibility identifier: \(identifier)
+        Current focused accessibility identifier: \(currentIdentifier)
+
+        \(redactedAccessibilityHierarchy(for: application))
+        """
+        let hierarchy = XCTAttachment(string: details)
+        hierarchy.name = "focus-failure-accessibility-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        attachScreenshot(named: "focus-failure-\(identifier)")
+    }
+
+    private func redactedAccessibilityHierarchy(for application: XCUIApplication) -> String {
+        application.debugDescription
+            .replacingOccurrences(
             of: #"(?:file://)?/(?:Users|private|var|Volumes)/[^\s,\]\)\}"]+"#,
             with: "<redacted-path>",
             options: .regularExpression
         )
-        let hierarchy = XCTAttachment(string: redacted)
-        hierarchy.name = "workspace-readiness-accessibility-hierarchy"
-        hierarchy.lifetime = .keepAlways
-        add(hierarchy)
+            .replacingOccurrences(
+                of: #"(label|value|title|placeholderValue): (?:'[^']*'|"[^"]*")"#,
+                with: "$1: <redacted-content>",
+                options: .regularExpression
+            )
     }
 
     private func trackedApplication() -> XCUIApplication {
@@ -428,6 +481,33 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["preview.placeholder"].waitForExistence(timeout: 2))
     }
 
+    // SF-0201-006, SF-0201-008, SF-0203-006, SF-0405-006, SF-0405-008
+    @MainActor
+    func testUndoRedoToolbarPointerUsesRightAlignedTestWindow() throws {
+        let application = launchWorkspace(windowAlignment: .right)
+        let canvas = application.descendants(matching: .any)["canvas.interaction"]
+        application.typeKey("f", modifierFlags: [])
+        XCTAssertTrue(application.staticTexts["Tool: Frame"].waitForExistence(timeout: 2))
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+
+        let undo = application.buttons["toolbar.undo"]
+        let redo = application.buttons["toolbar.redo"]
+        let screenWidth = XCUIScreen.main.screenshot().image.size.width
+        XCTAssertTrue(waitForHittable(undo))
+        XCTAssertGreaterThanOrEqual(undo.frame.minX, TestWindowGeometry.safeScreenInset)
+        undo.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+
+        XCTAssertTrue(waitForHittable(redo))
+        XCTAssertLessThanOrEqual(
+            redo.frame.maxX,
+            screenWidth - TestWindowGeometry.safeScreenInset
+        )
+        redo.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+    }
+
     // SF-0201-006, SF-0602-006, SF-1902-006
     @MainActor
     func testKeyboardFocusTraversesWorkspaceForwardAndReverse() throws {
@@ -436,36 +516,63 @@ final class SiteForgeLaunchTests: XCTestCase {
         let accessibility = application.buttons["inspector.tab.accessibility"]
 
         pages.click()
-        XCTAssertTrue(waitForKeyboardFocus(pages))
+        XCTAssertTrue(waitForKeyboardFocus(pages, in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["navigator.tab.layers"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["navigator.tab.layers"], in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(pageRow(named: "Home", in: application)))
+        XCTAssertTrue(waitForKeyboardFocus(pageRow(named: "Home", in: application), in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(pageRow(named: "Not Found", in: application)))
+        XCTAssertTrue(waitForKeyboardFocus(pageRow(named: "Not Found", in: application), in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.popUpButtons["canvas.viewport.preset"]))
+        XCTAssertTrue(waitForKeyboardFocus(
+            application.descendants(matching: .any)["canvas.viewport.preset"],
+            in: application
+        ))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.out"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.out"], in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.in"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.in"], in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.reset"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.reset"], in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.fit"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.fit"], in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.descendants(matching: .any)["canvas.interaction"]))
+        XCTAssertTrue(waitForKeyboardFocus(
+            application.descendants(matching: .any)["canvas.interaction"],
+            in: application
+        ))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.layout"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.layout"], in: application))
 
         accessibility.click()
-        XCTAssertTrue(waitForKeyboardFocus(accessibility))
+        XCTAssertTrue(waitForKeyboardFocus(accessibility, in: application))
         application.typeKey("\t", modifierFlags: .shift)
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.advanced"]))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.advanced"], in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(accessibility))
+        XCTAssertTrue(waitForKeyboardFocus(accessibility, in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(pages))
+        XCTAssertTrue(waitForKeyboardFocus(pages, in: application))
+
+        let reverseTraversal: [XCUIElement] = [
+            accessibility,
+            application.buttons["inspector.tab.advanced"],
+            application.buttons["inspector.tab.style"],
+            application.buttons["inspector.tab.layout"],
+            application.descendants(matching: .any)["canvas.interaction"],
+            application.buttons["canvas.zoom.fit"],
+            application.buttons["canvas.zoom.reset"],
+            application.buttons["canvas.zoom.in"],
+            application.buttons["canvas.zoom.out"],
+            application.descendants(matching: .any)["canvas.viewport.preset"],
+            pageRow(named: "Not Found", in: application),
+            pageRow(named: "Home", in: application),
+            application.buttons["navigator.tab.layers"],
+            pages,
+        ]
+        for destination in reverseTraversal {
+            application.typeKey("\t", modifierFlags: .shift)
+            XCTAssertTrue(waitForKeyboardFocus(destination, in: application))
+        }
     }
 
     // SF-0401-001, SF-0401-002, SF-0401-006, SF-0401-008

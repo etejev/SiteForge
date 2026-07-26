@@ -72,16 +72,6 @@ struct WorkspaceShellView: View {
             .padding(24).frame(minWidth: 420)
             .accessibilityIdentifier("recovery.details")
         }
-        .onKeyPress(keys: [.tab], phases: .down) { press in
-            let direction: ShellFocusDirection = press.modifiers.contains(.shift) ? .reverse : .forward
-            focusedControl = ShellFocusTraversal.adjacent(
-                to: focusedControl,
-                direction: direction,
-                pageIDs: state.pages.map(\.id),
-                layerIDs: state.navigatorTab == .layers ? state.layerTargets.map(\.id) : []
-            )
-            return .handled
-        }
         .onExitCommand {
             state.performEscape()
         }
@@ -406,7 +396,18 @@ private struct CanvasPlaceholderView: View {
                 ZStack {
                     NativeCanvasViewport(
                         state: state,
-                        isKeyboardFocused: focus.wrappedValue == .viewportCanvas
+                        isKeyboardFocused: focus.wrappedValue == .viewportCanvas,
+                        onTabTraversal: { direction in
+                            let next = ShellFocusTraversal.adjacent(
+                                to: .viewportCanvas,
+                                direction: direction,
+                                pageIDs: state.pages.map(\.id),
+                                layerIDs: state.navigatorTab == .layers ? state.layerTargets.map(\.id) : []
+                            )
+                            DispatchQueue.main.async {
+                                focus.wrappedValue = next
+                            }
+                        }
                     )
                         .focusable()
                         .focused(focus, equals: .viewportCanvas)
@@ -465,15 +466,28 @@ private struct ViewportControlsView: View {
             Label("Viewport", systemImage: "display")
                 .font(.caption.weight(.semibold))
 
-            Picker("Viewport preset", selection: $state.viewportPreset) {
+            Menu {
                 ForEach(ViewportPreset.allCases) { preset in
-                    Text(preset.title).tag(preset)
+                    Button {
+                        state.viewportPreset = preset
+                    } label: {
+                        if preset == state.viewportPreset {
+                            Label(preset.title, systemImage: "checkmark")
+                        } else {
+                            Text(preset.title)
+                        }
+                    }
                 }
+            } label: {
+                Text(state.viewportPreset.title)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .labelsHidden()
+            .menuStyle(.button)
             .frame(width: 110)
             .focusable()
             .focused(focus, equals: .viewportPreset)
+            .accessibilityLabel("Viewport preset")
+            .accessibilityValue(state.viewportPreset.title)
             .accessibilityIdentifier("canvas.viewport.preset")
 
             Text("\(state.viewportPreset.width) px")
@@ -788,6 +802,7 @@ struct SiteForgeCommands: Commands {
 private struct NativeCanvasViewport: NSViewRepresentable {
     @ObservedObject var state: WorkspaceShellState
     let isKeyboardFocused: Bool
+    let onTabTraversal: (ShellFocusDirection) -> Void
 
     func makeNSView(context: Context) -> NativeCanvasViewportView {
         let view = NativeCanvasViewportView()
@@ -836,6 +851,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.onZoomIn = { state.performViewportCommand(CanvasViewportCommand(.zoomIn)) }
         view.onZoomOut = { state.performViewportCommand(CanvasViewportCommand(.zoomOut)) }
         view.onReset = { state.performViewportCommand(CanvasViewportCommand(.actualSize)) }
+        view.onTabTraversal = onTabTraversal
     }
 }
 
@@ -875,6 +891,7 @@ private final class NativeCanvasViewportView: NSView {
     var onZoomIn: (() -> Void)?
     var onZoomOut: (() -> Void)?
     var onReset: (() -> Void)?
+    var onTabTraversal: ((ShellFocusDirection) -> Void)?
     private let contentContainer = CALayer()
     private let overlayContainer = CALayer()
     private var rasterViewportState: CanvasViewportState?
@@ -993,6 +1010,10 @@ private final class NativeCanvasViewportView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 48 {
+            onTabTraversal?(event.modifierFlags.contains(.shift) ? .reverse : .forward)
+            return
+        }
         if event.keyCode == 53 {
             onEscape?()
             return
