@@ -460,35 +460,39 @@ private struct CanvasPlaceholderView: View {
 private struct ViewportControlsView: View {
     @ObservedObject var state: WorkspaceShellState
     let focus: FocusState<ShellFocus?>.Binding
+    @State private var focusSceneID = ViewportPresetFocusSceneID()
 
     var body: some View {
         HStack(spacing: 10) {
             Label("Viewport", systemImage: "display")
                 .font(.caption.weight(.semibold))
 
-            Menu {
-                ForEach(ViewportPreset.allCases) { preset in
-                    Button {
-                        state.viewportPreset = preset
-                    } label: {
-                        if preset == state.viewportPreset {
-                            Label(preset.title, systemImage: "checkmark")
-                        } else {
-                            Text(preset.title)
-                        }
+            NativeViewportPresetControl(
+                selection: $state.viewportPreset,
+                sceneID: focusSceneID,
+                isKeyboardFocusRequested: focus.wrappedValue == .viewportPreset,
+                onNativeFocusChange: { isFocused in
+                    if isFocused {
+                        focus.wrappedValue = .viewportPreset
+                    } else if focus.wrappedValue == .viewportPreset {
+                        focus.wrappedValue = nil
+                    }
+                },
+                onTabTraversal: { direction in
+                    let next = ShellFocusTraversal.adjacent(
+                        to: .viewportPreset,
+                        direction: direction,
+                        pageIDs: state.pages.map(\.id),
+                        layerIDs: state.navigatorTab == .layers ? state.layerTargets.map(\.id) : []
+                    )
+                    DispatchQueue.main.async {
+                        focus.wrappedValue = next
                     }
                 }
-            } label: {
-                Text(state.viewportPreset.title)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .menuStyle(.button)
+            )
             .frame(width: 110)
             .focusable()
             .focused(focus, equals: .viewportPreset)
-            .accessibilityLabel("Viewport preset")
-            .accessibilityValue(state.viewportPreset.title)
-            .accessibilityIdentifier("canvas.viewport.preset")
 
             Text("\(state.viewportPreset.width) px")
                 .monospacedDigit()
@@ -542,6 +546,286 @@ private struct ViewportControlsView: View {
         .workspaceChrome(.viewportControls)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("canvas.viewport.controls")
+    }
+}
+
+struct ViewportPresetFocusSceneID: Hashable {
+    let rawValue: UUID
+
+    init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+struct ViewportPresetFocusRequest: Hashable {
+    let sceneID: ViewportPresetFocusSceneID
+    let requestID: UUID
+
+    init(sceneID: ViewportPresetFocusSceneID, requestID: UUID = UUID()) {
+        self.sceneID = sceneID
+        self.requestID = requestID
+    }
+}
+
+struct ViewportPresetWindowIdentity: Hashable {
+    private let rawValue: ObjectIdentifier
+
+    init(window: NSWindow) {
+        rawValue = ObjectIdentifier(window)
+    }
+}
+
+enum ViewportPresetFocusDecision: Equatable {
+    case adopt
+    case alreadyFocused
+    case ignoreStaleRequest
+    case ignoreWrongScene
+    case ignoreWrongWindow
+    case ignoreRelinquishedRequest
+}
+
+struct ViewportPresetFocusGate {
+    let sceneID: ViewportPresetFocusSceneID
+    private(set) var activeRequest: ViewportPresetFocusRequest?
+    private(set) var expectedWindow: ViewportPresetWindowIdentity?
+    private(set) var adoptedRequest: ViewportPresetFocusRequest?
+    private(set) var relinquishedRequest: ViewportPresetFocusRequest?
+
+    mutating func activate(
+        _ request: ViewportPresetFocusRequest,
+        in window: ViewportPresetWindowIdentity
+    ) {
+        activeRequest = request
+        expectedWindow = window
+        adoptedRequest = nil
+        relinquishedRequest = nil
+    }
+
+    mutating func cancel() {
+        activeRequest = nil
+        expectedWindow = nil
+        adoptedRequest = nil
+        relinquishedRequest = nil
+    }
+
+    func decision(
+        for request: ViewportPresetFocusRequest,
+        in window: ViewportPresetWindowIdentity,
+        isFirstResponder: Bool
+    ) -> ViewportPresetFocusDecision {
+        guard request.sceneID == sceneID else { return .ignoreWrongScene }
+        guard request == activeRequest else { return .ignoreStaleRequest }
+        guard window == expectedWindow else { return .ignoreWrongWindow }
+        if isFirstResponder { return .alreadyFocused }
+        if request == relinquishedRequest { return .ignoreRelinquishedRequest }
+        return .adopt
+    }
+
+    mutating func markAdopted(_ request: ViewportPresetFocusRequest) {
+        guard request == activeRequest else { return }
+        adoptedRequest = request
+    }
+
+    mutating func markRelinquished(_ request: ViewportPresetFocusRequest) {
+        guard request == adoptedRequest else { return }
+        relinquishedRequest = request
+    }
+}
+
+enum ViewportPresetControlContract {
+    static let accessibilityIdentifier = "canvas.viewport.preset"
+    static let accessibilityLabel = "Viewport preset"
+
+    static func index(for preset: ViewportPreset) -> Int {
+        ViewportPreset.allCases.firstIndex(of: preset) ?? 0
+    }
+
+    static func preset(at index: Int) -> ViewportPreset? {
+        guard ViewportPreset.allCases.indices.contains(index) else { return nil }
+        return ViewportPreset.allCases[index]
+    }
+
+    static func accessibilityValue(for preset: ViewportPreset) -> String {
+        preset.title
+    }
+}
+
+private struct NativeViewportPresetControl: NSViewRepresentable {
+    @Binding var selection: ViewportPreset
+    let sceneID: ViewportPresetFocusSceneID
+    let isKeyboardFocusRequested: Bool
+    let onNativeFocusChange: (Bool) -> Void
+    let onTabTraversal: (ShellFocusDirection) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(sceneID: sceneID)
+    }
+
+    func makeNSView(context: Context) -> FocusableViewportPresetPopUpButton {
+        let button = FocusableViewportPresetPopUpButton(frame: .zero, pullsDown: false)
+        button.addItems(withTitles: ViewportPreset.allCases.map(\.title))
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.selectionChanged(_:))
+        button.controlSize = .small
+        button.focusRingType = .default
+        button.setAccessibilityIdentifier(ViewportPresetControlContract.accessibilityIdentifier)
+        button.setAccessibilityLabel(ViewportPresetControlContract.accessibilityLabel)
+        context.coordinator.attach(button)
+        return button
+    }
+
+    func updateNSView(_ button: FocusableViewportPresetPopUpButton, context: Context) {
+        context.coordinator.selection = $selection
+        context.coordinator.onNativeFocusChange = onNativeFocusChange
+        context.coordinator.onTabTraversal = onTabTraversal
+        let selectedIndex = ViewportPresetControlContract.index(for: selection)
+        if button.indexOfSelectedItem != selectedIndex {
+            button.selectItem(at: selectedIndex)
+        }
+        button.setAccessibilityValue(ViewportPresetControlContract.accessibilityValue(for: selection))
+        context.coordinator.synchronizeFocus(
+            requested: isKeyboardFocusRequested,
+            for: button
+        )
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private let sceneID: ViewportPresetFocusSceneID
+        private var gate: ViewportPresetFocusGate
+        private var currentRequest: ViewportPresetFocusRequest?
+        private var wasFocusRequested = false
+        private var isAdoptingRequestedFocus = false
+        var selection: Binding<ViewportPreset>?
+        var onNativeFocusChange: ((Bool) -> Void)?
+        var onTabTraversal: ((ShellFocusDirection) -> Void)?
+
+        init(sceneID: ViewportPresetFocusSceneID) {
+            self.sceneID = sceneID
+            gate = ViewportPresetFocusGate(sceneID: sceneID)
+        }
+
+        func attach(_ button: FocusableViewportPresetPopUpButton) {
+            button.onFocusChange = { [weak self] isFocused in
+                guard let self else { return }
+                if !isFocused, let request = self.currentRequest {
+                    self.gate.markRelinquished(request)
+                }
+                if !self.isAdoptingRequestedFocus {
+                    self.onNativeFocusChange?(isFocused)
+                }
+            }
+            button.onWindowChange = { [weak self, weak button] in
+                guard let self, let button else { return }
+                self.bindRequestAndAdopt(for: button)
+            }
+            button.onTabTraversal = { [weak self, weak button] direction in
+                guard let self else { return }
+                _ = button?.window?.makeFirstResponder(nil)
+                self.onTabTraversal?(direction)
+            }
+        }
+
+        func synchronizeFocus(
+            requested: Bool,
+            for button: FocusableViewportPresetPopUpButton
+        ) {
+            if requested, !wasFocusRequested {
+                currentRequest = ViewportPresetFocusRequest(sceneID: sceneID)
+            } else if !requested, wasFocusRequested {
+                currentRequest = nil
+                gate.cancel()
+            }
+            wasFocusRequested = requested
+            guard requested else { return }
+            bindRequestAndAdopt(for: button)
+        }
+
+        private func bindRequestAndAdopt(
+            for button: FocusableViewportPresetPopUpButton
+        ) {
+            guard let request = currentRequest, let window = button.window else { return }
+            let windowIdentity = ViewportPresetWindowIdentity(window: window)
+            if gate.activeRequest == nil {
+                gate.activate(request, in: windowIdentity)
+            }
+            let decision = gate.decision(
+                for: request,
+                in: windowIdentity,
+                isFirstResponder: window.firstResponder === button
+            )
+            if decision == .alreadyFocused {
+                gate.markAdopted(request)
+                return
+            }
+            guard decision == .adopt else { return }
+            isAdoptingRequestedFocus = true
+            defer { isAdoptingRequestedFocus = false }
+            if window.makeFirstResponder(button) {
+                gate.markAdopted(request)
+            }
+        }
+
+        @objc func selectionChanged(_ sender: NSPopUpButton) {
+            guard let preset = ViewportPresetControlContract.preset(at: sender.indexOfSelectedItem) else {
+                return
+            }
+            selection?.wrappedValue = preset
+            sender.setAccessibilityValue(ViewportPresetControlContract.accessibilityValue(for: preset))
+        }
+    }
+}
+
+private final class FocusableViewportPresetPopUpButton: NSPopUpButton {
+    var onFocusChange: ((Bool) -> Void)?
+    var onWindowChange: (() -> Void)?
+    var onTabTraversal: ((ShellFocusDirection) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChange?()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            onFocusChange?(true)
+        }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted {
+            onFocusChange?(false)
+        }
+        return accepted
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        _ = window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 48 {
+            onTabTraversal?(event.modifierFlags.contains(.shift) ? .reverse : .forward)
+            return
+        }
+        if event.keyCode == 125 || event.keyCode == 126 {
+            guard numberOfItems > 0 else { return }
+            let offset = event.keyCode == 125 ? 1 : -1
+            let destination = max(0, min(numberOfItems - 1, indexOfSelectedItem + offset))
+            if destination != indexOfSelectedItem {
+                selectItem(at: destination)
+                sendAction(action, to: target)
+            }
+            return
+        }
+        super.keyDown(with: event)
     }
 }
 

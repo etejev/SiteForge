@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import SiteForge
 
@@ -80,6 +81,84 @@ final class AppMetadataTests: XCTestCase {
         }
         XCTAssertEqual(ShellFocusTraversal.adjacent(to: nil, direction: .forward, pageIDs: [first]), .navigatorPages)
         XCTAssertEqual(ShellFocusTraversal.adjacent(to: nil, direction: .reverse, pageIDs: [second]), .inspectorAccessibility)
+    }
+
+    // SF-0201-006, SF-0201-008, SF-1902-006, SF-1902-008
+    @MainActor
+    func testViewportPresetFocusGateAdoptsOnlyCurrentSceneWindowAndRequest() {
+        let scene = ViewportPresetFocusSceneID(
+            UUID(uuidString: "40000000-0000-0000-0000-000000000001")!
+        )
+        let otherScene = ViewportPresetFocusSceneID(
+            UUID(uuidString: "40000000-0000-0000-0000-000000000002")!
+        )
+        let window = ViewportPresetWindowIdentity(window: NSWindow())
+        let otherWindow = ViewportPresetWindowIdentity(window: NSWindow())
+        let request = ViewportPresetFocusRequest(
+            sceneID: scene,
+            requestID: UUID(uuidString: "42000000-0000-0000-0000-000000000001")!
+        )
+        let staleRequest = ViewportPresetFocusRequest(
+            sceneID: scene,
+            requestID: UUID(uuidString: "42000000-0000-0000-0000-000000000002")!
+        )
+        let wrongSceneRequest = ViewportPresetFocusRequest(
+            sceneID: otherScene,
+            requestID: request.requestID
+        )
+        var gate = ViewportPresetFocusGate(sceneID: scene)
+
+        gate.activate(request, in: window)
+        XCTAssertEqual(gate.decision(for: request, in: window, isFirstResponder: false), .adopt)
+        XCTAssertEqual(gate.decision(for: request, in: window, isFirstResponder: true), .alreadyFocused)
+        XCTAssertEqual(gate.decision(for: staleRequest, in: window, isFirstResponder: false), .ignoreStaleRequest)
+        XCTAssertEqual(gate.decision(for: wrongSceneRequest, in: window, isFirstResponder: false), .ignoreWrongScene)
+        XCTAssertEqual(gate.decision(for: request, in: otherWindow, isFirstResponder: false), .ignoreWrongWindow)
+
+        gate.cancel()
+        XCTAssertEqual(gate.decision(for: request, in: window, isFirstResponder: false), .ignoreStaleRequest)
+    }
+
+    // SF-0201-006, SF-0201-008, SF-1902-006
+    @MainActor
+    func testViewportPresetFocusLossDoesNotReclaimWithoutANewRequest() {
+        let scene = ViewportPresetFocusSceneID(
+            UUID(uuidString: "43000000-0000-0000-0000-000000000001")!
+        )
+        let window = ViewportPresetWindowIdentity(window: NSWindow())
+        let request = ViewportPresetFocusRequest(
+            sceneID: scene,
+            requestID: UUID(uuidString: "43000000-0000-0000-0000-000000000003")!
+        )
+        let nextRequest = ViewportPresetFocusRequest(
+            sceneID: scene,
+            requestID: UUID(uuidString: "43000000-0000-0000-0000-000000000004")!
+        )
+        var gate = ViewportPresetFocusGate(sceneID: scene)
+
+        gate.activate(request, in: window)
+        gate.markAdopted(request)
+        gate.markRelinquished(request)
+        XCTAssertEqual(
+            gate.decision(for: request, in: window, isFirstResponder: false),
+            .ignoreRelinquishedRequest
+        )
+
+        gate.activate(nextRequest, in: window)
+        XCTAssertEqual(gate.decision(for: nextRequest, in: window, isFirstResponder: false), .adopt)
+    }
+
+    // SF-0201-006, SF-0201-008, SF-1902-006
+    func testViewportPresetNativeContractSynchronizesSelectionAndAccessibility() {
+        XCTAssertEqual(ViewportPresetControlContract.accessibilityIdentifier, "canvas.viewport.preset")
+        XCTAssertEqual(ViewportPresetControlContract.accessibilityLabel, "Viewport preset")
+        for (index, preset) in ViewportPreset.allCases.enumerated() {
+            XCTAssertEqual(ViewportPresetControlContract.index(for: preset), index)
+            XCTAssertEqual(ViewportPresetControlContract.preset(at: index), preset)
+            XCTAssertEqual(ViewportPresetControlContract.accessibilityValue(for: preset), preset.title)
+        }
+        XCTAssertNil(ViewportPresetControlContract.preset(at: -1))
+        XCTAssertNil(ViewportPresetControlContract.preset(at: ViewportPreset.allCases.count))
     }
 
     // SF-0201-008, SF-0203-008, SF-1902-008

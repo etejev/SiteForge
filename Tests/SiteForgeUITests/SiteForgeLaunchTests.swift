@@ -580,9 +580,21 @@ final class SiteForgeLaunchTests: XCTestCase {
     func testViewportCommandsAreKeyboardAndAccessibilityOperable() throws {
         let application = launchWorkspace()
         let canvas = application.descendants(matching: .any)["canvas.interaction"]
+        let preset = application.descendants(matching: .any)["canvas.viewport.preset"]
         XCTAssertTrue(canvas.exists)
         XCTAssertEqual(canvas.label, "Canvas viewport")
         XCTAssertTrue((canvas.value as? String)?.contains("Zoom 100 percent") == true)
+        XCTAssertTrue(preset.exists)
+        XCTAssertEqual(preset.label, "Viewport preset")
+        XCTAssertEqual(preset.value as? String, "Desktop")
+
+        preset.click()
+        XCTAssertTrue(application.menuItems["Tablet"].waitForExistence(timeout: 2))
+        application.menuItems["Tablet"].click()
+        XCTAssertTrue(waitForValue(preset, containing: "Tablet"))
+        XCTAssertTrue(waitForKeyboardFocus(preset, in: application))
+        application.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(waitForValue(preset, containing: "Mobile"))
 
         application.buttons["canvas.zoom.in"].click()
         XCTAssertTrue(waitForValue(canvas, containing: "Zoom 125 percent"))

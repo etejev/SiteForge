@@ -6,6 +6,7 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- AppKit-deterministic viewport-preset focus and selection: the native popup preserves the existing layout and accessibility identity while synchronizing real first-responder state with the scene-owned traversal model, rejecting stale or wrong-window focus requests, and supporting pointer plus Up/Down keyboard preset selection.
 - Explicit `quick`, `changed`, `half`, and `full` local XCTest levels, with conservative changed-subsystem selection, automatic full-suite fallback for uncertain impact, and selector self-tests inside repository verification. Bare `./sf test`, `./sf verify`, and CI remain full regression gates.
 - Transactional frame and bounded plain-text insertion using stable typed node identities, exact parent/page/order ownership, deterministic `.defaulted` geometry/content, one atomic command/inverse, and exact undo/redo restoration.
 - One scene-owned editor-only insertion session with inactive, armed, previewing, committing, cancelled, and failed states; unified toolbar, pointer, keyboard, menu, contextual, accessibility, and automation command routing; cancellation and failure preserve canonical state and prior selection.
