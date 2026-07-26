@@ -6,6 +6,7 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Window-native mixed SwiftUI/AppKit Tab routing at the viewport-preset boundaries, scoped to each workspace window with genuine first-responder transfer, safe pass-through for editing and transient presentation contexts, deterministic teardown, and redacted responder diagnostics for hosted UI failures.
 - AppKit-deterministic viewport-preset focus and selection: the native popup preserves the existing layout and accessibility identity while synchronizing real first-responder state with the scene-owned traversal model, rejecting stale or wrong-window focus requests, and supporting pointer plus Up/Down keyboard preset selection.
 - Explicit `quick`, `changed`, `half`, and `full` local XCTest levels, with conservative changed-subsystem selection, automatic full-suite fallback for uncertain impact, and selector self-tests inside repository verification. Bare `./sf test`, `./sf verify`, and CI remain full regression gates.
 - Transactional frame and bounded plain-text insertion using stable typed node identities, exact parent/page/order ownership, deterministic `.defaulted` geometry/content, one atomic command/inverse, and exact undo/redo restoration.

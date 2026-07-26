@@ -135,6 +135,81 @@ enum ShellFocusTraversal {
     }
 }
 
+extension ShellFocus {
+    var diagnosticIdentifier: String {
+        switch self {
+        case .navigatorPages: "navigator.tab.pages"
+        case .navigatorLayers: "navigator.tab.layers"
+        case let .navigatorPage(id): NavigatorPageAccessibility.identifier(for: id)
+        case let .navigatorLayer(id): "navigator.layer.\(id.description)"
+        case .viewportPreset: "canvas.viewport.preset"
+        case .viewportZoomOut: "canvas.zoom.out"
+        case .viewportZoomIn: "canvas.zoom.in"
+        case .viewportReset: "canvas.zoom.reset"
+        case .viewportFit: "canvas.zoom.fit"
+        case .viewportCanvas: "canvas.interaction"
+        case .inspectorLayout: "inspector.tab.layout"
+        case .inspectorStyle: "inspector.tab.style"
+        case .inspectorAdvanced: "inspector.tab.advanced"
+        case .inspectorAccessibility: "inspector.tab.accessibility"
+        }
+    }
+}
+
+struct WorkspaceTabRoutingContext: Equatable {
+    let isWorkspaceWindowEvent: Bool
+    let isKeyWindow: Bool
+    let hasAttachedSheet: Bool
+    let isTextEditing: Bool
+    let hasTransientPresentation: Bool
+}
+
+enum WorkspaceTabRoutingPassReason: Equatable {
+    case wrongWindow
+    case inactiveWindow
+    case attachedSheet
+    case textEditing
+    case transientPresentation
+    case noLogicalFocus
+    case notMixedFrameworkBoundary
+}
+
+enum WorkspaceTabRoutingDecision: Equatable {
+    case route(ShellFocus)
+    case passThrough(WorkspaceTabRoutingPassReason)
+}
+
+enum WorkspaceTabRoutingPolicy {
+    static func decision(
+        from current: ShellFocus?,
+        direction: ShellFocusDirection,
+        pageIDs: [PageID],
+        layerIDs: [NodeID] = [],
+        context: WorkspaceTabRoutingContext
+    ) -> WorkspaceTabRoutingDecision {
+        guard context.isWorkspaceWindowEvent else { return .passThrough(.wrongWindow) }
+        guard context.isKeyWindow else { return .passThrough(.inactiveWindow) }
+        guard !context.hasAttachedSheet else { return .passThrough(.attachedSheet) }
+        guard !context.isTextEditing else { return .passThrough(.textEditing) }
+        guard !context.hasTransientPresentation else {
+            return .passThrough(.transientPresentation)
+        }
+        guard let current else { return .passThrough(.noLogicalFocus) }
+        guard let target = ShellFocusTraversal.adjacent(
+            to: current,
+            direction: direction,
+            pageIDs: pageIDs,
+            layerIDs: layerIDs
+        ) else {
+            return .passThrough(.noLogicalFocus)
+        }
+        guard current == .viewportPreset || target == .viewportPreset else {
+            return .passThrough(.notMixedFrameworkBoundary)
+        }
+        return .route(target)
+    }
+}
+
 enum NavigatorPageAccessibility {
     static func identifier(for pageID: PageID) -> String {
         "navigator.page.\(pageID.description)"

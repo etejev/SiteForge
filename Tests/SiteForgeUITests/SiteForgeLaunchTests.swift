@@ -277,9 +277,19 @@ final class SiteForgeLaunchTests: XCTestCase {
         } else {
             currentIdentifier = "<unavailable>"
         }
+        let nativeDiagnostics = application.descendants(matching: .any)[
+            "workspace.focus.diagnostics"
+        ]
+        let nativeFocusSnapshot: String
+        if nativeDiagnostics.exists, let value = nativeDiagnostics.value as? String {
+            nativeFocusSnapshot = value
+        } else {
+            nativeFocusSnapshot = "<unavailable>"
+        }
         let details = """
         Expected accessibility identifier: \(identifier)
         Current focused accessibility identifier: \(currentIdentifier)
+        Native focus snapshot: \(nativeFocusSnapshot)
 
         \(redactedAccessibilityHierarchy(for: application))
         """

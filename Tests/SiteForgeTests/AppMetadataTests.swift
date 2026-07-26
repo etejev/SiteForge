@@ -161,6 +161,161 @@ final class AppMetadataTests: XCTestCase {
         XCTAssertNil(ViewportPresetControlContract.preset(at: ViewportPreset.allCases.count))
     }
 
+    // SF-0201-006, SF-0201-008, SF-1902-006, SF-1902-008
+    func testWindowNativeTabPolicyRoutesOnlyBothMixedFrameworkBoundaries() {
+        let home = PageID(UUID(uuidString: "44000000-0000-0000-0000-000000000001")!)
+        let notFound = PageID(UUID(uuidString: "44000000-0000-0000-0000-000000000002")!)
+        let context = WorkspaceTabRoutingContext(
+            isWorkspaceWindowEvent: true,
+            isKeyWindow: true,
+            hasAttachedSheet: false,
+            isTextEditing: false,
+            hasTransientPresentation: false
+        )
+
+        XCTAssertEqual(
+            WorkspaceTabRoutingPolicy.decision(
+                from: .navigatorPage(notFound),
+                direction: .forward,
+                pageIDs: [home, notFound],
+                context: context
+            ),
+            .route(.viewportPreset)
+        )
+        XCTAssertEqual(
+            WorkspaceTabRoutingPolicy.decision(
+                from: .viewportPreset,
+                direction: .forward,
+                pageIDs: [home, notFound],
+                context: context
+            ),
+            .route(.viewportZoomOut)
+        )
+        XCTAssertEqual(
+            WorkspaceTabRoutingPolicy.decision(
+                from: .viewportZoomOut,
+                direction: .reverse,
+                pageIDs: [home, notFound],
+                context: context
+            ),
+            .route(.viewportPreset)
+        )
+        XCTAssertEqual(
+            WorkspaceTabRoutingPolicy.decision(
+                from: .viewportPreset,
+                direction: .reverse,
+                pageIDs: [home, notFound],
+                context: context
+            ),
+            .route(.navigatorPage(notFound))
+        )
+        XCTAssertEqual(
+            WorkspaceTabRoutingPolicy.decision(
+                from: .navigatorPages,
+                direction: .forward,
+                pageIDs: [home, notFound],
+                context: context
+            ),
+            .passThrough(.notMixedFrameworkBoundary)
+        )
+    }
+
+    // SF-0201-006, SF-0201-008, SF-1902-008
+    func testWindowNativeTabPolicyRejectsEveryUnsafePresentationContext() {
+        let page = PageID(UUID(uuidString: "45000000-0000-0000-0000-000000000001")!)
+        let safe = WorkspaceTabRoutingContext(
+            isWorkspaceWindowEvent: true,
+            isKeyWindow: true,
+            hasAttachedSheet: false,
+            isTextEditing: false,
+            hasTransientPresentation: false
+        )
+
+        let cases: [(WorkspaceTabRoutingContext, WorkspaceTabRoutingPassReason)] = [
+            (.init(
+                isWorkspaceWindowEvent: false,
+                isKeyWindow: true,
+                hasAttachedSheet: false,
+                isTextEditing: false,
+                hasTransientPresentation: false
+            ), .wrongWindow),
+            (.init(
+                isWorkspaceWindowEvent: true,
+                isKeyWindow: false,
+                hasAttachedSheet: false,
+                isTextEditing: false,
+                hasTransientPresentation: false
+            ), .inactiveWindow),
+            (.init(
+                isWorkspaceWindowEvent: true,
+                isKeyWindow: true,
+                hasAttachedSheet: true,
+                isTextEditing: false,
+                hasTransientPresentation: false
+            ), .attachedSheet),
+            (.init(
+                isWorkspaceWindowEvent: true,
+                isKeyWindow: true,
+                hasAttachedSheet: false,
+                isTextEditing: true,
+                hasTransientPresentation: false
+            ), .textEditing),
+            (.init(
+                isWorkspaceWindowEvent: true,
+                isKeyWindow: true,
+                hasAttachedSheet: false,
+                isTextEditing: false,
+                hasTransientPresentation: true
+            ), .transientPresentation),
+        ]
+        for (context, reason) in cases {
+            XCTAssertEqual(
+                WorkspaceTabRoutingPolicy.decision(
+                    from: .navigatorPage(page),
+                    direction: .forward,
+                    pageIDs: [page],
+                    context: context
+                ),
+                .passThrough(reason)
+            )
+        }
+        XCTAssertEqual(
+            WorkspaceTabRoutingPolicy.decision(
+                from: nil,
+                direction: .forward,
+                pageIDs: [page],
+                context: safe
+            ),
+            .passThrough(.noLogicalFocus)
+        )
+    }
+
+    // SF-0201-008, SF-1902-008
+    @MainActor
+    func testWindowNativeTabRouterLifecycleRejectsStaleAndWrongWindowIdentity() {
+        let first = NSWindow()
+        let second = NSWindow()
+        let firstID = WorkspaceTabRouterWindowIdentity(window: first)
+        let secondID = WorkspaceTabRouterWindowIdentity(window: second)
+        var lifecycle = WorkspaceTabRouterLifecycle()
+
+        lifecycle.bind(to: firstID)
+        let firstGeneration = lifecycle.generation
+        XCTAssertTrue(lifecycle.accepts(firstID, generation: firstGeneration))
+        XCTAssertFalse(lifecycle.accepts(secondID, generation: firstGeneration))
+
+        lifecycle.bind(to: secondID)
+        let secondGeneration = lifecycle.generation
+        XCTAssertFalse(lifecycle.accepts(firstID, generation: firstGeneration))
+        XCTAssertFalse(lifecycle.accepts(secondID, generation: firstGeneration))
+        XCTAssertTrue(lifecycle.accepts(secondID, generation: secondGeneration))
+
+        lifecycle.unbind(from: firstID)
+        XCTAssertTrue(lifecycle.accepts(secondID, generation: secondGeneration))
+        lifecycle.unbind(from: secondID)
+        XCTAssertFalse(lifecycle.accepts(secondID, generation: secondGeneration))
+    }
+
     // SF-0201-008, SF-0203-008, SF-1902-008
     @MainActor
     func testShellRequirementTraceabilityIsComplete() {

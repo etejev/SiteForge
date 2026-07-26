@@ -5,6 +5,7 @@ import QuartzCore
 struct WorkspaceShellView: View {
     @ObservedObject var state: WorkspaceShellState
     @FocusState private var focusedControl: ShellFocus?
+    @StateObject private var tabRouter = WorkspaceWindowTabRouter()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +20,7 @@ struct WorkspaceShellView: View {
                         maxWidth: WorkspaceMetrics.navigatorWidth.upperBound
                     )
 
-                CanvasPlaceholderView(state: state, focus: $focusedControl)
+                CanvasPlaceholderView(state: state, focus: $focusedControl, tabRouter: tabRouter)
                     .frame(minWidth: WorkspaceMetrics.minimumCanvasWidth, maxWidth: .infinity)
 
                 InspectorView(state: state, focus: $focusedControl)
@@ -45,6 +46,18 @@ struct WorkspaceShellView: View {
                 Color(nsColor: .underPageBackgroundColor)
                 WindowCloseGuard(controller: state.lifecycle).frame(width: 0, height: 0)
                 WorkspaceWindowConfigurator().frame(width: 0, height: 0)
+                WorkspaceWindowTabRouterInstaller(
+                    router: tabRouter,
+                    focus: $focusedControl,
+                    pageIDs: state.pages.map(\.id),
+                    layerIDs: state.navigatorTab == .layers ? state.layerTargets.map(\.id) : []
+                )
+                .frame(width: 0, height: 0)
+                if WorkspaceFocusDiagnosticsPolicy.isEnabled {
+                    WorkspaceFocusDiagnosticsProbe(router: tabRouter)
+                        .frame(width: 1, height: 1)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .navigationTitle(state.lifecycle.title)
@@ -386,10 +399,11 @@ private struct NavigatorPageRow: View {
 private struct CanvasPlaceholderView: View {
     @ObservedObject var state: WorkspaceShellState
     let focus: FocusState<ShellFocus?>.Binding
+    let tabRouter: WorkspaceWindowTabRouter
 
     var body: some View {
         VStack(spacing: 0) {
-            ViewportControlsView(state: state, focus: focus)
+            ViewportControlsView(state: state, focus: focus, tabRouter: tabRouter)
             Divider()
 
             GeometryReader { geometry in
@@ -460,6 +474,7 @@ private struct CanvasPlaceholderView: View {
 private struct ViewportControlsView: View {
     @ObservedObject var state: WorkspaceShellState
     let focus: FocusState<ShellFocus?>.Binding
+    let tabRouter: WorkspaceWindowTabRouter
     @State private var focusSceneID = ViewportPresetFocusSceneID()
 
     var body: some View {
@@ -470,23 +485,13 @@ private struct ViewportControlsView: View {
             NativeViewportPresetControl(
                 selection: $state.viewportPreset,
                 sceneID: focusSceneID,
+                tabRouter: tabRouter,
                 isKeyboardFocusRequested: focus.wrappedValue == .viewportPreset,
                 onNativeFocusChange: { isFocused in
                     if isFocused {
                         focus.wrappedValue = .viewportPreset
                     } else if focus.wrappedValue == .viewportPreset {
                         focus.wrappedValue = nil
-                    }
-                },
-                onTabTraversal: { direction in
-                    let next = ShellFocusTraversal.adjacent(
-                        to: .viewportPreset,
-                        direction: direction,
-                        pageIDs: state.pages.map(\.id),
-                        layerIDs: state.navigatorTab == .layers ? state.layerTargets.map(\.id) : []
-                    )
-                    DispatchQueue.main.async {
-                        focus.wrappedValue = next
                     }
                 }
             )
@@ -650,12 +655,277 @@ enum ViewportPresetControlContract {
     }
 }
 
+struct WorkspaceTabRouterWindowIdentity: Hashable {
+    private let rawValue: ObjectIdentifier
+
+    init(window: NSWindow) {
+        rawValue = ObjectIdentifier(window)
+    }
+}
+
+struct WorkspaceTabRouterLifecycle {
+    private(set) var activeWindow: WorkspaceTabRouterWindowIdentity?
+    private(set) var generation: UInt64 = 0
+
+    mutating func bind(to window: WorkspaceTabRouterWindowIdentity) {
+        guard activeWindow != window else { return }
+        activeWindow = window
+        generation &+= 1
+    }
+
+    mutating func unbind(from window: WorkspaceTabRouterWindowIdentity) {
+        guard activeWindow == window else { return }
+        activeWindow = nil
+        generation &+= 1
+    }
+
+    func accepts(_ window: WorkspaceTabRouterWindowIdentity, generation: UInt64) -> Bool {
+        activeWindow == window && self.generation == generation
+    }
+}
+
+enum WorkspaceFocusDiagnosticsPolicy {
+    static var isEnabled: Bool {
+        DebugTestComposition.current().boolValue(after: "-SiteForgeUITestMode") == true
+    }
+}
+
+@MainActor
+final class WorkspaceWindowTabRouter: ObservableObject {
+    @Published private(set) var diagnosticSnapshot =
+        "logical=none; responder=none; window=detached; route=none"
+
+    private weak var window: NSWindow?
+    private weak var presetControl: FocusableViewportPresetPopUpButton?
+    private var eventMonitor: Any?
+    private var lifecycle = WorkspaceTabRouterLifecycle()
+    private var pageIDs: [PageID] = []
+    private var layerIDs: [NodeID] = []
+    private var currentFocus: () -> ShellFocus? = { nil }
+    private var setFocus: (ShellFocus?) -> Void = { _ in }
+
+    func configure(
+        focus: FocusState<ShellFocus?>.Binding,
+        pageIDs: [PageID],
+        layerIDs: [NodeID]
+    ) {
+        self.pageIDs = pageIDs
+        self.layerIDs = layerIDs
+        currentFocus = { focus.wrappedValue }
+        setFocus = { focus.wrappedValue = $0 }
+    }
+
+    func bind(to candidate: NSWindow?) {
+        guard let candidate else { return }
+        if window === candidate, eventMonitor != nil { return }
+        detachMonitor()
+        window = candidate
+        lifecycle.bind(to: WorkspaceTabRouterWindowIdentity(window: candidate))
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.route(event) ?? event
+        }
+        updateDiagnostics(outcome: "attached")
+    }
+
+    func unbind(from candidate: NSWindow?) {
+        guard let candidate, window === candidate else { return }
+        lifecycle.unbind(from: WorkspaceTabRouterWindowIdentity(window: candidate))
+        detachMonitor()
+        window = nil
+        presetControl = nil
+        diagnosticSnapshot = "logical=none; responder=none; window=detached; route=none"
+    }
+
+    fileprivate func registerPresetControl(_ control: FocusableViewportPresetPopUpButton) {
+        presetControl = control
+        updateDiagnostics(outcome: "preset-attached")
+    }
+
+    fileprivate func unregisterPresetControl(_ control: FocusableViewportPresetPopUpButton) {
+        guard presetControl === control else { return }
+        presetControl = nil
+        updateDiagnostics(outcome: "preset-detached")
+    }
+
+    private func route(_ event: NSEvent) -> NSEvent? {
+        guard event.keyCode == 48 else { return event }
+        let unsupportedModifiers = event.modifierFlags.intersection([.command, .control, .option])
+        guard unsupportedModifiers.isEmpty else { return event }
+        guard let window else { return event }
+
+        let windowIdentity = WorkspaceTabRouterWindowIdentity(window: window)
+        let generation = lifecycle.generation
+        let direction: ShellFocusDirection = event.modifierFlags.contains(.shift) ? .reverse : .forward
+        let logicalFocus = window.firstResponder === presetControl ? .viewportPreset : currentFocus()
+        let context = WorkspaceTabRoutingContext(
+            isWorkspaceWindowEvent: event.window === window
+                && lifecycle.accepts(windowIdentity, generation: generation),
+            isKeyWindow: window.isKeyWindow && NSApp.keyWindow === window,
+            hasAttachedSheet: window.attachedSheet != nil,
+            isTextEditing: Self.isTextEditing(window.firstResponder),
+            hasTransientPresentation: NSApp.mainMenu?.highlightedItem != nil
+        )
+        let decision = WorkspaceTabRoutingPolicy.decision(
+            from: logicalFocus,
+            direction: direction,
+            pageIDs: pageIDs,
+            layerIDs: layerIDs,
+            context: context
+        )
+        guard case let .route(target) = decision else {
+            updateDiagnostics(
+                logicalFocus: logicalFocus,
+                outcome: "pass-\(String(describing: decision))"
+            )
+            return event
+        }
+
+        if target == .viewportPreset {
+            guard let presetControl, presetControl.window === window else {
+                updateDiagnostics(logicalFocus: logicalFocus, outcome: "preset-unavailable")
+                return event
+            }
+            guard lifecycle.accepts(windowIdentity, generation: generation),
+                  window.makeFirstResponder(presetControl) else {
+                updateDiagnostics(logicalFocus: logicalFocus, outcome: "preset-rejected")
+                return event
+            }
+            setFocus(.viewportPreset)
+            updateDiagnostics(logicalFocus: .viewportPreset, outcome: "routed-\(target.diagnosticIdentifier)")
+            return nil
+        }
+
+        if window.firstResponder === presetControl {
+            _ = window.makeFirstResponder(nil)
+        }
+        guard lifecycle.accepts(windowIdentity, generation: generation) else {
+            updateDiagnostics(logicalFocus: logicalFocus, outcome: "stale-window")
+            return event
+        }
+        setFocus(target)
+        updateDiagnostics(logicalFocus: target, outcome: "routed-\(target.diagnosticIdentifier)")
+        return nil
+    }
+
+    private func updateDiagnostics(
+        logicalFocus: ShellFocus? = nil,
+        outcome: String
+    ) {
+        let logical = (logicalFocus ?? currentFocus())?.diagnosticIdentifier ?? "none"
+        let responder = window?.firstResponder.map { String(describing: type(of: $0)) } ?? "none"
+        let windowState: String
+        if let window {
+            windowState = "key=\(window.isKeyWindow);main=\(window.isMainWindow);sheet=\(window.attachedSheet != nil)"
+        } else {
+            windowState = "detached"
+        }
+        diagnosticSnapshot =
+            "logical=\(logical); responder=\(responder); window=\(windowState); route=\(outcome)"
+    }
+
+    private static func isTextEditing(_ responder: NSResponder?) -> Bool {
+        responder is NSTextView || responder is NSTextField
+    }
+
+    private func detachMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+
+    isolated deinit {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+        }
+    }
+}
+
+private struct WorkspaceWindowTabRouterInstaller: NSViewRepresentable {
+    let router: WorkspaceWindowTabRouter
+    let focus: FocusState<ShellFocus?>.Binding
+    let pageIDs: [PageID]
+    let layerIDs: [NodeID]
+
+    func makeNSView(context: Context) -> WorkspaceWindowTabRouterHostView {
+        let view = WorkspaceWindowTabRouterHostView()
+        view.router = router
+        router.configure(focus: focus, pageIDs: pageIDs, layerIDs: layerIDs)
+        return view
+    }
+
+    func updateNSView(_ view: WorkspaceWindowTabRouterHostView, context: Context) {
+        view.router = router
+        router.configure(focus: focus, pageIDs: pageIDs, layerIDs: layerIDs)
+        router.bind(to: view.window)
+    }
+
+    static func dismantleNSView(
+        _ view: WorkspaceWindowTabRouterHostView,
+        coordinator: Void
+    ) {
+        view.detach()
+    }
+}
+
+@MainActor
+private final class WorkspaceWindowTabRouterHostView: NSView {
+    weak var router: WorkspaceWindowTabRouter?
+    private weak var boundWindow: NSWindow?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let boundWindow, boundWindow !== window {
+            router?.unbind(from: boundWindow)
+        }
+        boundWindow = window
+        router?.bind(to: window)
+    }
+
+    func detach() {
+        if let boundWindow {
+            router?.unbind(from: boundWindow)
+        }
+        boundWindow = nil
+        router = nil
+    }
+}
+
+private struct WorkspaceFocusDiagnosticsProbe: NSViewRepresentable {
+    @ObservedObject var router: WorkspaceWindowTabRouter
+
+    func makeNSView(context: Context) -> WorkspaceFocusDiagnosticsView {
+        let view = WorkspaceFocusDiagnosticsView()
+        view.setAccessibilityIdentifier("workspace.focus.diagnostics")
+        view.diagnosticValue = router.diagnosticSnapshot
+        return view
+    }
+
+    func updateNSView(_ view: WorkspaceFocusDiagnosticsView, context: Context) {
+        view.diagnosticValue = router.diagnosticSnapshot
+    }
+}
+
+private final class WorkspaceFocusDiagnosticsView: NSView {
+    var diagnosticValue = "" {
+        didSet {
+            setAccessibilityValue(diagnosticValue)
+            NSAccessibility.post(element: self, notification: .valueChanged)
+        }
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityLabel() -> String? { "Workspace focus diagnostics" }
+    override func accessibilityValue() -> Any? { diagnosticValue }
+}
+
 private struct NativeViewportPresetControl: NSViewRepresentable {
     @Binding var selection: ViewportPreset
     let sceneID: ViewportPresetFocusSceneID
+    let tabRouter: WorkspaceWindowTabRouter
     let isKeyboardFocusRequested: Bool
     let onNativeFocusChange: (Bool) -> Void
-    let onTabTraversal: (ShellFocusDirection) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(sceneID: sceneID)
@@ -671,13 +941,15 @@ private struct NativeViewportPresetControl: NSViewRepresentable {
         button.setAccessibilityIdentifier(ViewportPresetControlContract.accessibilityIdentifier)
         button.setAccessibilityLabel(ViewportPresetControlContract.accessibilityLabel)
         context.coordinator.attach(button)
+        context.coordinator.tabRouter = tabRouter
+        tabRouter.registerPresetControl(button)
         return button
     }
 
     func updateNSView(_ button: FocusableViewportPresetPopUpButton, context: Context) {
         context.coordinator.selection = $selection
         context.coordinator.onNativeFocusChange = onNativeFocusChange
-        context.coordinator.onTabTraversal = onTabTraversal
+        context.coordinator.tabRouter = tabRouter
         let selectedIndex = ViewportPresetControlContract.index(for: selection)
         if button.indexOfSelectedItem != selectedIndex {
             button.selectItem(at: selectedIndex)
@@ -689,6 +961,14 @@ private struct NativeViewportPresetControl: NSViewRepresentable {
         )
     }
 
+    static func dismantleNSView(
+        _ button: FocusableViewportPresetPopUpButton,
+        coordinator: Coordinator
+    ) {
+        coordinator.tabRouter?.unregisterPresetControl(button)
+        coordinator.tabRouter = nil
+    }
+
     @MainActor
     final class Coordinator: NSObject {
         private let sceneID: ViewportPresetFocusSceneID
@@ -698,7 +978,7 @@ private struct NativeViewportPresetControl: NSViewRepresentable {
         private var isAdoptingRequestedFocus = false
         var selection: Binding<ViewportPreset>?
         var onNativeFocusChange: ((Bool) -> Void)?
-        var onTabTraversal: ((ShellFocusDirection) -> Void)?
+        weak var tabRouter: WorkspaceWindowTabRouter?
 
         init(sceneID: ViewportPresetFocusSceneID) {
             self.sceneID = sceneID
@@ -718,11 +998,6 @@ private struct NativeViewportPresetControl: NSViewRepresentable {
             button.onWindowChange = { [weak self, weak button] in
                 guard let self, let button else { return }
                 self.bindRequestAndAdopt(for: button)
-            }
-            button.onTabTraversal = { [weak self, weak button] direction in
-                guard let self else { return }
-                _ = button?.window?.makeFirstResponder(nil)
-                self.onTabTraversal?(direction)
             }
         }
 
@@ -779,7 +1054,6 @@ private struct NativeViewportPresetControl: NSViewRepresentable {
 private final class FocusableViewportPresetPopUpButton: NSPopUpButton {
     var onFocusChange: ((Bool) -> Void)?
     var onWindowChange: (() -> Void)?
-    var onTabTraversal: ((ShellFocusDirection) -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
     override var canBecomeKeyView: Bool { true }
@@ -811,10 +1085,6 @@ private final class FocusableViewportPresetPopUpButton: NSPopUpButton {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 48 {
-            onTabTraversal?(event.modifierFlags.contains(.shift) ? .reverse : .forward)
-            return
-        }
         if event.keyCode == 125 || event.keyCode == 126 {
             guard numberOfItems > 0 else { return }
             let offset = event.keyCode == 125 ? 1 : -1
