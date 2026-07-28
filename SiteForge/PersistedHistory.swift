@@ -273,7 +273,7 @@ private extension PersistedHistoryStore {
     }
 
     static func sameContent(_ lhs: CanonicalDocument, _ rhs: CanonicalDocument) -> Bool {
-        lhs.id == rhs.id && lhs.pages == rhs.pages
+        lhs.id == rhs.id && lhs.pages == rhs.pages && lhs.guides == rhs.guides
     }
 
     static func removingOldest(from snapshot: PersistedHistorySnapshot) -> PersistedHistorySnapshot {

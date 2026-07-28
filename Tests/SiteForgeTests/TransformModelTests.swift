@@ -361,6 +361,7 @@ final class TransformModelTests: XCTestCase {
         )
         let historyCount = state.documentSession.historySnapshot().undoEntries.count
         state.selectTool(.select)
+        state.setSnappingSuppressed(true)
         let beforeCancelledPreview = try DocumentSerializer.encode(state.documentSession.document)
         XCTAssertTrue(state.beginPointerTransform(at: .init(
             x: original.origin.x + original.size.width / 2,

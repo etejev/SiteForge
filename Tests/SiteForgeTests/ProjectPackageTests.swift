@@ -54,7 +54,7 @@ final class ProjectPackageTests: XCTestCase {
         let manifest = try XCTUnwrap(members.first(where: { $0.path == "manifest.json" }))
         let text = String(decoding: manifest.data, as: UTF8.self)
         XCTAssertTrue(text.contains("\"packageVersion\":1"))
-        XCTAssertTrue(text.contains("\"documentSchemaVersion\":2"))
+        XCTAssertTrue(text.contains("\"documentSchemaVersion\":3"))
         XCTAssertTrue(text.contains(projectID.description))
         XCTAssertTrue(text.contains("\"sha256\""))
     }

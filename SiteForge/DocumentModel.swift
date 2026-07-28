@@ -57,11 +57,49 @@ enum TemplateIdentifierDomain: StableIdentifierDomain {
     static let diagnosticNamespace = "template"
 }
 
+enum GuideIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "guide"
+}
+
 typealias DocumentID = StableIdentifier<DocumentIdentifierDomain>
 typealias PageID = StableIdentifier<PageIdentifierDomain>
 typealias NodeID = StableIdentifier<NodeIdentifierDomain>
 typealias PropertyID = StableIdentifier<PropertyIdentifierDomain>
 typealias TemplateID = StableIdentifier<TemplateIdentifierDomain>
+typealias GuideID = StableIdentifier<GuideIdentifierDomain>
+
+enum GuideAxis: String, Codable, CaseIterable, Sendable {
+    case horizontal
+    case vertical
+}
+
+enum GuideProvenance: String, Codable, Sendable {
+    case authored
+}
+
+struct AuthoredGuide: Codable, Equatable, Identifiable, Sendable {
+    static let maximumCoordinate = 1_000_000_000.0
+
+    let id: GuideID
+    let pageID: PageID
+    var axis: GuideAxis
+    var position: Double
+    var provenance: GuideProvenance
+
+    init(
+        id: GuideID = GuideID(),
+        pageID: PageID,
+        axis: GuideAxis,
+        position: Double,
+        provenance: GuideProvenance = .authored
+    ) {
+        self.id = id
+        self.pageID = pageID
+        self.axis = axis
+        self.position = position
+        self.provenance = provenance
+    }
+}
 
 struct PropertyKey: Codable, Hashable, RawRepresentable, Sendable {
     let rawValue: String
@@ -264,24 +302,27 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
     var creationKind: ProjectCreationKind
     var templateID: TemplateID?
     var pages: [DocumentPage]
+    var guides: [AuthoredGuide]
 
     init(
         id: DocumentID = DocumentID(),
         revision: UInt64 = 0,
         creationKind: ProjectCreationKind = .blank,
         templateID: TemplateID? = nil,
-        pages: [DocumentPage]? = nil
+        pages: [DocumentPage]? = nil,
+        guides: [AuthoredGuide] = []
     ) {
         self.id = id
         self.revision = revision
         self.creationKind = creationKind
         self.templateID = templateID
         self.pages = pages ?? BlankProjectDefaults.pages()
+        self.guides = guides
     }
 
 
     private enum CodingKeys: String, CodingKey {
-        case id, revision, creationKind, templateID, pages
+        case id, revision, creationKind, templateID, pages, guides
     }
 
     init(from decoder: Decoder) throws {
@@ -300,6 +341,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         }
         templateID = try container.decodeIfPresent(TemplateID.self, forKey: .templateID)
         pages = try container.decode([DocumentPage].self, forKey: .pages)
+        guides = try container.decode([AuthoredGuide].self, forKey: .guides)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -313,6 +355,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
             try container.encodeNil(forKey: .templateID)
         }
         try container.encode(pages, forKey: .pages)
+        try container.encode(guides, forKey: .guides)
     }
 }
 
@@ -393,6 +436,10 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case invalidCreationProvenance
     case duplicateNodeID
     case duplicatePropertyID
+    case duplicateGuideID
+    case invalidGuidePage
+    case invalidGuidePosition
+    case guideLimitExceeded
     case invalidPageName
     case invalidNodeName
     case invalidPropertyKey
@@ -415,6 +462,10 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .invalidCreationProvenance: "Template projects require a template identity, and blank projects cannot carry one."
         case .duplicateNodeID: "Node identifiers must be unique across the document."
         case .duplicatePropertyID: "Property identifiers must be unique across the document."
+        case .duplicateGuideID: "Guide identifiers must be unique."
+        case .invalidGuidePage: "Every authored guide must belong to an existing page."
+        case .invalidGuidePosition: "Guide positions must be finite and within the supported canvas range."
+        case .guideLimitExceeded: "This project exceeds the supported authored-guide limit."
         case .invalidPageName: "Page names cannot be empty."
         case .invalidNodeName: "Node names cannot be empty."
         case .invalidPropertyKey: "Property keys cannot be empty."
@@ -464,6 +515,21 @@ extension CanonicalDocument {
                 documentPropertyIDs: &documentPropertyIDs,
                 checkpoint: checkpoint
             )
+        }
+        guard guides.count <= 10_000 else { throw ModelValidationError.guideLimitExceeded }
+        guard Set(guides.map(\.id)).count == guides.count else {
+            throw ModelValidationError.duplicateGuideID
+        }
+        let pageIDs = Set(pages.map(\.id))
+        for guide in guides {
+            try checkpoint()
+            guard pageIDs.contains(guide.pageID) else {
+                throw ModelValidationError.invalidGuidePage
+            }
+            guard guide.position.isFinite,
+                  abs(guide.position) <= AuthoredGuide.maximumCoordinate else {
+                throw ModelValidationError.invalidGuidePosition
+            }
         }
     }
 }
@@ -587,7 +653,7 @@ enum DocumentSerializationError: Error, Equatable, LocalizedError {
 }
 
 enum DocumentSerializer {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -602,6 +668,52 @@ enum DocumentSerializer {
     private struct SchemaOneEnvelope: Decodable {
         let schemaVersion: Int
         let document: SchemaOneDocument
+    }
+
+    private struct SchemaTwoEnvelope: Decodable {
+        let schemaVersion: Int
+        let document: SchemaTwoDocument
+    }
+
+    private struct SchemaTwoDocument: Decodable {
+        let id: DocumentID
+        let revision: UInt64
+        let creationKind: ProjectCreationKind
+        let templateID: TemplateID?
+        let pages: [DocumentPage]
+
+        private enum CodingKeys: String, CodingKey {
+            case id, revision, creationKind, templateID, pages
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(DocumentID.self, forKey: .id)
+            revision = try container.decode(UInt64.self, forKey: .revision)
+            creationKind = try container.decode(ProjectCreationKind.self, forKey: .creationKind)
+            guard container.contains(.templateID) else {
+                throw DecodingError.keyNotFound(
+                    CodingKeys.templateID,
+                    DecodingError.Context(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "Schema 2 requires an explicit templateID value."
+                    )
+                )
+            }
+            templateID = try container.decodeIfPresent(TemplateID.self, forKey: .templateID)
+            pages = try container.decode([DocumentPage].self, forKey: .pages)
+        }
+
+        func migrated() -> CanonicalDocument {
+            CanonicalDocument(
+                id: id,
+                revision: revision,
+                creationKind: creationKind,
+                templateID: templateID,
+                pages: pages,
+                guides: []
+            )
+        }
     }
 
     private struct SchemaOneDocument: Decodable {
@@ -703,6 +815,12 @@ enum DocumentSerializer {
         case 1:
             do {
                 document = try decoder.decode(SchemaOneEnvelope.self, from: data).document.migrated()
+            } catch {
+                throw DocumentSerializationError.malformedInput
+            }
+        case 2:
+            do {
+                document = try decoder.decode(SchemaTwoEnvelope.self, from: data).document.migrated()
             } catch {
                 throw DocumentSerializationError.malformedInput
             }

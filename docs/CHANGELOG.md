@@ -6,6 +6,10 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Deterministic edge, center, and authored-guide snapping layered over the existing move/resize preview boundary, with 6/9-point hysteresis, stable priority/tie rules, independent axes, zoom-aware tolerances, Option suppression, typed stale/cancellation neutrality, and no second canonical geometry source.
+- Native world-aligned horizontal/vertical rulers, smart-guide and bounded distance overlays, plus stable accessibility labels/identifiers and editor-only overlay isolation from authored rendering, packages, history, preview, and export-facing snapshots.
+- Stable page-owned authored guides with pointer and keyboard/accessibility creation, numeric movement, deletion, deterministic ordering, atomic commands/inverses, undo/redo, package/history round trips, and schema-v2 migration.
+- Reproducible optimized 100-/10,000-object snapping measurements with raw samples, memory, environment, methodology, and explicit full-scan/frame-pacing limitations.
 - Deterministic move and eight-handle resize sessions keyed by stable session, document, page, revision, renderer-generation, and selected-node identities, with exact axis constraints, typed validation/failure outcomes, editor-only previews, and one atomic transaction/inverse per completion.
 - Native accessible canvas resize handles plus shared pointer, keyboard, menu, contextual, inspector numeric, accessibility, and automation transform routing; compatible multiple selections move atomically while incompatible or multiple-resize requests are explicitly rejected.
 - Transform integration across undo/redo, deterministic package/history round trips, selection, Layers, layout, renderer, hit testing, bounded old/new dirty regions, autosave/recovery, and redacted diagnostics, with retained 100-/10,000-object timing/memory and running-app visual evidence.
@@ -77,7 +81,8 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Changed
 
-- Canonical schema v2 remains unchanged: move/resize commits author the existing stable `layout.x`, `layout.y`, `layout.width`, and `layout.height` properties, while transform sessions, pointer drafts, handles, and previews remain noncanonical and excluded from packages, history, preview, and export-facing snapshots.
+- Canonical document serialization is schema v3: explicitly authored guides are strict, versioned canonical members; schema-v2 documents migrate deterministically to no authored guides, while snap candidates, measurements, ruler interaction, suppression, and previews remain noncanonical.
+- The geometry representation carried forward into canonical schema v3 is unchanged: move/resize commits author the existing stable `layout.x`, `layout.y`, `layout.width`, and `layout.height` properties, while transform sessions, pointer drafts, handles, and previews remain noncanonical and excluded from packages, history, preview, and export-facing snapshots.
 - Canonical schema v2 now uses the existing ordered property/provenance representation for frame geometry, initial style, and bounded plain text without a format-version change; supported schema-v1 packages continue through the strict migration adapter.
 - Canonical graph validation now uses precomputed child membership and iterative traversal, avoiding quadratic membership checks and recursive-stack growth on bounded large documents.
 - Renderer scene revision/generation changes can retain bounded dirty-region planning when authored object identity and surface identity remain compatible, instead of forcing an unrelated full authored-scene raster.

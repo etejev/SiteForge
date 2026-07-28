@@ -473,7 +473,58 @@ private struct CanvasPlaceholderView: View {
                                     constraint: .horizontal
                                 )
                             ).isEnabled)
+                            Divider()
+                            Button("Add Horizontal Guide") {
+                                state.addGuide(
+                                    axis: .horizontal,
+                                    position: state.viewportState.visibleWorldRect.origin.y + 100,
+                                    provenance: .contextualMenu
+                                )
+                            }
+                            Button("Add Vertical Guide") {
+                                state.addGuide(
+                                    axis: .vertical,
+                                    position: state.viewportState.visibleWorldRect.origin.x + 100,
+                                    provenance: .contextualMenu
+                                )
+                            }
+                            Button("Move Selected Guide 1 px") {
+                                state.moveSelectedGuide(by: 1, provenance: .contextualMenu)
+                            }
+                            .disabled(state.selectedGuideID == nil)
+                            Button("Remove Selected Guide") {
+                                state.removeSelectedGuide(provenance: .contextualMenu)
+                            }
+                            .disabled(state.selectedGuideID == nil)
+                            Button("Suppress Snapping") {
+                                state.setSnappingSuppressed(!state.isSnappingSuppressed)
+                            }
                         }
+
+                    VStack {
+                        HStack {
+                            Text("Horizontal ruler")
+                                .accessibilityLabel("Horizontal ruler aligned to world X coordinates")
+                                .accessibilityValue(state.viewportAccessibilityValue)
+                                .accessibilityIdentifier("canvas.ruler.horizontal")
+                            Text("Vertical ruler")
+                                .accessibilityLabel("Vertical ruler aligned to world Y coordinates")
+                                .accessibilityValue(state.viewportAccessibilityValue)
+                                .accessibilityIdentifier("canvas.ruler.vertical")
+                        }
+                        ForEach(state.activeGuides, id: \.id) { guide in
+                            Text("\(guide.axis.rawValue.capitalized) guide")
+                                .accessibilityLabel("\(guide.axis.rawValue.capitalized) authored guide")
+                                .accessibilityValue(String(format: "%.1f points", guide.position))
+                                .accessibilityAddTraits(
+                                    guide.id == state.selectedGuideID ? .isSelected : []
+                                )
+                                .accessibilityIdentifier("canvas.guide.\(guide.id.description)")
+                        }
+                    }
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
 
                     if state.canvasRenderPlan == nil {
                         ProgressView("Preparing canvas…")
@@ -1200,6 +1251,59 @@ private struct InspectorView: View {
                         }
                         .controlSize(.small)
                     }
+                    Divider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Guides & Snapping").font(.headline)
+                        Text(state.snappingStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("inspector.snapping.status")
+                        HStack {
+                            Button("Add H Guide") {
+                                state.addGuide(
+                                    axis: .horizontal,
+                                    position: state.viewportState.visibleWorldRect.origin.y + 100,
+                                    provenance: .accessibility
+                                )
+                            }
+                            .accessibilityLabel("Add horizontal guide")
+                            .accessibilityIdentifier("inspector.guide.addHorizontal")
+                            Button("Add V Guide") {
+                                state.addGuide(
+                                    axis: .vertical,
+                                    position: state.viewportState.visibleWorldRect.origin.x + 100,
+                                    provenance: .accessibility
+                                )
+                            }
+                            .accessibilityLabel("Add vertical guide")
+                            .accessibilityIdentifier("inspector.guide.addVertical")
+                        }
+                        .controlSize(.small)
+                        if state.selectedGuideID != nil {
+                            Text(state.selectedGuideSummary)
+                                .monospacedDigit()
+                                .accessibilityIdentifier("inspector.guide.summary")
+                            HStack {
+                                Button("Move +1") {
+                                    state.moveSelectedGuide(by: 1, provenance: .accessibility)
+                                }
+                                .accessibilityLabel("Move selected guide one point")
+                                .accessibilityIdentifier("inspector.guide.move")
+                                Button("Remove") {
+                                    state.removeSelectedGuide(provenance: .accessibility)
+                                }
+                                .accessibilityLabel("Remove selected guide")
+                                .accessibilityIdentifier("inspector.guide.remove")
+                            }
+                            .controlSize(.small)
+                        }
+                        Toggle("Suppress snapping", isOn: Binding(
+                            get: { state.isSnappingSuppressed },
+                            set: { state.setSnappingSuppressed($0) }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .accessibilityIdentifier("inspector.snapping.suppress")
+                    }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1242,6 +1346,11 @@ private struct StatusBarView: View {
                 Divider().frame(height: 14)
                 Label(state.transformStatus, systemImage: "arrow.up.left.and.arrow.down.right")
                     .accessibilityIdentifier("status.transform")
+            }
+            if state.snapResolution != nil || state.isSnappingSuppressed {
+                Divider().frame(height: 14)
+                Label(state.snappingStatus, systemImage: "scope")
+                    .accessibilityIdentifier("status.snapping")
             }
             Spacer()
             if state.lifecycle.phase == .saving || state.lifecycle.phase == .autosaving {
@@ -1440,6 +1549,39 @@ struct SiteForgeCommands: Commands {
                     constraint: .horizontal
                 )
             ).isEnabled != true)
+            Divider()
+            Button("Add Horizontal Guide") {
+                guard let state else { return }
+                state.addGuide(
+                    axis: .horizontal,
+                    position: state.viewportState.visibleWorldRect.origin.y + 100,
+                    provenance: .menu
+                )
+            }
+            .keyboardShortcut("h", modifiers: [.command, .option])
+            Button("Add Vertical Guide") {
+                guard let state else { return }
+                state.addGuide(
+                    axis: .vertical,
+                    position: state.viewportState.visibleWorldRect.origin.x + 100,
+                    provenance: .menu
+                )
+            }
+            .keyboardShortcut("v", modifiers: [.command, .option])
+            Button("Move Selected Guide 1 px") {
+                state?.moveSelectedGuide(by: 1, provenance: .menu)
+            }
+            .disabled(state?.selectedGuideID == nil)
+            Button("Remove Selected Guide") {
+                state?.removeSelectedGuide(provenance: .menu)
+            }
+            .keyboardShortcut(.delete, modifiers: [.command, .option])
+            .disabled(state?.selectedGuideID == nil)
+            Button(state?.isSnappingSuppressed == true ? "Enable Snapping" : "Suppress Snapping") {
+                guard let state else { return }
+                state.setSnappingSuppressed(!state.isSnappingSuppressed)
+            }
+            .keyboardShortcut("s", modifiers: [.command, .option])
         }
     }
 }
@@ -1462,6 +1604,10 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.selectionOverlayPlan = state.selectionOverlayPlan
         view.insertionPreviewOverlay = state.insertionPreviewOverlay
         view.transformOverlays = state.transformOverlays
+        view.authoredGuides = state.activeGuides
+        view.guidePreview = state.guidePreview
+        view.snapResolution = state.snapResolution
+        view.selectedGuideID = state.selectedGuideID
         view.accessibilityViewportValue = state.viewportAccessibilityValue
         view.needsDisplay = true
         let width = Double(view.bounds.width)
@@ -1483,12 +1629,20 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.selectionOverlayPlan = state.selectionOverlayPlan
         view.insertionPreviewOverlay = state.insertionPreviewOverlay
         view.transformOverlays = state.transformOverlays
+        view.authoredGuides = state.activeGuides
+        view.guidePreview = state.guidePreview
+        view.snapResolution = state.snapResolution
+        view.selectedGuideID = state.selectedGuideID
         view.onInteraction = { state.noteCanvasInteraction() }
         view.onPointerSelection = { point, modifier in state.selectCanvasPoint(point, modifier: modifier) }
         view.onPointerPreview = { point in state.previewInsertion(at: point) }
         view.onPointerTransformStart = { point in state.beginPointerTransform(at: point) }
-        view.onPointerTransformUpdate = { delta, constrain in
-            state.updatePointerTransform(delta: delta, constrainAxis: constrain)
+        view.onPointerTransformUpdate = { delta, constrain, suppress in
+            state.updatePointerTransform(
+                delta: delta,
+                constrainAxis: constrain,
+                suppressSnapping: suppress
+            )
         }
         view.onPointerTransformCommit = { state.commitPointerTransform() }
         view.onPointerTransformCancel = { state.cancelTransform() }
@@ -1505,6 +1659,13 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.onEscape = { state.performEscape() }
         view.onInsertFrame = { state.performDefaultInsertion(.frame, provenance: .accessibility) }
         view.onInsertText = { state.performDefaultInsertion(.text, provenance: .accessibility) }
+        view.onCreateGuide = { axis, position in
+            state.addGuide(axis: axis, position: position, provenance: .pointer)
+        }
+        view.onSelectGuide = { state.selectGuide($0) }
+        view.onToggleSnapping = {
+            state.setSnappingSuppressed(!state.isSnappingSuppressed)
+        }
         view.onPan = { state.panViewport(by: $0) }
         view.onMagnify = { factor, anchor in state.magnify(by: factor, around: anchor) }
         view.onResize = { size, scale in state.resizeViewport(to: size, pixelRatio: scale) }
@@ -1538,12 +1699,16 @@ private final class NativeCanvasViewportView: NSView {
     var transformOverlays: [CanvasEditorOverlay] = [] {
         didSet { rebuildOverlay() }
     }
+    var authoredGuides: [AuthoredGuide] = [] { didSet { rebuildOverlay() } }
+    var guidePreview: GuidePreview? { didSet { rebuildOverlay() } }
+    var snapResolution: SnapResolution? { didSet { rebuildOverlay() } }
+    var selectedGuideID: GuideID? { didSet { rebuildOverlay() } }
     var accessibilityViewportValue = "Zoom 100 percent"
     var onInteraction: (() -> Void)?
     var onPointerSelection: ((WorldPoint, SelectionPointerModifier) -> Void)?
     var onPointerPreview: ((WorldPoint) -> Void)?
     var onPointerTransformStart: ((WorldPoint) -> Bool)?
-    var onPointerTransformUpdate: ((WorldVector, Bool) -> Void)?
+    var onPointerTransformUpdate: ((WorldVector, Bool, Bool) -> Void)?
     var onPointerTransformCommit: (() -> Void)?
     var onPointerTransformCancel: (() -> Void)?
     var onKeyboardMove: ((WorldVector) -> Bool)?
@@ -1553,6 +1718,9 @@ private final class NativeCanvasViewportView: NSView {
     var onEscape: (() -> Void)?
     var onInsertFrame: (() -> Void)?
     var onInsertText: (() -> Void)?
+    var onCreateGuide: ((GuideAxis, Double) -> Void)?
+    var onSelectGuide: ((GuideID?) -> Void)?
+    var onToggleSnapping: (() -> Void)?
     var onPan: ((ViewportVector) -> Void)?
     var onMagnify: ((Double, ViewportPoint) -> Void)?
     var onResize: ((ViewportSize, Double) -> Void)?
@@ -1609,6 +1777,17 @@ private final class NativeCanvasViewportView: NSView {
             NSAccessibilityCustomAction(name: "Clear Selection") { [weak self] in self?.onClearSelection?(); return true },
             NSAccessibilityCustomAction(name: "Insert Frame at Center") { [weak self] in self?.onInsertFrame?(); return true },
             NSAccessibilityCustomAction(name: "Insert Text at Center") { [weak self] in self?.onInsertText?(); return true },
+            NSAccessibilityCustomAction(name: "Add Horizontal Guide") { [weak self] in
+                guard let self else { return false }
+                self.onCreateGuide?(.horizontal, self.viewportState.visibleWorldRect.origin.y + 100)
+                return true
+            },
+            NSAccessibilityCustomAction(name: "Add Vertical Guide") { [weak self] in
+                guard let self else { return false }
+                self.onCreateGuide?(.vertical, self.viewportState.visibleWorldRect.origin.x + 100)
+                return true
+            },
+            NSAccessibilityCustomAction(name: "Toggle Snapping") { [weak self] in self?.onToggleSnapping?(); return true },
             NSAccessibilityCustomAction(name: "Move Right 1 px") { [weak self] in
                 self?.onKeyboardMove?(WorldVector(dx: 1, dy: 0)) ?? false
             },
@@ -1667,11 +1846,34 @@ private final class NativeCanvasViewportView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if point.y <= SnappingPolicy.rulerThicknessPoints,
+           point.x > SnappingPolicy.rulerThicknessPoints,
+           let world = try? viewportState.transform.viewportToWorld(
+               ViewportPoint(x: point.x, y: point.y)
+           ) {
+            window?.makeFirstResponder(self)
+            onCreateGuide?(.vertical, world.x)
+            return
+        }
+        if point.x <= SnappingPolicy.rulerThicknessPoints,
+           point.y > SnappingPolicy.rulerThicknessPoints,
+           let world = try? viewportState.transform.viewportToWorld(
+               ViewportPoint(x: point.x, y: point.y)
+           ) {
+            window?.makeFirstResponder(self)
+            onCreateGuide?(.horizontal, world.y)
+            return
+        }
+        if let guide = nearestGuide(at: point) {
+            window?.makeFirstResponder(self)
+            onSelectGuide?(guide.id)
+            return
+        }
         if beginTransformGesture(with: event) { return }
         window?.makeFirstResponder(self)
         onInteraction?()
         guard renderPlan != nil else { return }
-        let point = convert(event.locationInWindow, from: nil)
         guard let world = try? viewportState.transform.viewportToWorld(
             ViewportPoint(x: point.x, y: point.y)
         ) else { return }
@@ -1718,7 +1920,11 @@ private final class NativeCanvasViewportView: NSView {
         ) else { return true }
         let delta = WorldVector(dx: world.x - start.x, dy: world.y - start.y)
         transformDidDrag = transformDidDrag || abs(delta.dx) > 0.25 || abs(delta.dy) > 0.25
-        onPointerTransformUpdate?(delta, event.modifierFlags.contains(.shift))
+        onPointerTransformUpdate?(
+            delta,
+            event.modifierFlags.contains(.shift),
+            event.modifierFlags.contains(.option)
+        )
         return true
     }
 
@@ -1816,11 +2022,134 @@ private final class NativeCanvasViewportView: NSView {
         context.setStrokeColor(NSColor.separatorColor.cgColor)
         context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
         context.stroke(artboard)
+        drawRulersAndGuides(in: context)
         if window?.firstResponder === self {
             context.setStrokeColor(NSColor.keyboardFocusIndicatorColor.cgColor)
             context.setLineWidth(3)
             context.stroke(bounds.insetBy(dx: 2, dy: 2))
         }
+    }
+
+    private func nearestGuide(at point: NSPoint) -> AuthoredGuide? {
+        authoredGuides.first { guide in
+            let world = guide.axis == .vertical
+                ? WorldPoint(x: guide.position, y: viewportState.worldOrigin.y)
+                : WorldPoint(x: viewportState.worldOrigin.x, y: guide.position)
+            guard let viewport = try? viewportState.transform.worldToViewport(world) else { return false }
+            let distance = guide.axis == .vertical
+                ? abs(viewport.x - point.x) : abs(viewport.y - point.y)
+            return distance <= 5
+        }
+    }
+
+    private func drawRulersAndGuides(in context: CGContext) {
+        let thickness = SnappingPolicy.rulerThicknessPoints
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.setFillColor(NSColor.controlBackgroundColor.withAlphaComponent(0.94).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: bounds.width, height: thickness))
+        context.fill(CGRect(x: 0, y: 0, width: thickness, height: bounds.height))
+        context.setStrokeColor(NSColor.separatorColor.cgColor)
+        context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
+        context.move(to: CGPoint(x: 0, y: thickness))
+        context.addLine(to: CGPoint(x: bounds.width, y: thickness))
+        context.move(to: CGPoint(x: thickness, y: 0))
+        context.addLine(to: CGPoint(x: thickness, y: bounds.height))
+        context.strokePath()
+
+        let logicalStep = rulerStep(for: viewportState.zoom.value)
+        let visible = viewportState.visibleWorldRect
+        var x = floor(visible.minX / logicalStep) * logicalStep
+        while x <= visible.maxX {
+            if let point = try? viewportState.transform.worldToViewport(WorldPoint(x: x, y: 0)) {
+                context.move(to: CGPoint(x: point.x, y: thickness))
+                context.addLine(to: CGPoint(x: point.x, y: thickness - 6))
+            }
+            x += logicalStep
+        }
+        var y = floor(visible.minY / logicalStep) * logicalStep
+        while y <= visible.maxY {
+            if let point = try? viewportState.transform.worldToViewport(WorldPoint(x: 0, y: y)) {
+                context.move(to: CGPoint(x: thickness, y: point.y))
+                context.addLine(to: CGPoint(x: thickness - 6, y: point.y))
+            }
+            y += logicalStep
+        }
+        context.strokePath()
+
+        for guide in authoredGuides {
+            drawGuide(
+                axis: guide.axis,
+                position: guide.position,
+                color: guide.id == selectedGuideID ? .selectedControlColor : .systemPurple,
+                dashed: false,
+                in: context
+            )
+        }
+        if let guidePreview {
+            drawGuide(
+                axis: guidePreview.axis,
+                position: guidePreview.position,
+                color: .systemPurple,
+                dashed: true,
+                in: context
+            )
+        }
+        for guide in snapResolution?.smartGuides ?? [] {
+            drawGuide(
+                axis: guide.axis == .horizontal ? .vertical : .horizontal,
+                position: guide.position,
+                color: .systemPink,
+                dashed: true,
+                in: context
+            )
+        }
+        context.setStrokeColor(NSColor.systemPink.cgColor)
+        context.setLineDash(phase: 0, lengths: [2, 2])
+        for measurement in snapResolution?.measurements ?? [] {
+            let start = measurement.axis == .horizontal
+                ? WorldPoint(x: measurement.start, y: measurement.crossPosition)
+                : WorldPoint(x: measurement.crossPosition, y: measurement.start)
+            let end = measurement.axis == .horizontal
+                ? WorldPoint(x: measurement.end, y: measurement.crossPosition)
+                : WorldPoint(x: measurement.crossPosition, y: measurement.end)
+            if let a = try? viewportState.transform.worldToViewport(start),
+               let b = try? viewportState.transform.worldToViewport(end) {
+                context.move(to: CGPoint(x: a.x, y: a.y))
+                context.addLine(to: CGPoint(x: b.x, y: b.y))
+            }
+        }
+        context.strokePath()
+    }
+
+    private func rulerStep(for zoom: Double) -> Double {
+        var step = 10.0
+        while step * zoom < SnappingPolicy.rulerMinimumTickSpacingPoints { step *= 2 }
+        return step
+    }
+
+    private func drawGuide(
+        axis: GuideAxis,
+        position: Double,
+        color: NSColor,
+        dashed: Bool,
+        in context: CGContext
+    ) {
+        let world = axis == .vertical
+            ? WorldPoint(x: position, y: viewportState.worldOrigin.y)
+            : WorldPoint(x: viewportState.worldOrigin.x, y: position)
+        guard let point = try? viewportState.transform.worldToViewport(world) else { return }
+        context.setStrokeColor(color.cgColor)
+        context.setLineWidth(1)
+        context.setLineDash(phase: 0, lengths: dashed ? [5, 3] : [])
+        if axis == .vertical {
+            context.move(to: CGPoint(x: point.x, y: 0))
+            context.addLine(to: CGPoint(x: point.x, y: bounds.height))
+        } else {
+            context.move(to: CGPoint(x: 0, y: point.y))
+            context.addLine(to: CGPoint(x: bounds.width, y: point.y))
+        }
+        context.strokePath()
     }
 
     private func notifyResize() {

@@ -104,7 +104,8 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         moveDestination.click()
         let beforeKeyboard = try XCTUnwrap(geometry.value as? String)
-        application.typeKey(.rightArrow, modifierFlags: [])
+        // A large keyboard step deliberately exits the snapping hysteresis envelope.
+        application.typeKey(.rightArrow, modifierFlags: .shift)
         XCTAssertTrue(waitForValueToChange(geometry, from: beforeKeyboard))
 
         let committed = try XCTUnwrap(geometry.value as? String)
@@ -124,6 +125,68 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertFalse(beforeEscape.isEmpty)
         attachScreenshot(named: "SF-AUTHORING-006 cancelled selection scope")
         XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
+    }
+
+    // SF-0404-001 through SF-0404-008
+    func testSnappingRulersAuthoredGuidesSuppressionAndAccessibilityJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        XCTAssertTrue(application.descendants(matching: .any)["canvas.ruler.horizontal"].exists)
+        XCTAssertTrue(application.descendants(matching: .any)["canvas.ruler.vertical"].exists)
+
+        application.buttons["toolbar.tool.frame"].click()
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.40, dy: 0.40)).click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        application.buttons["toolbar.tool.select"].click()
+
+        let addHorizontal = application.buttons["inspector.guide.addHorizontal"]
+        XCTAssertTrue(addHorizontal.waitForExistence(timeout: 5))
+        XCTAssertEqual(addHorizontal.label, "Add horizontal guide")
+        addHorizontal.click()
+        let summary = application.descendants(matching: .any)["inspector.guide.summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        XCTAssertTrue(summary.label.contains("Horizontal") || (summary.value as? String)?.contains("Horizontal") == true)
+        let guide = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "canvas.guide."))
+            .firstMatch
+        XCTAssertTrue(guide.waitForExistence(timeout: 5))
+        XCTAssertTrue(guide.label.contains("Horizontal authored guide"))
+        attachWindowScreenshot(
+            application,
+            named: "SF-AUTHORING-007 rulers and authored guide"
+        )
+
+        let move = application.buttons["inspector.guide.move"]
+        XCTAssertTrue(move.exists)
+        let originalPosition = try XCTUnwrap(guide.value as? String)
+        let originalPoints = try XCTUnwrap(Double(
+            originalPosition.replacingOccurrences(of: " points", with: "")
+        ))
+        move.click()
+        XCTAssertTrue(waitForValueToChange(guide, from: originalPosition))
+        XCTAssertEqual(
+            guide.value as? String,
+            String(format: "%.1f points", originalPoints + 1)
+        )
+
+        let suppress = application.checkBoxes["inspector.snapping.suppress"]
+        XCTAssertTrue(suppress.exists)
+        suppress.click()
+        XCTAssertTrue(application.descendants(matching: .any)["status.snapping"].waitForExistence(timeout: 2))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-007 snapping suppressed")
+        suppress.click()
+
+        application.buttons["inspector.guide.remove"].click()
+        XCTAssertFalse(guide.exists)
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(
+            application.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@", "canvas.guide."))
+                .firstMatch.waitForExistence(timeout: 2)
+        )
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertFalse(guide.exists)
     }
 
     func testNativeCanvasRendererAdoptsAuthoredObjectsAndPreservesInput() throws {
@@ -410,6 +473,13 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     private func attachScreenshot(named name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func attachWindowScreenshot(_ application: XCUIApplication, named name: String) {
+        let attachment = XCTAttachment(screenshot: application.windows.firstMatch.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -911,6 +981,16 @@ final class SiteForgeLaunchTests: XCTestCase {
     private func waitForValueToChange(_ element: XCUIElement, from value: String) -> Bool {
         let predicate = NSPredicate { object, _ in
             ((object as? XCUIElement)?.value as? String) != value
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
+            timeout: 2
+        ) == .completed
+    }
+
+    private func waitForLabelToChange(_ element: XCUIElement, from value: String) -> Bool {
+        let predicate = NSPredicate { object, _ in
+            (object as? XCUIElement)?.label != value
         }
         return XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],

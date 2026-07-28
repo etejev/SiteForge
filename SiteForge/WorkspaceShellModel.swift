@@ -352,6 +352,8 @@ final class WorkspaceShellState: ObservableObject {
         "SF-0402-005", "SF-0402-006", "SF-0402-007", "SF-0402-008",
         "SF-0403-001", "SF-0403-002", "SF-0403-003", "SF-0403-004",
         "SF-0403-005", "SF-0403-006", "SF-0403-007", "SF-0403-008",
+        "SF-0404-001", "SF-0404-002", "SF-0404-003", "SF-0404-004",
+        "SF-0404-005", "SF-0404-006", "SF-0404-007", "SF-0404-008",
         "SF-0405-001", "SF-0405-002", "SF-0405-003", "SF-0405-004",
         "SF-0405-005", "SF-0405-006", "SF-0405-007", "SF-0405-008",
     ]
@@ -380,6 +382,12 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var transformSession = TransformSession()
     @Published private(set) var transformFailure: TransformError?
     @Published private(set) var lastTransformAnnouncement = "Transform inactive"
+    @Published private(set) var snapResolution: SnapResolution?
+    @Published private(set) var isSnappingSuppressed = false
+    @Published private(set) var selectedGuideID: GuideID?
+    @Published private(set) var guideEditingSession = GuideEditingSession()
+    @Published private(set) var guideFailure: GuideCommandError?
+    @Published private(set) var lastGuideAnnouncement = "No authored guide selected"
     @Published private(set) var viewportFailure: CanvasViewportError?
     @Published private(set) var lastViewportAnnouncement = "Canvas viewport at 100 percent"
     @Published private(set) var canvasInteractionCount = 0
@@ -388,6 +396,7 @@ final class WorkspaceShellState: ObservableObject {
             if isPreviewPresented {
                 cancelInsertion(resetTool: true)
                 cancelTransform()
+                cancelGuideEditing()
             }
         }
     }
@@ -401,11 +410,14 @@ final class WorkspaceShellState: ObservableObject {
     private let selectionOverlayPlanner = SelectionOverlayPlanner()
     private let insertionRegistry = InsertionCommandRegistry()
     private let transformRegistry = TransformCommandRegistry()
+    private let snapResolver = SnapResolver()
+    private let guideRegistry = GuideCommandRegistry()
     private let renderSurfaceID = CanvasRenderSurfaceID()
     let canvasRenderDiagnostics = CanvasRenderDiagnostics()
     let selectionDiagnostics = SelectionDiagnostics()
     let insertionDiagnostics = InsertionDiagnostics()
     let transformDiagnostics = TransformDiagnostics()
+    let snapDiagnostics = SnapDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
     private let announcementPoster: AccessibilityAnnouncementPoster
     private var viewportDocumentID: DocumentID
@@ -447,6 +459,7 @@ final class WorkspaceShellState: ObservableObject {
         if selectedTool != tool {
             cancelInsertion(resetTool: false)
             cancelTransform()
+            cancelGuideEditing()
         }
         selectedTool = tool
         switch tool {
@@ -469,6 +482,8 @@ final class WorkspaceShellState: ObservableObject {
         guard pages.contains(where: { $0.id == pageID }) else { return }
         cancelInsertion(resetTool: true)
         cancelTransform()
+        cancelGuideEditing()
+        selectedGuideID = nil
         selectedPageID = pageID
         refreshSelectionScene(boundary: .pageSwitch)
         scheduleScenePreparation()
@@ -742,6 +757,237 @@ final class WorkspaceShellState: ObservableObject {
         }
     }
 
+    var activeGuides: [AuthoredGuide] {
+        guard let pageID = effectiveSelectedPageID else { return [] }
+        return documentSession.document.guides.filter { $0.pageID == pageID }
+    }
+
+    var snappingStatus: String {
+        if isSnappingSuppressed { return "Snapping suppressed" }
+        guard let snapResolution, !snapResolution.winners.isEmpty else {
+            return "Snapping ready"
+        }
+        return snapResolution.winners
+            .sorted { $0.key.rawValue < $1.key.rawValue }
+            .map(\.value.explanation)
+            .joined(separator: "; ")
+    }
+
+    var selectedGuideSummary: String {
+        guard let selectedGuideID,
+              let guide = activeGuides.first(where: { $0.id == selectedGuideID }) else {
+            return activeGuides.isEmpty
+                ? "No authored guides"
+                : "\(activeGuides.count) authored guide\(activeGuides.count == 1 ? "" : "s")"
+        }
+        return String(
+            format: "%@ guide at %.0f",
+            guide.axis.rawValue.capitalized,
+            guide.position
+        )
+    }
+
+    func setSnappingSuppressed(_ value: Bool) {
+        guard value != isSnappingSuppressed else { return }
+        isSnappingSuppressed = value
+        if value {
+            snapResolution = nil
+            lastTransformAnnouncement = "Snapping suppressed"
+        } else {
+            lastTransformAnnouncement = "Snapping enabled"
+        }
+        announcementPoster.post(lastTransformAnnouncement)
+    }
+
+    func toggleSnappingSuppression() {
+        setSnappingSuppressed(!isSnappingSuppressed)
+    }
+
+    var guidePreview: GuidePreview? {
+        switch guideEditingSession.phase {
+        case .previewing(let value), .committing(let value): value
+        default: nil
+        }
+    }
+
+    func selectGuide(_ guideID: GuideID?) {
+        guard guideID == nil || activeGuides.contains(where: { $0.id == guideID }) else {
+            return
+        }
+        selectedGuideID = guideID
+        lastGuideAnnouncement = guideID == nil ? "No authored guide selected" : selectedGuideSummary
+        announcementPoster.post(lastGuideAnnouncement)
+    }
+
+    func addGuide(
+        axis: GuideAxis,
+        position: Double,
+        provenance: GuideCommandProvenance
+    ) {
+        let name: GuideCommandName = axis == .horizontal ? .addHorizontal : .addVertical
+        performGuideCommand(
+            name,
+            guideID: GuideID(),
+            position: position,
+            provenance: provenance
+        )
+    }
+
+    func moveSelectedGuide(by delta: Double, provenance: GuideCommandProvenance) {
+        guard let selectedGuideID,
+              let guide = activeGuides.first(where: { $0.id == selectedGuideID }) else {
+            guideFailure = .missingGuide
+            return
+        }
+        performGuideCommand(
+            .move,
+            guideID: selectedGuideID,
+            position: guide.position + delta,
+            provenance: provenance
+        )
+    }
+
+    func removeSelectedGuide(provenance: GuideCommandProvenance) {
+        guard let selectedGuideID else {
+            guideFailure = .missingGuide
+            return
+        }
+        performGuideCommand(
+            .remove,
+            guideID: selectedGuideID,
+            position: nil,
+            provenance: provenance
+        )
+    }
+
+    func performGuideCommand(
+        _ name: GuideCommandName,
+        guideID: GuideID,
+        position: Double?,
+        provenance: GuideCommandProvenance
+    ) {
+        guard let identity = makeGuideIdentity() else {
+            guideFailure = .staleRenderer
+            return
+        }
+        let command = GuideCommand(
+            identity: identity,
+            name: name,
+            guideID: guideID,
+            position: position,
+            provenance: provenance
+        )
+        let start = DispatchTime.now().uptimeNanoseconds
+        do {
+            let prepared = try guideRegistry.prepare(
+                command,
+                in: documentSession.document,
+                context: guideValidationContext
+            )
+            let axis: GuideAxis
+            switch name {
+            case .addHorizontal: axis = .horizontal
+            case .addVertical: axis = .vertical
+            case .move, .remove:
+                axis = activeGuides.first(where: { $0.id == guideID })?.axis ?? .horizontal
+            }
+            guideEditingSession.begin(identity: identity)
+            if let position {
+                let preview = GuidePreview(
+                    identity: identity,
+                    guideID: guideID,
+                    axis: axis,
+                    position: position
+                )
+                guideEditingSession.preview(preview)
+                guideEditingSession.beginCommit(preview)
+            }
+            _ = try documentSession.execute(prepared.documentCommand)
+            guideEditingSession.complete()
+            guideFailure = nil
+            selectedGuideID = name == .remove ? nil : guideID
+            lastGuideAnnouncement = switch name {
+            case .addHorizontal, .addVertical: "\(axis.rawValue.capitalized) guide added"
+            case .move: "\(axis.rawValue.capitalized) guide moved"
+            case .remove: "Guide removed"
+            }
+            announcementPoster.post(lastGuideAnnouncement)
+            Task {
+                await snapDiagnostics.append(SnapDiagnosticFactory.make(
+                    operation: "guide.\(name.rawValue)",
+                    identities: [guideID.description, identity.pageID.description],
+                    durationMilliseconds: Double(
+                        DispatchTime.now().uptimeNanoseconds - start
+                    ) / 1_000_000,
+                    candidateCount: 0,
+                    winnerCount: 0,
+                    result: .success
+                ))
+            }
+        } catch let error as GuideCommandError {
+            guideEditingSession.fail(error)
+            guideFailure = error
+            Task {
+                await snapDiagnostics.append(SnapDiagnosticFactory.make(
+                    operation: "guide.\(name.rawValue)",
+                    identities: [guideID.description],
+                    durationMilliseconds: Double(
+                        DispatchTime.now().uptimeNanoseconds - start
+                    ) / 1_000_000,
+                    candidateCount: 0,
+                    winnerCount: 0,
+                    result: [.staleDocument, .stalePage, .staleRevision, .staleRenderer]
+                        .contains(error) ? .stale : .failure,
+                    failureCategory: String(describing: error)
+                ))
+            }
+        } catch let error as CommandExecutionError {
+            let mapped: GuideCommandError = switch error {
+            case .cancelled: .cancelled
+            case .revisionExhausted: .revisionExhausted
+            case .disabled, .invalidResult: .staleRevision
+            }
+            guideEditingSession.fail(mapped)
+            guideFailure = mapped
+        } catch {}
+    }
+
+    func cancelGuideEditing() {
+        switch guideEditingSession.phase {
+        case .inactive, .cancelled: return
+        case .drafting, .previewing, .committing, .failed:
+            guideEditingSession.cancel()
+            guideFailure = nil
+            lastGuideAnnouncement = "Guide operation cancelled"
+            announcementPoster.post(lastGuideAnnouncement)
+        }
+    }
+
+    private func makeGuideIdentity() -> GuideOperationIdentity? {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else {
+            return nil
+        }
+        return GuideOperationIdentity(
+            operationID: GuideEditID(),
+            documentID: documentSession.document.id,
+            pageID: pageID,
+            revision: documentSession.document.revision,
+            sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration
+        )
+    }
+
+    private var guideValidationContext: GuideValidationContext {
+        let transform = transformValidationContext
+        return GuideValidationContext(
+            activePageID: transform.activePageID,
+            sceneID: transform.currentSceneID,
+            rendererGeneration: transform.rendererGeneration,
+            isLifecycleAvailable: transform.isLifecycleAvailable,
+            lifecycleDisabledReason: transform.lifecycleDisabledReason
+        )
+    }
+
     var transformOverlays: [CanvasEditorOverlay] {
         guard let plan = canvasRenderPlan else { return [] }
         let preview: TransformPreview? = switch transformSession.phase {
@@ -815,7 +1061,11 @@ final class WorkspaceShellState: ObservableObject {
         return beginTransform(operation, provenance: .pointer)
     }
 
-    func updatePointerTransform(delta: WorldVector, constrainAxis: Bool) {
+    func updatePointerTransform(
+        delta: WorldVector,
+        constrainAxis: Bool,
+        suppressSnapping: Bool = false
+    ) {
         let operation: TransformOperation
         let constraint: TransformAxisConstraint = constrainAxis
             ? (abs(delta.dx) >= abs(delta.dy) ? .horizontal : .vertical)
@@ -833,7 +1083,11 @@ final class WorkspaceShellState: ObservableObject {
         default:
             return
         }
-        updateTransformPreview(operation, provenance: .pointer)
+        updateTransformPreview(
+            operation,
+            provenance: .pointer,
+            temporarilySuppressSnapping: suppressSnapping
+        )
     }
 
     func commitPointerTransform() {
@@ -853,6 +1107,7 @@ final class WorkspaceShellState: ObservableObject {
         }
         guard active else { return }
         transformSession.cancel()
+        snapResolution = nil
         transformFailure = nil
         lastTransformAnnouncement = "Transform cancelled"
         announcementPoster.post(lastTransformAnnouncement)
@@ -889,6 +1144,48 @@ final class WorkspaceShellState: ObservableObject {
         )
     }
 
+    private func snapContext(
+        identity: TransformOperationIdentity,
+        temporarilySuppress: Bool
+    ) -> SnapResolutionContext {
+        let pageID = effectiveSelectedPageID ?? PageID()
+        let page = documentSession.document.pages.first(where: { $0.id == pageID })
+        let nodesByID = Dictionary(uniqueKeysWithValues: (page?.nodes ?? []).map { ($0.id, $0) })
+        let objects = (canvasRenderPlan?.authoredObjects ?? []).map { object in
+            let node = nodesByID[object.id]
+            let clipped: Bool
+            if let clip = object.clipRect {
+                clipped = object.frame.minX < clip.minX
+                    || object.frame.maxX > clip.maxX
+                    || object.frame.minY < clip.minY
+                    || object.frame.maxY > clip.maxY
+            } else {
+                clipped = false
+            }
+            return SnapSceneObject(
+                id: object.id,
+                pageID: pageID,
+                frame: object.frame,
+                isVisible: object.isVisible,
+                isLocked: node?.insertionBooleanProperty("locked") ?? false,
+                isClipped: clipped,
+                isAvailable: selectionScene?.targets.first(where: { $0.id == object.id })?
+                    .isAvailable ?? false
+            )
+        }
+        return SnapResolutionContext(
+            identity: identity,
+            activePageID: pageID,
+            selectedNodeIDs: selectionState.orderedIDs,
+            objects: objects,
+            guides: activeGuides,
+            zoom: viewportState.zoom,
+            pixelRatio: viewportState.pixelRatio,
+            previousWinners: snapResolution?.winners ?? [:],
+            isSuppressed: isSnappingSuppressed || temporarilySuppress
+        )
+    }
+
     @discardableResult
     private func beginTransform(
         _ operation: TransformOperation,
@@ -914,18 +1211,26 @@ final class WorkspaceShellState: ObservableObject {
 
     private func updateTransformPreview(
         _ operation: TransformOperation,
-        provenance: TransformProvenance
+        provenance: TransformProvenance,
+        temporarilySuppressSnapping: Bool = false
     ) {
         guard let identity = transformSession.currentIdentity else { return }
-        _ = prepareTransformPreview(operation, identity: identity, provenance: provenance)
+        _ = prepareTransformPreview(
+            operation,
+            identity: identity,
+            provenance: provenance,
+            temporarilySuppressSnapping: temporarilySuppressSnapping
+        )
     }
 
     @discardableResult
     private func prepareTransformPreview(
         _ operation: TransformOperation,
         identity: TransformOperationIdentity,
-        provenance: TransformProvenance
+        provenance: TransformProvenance,
+        temporarilySuppressSnapping: Bool = false
     ) -> Bool {
+        let snapStart = DispatchTime.now().uptimeNanoseconds
         let command = GeometryTransformCommand(
             identity: identity,
             orderedNodeIDs: selectionState.orderedIDs,
@@ -933,27 +1238,102 @@ final class WorkspaceShellState: ObservableObject {
             provenance: provenance
         )
         do {
-            let prepared = try transformRegistry.prepare(
+            let raw = try transformRegistry.prepare(
                 command,
+                in: documentSession.document,
+                context: transformValidationContext
+            )
+            let snap = try snapResolver.resolve(
+                raw: raw,
+                context: snapContext(
+                    identity: identity,
+                    temporarilySuppress: temporarilySuppressSnapping
+                )
+            )
+            let resolvedCommand = GeometryTransformCommand(
+                identity: identity,
+                orderedNodeIDs: selectionState.orderedIDs,
+                operation: snap.operation,
+                provenance: provenance
+            )
+            let prepared = try transformRegistry.prepare(
+                resolvedCommand,
                 in: documentSession.document,
                 context: transformValidationContext
             )
             transformSession.preview(TransformPreview(
                 identity: identity,
-                operation: operation,
+                operation: snap.operation,
                 geometries: prepared.geometries
             ))
+            snapResolution = snap
+            recordSnapDiagnostic(
+                operation: operation.name,
+                identity: identity,
+                start: snapStart,
+                candidateCount: snap.candidateCount,
+                winnerCount: snap.winners.count,
+                result: temporarilySuppressSnapping || isSnappingSuppressed
+                    ? .suppressed : .success
+            )
             transformFailure = nil
-            objectWillChange.send()
             return true
         } catch let error as TransformError {
             transformSession.fail(error)
+            snapResolution = nil
+            recordSnapDiagnostic(
+                operation: operation.name,
+                identity: identity,
+                start: snapStart,
+                candidateCount: 0,
+                winnerCount: 0,
+                result: [.staleDocument, .staleRevision, .staleRenderer].contains(error)
+                    ? .stale : error == .cancelled ? .cancelled : .failure,
+                failure: "transform-validation"
+            )
             transformFailure = error
-            objectWillChange.send()
+            return false
+        } catch let error as SnapError {
+            transformSession.fail(error == .cancelled ? .cancelled : .invalidResult)
+            snapResolution = nil
+            recordSnapDiagnostic(
+                operation: operation.name,
+                identity: identity,
+                start: snapStart,
+                candidateCount: 0,
+                winnerCount: 0,
+                result: error == .cancelled ? .cancelled
+                    : error == .staleTransform ? .stale : .failure,
+                failure: String(describing: error)
+            )
             return false
         } catch {
             return false
         }
+    }
+
+    private func recordSnapDiagnostic(
+        operation: String,
+        identity: TransformOperationIdentity,
+        start: UInt64,
+        candidateCount: Int,
+        winnerCount: Int,
+        result: SnapDiagnosticResult,
+        failure: String? = nil
+    ) {
+        let record = SnapDiagnosticFactory.make(
+            operation: "transform.\(operation)",
+            identities: selectionState.orderedIDs.map(\.description)
+                + [identity.pageID.description, identity.sessionID.description],
+            durationMilliseconds: Double(
+                DispatchTime.now().uptimeNanoseconds - start
+            ) / 1_000_000,
+            candidateCount: candidateCount,
+            winnerCount: winnerCount,
+            result: result,
+            failureCategory: failure
+        )
+        Task { await snapDiagnostics.append(record) }
     }
 
     private func commitTransform(provenance: TransformProvenance) {
@@ -974,6 +1354,7 @@ final class WorkspaceShellState: ObservableObject {
             transformSession.beginCommit(preview)
             _ = try documentSession.execute(prepared.documentCommand)
             transformSession.complete()
+            snapResolution = nil
             transformFailure = nil
             lastTransformAnnouncement = "\(preview.operation.name.capitalized) committed"
             announcementPoster.post(lastTransformAnnouncement)
@@ -983,6 +1364,7 @@ final class WorkspaceShellState: ObservableObject {
             )
         } catch let error as TransformError {
             transformSession.fail(error)
+            snapResolution = nil
             transformFailure = error
             recordTransformDiagnostic(
                 command, start: start, revision: nil,
@@ -998,6 +1380,7 @@ final class WorkspaceShellState: ObservableObject {
             case .invalidResult: .invalidResult
             }
             transformSession.fail(mapped)
+            snapResolution = nil
             transformFailure = mapped
             recordTransformDiagnostic(
                 command, start: start, revision: nil,
@@ -1095,6 +1478,13 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func performEscape() {
+        switch guideEditingSession.phase {
+        case .drafting, .previewing, .committing, .failed:
+            cancelGuideEditing()
+            return
+        case .inactive, .cancelled:
+            break
+        }
         switch transformSession.phase {
         case .drafting, .previewing, .committing, .failed:
             cancelTransform()
@@ -1306,15 +1696,27 @@ final class WorkspaceShellState: ObservableObject {
     func undo() {
         cancelInsertion(resetTool: true)
         cancelTransform()
+        cancelGuideEditing()
         try? documentSession.undo()
+        repairSelectedGuide()
         refreshSelectionScene(boundary: .undo)
     }
 
     func redo() {
         cancelInsertion(resetTool: true)
         cancelTransform()
+        cancelGuideEditing()
         try? documentSession.redo()
+        repairSelectedGuide()
         refreshSelectionScene(boundary: .redo)
+    }
+
+    private func repairSelectedGuide() {
+        if let selectedGuideID, !activeGuides.contains(where: { $0.id == selectedGuideID }) {
+            self.selectedGuideID = nil
+            lastGuideAnnouncement = "Authored guide selection cleared because the guide is unavailable"
+            announcementPoster.post(lastGuideAnnouncement)
+        }
     }
 
     private func updateViewportContentBounds() {
@@ -1339,6 +1741,13 @@ final class WorkspaceShellState: ObservableObject {
                   identity.documentID != document.id || identity.revision != document.revision {
             cancelTransform()
         }
+        if case .committing = guideEditingSession.phase {
+            // The synchronous guide transaction owns this exact revision transition.
+        } else if let identity = guideEditingSession.currentIdentity,
+                  identity.documentID != document.id || identity.revision != document.revision {
+            cancelGuideEditing()
+        }
+        repairSelectedGuide()
         guard document.id != viewportDocumentID else {
             scheduleScenePreparation()
             return
@@ -1363,6 +1772,10 @@ final class WorkspaceShellState: ObservableObject {
         insertionFailure = nil
         transformSession.deactivate()
         transformFailure = nil
+        snapResolution = nil
+        guideEditingSession.deactivate()
+        guideFailure = nil
+        selectedGuideID = nil
         pendingSelectionAfterInsertion = nil
         canvasRendererFailure = nil
         viewportFailure = nil

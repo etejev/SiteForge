@@ -1,0 +1,59 @@
+{
+  "environment": {
+    "configuration": "SiteForgeTests optimized test bundle (-O)",
+    "hardware": "Mac16,13",
+    "os": "27.0",
+    "processor": "Apple M4",
+    "xcode": "Xcode 27.0; Build version 27A5194q"
+  },
+  "limitations": [
+    "These are local engineering measurements, not owner-approved cross-hardware budgets.",
+    "The resolver currently performs a bounded full scan; 10,000-object results do not prove 60 Hz interaction.",
+    "Renderer, layout, and AppKit presentation costs are measured by their own evidence suites.",
+    "Text baselines, distribution snapping, rotation, skew, breakpoints, and export are excluded."
+  ],
+  "maximumResidentBytes": 109428736,
+  "measurements": [
+    {
+      "name": "snap-resolve",
+      "objectCount": 100,
+      "p95": 0.972,
+      "samples": [
+        0.972,
+        0.452916,
+        0.398584,
+        0.379042
+      ],
+      "unit": "milliseconds"
+    },
+    {
+      "name": "snap-resolve",
+      "objectCount": 10000,
+      "p95": 40.341417,
+      "samples": [
+        40.341417,
+        39.838292,
+        39.292792,
+        39.482625
+      ],
+      "unit": "milliseconds"
+    }
+  ],
+  "methodology": [
+    "The production SnapResolver evaluates stable object and authored-guide candidates.",
+    "Four monotonic-clock samples are retained for 100- and 10,000-object fixtures.",
+    "Fixtures exercise real finite frames, stable typed identities, filtering, candidate sorting, smart guides, and bounded measurements.",
+    "Behavioral tests separately prove transform preview/commit parity and guide transactions."
+  ],
+  "requirementIDs": [
+    "SF-0404-001",
+    "SF-0404-002",
+    "SF-0404-003",
+    "SF-0404-004",
+    "SF-0404-005",
+    "SF-0404-006",
+    "SF-0404-007",
+    "SF-0404-008"
+  ],
+  "schemaVersion": 1
+}

@@ -8,6 +8,9 @@ enum CommandName: String, CaseIterable, Codable, Sendable {
     case removeNode = "document.node.remove"
     case setProperty = "document.property.set"
     case removeProperty = "document.property.remove"
+    case insertGuide = "document.guide.insert"
+    case setGuidePosition = "document.guide.position.set"
+    case removeGuide = "document.guide.remove"
     case batch = "document.batch"
     case undo = "history.undo"
     case redo = "history.redo"
@@ -83,6 +86,20 @@ struct RemovePropertyCommand: Codable, Equatable, Sendable {
     let propertyID: PropertyID
 }
 
+struct InsertGuideCommand: Codable, Equatable, Sendable {
+    let guide: AuthoredGuide
+    let index: Int
+}
+
+struct SetGuidePositionCommand: Codable, Equatable, Sendable {
+    let guideID: GuideID
+    let position: Double
+}
+
+struct RemoveGuideCommand: Codable, Equatable, Sendable {
+    let guideID: GuideID
+}
+
 indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case insertPage(InsertPageCommand)
     case removePage(RemovePageCommand)
@@ -91,6 +108,9 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case removeNode(RemoveNodeCommand)
     case setProperty(SetPropertyCommand)
     case removeProperty(RemovePropertyCommand)
+    case insertGuide(InsertGuideCommand)
+    case setGuidePosition(SetGuidePositionCommand)
+    case removeGuide(RemoveGuideCommand)
     case batch([DocumentCommand])
 
     var name: CommandName {
@@ -102,6 +122,9 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
         case .removeNode: .removeNode
         case .setProperty: .setProperty
         case .removeProperty: .removeProperty
+        case .insertGuide: .insertGuide
+        case .setGuidePosition: .setGuidePosition
+        case .removeGuide: .removeGuide
         case .batch: .batch
         }
     }
@@ -130,6 +153,12 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
                 command.nodeID.commandTarget,
                 command.propertyID.commandTarget,
             ]
+        case .insertGuide(let command):
+            [command.guide.pageID.commandTarget, command.guide.id.commandTarget]
+        case .setGuidePosition(let command):
+            [command.guideID.commandTarget]
+        case .removeGuide(let command):
+            [command.guideID.commandTarget]
         case .batch(let commands):
             commands.flatMap(\.targets)
         }
@@ -185,6 +214,9 @@ struct CommandRegistry {
             CommandDescriptor(name: .removeNode, title: "Remove Node", mutatesDocument: true),
             CommandDescriptor(name: .setProperty, title: "Set Property", mutatesDocument: true),
             CommandDescriptor(name: .removeProperty, title: "Remove Property", mutatesDocument: true),
+            CommandDescriptor(name: .insertGuide, title: "Add Guide", mutatesDocument: true),
+            CommandDescriptor(name: .setGuidePosition, title: "Move Guide", mutatesDocument: true),
+            CommandDescriptor(name: .removeGuide, title: "Remove Guide", mutatesDocument: true),
             CommandDescriptor(name: .batch, title: "Grouped Edit", mutatesDocument: true),
             CommandDescriptor(name: .undo, title: "Undo", mutatesDocument: true),
             CommandDescriptor(name: .redo, title: "Redo", mutatesDocument: true),
@@ -285,6 +317,30 @@ struct CommandRegistry {
                 return .disabled(reason: "The property no longer exists.")
             }
             return .enabled
+
+        case .insertGuide(let value):
+            guard document.pages.contains(where: { $0.id == value.guide.pageID }) else {
+                return .disabled(reason: "The guide's owning page no longer exists.")
+            }
+            guard !document.guides.contains(where: { $0.id == value.guide.id }) else {
+                return .disabled(reason: "A guide with this stable identifier already exists.")
+            }
+            guard (0...document.guides.count).contains(value.index) else {
+                return .disabled(reason: "The guide insertion position is no longer valid.")
+            }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .setGuidePosition(let value):
+            guard document.guides.contains(where: { $0.id == value.guideID }) else {
+                return .disabled(reason: "The guide no longer exists.")
+            }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .removeGuide(let value):
+            guard document.guides.contains(where: { $0.id == value.guideID }) else {
+                return .disabled(reason: "The guide no longer exists.")
+            }
+            return validationAvailability(afterApplying: command, to: document)
 
         case .batch(let commands):
             guard !commands.isEmpty else {
@@ -478,6 +534,33 @@ struct CommandRegistry {
                         insertionIndex: propertyIndex
                     )
                 )
+            )
+
+        case .insertGuide(let value):
+            document.guides.insert(value.guide, at: value.index)
+            return CommandMutation(
+                inverse: .removeGuide(RemoveGuideCommand(guideID: value.guide.id))
+            )
+
+        case .setGuidePosition(let value):
+            guard let index = document.guides.firstIndex(where: { $0.id == value.guideID }) else {
+                throw CommandExecutionError.disabled("The guide no longer exists.")
+            }
+            let previous = document.guides[index].position
+            document.guides[index].position = value.position
+            return CommandMutation(
+                inverse: .setGuidePosition(
+                    SetGuidePositionCommand(guideID: value.guideID, position: previous)
+                )
+            )
+
+        case .removeGuide(let value):
+            guard let index = document.guides.firstIndex(where: { $0.id == value.guideID }) else {
+                throw CommandExecutionError.disabled("The guide no longer exists.")
+            }
+            let guide = document.guides.remove(at: index)
+            return CommandMutation(
+                inverse: .insertGuide(InsertGuideCommand(guide: guide, index: index))
             )
 
         case .batch(let commands):

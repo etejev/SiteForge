@@ -4,10 +4,10 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-AUTHORING-007` Implement deterministic snapping, guides, rulers, and measurement foundations.
-  - Requirements: `SF-0404-001` through `SF-0404-008` (bounded snapping/measurement slice).
-  - Acceptance: build on the verified transform-session identities and preview boundary; keep snap candidates and transient measurements editor-only while persisting only explicitly authored guides through one typed transaction boundary; preserve pointer/keyboard/accessibility parity, deterministic conflict resolution, cancellation/stale neutrality, and bounded scale evidence.
-  - Dependencies: `SF-AUTHORING-006`.
+- [ ] `SF-AUTHORING-008` Implement the bounded inline plain-text editing foundation.
+  - Requirements: `SF-0406-001` through `SF-0406-008` (bounded plain-text editing slice; rich text and production shaping remain later work).
+  - Acceptance: establish one scene-owned draft → validate → preview → commit text-editing boundary over stable text-node identity; preserve exact transactional history, persistence/recovery, renderer/layout adoption, keyboard/accessibility operation, stale/cancellation neutrality, diagnostic redaction, and bounded scale without adding rich-text spans, font browsing, advanced typography, responsive editing, export generation, or unrelated visual work.
+  - Dependencies: `SF-AUTHORING-005`, `SF-AUTHORING-006`, and `SF-AUTHORING-007`.
 
 ## IN PROGRESS
 
@@ -18,6 +18,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-AUTHORING-007` Implement deterministic snapping, guides, rulers, and measurement foundations.
+  - Requirements: `SF-0404-001` through `SF-0404-008` (bounded snapping/measurement slice; the normative module remains Partial overall).
+  - Plan: retain `layout.x`, `layout.y`, `layout.width`, and `layout.height` as the only canonical node geometry; extend the versioned canonical document only for explicitly authored page-owned guides with typed stable identity, axis, finite position, provenance, and deterministic order; migrate older schemas to an empty guide collection; add typed atomic create/move/remove guide commands with exact inverses; layer a Foundation-only editor snap resolver over the verified transform preparation boundary using 6-point entry and 9-point exit thresholds, authored-guide → object-edge → object-center priority, axis-independent resolution, stable distance/identity/feature tie-breaking, and previous-winner hysteresis; exclude hidden, clipped, unavailable, cross-page, selected, stale, and incompatible candidates while retaining locked objects as immutable reference geometry; keep candidates, winners, rulers, measurements, suppression, and previews noncanonical; render bounded native overlays and accessibility alternatives; then prove persistence/history/recovery/migration, preview/commit parity, cancellation/stale neutrality, dirty-region isolation, and 100-/10,000-object scale.
+  - Supported: deterministic edge, center, and authored-guide snapping for supported move/resize previews; 6/9-point zoom-aware hysteresis; independent axes; stable priority and tie-breaking; native rulers, smart-guide and bounded distance overlays; Option and accessible suppression; stable page-owned horizontal/vertical authored guides; pointer plus keyboard/menu/contextual/accessibility/automation adapters; one atomic guide transaction/inverse; exact undo/redo; deterministic schema-v3 package/history round trips and schema-v2 migration; redacted diagnostics.
+  - Explicitly unsupported: text-baseline/glyph and distribution snapping, rotation/skew snapping, responsive breakpoint editing, layout-distribution commands, export generation, incremental spatial indexing, final interactive renderer/frame-pacing acceptance, OS-level VoiceOver/settings acceptance, localization acceptance, cross-hardware budgets, and release acceptance. Snap candidates, winners, measurements, ruler interaction, suppression, and transform previews remain noncanonical.
+  - Evidence: six focused unit/integration tests plus one actual-app ruler/guide/suppression/accessibility journey; complete regression suite; headless import and editor-state non-serialization checks; strict schema-v3/schema-v2 migration coverage; retained native window screenshots; and two validated optimized capacity measurements. On Mac16,13, resolver P95 was 0.972 ms at 100 objects and 40.341 ms at 10,000 objects, with 109,428,736-byte resident-memory high water. The 10,000-object bounded full scan exceeds one 60 Hz interval and is not an incremental or release-budget pass.
+  - Dependencies: completed after `SF-AUTHORING-006`. `SF-AUTHORING-008` is next READY.
 
 - [x] `SF-AUTHORING-006` Implement deterministic geometry-transform sessions for selected nodes.
   - Requirements: `SF-0403-001` through `SF-0403-008` (bounded move/resize slice; the normative module remains Partial overall).
