@@ -44,13 +44,14 @@ struct WorkspaceShellView: View {
         .background {
             ZStack {
                 Color(nsColor: .underPageBackgroundColor)
-                WindowCloseGuard(controller: state.lifecycle).frame(width: 0, height: 0)
+                WindowCloseGuard(state: state).frame(width: 0, height: 0)
                 WorkspaceWindowConfigurator().frame(width: 0, height: 0)
                 WorkspaceWindowTabRouterInstaller(
                     router: tabRouter,
                     focus: $focusedControl,
                     pageIDs: state.pages.map(\.id),
-                    layerIDs: state.navigatorTab == .layers ? state.layerTargets.map(\.id) : []
+                    layerIDs: state.navigatorTab == .layers ? state.layerTargets.map(\.id) : [],
+                    state: state
                 )
                 .frame(width: 0, height: 0)
                 if WorkspaceFocusDiagnosticsPolicy.isEnabled {
@@ -115,24 +116,24 @@ private struct RecoveryCandidateBar: View {
 }
 
 private struct WindowCloseGuard: NSViewRepresentable {
-    @ObservedObject var controller: DocumentLifecycleController
+    @ObservedObject var state: WorkspaceShellState
 
-    func makeCoordinator() -> Coordinator { Coordinator(controller: controller) }
+    func makeCoordinator() -> Coordinator { Coordinator(state: state) }
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async { context.coordinator.attach(to: view.window) }
         return view
     }
     func updateNSView(_ view: NSView, context: Context) {
-        context.coordinator.controller = controller
+        context.coordinator.state = state
         DispatchQueue.main.async { context.coordinator.attach(to: view.window) }
     }
 
     @MainActor final class Coordinator: NSObject, NSWindowDelegate {
-        var controller: DocumentLifecycleController
+        var state: WorkspaceShellState
         weak var priorDelegate: NSWindowDelegate?
         weak var window: NSWindow?
-        init(controller: DocumentLifecycleController) { self.controller = controller }
+        init(state: WorkspaceShellState) { self.state = state }
         func attach(to candidate: NSWindow?) {
             guard let candidate, candidate !== window else { return }
             window = candidate
@@ -140,11 +141,16 @@ private struct WindowCloseGuard: NSViewRepresentable {
             candidate.delegate = self
         }
         func windowShouldClose(_ sender: NSWindow) -> Bool {
+            let controller = state.lifecycle
             if controller.consumeCloseAuthorization() {
                 return priorDelegate?.windowShouldClose?(sender) ?? true
             }
-            Task { @MainActor [weak self, weak sender] in
-                guard let self, let sender else { return }
+            if state.textEditingSession.isActive {
+                state.commitTextEditing()
+                guard !state.textEditingSession.isActive else { return false }
+            }
+            Task { @MainActor [weak sender] in
+                guard let sender else { return }
                 if await controller.requestCloseTransition() == .completed {
                     controller.closeAfterAuthorization(sender)
                 }
@@ -179,6 +185,7 @@ private struct WorkspaceToolbar: ToolbarContent {
                 .disabled(!state.canUndo)
                 .help(state.undoDisabledReason ?? "Undo the last document command")
                 .accessibilityIdentifier("toolbar.undo")
+                .accessibilityValue(state.nextUndoLabel ?? "Unavailable")
                 .accessibilityHint(state.undoDisabledReason ?? "Undo the last committed document command")
 
             Button("Redo", systemImage: "arrow.uturn.forward") {
@@ -187,6 +194,7 @@ private struct WorkspaceToolbar: ToolbarContent {
                 .disabled(!state.canRedo)
                 .help(state.redoDisabledReason ?? "Redo the last undone document command")
                 .accessibilityIdentifier("toolbar.redo")
+                .accessibilityValue(state.nextRedoLabel ?? "Unavailable")
                 .accessibilityHint(state.redoDisabledReason ?? "Redo the last undone document command")
         }
 
@@ -342,6 +350,12 @@ private struct NavigatorLayerRow: View {
         .accessibilityHint("Press Return to select. Use Up and Down Arrow to traverse objects.")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("navigator.layer.\(target.id.description)")
+        .contextMenu {
+            Button("Edit Text") {
+                state.beginTextEditing(nodeID: target.id, provenance: .contextualMenu)
+            }
+            .disabled(!state.textEditingAvailability(nodeID: target.id).isEnabled)
+        }
     }
 }
 
@@ -434,6 +448,18 @@ private struct CanvasPlaceholderView: View {
                                 state.performDefaultInsertion(.text, provenance: .contextualMenu)
                             }
                             .disabled(!state.insertionAvailability(.text).isEnabled)
+                            Button("Edit Selected Text") {
+                                guard let nodeID = state.selectionState.primaryID else { return }
+                                state.beginTextEditing(
+                                    nodeID: nodeID,
+                                    provenance: .contextualMenu
+                                )
+                            }
+                            .disabled(
+                                state.selectionState.primaryID.map {
+                                    !state.textEditingAvailability(nodeID: $0).isEnabled
+                                } ?? true
+                            )
                             Divider()
                             Button("Select Next Object") {
                                 state.performSelectionCommand(.next, provenance: .contextualMenu)
@@ -781,16 +807,28 @@ final class WorkspaceWindowTabRouter: ObservableObject {
     private var layerIDs: [NodeID] = []
     private var currentFocus: () -> ShellFocus? = { nil }
     private var setFocus: (ShellFocus?) -> Void = { _ in }
+    private var isInlineTextEditing: () -> Bool = { false }
+    private var hasMarkedText: () -> Bool = { false }
+    private var commitInlineTextEditing: () -> Void = {}
+    private var cancelInlineTextEditing: () -> Void = {}
 
     func configure(
         focus: FocusState<ShellFocus?>.Binding,
         pageIDs: [PageID],
-        layerIDs: [NodeID]
+        layerIDs: [NodeID],
+        isInlineTextEditing: @escaping () -> Bool,
+        hasMarkedText: @escaping () -> Bool,
+        commitInlineTextEditing: @escaping () -> Void,
+        cancelInlineTextEditing: @escaping () -> Void
     ) {
         self.pageIDs = pageIDs
         self.layerIDs = layerIDs
         currentFocus = { focus.wrappedValue }
         setFocus = { focus.wrappedValue = $0 }
+        self.isInlineTextEditing = isInlineTextEditing
+        self.hasMarkedText = hasMarkedText
+        self.commitInlineTextEditing = commitInlineTextEditing
+        self.cancelInlineTextEditing = cancelInlineTextEditing
     }
 
     func bind(to candidate: NSWindow?) {
@@ -826,11 +864,39 @@ final class WorkspaceWindowTabRouter: ObservableObject {
     }
 
     private func route(_ event: NSEvent) -> NSEvent? {
+        guard let window,
+              window.isKeyWindow,
+              NSApp.keyWindow === window,
+              window.attachedSheet == nil,
+              NSApp.mainMenu?.highlightedItem == nil else { return event }
+        let semanticKey: TextEditKey = switch event.keyCode {
+        case 36, 76: .returnKey
+        case 53: .escape
+        default: .other
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let textDecision = TextEditKeyRoutingPolicy.decision(
+            key: semanticKey,
+            isCommandModified: modifiers.contains(.command),
+            hasUnsupportedModifiers: !modifiers.intersection([.control, .option]).isEmpty,
+            isEditing: (event.window == nil || event.window === window) && isInlineTextEditing(),
+            hasMarkedText: hasMarkedText()
+        )
+        switch textDecision {
+        case .commit:
+            commitInlineTextEditing()
+            updateDiagnostics(outcome: "text-commit")
+            return nil
+        case .cancel:
+            cancelInlineTextEditing()
+            updateDiagnostics(outcome: "text-cancel")
+            return nil
+        case .passThrough:
+            break
+        }
         guard event.keyCode == 48 else { return event }
         let unsupportedModifiers = event.modifierFlags.intersection([.command, .control, .option])
         guard unsupportedModifiers.isEmpty else { return event }
-        guard let window else { return event }
-
         let windowIdentity = WorkspaceTabRouterWindowIdentity(window: window)
         let generation = lifecycle.generation
         let direction: ShellFocusDirection = event.modifierFlags.contains(.shift) ? .reverse : .forward
@@ -924,18 +990,31 @@ private struct WorkspaceWindowTabRouterInstaller: NSViewRepresentable {
     let focus: FocusState<ShellFocus?>.Binding
     let pageIDs: [PageID]
     let layerIDs: [NodeID]
+    @ObservedObject var state: WorkspaceShellState
 
     func makeNSView(context: Context) -> WorkspaceWindowTabRouterHostView {
         let view = WorkspaceWindowTabRouterHostView()
         view.router = router
-        router.configure(focus: focus, pageIDs: pageIDs, layerIDs: layerIDs)
+        configureRouter()
         return view
     }
 
     func updateNSView(_ view: WorkspaceWindowTabRouterHostView, context: Context) {
         view.router = router
-        router.configure(focus: focus, pageIDs: pageIDs, layerIDs: layerIDs)
+        configureRouter()
         router.bind(to: view.window)
+    }
+
+    private func configureRouter() {
+        router.configure(
+            focus: focus,
+            pageIDs: pageIDs,
+            layerIDs: layerIDs,
+            isInlineTextEditing: { [weak state] in state?.textEditingSession.isActive == true },
+            hasMarkedText: { [weak state] in state?.textEditingSession.draft?.markedRange != nil },
+            commitInlineTextEditing: { [weak state] in state?.commitTextEditing() },
+            cancelInlineTextEditing: { [weak state] in state?.cancelTextEditing() }
+        )
     }
 
     static func dismantleNSView(
@@ -1347,6 +1426,30 @@ private struct StatusBarView: View {
                 Label(state.transformStatus, systemImage: "arrow.up.left.and.arrow.down.right")
                     .accessibilityIdentifier("status.transform")
             }
+            if state.textEditingSession.phase != .inactive {
+                Divider().frame(height: 14)
+                Label(state.textEditingStatus, systemImage: "character.cursor.ibeam")
+                    .accessibilityLabel(state.textEditingStatus)
+                    .accessibilityValue(state.textEditingStatus)
+                    .accessibilityIdentifier("status.textEditing")
+                ControlGroup {
+                    Button {
+                        state.commitTextEditing()
+                    } label: {
+                        Image(systemName: "checkmark")
+                    }
+                    .accessibilityLabel("Commit text edit")
+                    .accessibilityIdentifier("textEditing.commit")
+                    Button {
+                        state.cancelTextEditing()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Cancel text edit")
+                    .accessibilityIdentifier("textEditing.cancel")
+                }
+                .controlSize(.mini)
+            }
             if state.snapResolution != nil || state.isSnappingSuppressed {
                 Divider().frame(height: 14)
                 Label(state.snappingStatus, systemImage: "scope")
@@ -1460,6 +1563,7 @@ struct SiteForgeCommands: Commands {
                     Label(tool.title, systemImage: tool.systemImage)
                 }
                 .keyboardShortcut(tool.shortcut, modifiers: [])
+                .disabled(state?.textEditingSession.isActive == true)
             }
             Divider()
             Button("Insert Frame at Center") {
@@ -1475,6 +1579,23 @@ struct SiteForgeCommands: Commands {
         }
 
         CommandMenu("Selection") {
+            Button("Edit Selected Text") {
+                guard let nodeID = state?.selectionState.primaryID else { return }
+                state?.beginTextEditing(nodeID: nodeID, provenance: .menu)
+            }
+            .keyboardShortcut(.return, modifiers: [])
+            .disabled(
+                state?.textEditingSession.isActive == true
+                    || (state?.selectionState.primaryID.map {
+                    state?.textEditingAvailability(nodeID: $0).isEnabled != true
+                } ?? true)
+            )
+            Button("Commit Text Edit") {
+                state?.commitTextEditing()
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(state?.textEditingSession.isActive != true)
+            Divider()
             Button("Select Next Object") {
                 state?.performSelectionCommand(.next, provenance: .menu)
             }
@@ -1608,13 +1729,21 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.guidePreview = state.guidePreview
         view.snapResolution = state.snapResolution
         view.selectedGuideID = state.selectedGuideID
+        view.textEditingPresentation = state.textEditingPresentation
         view.accessibilityViewportValue = state.viewportAccessibilityValue
         view.needsDisplay = true
         let width = Double(view.bounds.width)
         let height = Double(view.bounds.height)
         let scale = Double(view.window?.backingScaleFactor ?? 2)
-        if isKeyboardFocused, view.window?.firstResponder !== view {
-            DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+        if isKeyboardFocused,
+           state.textEditingPresentation == nil,
+           view.window?.firstResponder !== view {
+            DispatchQueue.main.async { [weak view, weak state] in
+                guard let view, let state,
+                      state.textEditingPresentation == nil,
+                      view.window != nil else { return }
+                view.window?.makeFirstResponder(view)
+            }
         }
         guard width > 0, height > 0 else { return }
         DispatchQueue.main.async {
@@ -1633,6 +1762,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.guidePreview = state.guidePreview
         view.snapResolution = state.snapResolution
         view.selectedGuideID = state.selectedGuideID
+        view.textEditingPresentation = state.textEditingPresentation
         view.onInteraction = { state.noteCanvasInteraction() }
         view.onPointerSelection = { point, modifier in state.selectCanvasPoint(point, modifier: modifier) }
         view.onPointerPreview = { point in state.previewInsertion(at: point) }
@@ -1659,6 +1789,22 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.onEscape = { state.performEscape() }
         view.onInsertFrame = { state.performDefaultInsertion(.frame, provenance: .accessibility) }
         view.onInsertText = { state.performDefaultInsertion(.text, provenance: .accessibility) }
+        view.onBeginTextEditingAtPoint = {
+            state.beginTextEditing(at: $0, provenance: .pointer)
+        }
+        view.onBeginSelectedTextEditing = {
+            guard let nodeID = state.selectionState.primaryID else { return false }
+            return state.beginTextEditing(nodeID: nodeID, provenance: .keyboard)
+        }
+        view.onTextDraftChange = { text, selection, markedRange in
+            state.updateTextEditingDraft(
+                text: text,
+                selection: selection,
+                markedRange: markedRange
+            )
+        }
+        view.onTextCommit = { state.commitTextEditing() }
+        view.onTextCancel = { state.cancelTextEditing() }
         view.onCreateGuide = { axis, position in
             state.addGuide(axis: axis, position: position, provenance: .pointer)
         }
@@ -1681,6 +1827,7 @@ private final class NativeCanvasViewportView: NSView {
         didSet {
             applyCompositorTransformIfPossible()
             rebuildOverlay()
+            updateTextEditor()
             if let renderPlan { rebuildAccessibility(renderPlan) }
         }
     }
@@ -1703,6 +1850,9 @@ private final class NativeCanvasViewportView: NSView {
     var guidePreview: GuidePreview? { didSet { rebuildOverlay() } }
     var snapResolution: SnapResolution? { didSet { rebuildOverlay() } }
     var selectedGuideID: GuideID? { didSet { rebuildOverlay() } }
+    var textEditingPresentation: InlineTextEditorPresentation? {
+        didSet { updateTextEditor() }
+    }
     var accessibilityViewportValue = "Zoom 100 percent"
     var onInteraction: (() -> Void)?
     var onPointerSelection: ((WorldPoint, SelectionPointerModifier) -> Void)?
@@ -1718,6 +1868,11 @@ private final class NativeCanvasViewportView: NSView {
     var onEscape: (() -> Void)?
     var onInsertFrame: (() -> Void)?
     var onInsertText: (() -> Void)?
+    var onBeginTextEditingAtPoint: ((WorldPoint) -> Bool)?
+    var onBeginSelectedTextEditing: (() -> Bool)?
+    var onTextDraftChange: ((String, TextEditRange, TextEditRange?) -> Void)?
+    var onTextCommit: (() -> Void)?
+    var onTextCancel: (() -> Void)?
     var onCreateGuide: ((GuideAxis, Double) -> Void)?
     var onSelectGuide: ((GuideID?) -> Void)?
     var onToggleSnapping: (() -> Void)?
@@ -1737,6 +1892,8 @@ private final class NativeCanvasViewportView: NSView {
     private var pointerTrackingArea: NSTrackingArea?
     private var transformPointerStart: WorldPoint?
     private var transformDidDrag = false
+    private var inlineTextView: InlineCanvasTextView?
+    private var isApplyingTextPresentation = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1762,7 +1919,7 @@ private final class NativeCanvasViewportView: NSView {
     override func accessibilityChildren() -> [Any]? {
         virtualAccessibilityElements + TransformHandle.allCases.compactMap {
             transformHandleViews[$0.rawValue]
-        }
+        } + [inlineTextView].compactMap { $0 }
     }
     override func accessibilityHelp() -> String? {
         "Scroll to pan. Pinch to zoom around the pointer. Use the View menu for keyboard controls."
@@ -1777,6 +1934,9 @@ private final class NativeCanvasViewportView: NSView {
             NSAccessibilityCustomAction(name: "Clear Selection") { [weak self] in self?.onClearSelection?(); return true },
             NSAccessibilityCustomAction(name: "Insert Frame at Center") { [weak self] in self?.onInsertFrame?(); return true },
             NSAccessibilityCustomAction(name: "Insert Text at Center") { [weak self] in self?.onInsertText?(); return true },
+            NSAccessibilityCustomAction(name: "Edit Selected Text") { [weak self] in
+                self?.onBeginSelectedTextEditing?() ?? false
+            },
             NSAccessibilityCustomAction(name: "Add Horizontal Guide") { [weak self] in
                 guard let self else { return false }
                 self.onCreateGuide?(.horizontal, self.viewportState.visibleWorldRect.origin.y + 100)
@@ -1842,11 +2002,20 @@ private final class NativeCanvasViewportView: NSView {
         contentContainer.frame = bounds
         overlayContainer.frame = bounds
         CATransaction.commit()
+        updateTextEditor()
         notifyResize()
     }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if event.clickCount >= 2 {
+            if let world = try? viewportState.transform.viewportToWorld(
+                ViewportPoint(x: point.x, y: point.y)
+            ) {
+                _ = onBeginTextEditingAtPoint?(world)
+            }
+            return
+        }
         if point.y <= SnappingPolicy.rulerThicknessPoints,
            point.x > SnappingPolicy.rulerThicknessPoints,
            let world = try? viewportState.transform.viewportToWorld(
@@ -1954,6 +2123,9 @@ private final class NativeCanvasViewportView: NSView {
         if event.keyCode == 53 {
             onEscape?()
             return
+        }
+        if event.keyCode == 36 || event.keyCode == 76 {
+            if onBeginSelectedTextEditing?() == true { return }
         }
         if event.modifierFlags.contains(.command), event.keyCode == 30 {
             onSelectNext?()
@@ -2332,6 +2504,211 @@ private final class NativeCanvasViewportView: NSView {
         }
     }
 
+    private func updateTextEditor() {
+        guard let presentation = textEditingPresentation else {
+            if let inlineTextView {
+                inlineTextView.suppressEndEditingCallback = true
+                if window?.firstResponder === inlineTextView {
+                    window?.makeFirstResponder(self)
+                }
+                inlineTextView.removeFromSuperview()
+                self.inlineTextView = nil
+                NSAccessibility.post(element: self, notification: .layoutChanged)
+            }
+            return
+        }
+        let editor = inlineTextView ?? {
+            let value = InlineCanvasTextView()
+            value.delegate = self
+            value.onCommit = { [weak self] in self?.onTextCommit?() }
+            value.onCancel = { [weak self] in self?.onTextCancel?() }
+            value.setAccessibilityIdentifier("canvas.text.editor")
+            value.setAccessibilityLabel("Inline plain-text editor")
+            value.setAccessibilityHelp(
+                "Type plain text. Press Command-Return to commit or Escape to cancel."
+            )
+            addSubview(value)
+            inlineTextView = value
+            NSAccessibility.post(element: self, notification: .layoutChanged)
+            return value
+        }()
+        guard let origin = try? viewportState.transform.worldToViewport(
+            presentation.frame.origin
+        ) else { return }
+        editor.frame = CGRect(
+            x: origin.x,
+            y: origin.y,
+            width: max(44, presentation.frame.size.width * viewportState.zoom.value),
+            height: max(24, presentation.frame.size.height * viewportState.zoom.value)
+        )
+        let preservesNativeDraft = editor.representedSessionIdentity == presentation.identity
+            && window?.firstResponder === editor
+        editor.representedSessionIdentity = presentation.identity
+        if !preservesNativeDraft {
+            isApplyingTextPresentation = true
+            if editor.string != presentation.text { editor.string = presentation.text }
+            let range = NSRange(
+                location: presentation.selection.location,
+                length: presentation.selection.length
+            )
+            if editor.selectedRange() != range { editor.setSelectedRange(range) }
+            isApplyingTextPresentation = false
+        }
+        if window?.firstResponder === editor {
+            editor.suppressEndEditingCallback = false
+        } else {
+            DispatchQueue.main.async { [weak self, weak editor] in
+                guard let self, let editor,
+                      self.textEditingPresentation?.identity == presentation.identity,
+                      editor.window === self.window else { return }
+                if editor.window?.makeFirstResponder(editor) == true {
+                    editor.suppressEndEditingCallback = false
+                }
+            }
+        }
+    }
+
+}
+
+extension NativeCanvasViewportView: NSTextViewDelegate {
+    func textDidChange(_ notification: Notification) {
+        publishTextEditorState()
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        publishTextEditorState()
+    }
+
+    func textDidEndEditing(_ notification: Notification) {
+        guard inlineTextView?.suppressEndEditingCallback != true else { return }
+        onTextCommit?()
+    }
+
+    private func publishTextEditorState() {
+        guard !isApplyingTextPresentation, let editor = inlineTextView else { return }
+        guard editor.string.utf8.count <= InlineTextEditingPolicy.maximumTextBytes,
+              InlineTextEditingPolicy.validatesContent(editor.string) else {
+            guard let presentation = textEditingPresentation else { return }
+            isApplyingTextPresentation = true
+            editor.string = presentation.text
+            editor.setSelectedRange(NSRange(
+                location: presentation.selection.location,
+                length: presentation.selection.length
+            ))
+            isApplyingTextPresentation = false
+            NSSound.beep()
+            return
+        }
+        let selected = editor.selectedRange()
+        let marked = editor.markedRange()
+        onTextDraftChange?(
+            editor.string,
+            TextEditRange(location: selected.location, length: selected.length),
+            marked.location == NSNotFound || marked.length == 0
+                ? nil
+                : TextEditRange(location: marked.location, length: marked.length)
+        )
+    }
+}
+
+final class InlineCanvasTextView: NSTextView {
+    var onCommit: (() -> Void)?
+    var onCancel: (() -> Void)?
+    var suppressEndEditingCallback = true
+    var representedSessionIdentity: TextEditOperationIdentity?
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        isEditable = true
+        isSelectable = true
+        isRichText = false
+        importsGraphics = false
+        allowsUndo = false
+        drawsBackground = true
+        backgroundColor = .textBackgroundColor
+        textColor = .labelColor
+        insertionPointColor = .controlAccentColor
+        font = .systemFont(ofSize: 14)
+        textContainerInset = NSSize(width: 4, height: 3)
+        setAccessibilityRole(.textArea)
+    }
+
+    convenience init() {
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(containerSize: NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        ))
+        textContainer.widthTracksTextView = true
+        textContainer.heightTracksTextView = true
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(textContainer)
+        self.init(frame: .zero, textContainer: textContainer)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            suppressEndEditingCallback = false
+            NSAccessibility.post(element: self, notification: .focusedUIElementChanged)
+        }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            NSAccessibility.post(element: self, notification: .focusedUIElementChanged)
+        }
+        return resigned
+    }
+
+    override func isAccessibilityFocused() -> Bool {
+        window?.firstResponder === self
+    }
+
+    override func setAccessibilityFocused(_ focused: Bool) {
+        guard focused else { return }
+        window?.makeFirstResponder(self)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if (event.keyCode == 36 || event.keyCode == 76),
+           event.modifierFlags.contains(.command) {
+            guard !hasMarkedText() else {
+                interpretKeyEvents([event])
+                return true
+            }
+            suppressEndEditingCallback = true
+            onCommit?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            suppressEndEditingCallback = true
+            onCancel?()
+            return
+        }
+        if (event.keyCode == 36 || event.keyCode == 76),
+           event.modifierFlags.contains(.command) {
+            guard !hasMarkedText() else {
+                interpretKeyEvents([event])
+                return
+            }
+            suppressEndEditingCallback = true
+            onCommit?()
+            return
+        }
+        super.keyDown(with: event)
+    }
 }
 
 private final class TransformHandleControlView: NSView {

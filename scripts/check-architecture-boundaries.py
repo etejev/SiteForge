@@ -50,6 +50,9 @@ TRANSFORM_MODEL_SLICE = list(dict.fromkeys(
 SNAPPING_MODEL_SLICE = list(dict.fromkeys(
     TRANSFORM_MODEL_SLICE + ["SiteForge/SnappingGuideModel.swift"]
 ))
+INLINE_TEXT_MODEL_SLICE = list(dict.fromkeys(
+    INSERTION_MODEL_SLICE + ["SiteForge/InlineTextEditingModel.swift"]
+))
 HEADLESS_FORBIDDEN = {"SwiftUI", "AppKit", "Metal", "WebKit"}
 
 
@@ -71,7 +74,7 @@ def typecheck(name: str, sources: list[str]) -> None:
 
 
 for source in dict.fromkeys(
-    MODEL_SLICE + ENGINE_SLICE + RUNWAY_HEADLESS_SLICE + CANVAS_VIEWPORT_SLICE + LAYOUT_ENGINE_SLICE + CANVAS_RENDERER_SLICE + SELECTION_MODEL_SLICE + INSERTION_MODEL_SLICE + TRANSFORM_MODEL_SLICE + SNAPPING_MODEL_SLICE
+    MODEL_SLICE + ENGINE_SLICE + RUNWAY_HEADLESS_SLICE + CANVAS_VIEWPORT_SLICE + LAYOUT_ENGINE_SLICE + CANVAS_RENDERER_SLICE + SELECTION_MODEL_SLICE + INSERTION_MODEL_SLICE + TRANSFORM_MODEL_SLICE + SNAPPING_MODEL_SLICE + INLINE_TEXT_MODEL_SLICE
 ):
     forbidden = imports(source) & HEADLESS_FORBIDDEN
     if forbidden:
@@ -87,6 +90,7 @@ typecheck("selection-model-contract", SELECTION_MODEL_SLICE)
 typecheck("insertion-model-contract", INSERTION_MODEL_SLICE)
 typecheck("transform-model-contract", TRANSFORM_MODEL_SLICE)
 typecheck("snapping-and-guide-contract", SNAPPING_MODEL_SLICE)
+typecheck("inline-text-editing-contract", INLINE_TEXT_MODEL_SLICE)
 
 project = (ROOT / "SiteForge.xcodeproj/project.pbxproj").read_text()
 if "WorkspaceSceneComposition.swift in Sources" not in project:
@@ -105,6 +109,8 @@ if "TransformModel.swift in Sources" not in project or "TransformModelTests.swif
     fail("The headless transform model and its behavioral tests must be compiled into their targets.")
 if "SnappingGuideModel.swift in Sources" not in project or "SnappingGuideModelTests.swift in Sources" not in project:
     fail("The headless snapping/guide model and its behavioral tests must be compiled into their targets.")
+if "InlineTextEditingModel.swift in Sources" not in project or "InlineTextEditingModelTests.swift in Sources" not in project:
+    fail("The headless inline-text model and its behavioral tests must be compiled into their targets.")
 
 selection_source = (ROOT / "SiteForge/SelectionModel.swift").read_text()
 if re.search(r"(?:struct|class)\s+SelectionState\s*:\s*[^\n]*(?:Codable|Encodable|Decodable)", selection_source):
@@ -118,6 +124,10 @@ if re.search(r"(?:struct|class)\s+TransformSession\s*:\s*[^\n]*(?:Codable|Encoda
 snapping_source = (ROOT / "SiteForge/SnappingGuideModel.swift").read_text()
 for editor_state in ["SnapResolution", "GuideEditingSession"]:
     if re.search(rf"(?:struct|class)\s+{editor_state}\s*:\s*[^\n]*(?:Codable|Encodable|Decodable)", snapping_source):
+        fail(f"{editor_state} editor state must not become canonical serialized project content.")
+inline_text_source = (ROOT / "SiteForge/InlineTextEditingModel.swift").read_text()
+for editor_state in ["InlineTextEditingSession", "TextEditDraft", "InlineTextEditorPresentation"]:
+    if re.search(rf"(?:struct|class)\s+{editor_state}\s*:\s*[^\n]*(?:Codable|Encodable|Decodable)", inline_text_source):
         fail(f"{editor_state} editor state must not become canonical serialized project content.")
 app_sources = re.search(
     r"600000000000000000000001 /\* Sources \*/ = .*?files = \((.*?)\);",

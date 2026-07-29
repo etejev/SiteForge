@@ -4,10 +4,10 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-AUTHORING-008` Implement the bounded inline plain-text editing foundation.
-  - Requirements: `SF-0406-001` through `SF-0406-008` (bounded plain-text editing slice; rich text and production shaping remain later work).
-  - Acceptance: establish one scene-owned draft → validate → preview → commit text-editing boundary over stable text-node identity; preserve exact transactional history, persistence/recovery, renderer/layout adoption, keyboard/accessibility operation, stale/cancellation neutrality, diagnostic redaction, and bounded scale without adding rich-text spans, font browsing, advanced typography, responsive editing, export generation, or unrelated visual work.
-  - Dependencies: `SF-AUTHORING-005`, `SF-AUTHORING-006`, and `SF-AUTHORING-007`.
+- [ ] `SF-AUTHORING-009` Implement the bounded drag-and-drop authoring foundation.
+  - Requirements: `SF-0408-001` through `SF-0408-008` (bounded local reorder/nest/place slice; the normative module remains Partial overall).
+  - Acceptance: establish one scene-owned drag session with stable source, destination, insertion-point, document, page, revision, and renderer identities; route pointer, keyboard, menu/contextual, accessibility, and automation paths through one typed transactional registry; preserve exact preview/commit parity, cancellation and stale-result neutrality, undo/redo, persistence/recovery, deterministic ordering, accessibility, redaction, and bounded scale. External imports, connected resources, cross-project transfer, broad asset-library work, and export generation require separately bounded acceptance.
+  - Dependencies: `SF-AUTHORING-004` through `SF-AUTHORING-008`.
 
 ## IN PROGRESS
 
@@ -18,6 +18,14 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-AUTHORING-008` Implement the bounded inline plain-text editing foundation.
+  - Requirements: `SF-0406-001` through `SF-0406-008` (bounded plain-text editing slice; rich text and production shaping remain later work).
+  - Plan: retain the existing versioned `content.text` `NodeProperty` as the sole canonical text source; add a Foundation-only typed edit registry and scene-owned inactive/drafting/previewing/composing/committing/cancelled/failed session keyed by document, page, revision, renderer generation, session, and stable text-node identity; validate node kind, page ownership, visibility, locking, availability, lifecycle, UTF-8/control-input limits, selection/range boundaries, cancellation, and stale identities before compiling one exact `setProperty` transaction and inverse; bridge the native canvas to one AppKit text editor that owns caret, selection, clipboard, newline, and marked-text behavior while its draft/composition remain noncanonical; route pointer, keyboard, menu, contextual, accessibility, and automation activation through the same registry; then prove one-transaction history, Escape restoration, save/reopen/autosave/recovery, renderer/layout/selection adoption, shortcut isolation, accessibility, redaction, and bounded 100-/10,000-object preparation without adding rich text, advanced typography, responsive editing, or export generation.
+  - Supported: one native `NSTextView` draft/composition session over a stable plain-text node; pointer double-click, keyboard, menu, contextual, accessibility, and automation activation; native caret, selection, insertion/deletion/replacement, newline, copy/cut/paste, and marked-text semantics; exact UTF-16 range validation and the existing 64-KiB limit; one atomic `content.text` transaction/inverse; exact undo/redo and deterministic package/history round trips; selection, Layers, layout, renderer, hit-test, dirty-region, autosave/recovery, focus, and announcement adoption after commit.
+  - Explicitly unsupported: rich-text spans and range styling, font browsing/installation, production shaping/typography, advanced paragraph layout, vertical or path text, responsive text overrides, collaboration, export generation, OS-level IME/VoiceOver acceptance, localization acceptance, incremental indexing, cross-hardware budgets, and release acceptance. Draft text, caret/selection, composition, clipboard state, and editor overlays remain noncanonical and excluded from packages, history, preview, and export-facing snapshots.
+  - Evidence: thirteen focused unit/integration tests and one actual-app pointer/keyboard/clipboard/commit/cancel/undo/redo/accessibility journey; headless architecture and nonserialization checks; deterministic package/history coverage; retained native-window draft/commit/cancellation screenshots; and two validated capacity measurements. On Mac16,13 in the Debug test composition, command preparation P95 was 0.819 ms at 100 nodes and 2.419 ms at 10,000 nodes, with 108,314,624-byte resident-memory high water. These measurements exclude native input, layout, rasterization, package I/O, and autosave and are not release budgets.
+  - Dependencies: completed after `SF-AUTHORING-005`, `SF-AUTHORING-006`, and `SF-AUTHORING-007`. `SF-AUTHORING-009` is next READY.
 
 - [x] `SF-AUTHORING-007` Implement deterministic snapping, guides, rulers, and measurement foundations.
   - Requirements: `SF-0404-001` through `SF-0404-008` (bounded snapping/measurement slice; the normative module remains Partial overall).

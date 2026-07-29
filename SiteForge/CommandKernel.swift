@@ -698,6 +698,8 @@ final class DocumentSession: ObservableObject {
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
+    var nextUndoLabel: String? { undoStack.last?.label }
+    var nextRedoLabel: String? { redoStack.last?.label }
 
     var undoAvailability: CommandAvailability {
         registry.historyAvailability(for: .undo, canUndo: canUndo, canRedo: canRedo)

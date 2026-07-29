@@ -4886,6 +4886,8 @@ Priority / milestone  MUST. Release blocking for the first milestone in which th
 
 ☐ Performance budgets pass for standard and large fixtures on named minimum and reference hardware.
 
+Implementation note (2026-07-28): `SF-AUTHORING-008` verifies a bounded inline plain-text subset for `SF-0406-001` through `SF-0406-008`: the existing versioned `content.text` property remains canonical; one scene-owned noncanonical session owns draft, caret/range, and marked-text state; native AppKit input supports bounded multiline editing and clipboard commands; every completed edit compiles to one atomic property transaction and exact inverse; and stale, invalid, removed, interrupted, or cancelled work preserves committed content. The normative module remains Partial overall because rich-text spans/range styling, paragraph and font provenance, production shaping/typography, responsive overrides, collaboration, export generation, OS-level IME/VoiceOver/settings acceptance, localization, incremental indexing, cross-hardware performance, and release acceptance are outside this slice.
+
 ### 4.7 Canvas rendering and overlays
 
 Module code  0407

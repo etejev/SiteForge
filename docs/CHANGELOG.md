@@ -6,6 +6,9 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Native inline plain-text editing on the canvas with stable session/document/page/revision/renderer/node identity, genuine AppKit caret and selection behavior, multiline insertion/deletion/replacement, copy/cut/paste, marked-text composition, and shared pointer, keyboard, menu, contextual, accessibility, and automation activation.
+- One atomic canonical `content.text` transaction and exact inverse per completed edit, with deterministic undo/redo, package/history round trips, autosave/recovery, selection/Layers/layout/renderer/hit-test adoption, bounded dirty regions, and exact Escape/stale/cancellation neutrality.
+- Reproducible 100-/10,000-object text-command preparation evidence plus retained running-app draft, commit, and cancellation screenshots; draft text, selection ranges, composition, clipboard state, and editor overlays remain excluded from canonical persistence, history, preview, and export-facing snapshots.
 - Deterministic edge, center, and authored-guide snapping layered over the existing move/resize preview boundary, with 6/9-point hysteresis, stable priority/tie rules, independent axes, zoom-aware tolerances, Option suppression, typed stale/cancellation neutrality, and no second canonical geometry source.
 - Native world-aligned horizontal/vertical rulers, smart-guide and bounded distance overlays, plus stable accessibility labels/identifiers and editor-only overlay isolation from authored rendering, packages, history, preview, and export-facing snapshots.
 - Stable page-owned authored guides with pointer and keyboard/accessibility creation, numeric movement, deletion, deterministic ordering, atomic commands/inverses, undo/redo, package/history round trips, and schema-v2 migration.

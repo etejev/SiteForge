@@ -11,6 +11,107 @@ final class SiteForgeLaunchTests: XCTestCase {
         static let safeScreenInset: CGFloat = 16
     }
 
+    // SF-0406-001 through SF-0406-008
+    func testInlinePlainTextEditingCommitCancelUndoRedoAndAccessibilityJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+
+        application.buttons["toolbar.tool.text"].click()
+        let textPoint = canvas.coordinate(withNormalizedOffset: .init(dx: 0.55, dy: 0.50))
+        textPoint.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(application.buttons["toolbar.tool.select"].value as? String, "Selected")
+
+        func textObject() -> XCUIElement {
+            application.descendants(matching: .any)
+                .matching(NSPredicate(
+                    format: "label == %@ AND identifier BEGINSWITH %@",
+                    "Text object",
+                    "canvas.object."
+                ))
+                .firstMatch
+        }
+        XCTAssertTrue(textObject().waitForExistence(timeout: 5))
+        func editPoint() -> XCUICoordinate {
+            canvas.coordinate(withNormalizedOffset: .init(dx: 0.67, dy: 0.52))
+        }
+        editPoint().doubleClick()
+        var editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.label, "Inline plain-text editor")
+        XCTAssertTrue(waitForKeyboardFocus(editor, in: application))
+        for _ in 0..<4 {
+            editor.typeKey(.delete, modifierFlags: [])
+        }
+        editor.typeText("Edited")
+        XCTAssertEqual(editor.value as? String, "Edited")
+        editor.typeKey(.return, modifierFlags: [])
+        XCTAssertEqual(editor.value as? String, "Edited\n")
+        editor.typeText("Line")
+        XCTAssertEqual(application.buttons["toolbar.tool.select"].value as? String, "Selected")
+        XCTAssertEqual(editor.value as? String, "Edited\nLine")
+        XCTAssertTrue(waitForValue(
+            application.descendants(matching: .any)["status.textEditing"],
+            containing: "11 bytes"
+        ))
+        editor.typeKey(.leftArrow, modifierFlags: [.shift])
+        attachWindowScreenshot(application, named: "SF-AUTHORING-008 inline text draft")
+        editor.typeKey(.rightArrow, modifierFlags: [])
+        application.buttons["textEditing.commit"].click()
+        XCTAssertTrue(
+            waitForValue(application.buttons["toolbar.undo"], containing: "Set Property"),
+            String(describing: application.descendants(matching: .any)["status.textEditing"].value)
+        )
+        XCTAssertTrue(
+            waitForEnabled(application.buttons["toolbar.undo"]),
+            String(describing: application.descendants(matching: .any)[
+                "workspace.focus.diagnostics"
+            ].value)
+        )
+        attachWindowScreenshot(application, named: "SF-AUTHORING-008 committed plain text")
+
+        application.typeKey("z", modifierFlags: .command)
+        let undoneTextObject = textObject()
+        XCTAssertTrue(undoneTextObject.waitForExistence(timeout: 5))
+        application.typeKey(.return, modifierFlags: [])
+        editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "Text")
+        editor.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForNonexistence(editor))
+
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        let redoneTextObject = textObject()
+        XCTAssertTrue(redoneTextObject.waitForExistence(timeout: 5))
+        editPoint().doubleClick()
+        editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "Edited\nLine")
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeText("Cancelled")
+        editor.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForNonexistence(editor))
+        XCTAssertTrue(
+            application.descendants(matching: .any)["status.textEditing"]
+                .waitForExistence(timeout: 2)
+        )
+
+        editPoint().doubleClick()
+        editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "Edited\nLine")
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeKey("c", modifierFlags: .command)
+        editor.typeKey("x", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, "")
+        editor.typeKey("v", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, "Edited\nLine")
+        editor.typeKey(.escape, modifierFlags: [])
+        attachWindowScreenshot(application, named: "SF-AUTHORING-008 cancelled text restored")
+    }
+
     // SF-0405-002 through SF-0405-007
     func testFrameTextInsertionCancellationUndoRedoAndSelectionJourney() throws {
         let application = launchWorkspace()
@@ -20,7 +121,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.buttons["toolbar.tool.frame"].click()
         XCTAssertTrue(application.descendants(matching: .any)["status.insertion"].exists)
         canvas.coordinate(withNormalizedOffset: .init(dx: 0.35, dy: 0.35)).click()
-        XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
+        XCTAssertTrue(waitForEnabled(application.buttons["toolbar.undo"]))
         attachScreenshot(named: "SF-AUTHORING-005 inserted frame")
 
         application.buttons["toolbar.tool.text"].click()
@@ -33,7 +134,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
         attachScreenshot(named: "SF-AUTHORING-005 cancelled preview")
 
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 3"))
+        XCTAssertTrue(
+            waitForValue(canvas, containing: "rendered objects 3"),
+            "Unexpected canvas state after frame/text insertion: \(String(describing: canvas.value))"
+        )
         application.typeKey("z", modifierFlags: .command)
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
         XCTAssertTrue(application.buttons["toolbar.redo"].isEnabled)
@@ -366,6 +470,32 @@ final class SiteForgeLaunchTests: XCTestCase {
                     guard let element = object as? XCUIElement else { return false }
                     return element.exists && element.isHittable
                 },
+                object: element
+            )],
+            timeout: timeout
+        ) == .completed
+    }
+
+    private func waitForNonexistence(
+        _ element: XCUIElement,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"),
+                object: element
+            )],
+            timeout: timeout
+        ) == .completed
+    }
+
+    private func waitForEnabled(
+        _ element: XCUIElement,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND enabled == true"),
                 object: element
             )],
             timeout: timeout

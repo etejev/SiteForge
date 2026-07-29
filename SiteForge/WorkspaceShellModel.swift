@@ -356,6 +356,8 @@ final class WorkspaceShellState: ObservableObject {
         "SF-0404-005", "SF-0404-006", "SF-0404-007", "SF-0404-008",
         "SF-0405-001", "SF-0405-002", "SF-0405-003", "SF-0405-004",
         "SF-0405-005", "SF-0405-006", "SF-0405-007", "SF-0405-008",
+        "SF-0406-001", "SF-0406-002", "SF-0406-003", "SF-0406-004",
+        "SF-0406-005", "SF-0406-006", "SF-0406-007", "SF-0406-008",
     ]
 
     @Published var selectedTool: CanvasTool = .select
@@ -379,6 +381,9 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var insertionSession = InsertionSession()
     @Published private(set) var insertionFailure: InsertionError?
     @Published private(set) var lastInsertionAnnouncement = "Insertion inactive"
+    @Published private(set) var textEditingSession = InlineTextEditingSession()
+    @Published private(set) var textEditingFailure: TextEditError?
+    @Published private(set) var lastTextEditingAnnouncement = "Text editing inactive"
     @Published private(set) var transformSession = TransformSession()
     @Published private(set) var transformFailure: TransformError?
     @Published private(set) var lastTransformAnnouncement = "Transform inactive"
@@ -397,6 +402,7 @@ final class WorkspaceShellState: ObservableObject {
                 cancelInsertion(resetTool: true)
                 cancelTransform()
                 cancelGuideEditing()
+                cancelTextEditing()
             }
         }
     }
@@ -409,6 +415,7 @@ final class WorkspaceShellState: ObservableObject {
     private let selectionRegistry = SelectionCommandRegistry()
     private let selectionOverlayPlanner = SelectionOverlayPlanner()
     private let insertionRegistry = InsertionCommandRegistry()
+    private let textEditingRegistry = InlineTextCommandRegistry()
     private let transformRegistry = TransformCommandRegistry()
     private let snapResolver = SnapResolver()
     private let guideRegistry = GuideCommandRegistry()
@@ -416,6 +423,7 @@ final class WorkspaceShellState: ObservableObject {
     let canvasRenderDiagnostics = CanvasRenderDiagnostics()
     let selectionDiagnostics = SelectionDiagnostics()
     let insertionDiagnostics = InsertionDiagnostics()
+    let textEditingDiagnostics = TextEditDiagnostics()
     let transformDiagnostics = TransformDiagnostics()
     let snapDiagnostics = SnapDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
@@ -426,6 +434,7 @@ final class WorkspaceShellState: ObservableObject {
     private var previousRenderScene: CanvasRenderSceneSnapshot?
     private var selectionScene: SelectionSceneSnapshot?
     private var pendingSelectionAfterInsertion: NodeID?
+    private var retainedTextEditingFrame: WorldRect?
 
     init(
         documentSession: DocumentSession = DocumentSession(),
@@ -452,6 +461,8 @@ final class WorkspaceShellState: ObservableObject {
 
     var canUndo: Bool { documentSession.canUndo }
     var canRedo: Bool { documentSession.canRedo }
+    var nextUndoLabel: String? { documentSession.nextUndoLabel }
+    var nextRedoLabel: String? { documentSession.nextRedoLabel }
     var undoDisabledReason: String? { documentSession.undoAvailability.disabledReason }
     var redoDisabledReason: String? { documentSession.redoAvailability.disabledReason }
 
@@ -460,6 +471,7 @@ final class WorkspaceShellState: ObservableObject {
             cancelInsertion(resetTool: false)
             cancelTransform()
             cancelGuideEditing()
+            cancelTextEditing()
         }
         selectedTool = tool
         switch tool {
@@ -483,6 +495,7 @@ final class WorkspaceShellState: ObservableObject {
         cancelInsertion(resetTool: true)
         cancelTransform()
         cancelGuideEditing()
+        cancelTextEditing()
         selectedGuideID = nil
         selectedPageID = pageID
         refreshSelectionScene(boundary: .pageSwitch)
@@ -702,6 +715,9 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func selectCanvasPoint(_ point: WorldPoint, modifier: SelectionPointerModifier) {
+        if textEditingSession.isActive {
+            commitTextEditing()
+        }
         if selectedTool == .frame {
             commitInsertion(.frame, at: point, provenance: .pointer)
             return
@@ -723,6 +739,258 @@ final class WorkspaceShellState: ObservableObject {
         case .toggle: .toggle
         }
         performSelectionCommand(command, targetID: id, provenance: .pointer)
+    }
+
+    var textEditingPresentation: InlineTextEditorPresentation? {
+        guard let draft = textEditingSession.draft else { return nil }
+        let currentFrame = canvasRenderPlan?.authoredObjects.first(where: {
+            $0.id == draft.activation.identity.nodeID
+        })?.frame
+        guard let frame = currentFrame ?? retainedTextEditingFrame else { return nil }
+        return InlineTextEditorPresentation(
+            identity: draft.activation.identity,
+            text: draft.text,
+            selection: draft.selection,
+            frame: frame
+        )
+    }
+
+    var textEditingStatus: String {
+        switch textEditingSession.phase {
+        case .inactive: "Text editing inactive"
+        case .drafting:
+            "Editing text (\(textEditingSession.draft?.text.utf8.count ?? 0) bytes)"
+        case .previewing:
+            "Previewing text edit (\(textEditingSession.draft?.text.utf8.count ?? 0) bytes)"
+        case .composing:
+            "Composing text (\(textEditingSession.draft?.text.utf8.count ?? 0) bytes)"
+        case .committing: "Committing text edit…"
+        case .cancelled: "Text edit cancelled"
+        case .failed(let error, _): error.localizedDescription
+        }
+    }
+
+    func textEditingAvailability(
+        nodeID: NodeID,
+        provenance: TextEditProvenance = .menu
+    ) -> TextEditAvailability {
+        guard canvasRenderPlan != nil else {
+            return .disabled("The rendered canvas is not ready.")
+        }
+        return textEditingRegistry.availability(
+            nodeID: nodeID,
+            provenance: provenance,
+            in: documentSession.document,
+            context: textEditingValidationContext
+        )
+    }
+
+    @discardableResult
+    func beginTextEditing(
+        nodeID: NodeID,
+        provenance: TextEditProvenance
+    ) -> Bool {
+        if textEditingSession.isActive {
+            guard textEditingSession.draft?.activation.identity.nodeID != nodeID else {
+                return true
+            }
+            commitTextEditing()
+            guard !textEditingSession.isActive else { return false }
+        }
+        cancelInsertion(resetTool: true)
+        cancelTransform()
+        cancelGuideEditing()
+        let start = DispatchTime.now().uptimeNanoseconds
+        do {
+            let activation = try textEditingRegistry.activate(
+                nodeID: nodeID,
+                provenance: provenance,
+                in: documentSession.document,
+                context: textEditingValidationContext
+            )
+            retainedTextEditingFrame = canvasRenderPlan?.authoredObjects.first(where: {
+                $0.id == nodeID
+            })?.frame
+            textEditingSession.begin(activation)
+            textEditingFailure = nil
+            if selectionState.orderedIDs != [nodeID] {
+                performSelectionCommand(.replace, targetID: nodeID, provenance: .lifecycleRepair)
+            }
+            lastTextEditingAnnouncement = "Editing plain text"
+            announcementPoster.post(lastTextEditingAnnouncement)
+            return true
+        } catch let error as TextEditError {
+            textEditingFailure = error
+            lastTextEditingAnnouncement = error.localizedDescription
+            announcementPoster.post(lastTextEditingAnnouncement)
+            if let draft = textEditingSession.draft {
+                recordTextEditingDiagnostic(
+                    "activate",
+                    draft: draft,
+                    start: start,
+                    result: [.staleDocument, .stalePage, .staleRevision, .staleRenderer]
+                        .contains(error) ? .stale : .failure,
+                    failure: error
+                )
+            } else {
+                let record = TextEditDiagnosticFactory.makeActivationFailure(
+                    nodeID: nodeID,
+                    pageID: effectiveSelectedPageID ?? textEditingValidationContext.activePageID,
+                    durationMilliseconds: Double(
+                        DispatchTime.now().uptimeNanoseconds - start
+                    ) / 1_000_000,
+                    failure: error
+                )
+                Task { await textEditingDiagnostics.append(record) }
+            }
+            return false
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    func beginTextEditing(
+        at point: WorldPoint,
+        provenance: TextEditProvenance
+    ) -> Bool {
+        guard let plan = canvasRenderPlan,
+              let id = CanvasRendererCore().hitTest(point, in: plan),
+              documentSession.document.pages
+                .flatMap(\.nodes)
+                .first(where: { $0.id == id })?.kind == .text else {
+            return false
+        }
+        return beginTextEditing(nodeID: id, provenance: provenance)
+    }
+
+    func updateTextEditingDraft(
+        text: String,
+        selection: TextEditRange,
+        markedRange: TextEditRange?
+    ) {
+        guard textEditingSession.isActive else { return }
+        guard text.utf8.count <= InlineTextEditingPolicy.maximumTextBytes,
+              InlineTextEditingPolicy.validatesContent(text),
+              selection.isValid(in: text),
+              markedRange?.isValid(in: text) != false else {
+            textEditingFailure = text.utf8.count > InlineTextEditingPolicy.maximumTextBytes
+                ? .textLimitExceeded : .invalidText
+            return
+        }
+        textEditingSession.update(text: text, selection: selection, markedRange: markedRange)
+        textEditingFailure = nil
+    }
+
+    func commitTextEditing() {
+        guard let draft = textEditingSession.draft else { return }
+        let start = DispatchTime.now().uptimeNanoseconds
+        do {
+            let prepared = try textEditingRegistry.prepare(
+                draft,
+                in: documentSession.document,
+                context: textEditingValidationContext
+            )
+            textEditingSession.beginCommit()
+            if let command = prepared.command {
+                _ = try documentSession.execute(command)
+            }
+            textEditingSession.complete()
+            retainedTextEditingFrame = nil
+            textEditingFailure = nil
+            lastTextEditingAnnouncement = prepared.command == nil
+                ? "Text editing ended with no changes"
+                : "Text edit committed"
+            announcementPoster.post(lastTextEditingAnnouncement)
+            recordTextEditingDiagnostic(
+                "commit", draft: draft, start: start, result: .success, failure: nil
+            )
+        } catch let error as TextEditError {
+            textEditingSession.fail(error)
+            textEditingFailure = error
+            let result: TextEditDiagnosticResult =
+                [.staleDocument, .stalePage, .staleRevision, .staleRenderer].contains(error)
+                ? .stale : error == .cancelled ? .cancelled : .failure
+            recordTextEditingDiagnostic(
+                "commit", draft: draft, start: start, result: result, failure: error
+            )
+        } catch let error as CommandExecutionError {
+            let mapped: TextEditError = switch error {
+            case .cancelled: .cancelled
+            case .revisionExhausted: .revisionExhausted
+            case .disabled: .staleRevision
+            case .invalidResult: .invalidResult
+            }
+            textEditingSession.fail(mapped)
+            textEditingFailure = mapped
+            recordTextEditingDiagnostic(
+                "commit", draft: draft, start: start,
+                result: mapped == .cancelled ? .cancelled : .failure,
+                failure: mapped
+            )
+        } catch {}
+    }
+
+    func cancelTextEditing() {
+        guard let draft = textEditingSession.draft else { return }
+        let start = DispatchTime.now().uptimeNanoseconds
+        textEditingSession.cancel()
+        retainedTextEditingFrame = nil
+        textEditingFailure = nil
+        lastTextEditingAnnouncement = "Text edit cancelled; committed text restored"
+        announcementPoster.post(lastTextEditingAnnouncement)
+        recordTextEditingDiagnostic(
+            "cancel", draft: draft, start: start, result: .cancelled, failure: .cancelled
+        )
+    }
+
+    private var textEditingValidationContext: TextEditValidationContext {
+        let plan = canvasRenderPlan
+        let lifecycleAvailable: Bool
+        let reason: String?
+        if isPreviewPresented {
+            lifecycleAvailable = false
+            reason = "Close Preview before editing text."
+        } else {
+            switch lifecycle.phase {
+            case .saving, .autosaving:
+                lifecycleAvailable = true
+                reason = nil
+            case .conflicted:
+                lifecycleAvailable = false
+                reason = "Resolve the file conflict before editing text."
+            case .clean, .modified, .failed, .recovered:
+                lifecycleAvailable = true
+                reason = nil
+            }
+        }
+        return TextEditValidationContext(
+            activePageID: effectiveSelectedPageID ?? PageID(),
+            sceneID: plan?.identity.sceneID ?? viewportState.sceneID,
+            rendererGeneration: plan?.identity.sceneGeneration ?? documentSession.document.revision,
+            availableNodeIDs: plan.map { Set($0.authoredObjects.map(\.id)) },
+            isLifecycleAvailable: lifecycleAvailable,
+            lifecycleDisabledReason: reason
+        )
+    }
+
+    private func recordTextEditingDiagnostic(
+        _ operation: String,
+        draft: TextEditDraft,
+        start: UInt64,
+        result: TextEditDiagnosticResult,
+        failure: TextEditError?
+    ) {
+        let record = TextEditDiagnosticFactory.make(
+            operation: operation,
+            draft: draft,
+            durationMilliseconds: Double(
+                DispatchTime.now().uptimeNanoseconds - start
+            ) / 1_000_000,
+            result: result,
+            failure: failure
+        )
+        Task { await textEditingDiagnostics.append(record) }
     }
 
     func selectLayer(_ id: NodeID, modifier: SelectionPointerModifier = .replace) {
@@ -1478,6 +1746,10 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func performEscape() {
+        if textEditingSession.isActive {
+            cancelTextEditing()
+            return
+        }
         switch guideEditingSession.phase {
         case .drafting, .previewing, .committing, .failed:
             cancelGuideEditing()
@@ -1694,6 +1966,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func undo() {
+        cancelTextEditing()
         cancelInsertion(resetTool: true)
         cancelTransform()
         cancelGuideEditing()
@@ -1703,6 +1976,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func redo() {
+        cancelTextEditing()
         cancelInsertion(resetTool: true)
         cancelTransform()
         cancelGuideEditing()
@@ -1729,6 +2003,12 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private func synchronizeViewportDocumentBoundary(_ document: CanonicalDocument) {
+        if case .committing = textEditingSession.phase {
+            // The synchronous text transaction owns this exact revision transition.
+        } else if let identity = textEditingSession.draft?.activation.identity,
+                  identity.documentID != document.id || identity.revision != document.revision {
+            cancelTextEditing()
+        }
         if case .committing = insertionSession.phase {
             // The synchronous transaction owns this revision transition.
         } else if let identity = insertionSession.identity,
@@ -1775,6 +2055,9 @@ final class WorkspaceShellState: ObservableObject {
         snapResolution = nil
         guideEditingSession.deactivate()
         guideFailure = nil
+        textEditingSession = InlineTextEditingSession()
+        retainedTextEditingFrame = nil
+        textEditingFailure = nil
         selectedGuideID = nil
         pendingSelectionAfterInsertion = nil
         canvasRendererFailure = nil

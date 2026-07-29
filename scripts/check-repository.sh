@@ -79,6 +79,10 @@ if ! scripts/check-snapping-guide-evidence.py; then
   failed=1
 fi
 
+if ! scripts/check-inline-text-editing-evidence.py; then
+  failed=1
+fi
+
 if ! scripts/select-test-scope.py --self-test; then
   print -u2 "Test-level selection checks failed."
   failed=1
