@@ -174,7 +174,7 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             WorkspaceMetrics.effectiveMinimumWindowSize(composition: topComposition),
-            WorkspaceMetrics.minimumWindowSize
+            CGSize(width: 1_100, height: 1)
         )
         XCTAssertEqual(
             WorkspaceMetrics.effectiveMinimumWindowSize(composition: bottomComposition),
@@ -196,11 +196,22 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             visibleFrame: hostedVisibleFrame,
             placement: WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .bottom)
         )
+        let hostedTop = WorkspaceMetrics.uiTestWindowFrame(
+            windowFrame: productionMinimumWindowFrame,
+            visibleFrame: hostedVisibleFrame,
+            placement: WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .top)
+        )
         XCTAssertEqual(hostedBottom, CGRect(x: 16, y: 16, width: 1_100, height: 721))
+        XCTAssertEqual(hostedTop, CGRect(x: 16, y: 0, width: 1_100, height: 721))
         XCTAssertEqual(
             hostedBottom.maxY,
             hostedVisibleFrame.maxY,
-            "Only the Debug/UI-test frame fits vertically; production minimum metrics stay unchanged."
+            "Only explicit Debug/UI-test frames fit vertically; production minimum metrics stay unchanged."
+        )
+        XCTAssertEqual(
+            hostedTop.height,
+            hostedBottom.height,
+            "Top and bottom placement must share the same deterministic hosted height."
         )
     }
 

@@ -260,13 +260,13 @@ enum WorkspaceMetrics {
     static func effectiveMinimumWindowSize(
         composition: DebugTestComposition = .current()
     ) -> CGSize {
-        guard requestedUITestWindowPlacement(composition: composition)?.vertical == .bottom else {
+        guard requestedUITestWindowPlacement(composition: composition) != nil else {
             return minimumWindowSize
         }
         // A titled AppKit window cannot move its title bar above the hosted
-        // display's menu-bar-safe edge. The one bottom-edge pointer journey
-        // therefore permits only its Debug/UI-test content to compress; the
-        // production metric and every ordinary test window remain unchanged.
+        // display's menu-bar-safe edge. Explicit Debug/UI-test placement
+        // therefore permits test content to compress to the fitted frame;
+        // production and Release composition retain the full minimum.
         return CGSize(width: minimumWindowSize.width, height: 1)
     }
 
@@ -297,16 +297,10 @@ enum WorkspaceMetrics {
         placement: WorkspaceUITestWindowPlacement,
         inset: CGFloat = uiTestScreenEdgeInset
     ) -> CGRect {
-        let height = switch placement.vertical {
-        case .top:
-            windowFrame.height
-        case .bottom:
-            // AppKit keeps a titled window's title bar on screen. On a hosted
-            // display shorter than the production-minimum window frame, fit
-            // only the Debug/UI-test frame so bottom status controls remain
-            // genuinely pointer-accessible.
-            min(windowFrame.height, max(1, visibleFrame.height - inset))
-        }
+        // AppKit keeps a titled window's title bar on screen. Fit explicit
+        // Debug/UI-test windows vertically before AppKit can apply a smaller,
+        // origin-dependent constraint of its own.
+        let height = min(windowFrame.height, max(1, visibleFrame.height - inset))
         let x = switch placement.horizontal {
         case .left: visibleFrame.minX + inset
         case .right: visibleFrame.maxX - windowFrame.width - inset
