@@ -244,6 +244,19 @@ enum WorkspaceMetrics {
         return minimumWindowSize
     }
 
+    static func effectiveMinimumWindowSize(
+        composition: DebugTestComposition = .current()
+    ) -> CGSize {
+        guard requestedUITestWindowPlacement(composition: composition)?.vertical == .bottom else {
+            return minimumWindowSize
+        }
+        // A titled AppKit window cannot move its title bar above the hosted
+        // display's menu-bar-safe edge. The one bottom-edge pointer journey
+        // therefore permits only its Debug/UI-test content to compress; the
+        // production metric and every ordinary test window remain unchanged.
+        return CGSize(width: minimumWindowSize.width, height: 1)
+    }
+
     static func usesDeterministicUITestPlacement(
         composition: DebugTestComposition = .current()
     ) -> Bool {

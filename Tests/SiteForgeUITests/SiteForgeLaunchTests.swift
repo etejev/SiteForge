@@ -834,12 +834,22 @@ final class SiteForgeLaunchTests: XCTestCase {
     func testInlineTextStatusCommitAndCancelUseBottomAlignedPointerWindow() throws {
         let application = launchWorkspace(verticalAlignment: .bottom)
         let canvas = application.descendants(matching: .any)["canvas.interaction"]
-        application.typeKey("t", modifierFlags: [])
+        let textTool = application.buttons["toolbar.tool.text"]
+        XCTAssertTrue(waitForHittable(textTool, in: application))
+        textTool.click()
+        XCTAssertTrue(waitForHittable(canvas, in: application))
         canvas.coordinate(withNormalizedOffset: .init(dx: 0.55, dy: 0.50)).click()
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
-        application.typeKey(.escape, modifierFlags: [])
+        application.buttons["toolbar.tool.select"].click()
 
-        application.typeKey(.return, modifierFlags: [])
+        func openSelectedTextEditor() {
+            application.menuBars.menuBarItems["Selection"].click()
+            let edit = application.menuItems["Edit Selected Text"]
+            XCTAssertTrue(edit.waitForExistence(timeout: 2))
+            XCTAssertTrue(edit.isEnabled)
+            edit.click()
+        }
+        openSelectedTextEditor()
         var editor = application.textViews["canvas.text.editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.typeKey("a", modifierFlags: .command)
@@ -857,7 +867,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForNonexistence(editor))
         XCTAssertTrue(waitForValue(application.buttons["toolbar.undo"], containing: "Set Property"))
 
-        application.typeKey(.return, modifierFlags: [])
+        openSelectedTextEditor()
         editor = application.textViews["canvas.text.editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.typeKey("a", modifierFlags: .command)
@@ -870,7 +880,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         cancel.click()
         XCTAssertTrue(waitForNonexistence(editor))
 
-        application.typeKey(.return, modifierFlags: [])
+        openSelectedTextEditor()
         editor = application.textViews["canvas.text.editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.value as? String, "Pointer commit")

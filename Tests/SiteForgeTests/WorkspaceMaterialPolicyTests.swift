@@ -156,6 +156,30 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             visibleFrame.minY + WorkspaceMetrics.uiTestScreenEdgeInset
         )
         XCTAssertEqual(WorkspaceMetrics.minimumWindowSize, CGSize(width: 1_100, height: 700))
+        let topComposition = DebugTestComposition(
+            arguments: [
+                "SiteForge",
+                "-SiteForgeUITestMode", "YES",
+                "-SiteForgeUITestWindowVerticalAlignment", "top",
+            ],
+            enabled: true
+        )
+        let bottomComposition = DebugTestComposition(
+            arguments: [
+                "SiteForge",
+                "-SiteForgeUITestMode", "YES",
+                "-SiteForgeUITestWindowVerticalAlignment", "bottom",
+            ],
+            enabled: true
+        )
+        XCTAssertEqual(
+            WorkspaceMetrics.effectiveMinimumWindowSize(composition: topComposition),
+            WorkspaceMetrics.minimumWindowSize
+        )
+        XCTAssertEqual(
+            WorkspaceMetrics.effectiveMinimumWindowSize(composition: bottomComposition),
+            CGSize(width: 1_100, height: 1)
+        )
 
         let hostedVisibleFrame = CGRect(x: 0, y: 0, width: 1_024, height: 737)
         let productionMinimumWindowFrame = CGRect(x: 0, y: 0, width: 1_100, height: 752)
@@ -186,6 +210,10 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertNil(WorkspaceMetrics.requestedUITestWindowPlacement(composition: disabled))
         XCTAssertFalse(WorkspaceMetrics.usesDeterministicUITestPlacement(composition: disabled))
         XCTAssertNil(WorkspaceMetrics.requestedWindowSize(composition: disabled))
+        XCTAssertEqual(
+            WorkspaceMetrics.effectiveMinimumWindowSize(composition: disabled),
+            WorkspaceMetrics.minimumWindowSize
+        )
     }
 
     // SF-0201-007, SF-1505-007, SF-1605-007

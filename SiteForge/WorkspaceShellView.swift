@@ -35,8 +35,8 @@ struct WorkspaceShellView: View {
             StatusBarView(state: state)
         }
         .frame(
-            minWidth: WorkspaceMetrics.minimumWindowSize.width,
-            minHeight: WorkspaceMetrics.minimumWindowSize.height
+            minWidth: WorkspaceMetrics.effectiveMinimumWindowSize().width,
+            minHeight: WorkspaceMetrics.effectiveMinimumWindowSize().height
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel("SiteForge workspace")

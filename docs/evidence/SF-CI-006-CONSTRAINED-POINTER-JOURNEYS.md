@@ -23,6 +23,8 @@ Actions follow-up `30572053725` at `dfe78ec` passed all 242 unit tests and 27 of
 
 The bounded follow-up keeps top/left/right journeys at the full production-minimum frame. Only a bottom-aligned Debug/UI-test frame is fitted when the display's usable height is shorter than that titled frame. The coordinator lowers only that test window's minimum frame height, restores the original minimum when detached, and retains the full requested width. Release composition cannot read these arguments, and `WorkspaceMetrics.minimumWindowSize` remains 1100 by 700.
 
+Actions `30575084659` at `21e1b93` passed all 242 unit tests and 24 of 28 UI tests. That run proved the first constrained-height follow-up was broader than intended: it lowered the AppKit minimum for every UI-test placement, allowing normal top-aligned windows to shrink to 677 points and destabilizing the large-fixture and Layers/material journeys. For the explicit bottom journey, AppKit compressed the frame while SwiftUI still enforced its 700-point content minimum, clipping the canvas interaction. The final policy restores the production minimum for top/left/right test composition and applies the reduced AppKit and SwiftUI minimum together only to the explicit bottom-aligned Debug/UI-test composition.
+
 The general inline-text journey now commits through the production Command-Return path, because status-bar pointer geometry is not its subject. A dedicated bottom-aligned journey clicks the real Commit and Cancel controls, proves both are inside the screen-edge envelope, and reopens the editor to prove Cancel retained the last committed text. Existing dedicated right-aligned journeys continue to click Preview, Undo, and Redo.
 
 Pointer-failure attachments contain stable control identifiers, enabled/hittable/focused state, sanitized control/window/display geometry, Undo/Redo availability and operation name, the non-content text-editing phase, and the responder/window diagnostic value. Missing accessibility elements remain diagnostic-neutral. No text content, clipboard data, absolute path, or secret is recorded.
@@ -39,6 +41,7 @@ Environment: Mac16,13, arm64, macOS 27.0 build 26A5388g, Xcode 27.0 build 27A519
 - Repository security, traceability, architecture, migration, evidence, and fixture-hygiene checks passed.
 - Authoritative `./sf verify` passed 242 unit tests and 28 UI tests with zero failures.
 - After inspecting hosted `30572053725`, the revised constrained-height policy passed 14/14 focused tests, the real bottom Commit/Cancel journey passed 3/3 fresh-process runs, the complete UI target passed 28/28, and authoritative `./sf verify` passed 242 unit plus 28 UI tests.
+- After inspecting hosted `30575084659`, the final bottom-only policy passed the real Commit/Cancel journey 3/3 fresh-process runs, a five-journey matrix covering both original failures plus minimum and Layers/material regressions passed 5/5, the complete UI target passed 28/28, and authoritative `./sf verify` passed 242 unit plus 28 UI tests. The dedicated journey uses the real Text/Select toolbar controls, canvas pointer insertion, Selection menu activation, and real status Commit/Cancel clicks so its setup does not depend on unrelated first-responder timing.
 
 ## Hosted acceptance
 

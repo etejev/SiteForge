@@ -255,7 +255,7 @@ final class WorkspaceWindowConfigurationView: NSView {
                 visibleFrame: visibleFrame,
                 placement: placement
             )
-            applyUITestMinimumSize(for: frame, to: window)
+            applyUITestMinimumSize(for: frame, placement: placement, to: window)
             if !window.frame.isApproximatelyEqual(to: frame) {
                 // setFrame is required here: setFrameOrigin can be constrained back to
                 // the leading/top edge when a production-minimum window is larger than
@@ -315,12 +315,17 @@ final class WorkspaceWindowConfigurationView: NSView {
         }
     }
 
-    private func applyUITestMinimumSize(for frame: CGRect, to window: NSWindow) {
+    private func applyUITestMinimumSize(
+        for frame: CGRect,
+        placement: WorkspaceUITestWindowPlacement,
+        to window: NSWindow
+    ) {
         guard let originalWindowMinimumSize else { return }
-        window.minSize = CGSize(
-            width: originalWindowMinimumSize.width,
-            height: min(originalWindowMinimumSize.height, frame.height)
-        )
+        guard placement.vertical == .bottom else {
+            window.minSize = originalWindowMinimumSize
+            return
+        }
+        window.minSize = WorkspaceMetrics.effectiveMinimumWindowSize()
     }
 }
 
