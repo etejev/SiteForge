@@ -110,7 +110,7 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
     }
 
     // SF-0201-008, SF-1605-008, SF-1902-008
-    func testConstrainedDisplayPlacementPreservesMinimumWindowAndExposesEveryRequestedEdge() {
+    func testConstrainedDisplayPlacementPreservesProductionMetricsAndExposesEveryRequestedEdge() {
         let visibleFrame = CGRect(x: 0, y: 0, width: 1_024, height: 768)
         let windowFrame = CGRect(
             origin: .zero,
@@ -154,6 +154,21 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertEqual(
             leftBottom.minY,
             visibleFrame.minY + WorkspaceMetrics.uiTestScreenEdgeInset
+        )
+        XCTAssertEqual(WorkspaceMetrics.minimumWindowSize, CGSize(width: 1_100, height: 700))
+
+        let hostedVisibleFrame = CGRect(x: 0, y: 0, width: 1_024, height: 737)
+        let productionMinimumWindowFrame = CGRect(x: 0, y: 0, width: 1_100, height: 752)
+        let hostedBottom = WorkspaceMetrics.uiTestWindowFrame(
+            windowFrame: productionMinimumWindowFrame,
+            visibleFrame: hostedVisibleFrame,
+            placement: WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .bottom)
+        )
+        XCTAssertEqual(hostedBottom, CGRect(x: 16, y: 16, width: 1_100, height: 721))
+        XCTAssertEqual(
+            hostedBottom.maxY,
+            hostedVisibleFrame.maxY,
+            "Only the Debug/UI-test frame fits vertically; production minimum metrics stay unchanged."
         )
     }
 

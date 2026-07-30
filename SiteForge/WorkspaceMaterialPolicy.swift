@@ -216,12 +216,15 @@ final class WorkspaceWindowConfigurationView: NSView {
     private weak var configuredWindow: NSWindow?
     private var observationTokens: [NSObjectProtocol] = []
     private var configurationScheduled = false
+    private var originalWindowMinimumSize: CGSize?
+    private var requestedWindowFrameSize: CGSize?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if configuredWindow !== window {
             detach()
             configuredWindow = window
+            originalWindowMinimumSize = window?.minSize
             installPlacementObserversIfNeeded()
         }
         scheduleConfiguration()
@@ -234,17 +237,25 @@ final class WorkspaceWindowConfigurationView: NSView {
         window.titlebarSeparatorStyle = .automatic
         window.backgroundColor = .windowBackgroundColor
         window.isOpaque = true
-        if let requestedSize = WorkspaceMetrics.requestedWindowSize(),
-           window.contentLayoutRect.size != requestedSize {
-            window.setContentSize(requestedSize)
+        if requestedWindowFrameSize == nil,
+           let requestedSize = WorkspaceMetrics.requestedWindowSize() {
+            if window.contentLayoutRect.size != requestedSize {
+                window.setContentSize(requestedSize)
+            }
+            requestedWindowFrameSize = window.frame.size
         }
         if let placement = WorkspaceMetrics.requestedUITestWindowPlacement(),
            let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+            let requestedFrame = CGRect(
+                origin: window.frame.origin,
+                size: requestedWindowFrameSize ?? window.frame.size
+            )
             let frame = WorkspaceMetrics.uiTestWindowFrame(
-                windowFrame: window.frame,
+                windowFrame: requestedFrame,
                 visibleFrame: visibleFrame,
                 placement: placement
             )
+            applyUITestMinimumSize(for: frame, to: window)
             if !window.frame.isApproximatelyEqual(to: frame) {
                 // setFrame is required here: setFrameOrigin can be constrained back to
                 // the leading/top edge when a production-minimum window is larger than
@@ -255,10 +266,15 @@ final class WorkspaceWindowConfigurationView: NSView {
     }
 
     func detach() {
+        if let configuredWindow, let originalWindowMinimumSize {
+            configuredWindow.minSize = originalWindowMinimumSize
+        }
         observationTokens.forEach(NotificationCenter.default.removeObserver)
         observationTokens.removeAll()
         configuredWindow = nil
         configurationScheduled = false
+        originalWindowMinimumSize = nil
+        requestedWindowFrameSize = nil
     }
 
     private func installPlacementObserversIfNeeded() {
@@ -297,6 +313,14 @@ final class WorkspaceWindowConfigurationView: NSView {
             self.configurationScheduled = false
             self.configureWindow()
         }
+    }
+
+    private func applyUITestMinimumSize(for frame: CGRect, to window: NSWindow) {
+        guard let originalWindowMinimumSize else { return }
+        window.minSize = CGSize(
+            width: originalWindowMinimumSize.width,
+            height: min(originalWindowMinimumSize.height, frame.height)
+        )
     }
 }
 

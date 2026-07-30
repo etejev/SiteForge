@@ -271,19 +271,29 @@ enum WorkspaceMetrics {
         placement: WorkspaceUITestWindowPlacement,
         inset: CGFloat = uiTestScreenEdgeInset
     ) -> CGRect {
+        let height = switch placement.vertical {
+        case .top:
+            windowFrame.height
+        case .bottom:
+            // AppKit keeps a titled window's title bar on screen. On a hosted
+            // display shorter than the production-minimum window frame, fit
+            // only the Debug/UI-test frame so bottom status controls remain
+            // genuinely pointer-accessible.
+            min(windowFrame.height, max(1, visibleFrame.height - inset))
+        }
         let x = switch placement.horizontal {
         case .left: visibleFrame.minX + inset
         case .right: visibleFrame.maxX - windowFrame.width - inset
         }
         let y = switch placement.vertical {
-        case .top: visibleFrame.maxY - windowFrame.height - inset
+        case .top: visibleFrame.maxY - height - inset
         case .bottom: visibleFrame.minY + inset
         }
         return CGRect(
             x: x,
             y: y,
             width: windowFrame.width,
-            height: windowFrame.height
+            height: height
         )
     }
 

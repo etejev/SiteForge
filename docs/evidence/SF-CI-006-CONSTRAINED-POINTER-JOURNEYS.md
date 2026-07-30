@@ -19,6 +19,10 @@ The second failure was not stale history publication. The production command sta
 
 Debug UI-test composition now requests horizontal and vertical safe-edge placement independently. One window-local AppKit configuration view reapplies the complete requested frame after attachment, key-window adoption, screen changes, moves, resizes, and application activation. It observes only its bound window, coalesces updates, avoids reapplying an equal frame, captures itself weakly, and removes every observer on detach. Release composition ignores both placement arguments. The production 1100-by-700-point content minimum is unchanged.
 
+Actions follow-up `30572053725` at `dfe78ec` passed all 242 unit tests and 27 of 28 UI tests. Both original hosted failures passed: the generic inline-text journey completed through Command-Return, and pointer Undo/Redo succeeded at the right edge. The new bottom-pointer journey alone failed because macOS 26.4 kept the titled 1100-by-752-point frame at the title-bar-safe y 31; Commit was still enabled at y 761 but not hittable. This proves the vertical failure was AppKit frame constraint, not text-editor or command state.
+
+The bounded follow-up keeps top/left/right journeys at the full production-minimum frame. Only a bottom-aligned Debug/UI-test frame is fitted when the display's usable height is shorter than that titled frame. The coordinator lowers only that test window's minimum frame height, restores the original minimum when detached, and retains the full requested width. Release composition cannot read these arguments, and `WorkspaceMetrics.minimumWindowSize` remains 1100 by 700.
+
 The general inline-text journey now commits through the production Command-Return path, because status-bar pointer geometry is not its subject. A dedicated bottom-aligned journey clicks the real Commit and Cancel controls, proves both are inside the screen-edge envelope, and reopens the editor to prove Cancel retained the last committed text. Existing dedicated right-aligned journeys continue to click Preview, Undo, and Redo.
 
 Pointer-failure attachments contain stable control identifiers, enabled/hittable/focused state, sanitized control/window/display geometry, Undo/Redo availability and operation name, the non-content text-editing phase, and the responder/window diagnostic value. Missing accessibility elements remain diagnostic-neutral. No text content, clipboard data, absolute path, or secret is recorded.
@@ -34,7 +38,8 @@ Environment: Mac16,13, arm64, macOS 27.0 build 26A5388g, Xcode 27.0 build 27A519
 - The complete `SiteForgeUITests` target passed 28/28.
 - Repository security, traceability, architecture, migration, evidence, and fixture-hygiene checks passed.
 - Authoritative `./sf verify` passed 242 unit tests and 28 UI tests with zero failures.
+- After inspecting hosted `30572053725`, the revised constrained-height policy passed 14/14 focused tests, the real bottom Commit/Cancel journey passed 3/3 fresh-process runs, the complete UI target passed 28/28, and authoritative `./sf verify` passed 242 unit plus 28 UI tests.
 
 ## Hosted acceptance
 
-Pending the next GitHub Actions Xcode 26.5 run. Local success does not close `SF-CI-006`; `SF-AUTHORING-009` must not begin until the complete hosted gate passes.
+Pending the next GitHub Actions Xcode 26.5 run after the constrained-height follow-up. Local success does not close `SF-CI-006`; `SF-AUTHORING-009` must not begin until the complete hosted gate passes.
