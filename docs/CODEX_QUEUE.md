@@ -11,7 +11,11 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## IN PROGRESS
 
-None.
+- [ ] `SF-CI-006` Stabilize constrained-display text and history pointer journeys.
+  - Requirements: bounded regression coverage for `SF-0201-006`, `SF-0201-008`, `SF-0203-006`, `SF-0203-008`, `SF-0405-006`, `SF-0405-008`, `SF-0406-006`, and `SF-1902-008`.
+  - Plan: retain the production 1100×700 content minimum and Release placement unchanged; replace the one-axis Debug/UI-test placement request with an explicit horizontal/vertical safe-edge request and a window-local AppKit placement coordinator that reapplies only when the requested window, screen, or frame changes; prove left/right/top/bottom placement against a simulated 1024×768 visible frame and Release composition isolation; keep the general inline-text journey on its production Command-Return commit path while adding a dedicated bottom-aligned pointer journey that clicks the real status Commit and Cancel controls; retain the existing right-aligned Undo/Redo pointer journey and diagnose its state with stable identifiers, sanitized geometry, history labels/availability, text phase, responder class, and window identity; then repeat both hosted failures with fresh processes, run history/constrained-display regressions, the complete UI target, and authoritative verification before checkpointing and pushing.
+  - Hosted evidence: Actions run `30415629157` passed repository/security/architecture/traceability/migration/evidence checks, all 241 unit tests, and 25 of 27 UI tests on macOS 26.4/Xcode 26.5. Its retained hierarchy placed status Commit/Cancel at y 761–777 on a 768-point display. The Redo hierarchy exposed value `Insert Node` without a disabled state, but its x range was 1034–1071 on the 1024-point display; the requested right-edge origin had been constrained back to x 16. These are separate status-bottom and toolbar-right geometry failures, not evidence of stale history.
+  - Local evidence: 14/14 focused placement/composition tests passed; each original hosted failure passed 3/3 consecutive final fresh-process runs; 56 command/history/insertion/text unit tests and six constrained/history UI journeys passed together; the complete UI target passed 28/28; and authoritative `./sf verify` passed 242 unit plus 28 UI tests with zero failures. The correction remains IN PROGRESS until the next hosted Xcode 26.5 complete gate passes.
 
 ## BLOCKED
 

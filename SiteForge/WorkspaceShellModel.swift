@@ -247,33 +247,43 @@ enum WorkspaceMetrics {
     static func usesDeterministicUITestPlacement(
         composition: DebugTestComposition = .current()
     ) -> Bool {
-        requestedUITestWindowAlignment(composition: composition) != nil
+        requestedUITestWindowPlacement(composition: composition) != nil
     }
 
-    static func requestedUITestWindowAlignment(
+    static func requestedUITestWindowPlacement(
         composition: DebugTestComposition = .current()
-    ) -> WorkspaceUITestWindowAlignment? {
+    ) -> WorkspaceUITestWindowPlacement? {
         guard composition.boolValue(after: "-SiteForgeUITestMode") == true else {
             return nil
         }
-        return composition.value(after: "-SiteForgeUITestWindowAlignment")
+        let horizontal = composition.value(after: "-SiteForgeUITestWindowAlignment")
             .flatMap(WorkspaceUITestWindowAlignment.init(rawValue:))
             ?? .left
+        let vertical = composition.value(after: "-SiteForgeUITestWindowVerticalAlignment")
+            .flatMap(WorkspaceUITestWindowVerticalAlignment.init(rawValue:))
+            ?? .top
+        return WorkspaceUITestWindowPlacement(horizontal: horizontal, vertical: vertical)
     }
 
-    static func uiTestWindowOrigin(
+    static func uiTestWindowFrame(
         windowFrame: CGRect,
         visibleFrame: CGRect,
-        alignment: WorkspaceUITestWindowAlignment,
+        placement: WorkspaceUITestWindowPlacement,
         inset: CGFloat = uiTestScreenEdgeInset
-    ) -> CGPoint {
-        let x = switch alignment {
+    ) -> CGRect {
+        let x = switch placement.horizontal {
         case .left: visibleFrame.minX + inset
         case .right: visibleFrame.maxX - windowFrame.width - inset
         }
-        return CGPoint(
+        let y = switch placement.vertical {
+        case .top: visibleFrame.maxY - windowFrame.height - inset
+        case .bottom: visibleFrame.minY + inset
+        }
+        return CGRect(
             x: x,
-            y: visibleFrame.maxY - windowFrame.height - inset
+            y: y,
+            width: windowFrame.width,
+            height: windowFrame.height
         )
     }
 
@@ -285,6 +295,16 @@ enum WorkspaceMetrics {
 enum WorkspaceUITestWindowAlignment: String {
     case left
     case right
+}
+
+enum WorkspaceUITestWindowVerticalAlignment: String {
+    case top
+    case bottom
+}
+
+struct WorkspaceUITestWindowPlacement: Equatable {
+    let horizontal: WorkspaceUITestWindowAlignment
+    let vertical: WorkspaceUITestWindowVerticalAlignment
 }
 
 enum WorkspaceFixtureScale: String {

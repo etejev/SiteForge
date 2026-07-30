@@ -193,17 +193,41 @@ private extension WorkspaceMaterialStyle {
 }
 
 struct WorkspaceWindowConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        DispatchQueue.main.async { configure(view.window) }
+    func makeNSView(context: Context) -> WorkspaceWindowConfigurationView {
+        let view = WorkspaceWindowConfigurationView(frame: .zero)
+        DispatchQueue.main.async { view.configureWindow() }
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
-        DispatchQueue.main.async { configure(view.window) }
+    func updateNSView(_ view: WorkspaceWindowConfigurationView, context: Context) {
+        DispatchQueue.main.async { view.configureWindow() }
     }
 
-    private func configure(_ window: NSWindow?) {
+    static func dismantleNSView(
+        _ view: WorkspaceWindowConfigurationView,
+        coordinator: Void
+    ) {
+        view.detach()
+    }
+}
+
+@MainActor
+final class WorkspaceWindowConfigurationView: NSView {
+    private weak var configuredWindow: NSWindow?
+    private var observationTokens: [NSObjectProtocol] = []
+    private var configurationScheduled = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if configuredWindow !== window {
+            detach()
+            configuredWindow = window
+            installPlacementObserversIfNeeded()
+        }
+        scheduleConfiguration()
+    }
+
+    func configureWindow() {
         guard let window else { return }
         window.titlebarAppearsTransparent = false
         window.toolbarStyle = .unified
@@ -214,14 +238,73 @@ struct WorkspaceWindowConfigurator: NSViewRepresentable {
            window.contentLayoutRect.size != requestedSize {
             window.setContentSize(requestedSize)
         }
-        if let alignment = WorkspaceMetrics.requestedUITestWindowAlignment(),
+        if let placement = WorkspaceMetrics.requestedUITestWindowPlacement(),
            let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
-            let origin = WorkspaceMetrics.uiTestWindowOrigin(
+            let frame = WorkspaceMetrics.uiTestWindowFrame(
                 windowFrame: window.frame,
                 visibleFrame: visibleFrame,
-                alignment: alignment
+                placement: placement
             )
-            window.setFrameOrigin(origin)
+            if !window.frame.isApproximatelyEqual(to: frame) {
+                // setFrame is required here: setFrameOrigin can be constrained back to
+                // the leading/top edge when a production-minimum window is larger than
+                // a hosted test display.
+                window.setFrame(frame, display: true, animate: false)
+            }
         }
+    }
+
+    func detach() {
+        observationTokens.forEach(NotificationCenter.default.removeObserver)
+        observationTokens.removeAll()
+        configuredWindow = nil
+        configurationScheduled = false
+    }
+
+    private func installPlacementObserversIfNeeded() {
+        guard WorkspaceMetrics.usesDeterministicUITestPlacement(),
+              let configuredWindow else { return }
+        let center = NotificationCenter.default
+        let windowNotifications: [Notification.Name] = [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didChangeScreenNotification,
+            NSWindow.didMoveNotification,
+            NSWindow.didResizeNotification,
+        ]
+        observationTokens = windowNotifications.map { name in
+            center.addObserver(
+                forName: name,
+                object: configuredWindow,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.scheduleConfiguration() }
+            }
+        }
+        observationTokens.append(center.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: NSApp,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleConfiguration() }
+        })
+    }
+
+    private func scheduleConfiguration() {
+        guard !configurationScheduled else { return }
+        configurationScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.configurationScheduled = false
+            self.configureWindow()
+        }
+    }
+}
+
+private extension CGRect {
+    func isApproximatelyEqual(to other: CGRect, tolerance: CGFloat = 0.5) -> Bool {
+        abs(minX - other.minX) <= tolerance
+            && abs(minY - other.minY) <= tolerance
+            && abs(width - other.width) <= tolerance
+            && abs(height - other.height) <= tolerance
     }
 }

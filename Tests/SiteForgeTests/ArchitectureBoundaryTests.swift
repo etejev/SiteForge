@@ -48,7 +48,7 @@ final class ArchitectureBoundaryTests: XCTestCase {
         XCTAssertNil(WorkspaceFixtureScale.from(composition: disabled))
         XCTAssertNil(WorkspaceMetrics.requestedWindowSize(composition: disabled))
         XCTAssertFalse(WorkspaceMetrics.usesDeterministicUITestPlacement(composition: disabled))
-        XCTAssertNil(WorkspaceMetrics.requestedUITestWindowAlignment(composition: disabled))
+        XCTAssertNil(WorkspaceMetrics.requestedUITestWindowPlacement(composition: disabled))
         XCTAssertNil(LaunchPreviewScenario.from(composition: disabled))
     }
 
@@ -68,7 +68,10 @@ final class ArchitectureBoundaryTests: XCTestCase {
         XCTAssertEqual(WorkspaceFixtureScale.from(composition: enabled), .standard)
         XCTAssertEqual(WorkspaceMetrics.requestedWindowSize(composition: enabled), WorkspaceMetrics.minimumWindowSize)
         XCTAssertTrue(WorkspaceMetrics.usesDeterministicUITestPlacement(composition: enabled))
-        XCTAssertEqual(WorkspaceMetrics.requestedUITestWindowAlignment(composition: enabled), .right)
+        XCTAssertEqual(
+            WorkspaceMetrics.requestedUITestWindowPlacement(composition: enabled),
+            WorkspaceUITestWindowPlacement(horizontal: .right, vertical: .top)
+        )
         XCTAssertEqual(LaunchPreviewScenario.from(composition: enabled), .loadingDeterminate)
     }
 }

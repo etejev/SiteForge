@@ -7,6 +7,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         case right
     }
 
+    private enum TestWindowVerticalAlignment: String {
+        case top
+        case bottom
+    }
+
     private enum TestWindowGeometry {
         static let safeScreenInset: CGFloat = 16
     }
@@ -59,7 +64,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         editor.typeKey(.leftArrow, modifierFlags: [.shift])
         attachWindowScreenshot(application, named: "SF-AUTHORING-008 inline text draft")
         editor.typeKey(.rightArrow, modifierFlags: [])
-        application.buttons["textEditing.commit"].click()
+        editor.typeKey(.return, modifierFlags: .command)
+        XCTAssertTrue(waitForNonexistence(editor))
         XCTAssertTrue(
             waitForValue(application.buttons["toolbar.undo"], containing: "Set Property"),
             String(describing: application.descendants(matching: .any)["status.textEditing"].value)
@@ -364,7 +370,8 @@ final class SiteForgeLaunchTests: XCTestCase {
     }
 
     private func launchWorkspace(
-        windowAlignment: TestWindowAlignment = .left
+        windowAlignment: TestWindowAlignment = .left,
+        verticalAlignment: TestWindowVerticalAlignment = .top
     ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
@@ -373,6 +380,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             "-AppleKeyboardUIMode", "3",
             "-SiteForgeUITestMode", "YES",
             "-SiteForgeUITestWindowAlignment", windowAlignment.rawValue,
+            "-SiteForgeUITestWindowVerticalAlignment", verticalAlignment.rawValue,
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
         ]
         application.launch()
@@ -476,6 +484,18 @@ final class SiteForgeLaunchTests: XCTestCase {
         ) == .completed
     }
 
+    private func waitForHittable(
+        _ element: XCUIElement,
+        in application: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        let result = waitForHittable(element, timeout: timeout)
+        if !result {
+            attachPointerDiagnostics(control: element, application: application)
+        }
+        return result
+    }
+
     private func waitForNonexistence(
         _ element: XCUIElement,
         timeout: TimeInterval = 5
@@ -566,6 +586,49 @@ final class SiteForgeLaunchTests: XCTestCase {
         hierarchy.lifetime = .keepAlways
         add(hierarchy)
         attachScreenshot(named: "focus-failure-\(identifier)")
+    }
+
+    private func attachPointerDiagnostics(
+        control: XCUIElement,
+        application: XCUIApplication
+    ) {
+        let window = application.windows.firstMatch
+        let screenSize = XCUIScreen.main.screenshot().image.size
+        let history = ["toolbar.undo", "toolbar.redo"].map { identifier in
+            let command = application.buttons[identifier]
+            let exists = command.exists
+            let value = exists ? ((command.value as? String) ?? "unavailable") : "unavailable"
+            return "\(identifier){exists=\(exists);enabled=\(exists && command.isEnabled);operation=\(value)}"
+        }.joined(separator: ";")
+        let textStatus = application.descendants(matching: .any)["status.textEditing"]
+        let focusStatus = application.descendants(matching: .any)["workspace.focus.diagnostics"]
+        let controlExists = control.exists
+        let windowExists = window.exists
+        let details = """
+        control=\(control.identifier)
+        state={exists=\(controlExists);enabled=\(controlExists && control.isEnabled);hittable=\(controlExists && control.isHittable);focused=\(controlExists && hasKeyboardFocus(control))}
+        controlFrame=\(controlExists ? sanitizedFrame(control.frame) : "unavailable")
+        visibleScreen={x=0.0;y=0.0;width=\(screenSize.width);height=\(screenSize.height)}
+        window={identifier=\(windowExists ? window.identifier : "unavailable");frame=\(windowExists ? sanitizedFrame(window.frame) : "unavailable")}
+        history=\(history)
+        textPhase=\(textStatus.exists ? ((textStatus.value as? String) ?? "unavailable") : "unavailable")
+        responder=\(focusStatus.exists ? ((focusStatus.value as? String) ?? "unavailable") : "unavailable")
+        """
+        let attachment = XCTAttachment(string: details)
+        attachment.name = "pointer-failure-\(control.identifier)"
+        attachment.lifetime = XCTAttachment.Lifetime.keepAlways
+        add(attachment)
+        attachScreenshot(named: "pointer-failure-\(control.identifier)")
+    }
+
+    private func sanitizedFrame(_ frame: CGRect) -> String {
+        String(
+            format: "{x=%.1f;y=%.1f;width=%.1f;height=%.1f}",
+            frame.minX,
+            frame.minY,
+            frame.width,
+            frame.height
+        )
     }
 
     private func redactedAccessibilityHierarchy(for application: XCUIApplication) -> String {
@@ -761,9 +824,57 @@ final class SiteForgeLaunchTests: XCTestCase {
         let application = launchWorkspace(windowAlignment: .right)
         let preview = application.buttons["toolbar.preview"]
 
-        XCTAssertTrue(waitForHittable(preview))
+        XCTAssertTrue(waitForHittable(preview, in: application))
         preview.click()
         XCTAssertTrue(application.descendants(matching: .any)["preview.placeholder"].waitForExistence(timeout: 2))
+    }
+
+    // SF-0201-006, SF-0201-008, SF-0406-006, SF-1902-008
+    @MainActor
+    func testInlineTextStatusCommitAndCancelUseBottomAlignedPointerWindow() throws {
+        let application = launchWorkspace(verticalAlignment: .bottom)
+        let canvas = application.descendants(matching: .any)["canvas.interaction"]
+        application.typeKey("t", modifierFlags: [])
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.55, dy: 0.50)).click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        application.typeKey(.escape, modifierFlags: [])
+
+        application.typeKey(.return, modifierFlags: [])
+        var editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeText("Pointer commit")
+
+        let commit = application.buttons["textEditing.commit"]
+        let cancel = application.buttons["textEditing.cancel"]
+        let screenHeight = XCUIScreen.main.screenshot().image.size.height
+        XCTAssertTrue(waitForHittable(commit, in: application))
+        XCTAssertLessThanOrEqual(
+            commit.frame.maxY,
+            screenHeight - TestWindowGeometry.safeScreenInset
+        )
+        commit.click()
+        XCTAssertTrue(waitForNonexistence(editor))
+        XCTAssertTrue(waitForValue(application.buttons["toolbar.undo"], containing: "Set Property"))
+
+        application.typeKey(.return, modifierFlags: [])
+        editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeText("Pointer cancel")
+        XCTAssertTrue(waitForHittable(cancel, in: application))
+        XCTAssertLessThanOrEqual(
+            cancel.frame.maxY,
+            screenHeight - TestWindowGeometry.safeScreenInset
+        )
+        cancel.click()
+        XCTAssertTrue(waitForNonexistence(editor))
+
+        application.typeKey(.return, modifierFlags: [])
+        editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "Pointer commit")
+        editor.typeKey(.escape, modifierFlags: [])
     }
 
     // SF-0201-006, SF-0201-008, SF-0203-006, SF-0405-006, SF-0405-008
@@ -779,12 +890,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         let undo = application.buttons["toolbar.undo"]
         let redo = application.buttons["toolbar.redo"]
         let screenWidth = XCUIScreen.main.screenshot().image.size.width
-        XCTAssertTrue(waitForHittable(undo))
+        XCTAssertTrue(waitForHittable(undo, in: application))
         XCTAssertGreaterThanOrEqual(undo.frame.minX, TestWindowGeometry.safeScreenInset)
         undo.click()
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
 
-        XCTAssertTrue(waitForHittable(redo))
+        XCTAssertTrue(waitForHittable(redo, in: application))
         XCTAssertLessThanOrEqual(
             redo.frame.maxX,
             screenWidth - TestWindowGeometry.safeScreenInset

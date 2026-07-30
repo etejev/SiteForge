@@ -100,42 +100,77 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             )
         ))
         XCTAssertEqual(
-            WorkspaceMetrics.requestedUITestWindowAlignment(composition: DebugTestComposition(
+            WorkspaceMetrics.requestedUITestWindowPlacement(composition: DebugTestComposition(
                 arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"],
                 enabled: true
             )),
-            .left
+            WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .top)
         )
         XCTAssertNil(WorkspaceMetrics.requestedWindowSize(arguments: ["SiteForge"]))
     }
 
     // SF-0201-008, SF-1605-008, SF-1902-008
-    func testConstrainedDisplayPlacementPreservesMinimumWindowAndExposesRequestedEdge() {
+    func testConstrainedDisplayPlacementPreservesMinimumWindowAndExposesEveryRequestedEdge() {
         let visibleFrame = CGRect(x: 0, y: 0, width: 1_024, height: 768)
         let windowFrame = CGRect(
             origin: .zero,
             size: WorkspaceMetrics.minimumWindowSize
         )
 
-        let left = WorkspaceMetrics.uiTestWindowOrigin(
+        let leftTop = WorkspaceMetrics.uiTestWindowFrame(
             windowFrame: windowFrame,
             visibleFrame: visibleFrame,
-            alignment: .left
+            placement: WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .top)
         )
-        let right = WorkspaceMetrics.uiTestWindowOrigin(
+        let rightTop = WorkspaceMetrics.uiTestWindowFrame(
             windowFrame: windowFrame,
             visibleFrame: visibleFrame,
-            alignment: .right
+            placement: WorkspaceUITestWindowPlacement(horizontal: .right, vertical: .top)
+        )
+        let leftBottom = WorkspaceMetrics.uiTestWindowFrame(
+            windowFrame: windowFrame,
+            visibleFrame: visibleFrame,
+            placement: WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .bottom)
+        )
+        let rightBottom = WorkspaceMetrics.uiTestWindowFrame(
+            windowFrame: windowFrame,
+            visibleFrame: visibleFrame,
+            placement: WorkspaceUITestWindowPlacement(horizontal: .right, vertical: .bottom)
         )
 
-        XCTAssertEqual(left, CGPoint(x: 16, y: 52))
-        XCTAssertEqual(right, CGPoint(x: -92, y: 52))
-        XCTAssertEqual(windowFrame.size, CGSize(width: 1_100, height: 700))
-        XCTAssertEqual(left.x, visibleFrame.minX + WorkspaceMetrics.uiTestScreenEdgeInset)
+        XCTAssertEqual(leftTop, CGRect(x: 16, y: 52, width: 1_100, height: 700))
+        XCTAssertEqual(rightTop, CGRect(x: -92, y: 52, width: 1_100, height: 700))
+        XCTAssertEqual(leftBottom, CGRect(x: 16, y: 16, width: 1_100, height: 700))
+        XCTAssertEqual(rightBottom, CGRect(x: -92, y: 16, width: 1_100, height: 700))
+        XCTAssertEqual(leftTop.minX, visibleFrame.minX + WorkspaceMetrics.uiTestScreenEdgeInset)
         XCTAssertEqual(
-            right.x + windowFrame.width,
+            rightTop.maxX,
             visibleFrame.maxX - WorkspaceMetrics.uiTestScreenEdgeInset
         )
+        XCTAssertEqual(
+            leftTop.maxY,
+            visibleFrame.maxY - WorkspaceMetrics.uiTestScreenEdgeInset
+        )
+        XCTAssertEqual(
+            leftBottom.minY,
+            visibleFrame.minY + WorkspaceMetrics.uiTestScreenEdgeInset
+        )
+    }
+
+    // SF-0201-008, SF-1902-008
+    func testReleaseCompositionIgnoresEveryWindowPlacementArgument() {
+        let disabled = DebugTestComposition(
+            arguments: [
+                "SiteForge",
+                "-SiteForgeUITestMode", "YES",
+                "-SiteForgeUITestWindowAlignment", "right",
+                "-SiteForgeUITestWindowVerticalAlignment", "bottom",
+            ],
+            enabled: false
+        )
+        XCTAssertNil(WorkspaceMetrics.requestedUITestWindowPlacement(composition: disabled))
+        XCTAssertFalse(WorkspaceMetrics.usesDeterministicUITestPlacement(composition: disabled))
+        XCTAssertNil(WorkspaceMetrics.requestedWindowSize(composition: disabled))
     }
 
     // SF-0201-007, SF-1505-007, SF-1605-007
