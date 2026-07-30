@@ -239,10 +239,11 @@ final class WorkspaceWindowConfigurationView: NSView {
         window.isOpaque = true
         if requestedWindowFrameSize == nil,
            let requestedSize = WorkspaceMetrics.requestedWindowSize() {
-            if window.contentLayoutRect.size != requestedSize {
-                window.setContentSize(requestedSize)
-            }
-            requestedWindowFrameSize = window.frame.size
+            requestedWindowFrameSize = WorkspaceMetrics.requestedWindowFrameSize(
+                contentSize: requestedSize,
+                currentFrameSize: window.frame.size,
+                currentContentLayoutSize: window.contentLayoutRect.size
+            )
         }
         if let placement = WorkspaceMetrics.requestedUITestWindowPlacement(),
            let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {

@@ -180,6 +180,14 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             WorkspaceMetrics.effectiveMinimumWindowSize(composition: bottomComposition),
             CGSize(width: 1_100, height: 1)
         )
+        XCTAssertEqual(
+            WorkspaceMetrics.requestedWindowFrameSize(
+                contentSize: WorkspaceMetrics.minimumWindowSize,
+                currentFrameSize: CGSize(width: 1_100, height: 677),
+                currentContentLayoutSize: CGSize(width: 1_100, height: 625)
+            ),
+            CGSize(width: 1_100, height: 752)
+        )
 
         let hostedVisibleFrame = CGRect(x: 0, y: 0, width: 1_024, height: 737)
         let productionMinimumWindowFrame = CGRect(x: 0, y: 0, width: 1_100, height: 752)

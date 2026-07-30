@@ -244,6 +244,19 @@ enum WorkspaceMetrics {
         return minimumWindowSize
     }
 
+    static func requestedWindowFrameSize(
+        contentSize: CGSize,
+        currentFrameSize: CGSize,
+        currentContentLayoutSize: CGSize
+    ) -> CGSize {
+        CGSize(
+            width: contentSize.width
+                + max(0, currentFrameSize.width - currentContentLayoutSize.width),
+            height: contentSize.height
+                + max(0, currentFrameSize.height - currentContentLayoutSize.height)
+        )
+    }
+
     static func effectiveMinimumWindowSize(
         composition: DebugTestComposition = .current()
     ) -> CGSize {
