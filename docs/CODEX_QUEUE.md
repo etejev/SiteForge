@@ -4,10 +4,7 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-AUTHORING-009` Implement the bounded drag-and-drop authoring foundation.
-  - Requirements: `SF-0408-001` through `SF-0408-008` (bounded local reorder/nest/place slice; the normative module remains Partial overall).
-  - Acceptance: establish one scene-owned drag session with stable source, destination, insertion-point, document, page, revision, and renderer identities; route pointer, keyboard, menu/contextual, accessibility, and automation paths through one typed transactional registry; preserve exact preview/commit parity, cancellation and stale-result neutrality, undo/redo, persistence/recovery, deterministic ordering, accessibility, redaction, and bounded scale. External imports, connected resources, cross-project transfer, broad asset-library work, and export generation require separately bounded acceptance.
-  - Dependencies: `SF-AUTHORING-004` through `SF-AUTHORING-008`.
+None.
 
 ## IN PROGRESS
 
@@ -18,6 +15,15 @@ None.
 None.
 
 ## DONE
+
+- [x] `SF-AUTHORING-009` Implement the bounded drag-and-drop authoring foundation.
+  - Requirements: `SF-0408-001` through `SF-0408-008` (bounded local reorder/nest/place slice; the normative module remains Partial overall).
+  - Acceptance: establish one scene-owned drag session with stable source, destination, insertion-point, document, page, revision, and renderer identities; route pointer, keyboard, menu/contextual, accessibility, and automation paths through one typed transactional registry; preserve exact preview/commit parity, cancellation and stale-result neutrality, undo/redo, persistence/recovery, deterministic ordering, accessibility, redaction, and bounded scale. External imports, connected resources, cross-project transfer, broad asset-library work, and export generation require separately bounded acceptance.
+  - Dependencies: `SF-AUTHORING-004` through `SF-AUTHORING-008`.
+  - Plan and result: use the existing canonical `DocumentNode.parent`, `DocumentPage.rootNodeIDs`, and `DocumentNode.childIDs` as the only ownership and ordering representation. `document.node.move` is one atomic command with an exact inverse. The headless registry validates document/page/revision/scene/renderer identities, source/destination availability, frame-only nesting, same-parent insertion-index adjustment, cycles, depth, locks, visibility, lifecycle, cancellation, and revision exhaustion before preparing that command. Scene-owned previews/sessions/payloads/indicators remain noncanonical. Layers native drag/drop, contextual actions, named accessibility actions, and automation provenance use that registry. The transfer type is an explicitly declared internal UTI, so generic text/Finder input cannot accidentally become a move.
+  - Supported: bounded same-page sibling reorder and move into a compatible frame container; deterministic destination adjustment; exact transaction/history/package behavior; noncanonical preview/session isolation; typed rejection; contextual and named accessibility actions; retained Layers reorder screenshot; reproducible 100-/10,000-node preparation evidence.
+  - Explicitly unsupported: Finder/external and asset drags, cross-window/project transfer, component ownership, responsive editing, autoscroll beyond the local list, incremental spatial indexing, final interactive frame pacing, OS-level VoiceOver/settings acceptance, cross-hardware budgets, export generation, and release acceptance.
+  - Evidence: 6 focused unit tests; one running-app Layers contextual reorder/undo/redo accessibility journey; complete UI target 29/29; authoritative `./sf verify` 248 unit + 29 UI tests, zero failures, and all repository/security/traceability/architecture/migration/evidence checks passing on 2026-07-31. `docs/evidence/drag-drop-foundation/` retains raw samples, environment/memory/limitations, and the reviewed screenshot. No next feature item is ready.
 
 - [x] `SF-CI-006` Stabilize constrained-display text and history pointer journeys.
   - Requirements: bounded regression coverage for `SF-0201-006`, `SF-0201-008`, `SF-0203-006`, `SF-0203-008`, `SF-0405-006`, `SF-0405-008`, `SF-0406-006`, and `SF-1902-008`.

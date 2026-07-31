@@ -6,6 +6,7 @@ enum CommandName: String, CaseIterable, Codable, Sendable {
     case renamePage = "document.page.rename"
     case insertNode = "document.node.insert"
     case removeNode = "document.node.remove"
+    case moveNode = "document.node.move"
     case setProperty = "document.property.set"
     case removeProperty = "document.property.remove"
     case insertGuide = "document.guide.insert"
@@ -61,6 +62,15 @@ struct RemoveNodeCommand: Codable, Equatable, Sendable {
     let nodeID: NodeID
 }
 
+/// Moves an existing node without duplicating its identity or subtree. `index` is
+/// interpreted against the destination collection before same-parent removal.
+struct MoveNodeCommand: Codable, Equatable, Sendable {
+    let pageID: PageID
+    let nodeID: NodeID
+    let destination: NodeParent
+    let index: Int
+}
+
 struct SetPropertyCommand: Codable, Equatable, Sendable {
     let pageID: PageID
     let nodeID: NodeID
@@ -106,6 +116,7 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case renamePage(RenamePageCommand)
     case insertNode(InsertNodeCommand)
     case removeNode(RemoveNodeCommand)
+    case moveNode(MoveNodeCommand)
     case setProperty(SetPropertyCommand)
     case removeProperty(RemovePropertyCommand)
     case insertGuide(InsertGuideCommand)
@@ -120,6 +131,7 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
         case .renamePage: .renamePage
         case .insertNode: .insertNode
         case .removeNode: .removeNode
+        case .moveNode: .moveNode
         case .setProperty: .setProperty
         case .removeProperty: .removeProperty
         case .insertGuide: .insertGuide
@@ -130,7 +142,7 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
     }
 
     var targets: [CommandTarget] {
-        switch self {
+        return switch self {
         case .insertPage(let command):
             [command.page.id.commandTarget]
         case .removePage(let command):
@@ -141,6 +153,11 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
             [command.pageID.commandTarget, command.node.id.commandTarget]
         case .removeNode(let command):
             [command.pageID.commandTarget, command.nodeID.commandTarget]
+        case .moveNode(let command):
+            switch command.destination {
+            case .page: [command.pageID.commandTarget, command.nodeID.commandTarget]
+            case .node(let parentID): [command.pageID.commandTarget, command.nodeID.commandTarget, parentID.commandTarget]
+            }
         case .setProperty(let command):
             [
                 command.pageID.commandTarget,
@@ -212,6 +229,7 @@ struct CommandRegistry {
             CommandDescriptor(name: .renamePage, title: "Rename Page", mutatesDocument: true),
             CommandDescriptor(name: .insertNode, title: "Insert Node", mutatesDocument: true),
             CommandDescriptor(name: .removeNode, title: "Remove Node", mutatesDocument: true),
+            CommandDescriptor(name: .moveNode, title: "Move Node", mutatesDocument: true),
             CommandDescriptor(name: .setProperty, title: "Set Property", mutatesDocument: true),
             CommandDescriptor(name: .removeProperty, title: "Remove Property", mutatesDocument: true),
             CommandDescriptor(name: .insertGuide, title: "Add Guide", mutatesDocument: true),
@@ -288,6 +306,30 @@ struct CommandRegistry {
             guard node.childIDs.isEmpty else {
                 return .disabled(reason: "Remove child nodes before removing their parent.")
             }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .moveNode(let value):
+            guard let pageIndex = document.pageIndex(for: value.pageID),
+                  let source = document.node(pageID: value.pageID, nodeID: value.nodeID) else {
+                return .disabled(reason: "The moved node no longer exists on this page.")
+            }
+            let page = document.pages[pageIndex]
+            let count: Int
+            switch value.destination {
+            case .page(let pageID):
+                guard pageID == value.pageID else { return .disabled(reason: "A node cannot move across pages.") }
+                count = page.rootNodeIDs.count
+            case .node(let parentID):
+                guard let parent = page.nodes.first(where: { $0.id == parentID }) else {
+                    return .disabled(reason: "The destination container no longer exists on this page.")
+                }
+                guard parent.kind == .frame else { return .disabled(reason: "Only frame containers accept nested nodes.") }
+                guard parentID != source.id, !isDescendant(parentID, of: source.id, in: page) else {
+                    return .disabled(reason: "A node cannot be moved into itself or its descendant.")
+                }
+                count = parent.childIDs.count
+            }
+            guard (0...count).contains(value.index) else { return .disabled(reason: "The destination insertion position is no longer valid.") }
             return validationAvailability(afterApplying: command, to: document)
 
         case .setProperty(let value):
@@ -482,6 +524,20 @@ struct CommandRegistry {
                 inverse: .insertNode(InsertNodeCommand(pageID: value.pageID, node: node, index: index))
             )
 
+        case .moveNode(let value):
+            guard let location = document.nodeLocation(pageID: value.pageID, nodeID: value.nodeID) else {
+                throw CommandExecutionError.disabled("The moved node no longer exists.")
+            }
+            let sourceParent = document.pages[location.page].nodes[location.node].parent
+            let sourceIndex = try removeNodeReference(value.nodeID, parent: sourceParent, from: &document.pages[location.page])
+            var adjustedIndex = value.index
+            if sourceParent == value.destination, sourceIndex < adjustedIndex { adjustedIndex -= 1 }
+            try insertNodeReference(value.nodeID, parent: value.destination, at: adjustedIndex, into: &document.pages[location.page])
+            document.pages[location.page].nodes[location.node].parent = value.destination
+            return CommandMutation(inverse: .moveNode(MoveNodeCommand(
+                pageID: value.pageID, nodeID: value.nodeID, destination: sourceParent, index: sourceIndex
+            )))
+
         case .setProperty(let value):
             guard let location = document.nodeLocation(pageID: value.pageID, nodeID: value.nodeID) else {
                 throw CommandExecutionError.disabled("The property owner no longer exists.")
@@ -575,6 +631,42 @@ struct CommandRegistry {
                 inverses.append(mutation.inverse)
             }
             return CommandMutation(inverse: .batch(inverses.reversed()))
+        }
+    }
+
+    private func isDescendant(_ candidate: NodeID, of ancestor: NodeID, in page: DocumentPage) -> Bool {
+        guard let root = page.nodes.first(where: { $0.id == ancestor }) else { return false }
+        var pending = root.childIDs
+        var visited = Set<NodeID>()
+        while let id = pending.popLast() {
+            guard visited.insert(id).inserted else { return true }
+            if id == candidate { return true }
+            pending.append(contentsOf: page.nodes.first(where: { $0.id == id })?.childIDs ?? [])
+        }
+        return false
+    }
+
+    private func removeNodeReference(_ nodeID: NodeID, parent: NodeParent, from page: inout DocumentPage) throws -> Int {
+        switch parent {
+        case .page:
+            guard let index = page.rootNodeIDs.firstIndex(of: nodeID) else { throw CommandExecutionError.disabled("The page no longer owns this node.") }
+            page.rootNodeIDs.remove(at: index); return index
+        case .node(let parentID):
+            guard let parentIndex = page.nodes.firstIndex(where: { $0.id == parentID }),
+                  let index = page.nodes[parentIndex].childIDs.firstIndex(of: nodeID) else { throw CommandExecutionError.disabled("The parent no longer owns this node.") }
+            page.nodes[parentIndex].childIDs.remove(at: index); return index
+        }
+    }
+
+    private func insertNodeReference(_ nodeID: NodeID, parent: NodeParent, at index: Int, into page: inout DocumentPage) throws {
+        switch parent {
+        case .page:
+            guard (0...page.rootNodeIDs.count).contains(index) else { throw CommandExecutionError.disabled("The destination insertion position is no longer valid.") }
+            page.rootNodeIDs.insert(nodeID, at: index)
+        case .node(let parentID):
+            guard let parentIndex = page.nodes.firstIndex(where: { $0.id == parentID }),
+                  (0...page.nodes[parentIndex].childIDs.count).contains(index) else { throw CommandExecutionError.disabled("The destination insertion position is no longer valid.") }
+            page.nodes[parentIndex].childIDs.insert(nodeID, at: index)
         }
     }
 }

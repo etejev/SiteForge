@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import QuartzCore
+import UniformTypeIdentifiers
 
 struct WorkspaceShellView: View {
     @ObservedObject var state: WorkspaceShellState
@@ -319,43 +320,147 @@ private struct NavigatorLayerRow: View {
     private var isPrimary: Bool { state.selectionState.primaryID == target.id }
 
     var body: some View {
-        Button {
-            let flags = NSEvent.modifierFlags
-            let modifier: SelectionPointerModifier = flags.contains(.command)
-                ? .toggle : flags.contains(.shift) ? .add : .replace
-            state.selectLayer(target.id, modifier: modifier)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: target.isLocked ? "lock.fill" : "square.dashed")
-                    .frame(width: 16)
-                Text(target.name).lineLimit(1)
-                Spacer(minLength: 4)
-                if isPrimary { Text("Primary").font(.caption2).foregroundStyle(.secondary) }
+        VStack(spacing: 2) {
+            if state.isDragInsertionPreview(before: target.id) {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(height: 3)
+                    .padding(.horizontal, 6)
+                    .accessibilityLabel("Valid insertion position before \(target.name)")
+                    .accessibilityIdentifier("drag.insertion.indicator.\(target.id.description)")
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-        .focusable()
-        .focused(focus, equals: .navigatorLayer(target.id))
-        .onMoveCommand { direction in
-            if direction == .down { state.performSelectionCommand(.next, provenance: .keyboard) }
-            if direction == .up { state.performSelectionCommand(.previous, provenance: .keyboard) }
-        }
-        .accessibilityLabel(target.name)
-        .accessibilityValue("\(target.isLocked ? "Locked; " : "")\(isPrimary ? "Primary selection" : isSelected ? "Selected" : "Not selected")")
-        .accessibilityHint("Press Return to select. Use Up and Down Arrow to traverse objects.")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityIdentifier("navigator.layer.\(target.id.description)")
-        .contextMenu {
-            Button("Edit Text") {
-                state.beginTextEditing(nodeID: target.id, provenance: .contextualMenu)
+            Button {
+                let flags = NSEvent.modifierFlags
+                let modifier: SelectionPointerModifier = flags.contains(.command)
+                    ? .toggle : flags.contains(.shift) ? .add : .replace
+                state.selectLayer(target.id, modifier: modifier)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: target.isLocked ? "lock.fill" : "square.dashed")
+                        .frame(width: 16)
+                    Text(target.name).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if isPrimary { Text("Primary").font(.caption2).foregroundStyle(.secondary) }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
             }
-            .disabled(!state.textEditingAvailability(nodeID: target.id).isEnabled)
+            .buttonStyle(.plain)
+            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .focusable()
+            .focused(focus, equals: .navigatorLayer(target.id))
+            .onMoveCommand { direction in
+                if direction == .down { state.performSelectionCommand(.next, provenance: .keyboard) }
+                if direction == .up { state.performSelectionCommand(.previous, provenance: .keyboard) }
+            }
+            .accessibilityLabel(target.name)
+            .accessibilityValue("\(target.isLocked ? "Locked; " : "")\(isPrimary ? "Primary selection" : isSelected ? "Selected" : "Not selected")")
+            .accessibilityHint("Press Return to select. Use Up and Down Arrow to traverse objects. Drag to move, or use accessible actions to place the selected layer.")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .accessibilityIdentifier("navigator.layer.\(target.id.description)")
+            .accessibilityAction(named: "Move selected layer before \(target.name)") {
+                guard let destination = state.dragDestination(before: target.id),
+                      let source = state.selectionState.primaryID else { return }
+                state.performDragDrop(sourceID: source, destination: destination, provenance: .accessibility)
+            }
+            .accessibilityAction(named: "Nest selected layer in \(target.name)") {
+                guard let destination = state.dragDestination(nestingIn: target.id),
+                      let source = state.selectionState.primaryID else { return }
+                state.performDragDrop(sourceID: source, destination: destination, provenance: .accessibility)
+            }
+            .contextMenu {
+                Button("Move Before") {
+                    guard let destination = state.dragDestination(before: target.id),
+                          let source = state.selectionState.primaryID else { return }
+                    state.performDragDrop(sourceID: source, destination: destination, provenance: .contextualMenu)
+                }
+                .disabled(state.selectionState.primaryID == nil)
+                Button("Nest In") {
+                    guard let destination = state.dragDestination(nestingIn: target.id),
+                          let source = state.selectionState.primaryID else { return }
+                    state.performDragDrop(sourceID: source, destination: destination, provenance: .contextualMenu)
+                }
+                .disabled(state.selectionState.primaryID == nil)
+                Button("Edit Text") {
+                    state.beginTextEditing(nodeID: target.id, provenance: .contextualMenu)
+                }
+                .disabled(!state.textEditingAvailability(nodeID: target.id).isEnabled)
+            }
+            if state.isDragNestingPreview(in: target.id) {
+                Text("Drop to nest in \(target.name)")
+                    .font(.caption2)
+                    .foregroundStyle(.tint)
+                    .accessibilityIdentifier("drag.nesting.indicator.\(target.id.description)")
+            }
         }
+        // Attach the native source and target to the row container rather than
+        // its selection button: AppKit must be able to begin a drag without the
+        // button's activation gesture consuming the pointer sequence.
+        .onDrag {
+            LayerDragPayload.provider(for: target.id)
+        }
+        .onDrop(of: [LayerDragPayload.contentType], delegate: LayerDropDelegate(targetID: target.id, state: state))
+    }
+}
+
+private struct LayerDropDelegate: DropDelegate {
+    let targetID: NodeID
+    @ObservedObject var state: WorkspaceShellState
+
+    func validateDrop(info: DropInfo) -> Bool {
+        guard let item = info.itemProviders(for: [LayerDragPayload.contentType]).first else { return false }
+        item.loadDataRepresentation(forTypeIdentifier: LayerDragPayload.contentType.identifier) { data, _ in
+            guard let source = LayerDragPayload.nodeID(from: data) else { return }
+            Task { @MainActor in
+                guard let destination = state.dragDestination(before: targetID) else { return }
+                _ = state.previewDragDrop(sourceID: source, destination: destination, provenance: .pointer)
+            }
+        }
+        return true
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let item = info.itemProviders(for: [LayerDragPayload.contentType]).first else { return false }
+        item.loadDataRepresentation(forTypeIdentifier: LayerDragPayload.contentType.identifier) { data, _ in
+            guard let source = LayerDragPayload.nodeID(from: data) else { return }
+            Task { @MainActor in
+                guard let destination = state.dragDestination(before: targetID) else { return }
+                state.performDragDrop(sourceID: source, destination: destination, provenance: .pointer)
+            }
+        }
+        return true
+    }
+
+    func dropExited(info: DropInfo) { state.cancelDragDrop() }
+}
+
+/// The Layers navigator only accepts this process-owned representation. Generic
+/// text and Finder payloads cannot accidentally become canonical move commands.
+private enum LayerDragPayload {
+    static let contentType = UTType(
+        exportedAs: "app.siteforge.SiteForge.layer-drag",
+        conformingTo: .data
+    )
+
+    static func provider(for nodeID: NodeID) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: contentType.identifier,
+            // Drag delivery crosses the system drag server even for two views
+            // in the same scene; the custom UTI remains the acceptance gate.
+            visibility: .all
+        ) { completion in
+            completion(Data(nodeID.description.utf8), nil)
+            return nil
+        }
+        return provider
+    }
+
+    static func nodeID(from data: Data?) -> NodeID? {
+        guard let data, let value = String(data: data, encoding: .utf8) else { return nil }
+        return NodeID(uuidString: value)
     }
 }
 

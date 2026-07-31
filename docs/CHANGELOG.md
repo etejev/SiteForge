@@ -6,6 +6,9 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Bounded local Layers drag-and-drop authoring: transactional sibling reorder and frame nesting through stable identities, deterministic insertion previews, exact undo/redo, and noncanonical drag-session state. An explicitly declared internal drag type keeps generic text and Finder payloads outside the local move path.
+- Reproducible 100-/10,000-node drag-preparation evidence plus a retained running-app Layers contextual reorder/undo/redo screenshot; drag session, payload, preview, and indicators remain excluded from packages, history, autosave/recovery, and preview/export snapshots.
+
 - Native inline plain-text editing on the canvas with stable session/document/page/revision/renderer/node identity, genuine AppKit caret and selection behavior, multiline insertion/deletion/replacement, copy/cut/paste, marked-text composition, and shared pointer, keyboard, menu, contextual, accessibility, and automation activation.
 - One atomic canonical `content.text` transaction and exact inverse per completed edit, with deterministic undo/redo, package/history round trips, autosave/recovery, selection/Layers/layout/renderer/hit-test adoption, bounded dirty regions, and exact Escape/stale/cancellation neutrality.
 - Reproducible 100-/10,000-object text-command preparation evidence plus retained running-app draft, commit, and cancellation screenshots; draft text, selection ranges, composition, clipboard state, and editor overlays remain excluded from canonical persistence, history, preview, and export-facing snapshots.

@@ -169,6 +169,39 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(Set(layers.map(\.identifier)).count, layers.count)
     }
 
+    // SF-0408-001 through SF-0408-008 — local navigator drag command parity.
+    func testLayersContextualReorderShowsAccessiblePreviewAndUndoRedo() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        application.buttons["toolbar.tool.frame"].click()
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.30, dy: 0.35)).click()
+        application.buttons["toolbar.tool.frame"].click()
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.60, dy: 0.50)).click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 3"))
+
+        application.buttons["navigator.tab.layers"].click()
+        let layers = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "navigator.layer."))
+        expectation(for: NSPredicate { _, _ in layers.count >= 3 }, evaluatedWith: application)
+        waitForExpectations(timeout: 5)
+        let values = layers.allElementsBoundByAccessibilityElement
+        XCTAssertGreaterThanOrEqual(values.count, 3)
+        values[2].click()
+        XCTAssertTrue((values[2].value as? String)?.contains("Primary selection") == true)
+        values[1].rightClick()
+        let moveBefore = application.menuItems["Move Before"]
+        XCTAssertTrue(moveBefore.waitForExistence(timeout: 3))
+        XCTAssertTrue(moveBefore.isEnabled)
+        moveBefore.click()
+        XCTAssertTrue(waitForValue(application.buttons["toolbar.undo"], containing: "Move Node"))
+        attachScreenshot(named: "SF-AUTHORING-009 local Layers reorder")
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForEnabled(application.buttons["toolbar.redo"]))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForEnabled(application.buttons["toolbar.undo"]))
+    }
+
     // SF-0403-001 through SF-0403-008
     func testGeometryTransformPointerKeyboardNumericUndoRedoAndAccessibilityJourney() throws {
         let application = launchWorkspace()

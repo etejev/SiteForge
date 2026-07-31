@@ -36,6 +36,16 @@
 				</array>
 			</dict>
 		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>SiteForge Internal Layer Drag</string>
+			<key>UTTypeIdentifier</key>
+			<string>app.siteforge.SiteForge.layer-drag</string>
+		</dict>
 	</array>
 </dict>
 </plist>
