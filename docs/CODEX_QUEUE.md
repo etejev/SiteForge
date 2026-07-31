@@ -11,7 +11,15 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## IN PROGRESS
 
-- [ ] `SF-CI-006` Stabilize constrained-display text and history pointer journeys.
+None.
+
+## BLOCKED
+
+None.
+
+## DONE
+
+- [x] `SF-CI-006` Stabilize constrained-display text and history pointer journeys.
   - Requirements: bounded regression coverage for `SF-0201-006`, `SF-0201-008`, `SF-0203-006`, `SF-0203-008`, `SF-0405-006`, `SF-0405-008`, `SF-0406-006`, and `SF-1902-008`.
   - Plan: retain the production 1100×700 content minimum and Release placement unchanged; replace the one-axis Debug/UI-test placement request with an explicit horizontal/vertical safe-edge request and a window-local AppKit placement coordinator that reapplies only when the requested window, screen, or frame changes; fit every explicitly placed Debug/UI-test frame to a hosted display whose usable height is shorter than the titled production-minimum frame while retaining the complete requested width and selected safe edges; prove left/right/top/bottom policy, the constrained 1024×737 usable frame, and Release composition isolation; keep the general inline-text journey on its production Command-Return commit path while adding a dedicated bottom-aligned pointer journey that clicks the real status Commit and Cancel controls; retain the existing right-aligned Undo/Redo pointer journey and diagnose its state with stable identifiers, sanitized geometry, history labels/availability, text phase, responder class, and window identity; then repeat both hosted failures with fresh processes, run history/constrained-display regressions, the complete UI target, and authoritative verification before checkpointing and pushing.
   - Hosted evidence: Actions run `30415629157` passed repository/security/architecture/traceability/migration/evidence checks, all 241 unit tests, and 25 of 27 UI tests on macOS 26.4/Xcode 26.5. Its retained hierarchy placed status Commit/Cancel at y 761–777 on a 768-point display. The Redo hierarchy exposed value `Insert Node` without a disabled state, but its x range was 1034–1071 on the 1024-point display; the requested right-edge origin had been constrained back to x 16. These are separate status-bottom and toolbar-right geometry failures, not evidence of stale history.
@@ -20,13 +28,8 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
   - Third hosted follow-up: Actions `30578634561` at `a412a69` passed all 242 unit tests and 24 of 28 UI tests. The four failures all used ordinary top placement: the large fixture measured a 677-point frame, and the page/Layers accessibility subtrees became unavailable. The coordinator had cached that already screen-constrained frame as its requested size. It now derives the intended frame once from the requested 1100×700 content size plus the bound window's actual chrome inset, then applies bottom-only fitting afterward.
   - Fourth hosted follow-up: Actions `30581883646` at `b3999f6` passed all 242 unit tests and 25 of 28 UI tests. The intended titled frame was correctly derived, but top-aligned Debug/UI-test composition still retained the production content constraint and asked AppKit for a 752-point frame on a 737-point visible screen. AppKit independently reduced it to 677 points; the large-fixture assertion and two Layers accessibility queries failed from that same truncation. The bounded follow-up now fits every explicit Debug/UI-test vertical placement to the usable display height before AppKit can apply an origin-dependent constraint. Release and non-test composition retain 1100×700.
   - Fifth hosted follow-up: Actions `30584649437` at `9088931` passed all 242 unit tests and 26 of 28 UI tests. Every Layers/material regression passed. The only failures were the minimum and large-fixture journeys retaining a literal 700-point runtime-frame assertion after the explicit Debug/UI-test fit correctly produced 661 points from the hosted 677-point AppKit visible height minus the 16-point safe inset. Those journeys now assert the exact constrained-display threshold from the test runner's native visible frame; production/unit coverage continues to require the unchanged 1100×700 content minimum, and Release/non-test composition cannot use the fit.
-  - Local evidence: the final placement contract passed 11/11 focused tests; the five-journey matrix covering all three `30581883646` failures, the earlier page-row regression, and the real bottom Commit/Cancel pointer path passed 15/15 across three fresh-process repetitions; the complete UI target passed 28/28; and authoritative `./sf verify` passed 242 unit plus 28 UI tests with every repository, security, architecture, traceability, migration, and retained-evidence check green. Earlier evidence retained each original `30415629157` failure at 3/3 and 56 command/history/insertion/text unit tests plus six constrained/history UI journeys. The correction remains IN PROGRESS until the next hosted Xcode 26.5 complete gate passes.
-
-## BLOCKED
-
-None.
-
-## DONE
+  - Local evidence: the final placement contract passed 11/11 focused tests; the five-journey matrix covering all three `30581883646` failures, the earlier page-row regression, and the real bottom Commit/Cancel pointer path passed 15/15 across three fresh-process repetitions; the native-screen minimum and large-fixture journeys passed 6/6 across three fresh-process repetitions; the complete UI target passed 28/28; and authoritative `./sf verify` passed 242 unit plus 28 UI tests with every repository, security, architecture, traceability, migration, and retained-evidence check green. Earlier evidence retained each original `30415629157` failure at 3/3 and 56 command/history/insertion/text unit tests plus six constrained/history UI journeys.
+  - Final hosted evidence: Actions run `30599626407` at `94a372b` passed the complete macOS 26.4/Xcode 26.5 gate. The Verify job completed successfully, failure diagnostics were correctly skipped, and `SF-AUTHORING-009` remains the first READY item.
 
 - [x] `SF-AUTHORING-008` Implement the bounded inline plain-text editing foundation.
   - Requirements: `SF-0406-001` through `SF-0406-008` (bounded plain-text editing slice; rich text and production shaping remain later work).

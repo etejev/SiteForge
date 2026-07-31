@@ -55,4 +55,4 @@ Environment: Mac16,13, arm64, macOS 27.0 build 26A5388g, Xcode 27.0 build 27A519
 
 The native-screen minimum and large-fixture journeys passed 6/6 across three fresh-process repetitions. The complete UI target passed 28/28, and authoritative `./sf verify` passed 242 unit plus 28 UI tests with all repository gates green. One earlier full-UI invocation was suspended by the local machine for four hours; its two failures were a generic post-suspension assertion and an application left in `Running Background`, so it is retained as host-interruption evidence and is not counted as product validation.
 
-Pending the next GitHub Actions Xcode 26.5 run after the locally verified native-screen threshold correction. Local success does not close `SF-CI-006`; `SF-AUTHORING-009` must not begin until the complete hosted gate passes.
+Actions `30599626407` at `94a372b` passed the complete macOS 26.4/Xcode 26.5 gate. The Verify job completed successfully and failure diagnostics were correctly skipped. This closes `SF-CI-006`; `SF-AUTHORING-009` is first READY but was not started.
