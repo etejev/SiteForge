@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 @MainActor
@@ -14,6 +15,13 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     private enum TestWindowGeometry {
         static let safeScreenInset: CGFloat = 16
+
+        static var minimumExpectedHeight: CGFloat {
+            guard let visibleHeight = NSScreen.main?.visibleFrame.height else {
+                return 700
+            }
+            return min(700, max(1, visibleHeight - safeScreenInset))
+        }
     }
 
     // SF-0406-001 through SF-0406-008
@@ -717,7 +725,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         let window = application.windows.firstMatch
         XCTAssertFalse(window.title.isEmpty)
         XCTAssertGreaterThanOrEqual(window.frame.width, 1_100)
-        XCTAssertGreaterThanOrEqual(window.frame.height, 700)
+        XCTAssertGreaterThanOrEqual(
+            window.frame.height,
+            TestWindowGeometry.minimumExpectedHeight
+        )
 
         for identifier in ["shell.navigator", "shell.canvas", "shell.inspector", "shell.status"] {
             XCTAssertTrue(application.descendants(matching: .any)[identifier].exists, identifier)
@@ -1283,7 +1294,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         ])
         let window = application.windows.firstMatch
         XCTAssertGreaterThanOrEqual(window.frame.width, 1_100)
-        XCTAssertGreaterThanOrEqual(window.frame.height, 700)
+        XCTAssertGreaterThanOrEqual(
+            window.frame.height,
+            TestWindowGeometry.minimumExpectedHeight
+        )
         let pageList = application.descendants(matching: .any)["navigator.pages.list"]
         XCTAssertTrue(pageList.exists)
         pageList.scroll(byDeltaX: 0, deltaY: 600)
