@@ -3,11 +3,11 @@ import XCTest
 
 @MainActor
 final class DocumentLifecycleRaceTests: XCTestCase {
-    nonisolated(unsafe) private var fixtureLease: RepositoryTestFixture!
+    nonisolated(unsafe) private var fixtureLease: ApplicationOwnedTestFixture!
 
     nonisolated override func setUpWithError() throws {
         try super.setUpWithError()
-        fixtureLease = try RepositoryTestFixture.create("lifecycle-races")
+        fixtureLease = try ApplicationOwnedTestFixture.create("lifecycle-races")
     }
 
     nonisolated override func tearDownWithError() throws {
@@ -102,6 +102,44 @@ final class DocumentLifecycleRaceTests: XCTestCase {
         }
     }
 
+    // SF-0306-003, SF-0306-004, SF-0306-005 — a validated recovery remains
+    // restorable while a newer edit is pending or executing, then is retired
+    // only once replacement bytes have committed under the owned fingerprint.
+    func testValidatedRecoveryCandidateRemainsUntilReplacementAutosaveCommits() async throws {
+        let probe = LifecycleBackendProbe()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let context = try await makeContext(
+            "RecoveryCandidateReplacement",
+            probe: probe,
+            debouncer: debouncer
+        )
+        try await seedRecoveryCandidate(in: context)
+        let originalCandidate = try XCTUnwrap(context.controller.recoveryCandidate)
+
+        try addPage("Current edit replaces candidate", to: context.controller)
+        await debouncer.waitUntilPending()
+        XCTAssertEqual(context.controller.recoveryCandidate, originalCandidate)
+
+        await probe.block(.beforeFilesystemWrite, intent: .autosave)
+        debouncer.fireAll()
+        await probe.waitUntilBlocked()
+        XCTAssertEqual(context.controller.recoveryCandidate, originalCandidate)
+
+        await probe.release()
+        await waitUntil { !context.controller.hasPendingAutosaveWork }
+        XCTAssertNil(context.controller.recoveryCandidate)
+        XCTAssertNil(context.controller.failure)
+
+        let replacement = try await ProjectPackageStore().read(
+            from: DocumentLifecycleBackend.recoveryURL(
+                for: context.controller.currentProjectID,
+                in: context.recoveryDirectory
+            )
+        )
+        XCTAssertEqual(replacement.document, context.controller.session.document)
+        XCTAssertNotEqual(replacement.document, originalCandidate.package.document)
+    }
+
     // SF-0301-005, SF-0306-003, SF-0306-004, SF-0306-005
     func testPendingAutosaveIsCancelledAndDrainedBeforeManualSave() async throws {
         let probe = LifecycleBackendProbe()
@@ -174,6 +212,77 @@ final class DocumentLifecycleRaceTests: XCTestCase {
         XCTAssertEqual(saveWrites, 1)
         XCTAssertEqual(durableDocument, context.controller.session.document)
         XCTAssertEqual(context.controller.phase, .clean)
+    }
+
+    // SF-0301-005, SF-0306-003, SF-0306-004, SF-0306-005 — a cancelled
+    // autosave that already committed bytes contributes its exact fingerprint
+    // before a later revision attempts the next conditional replacement.
+    func testPostCommitAutosaveCancellationSerializesNextRecoveryRevision() async throws {
+        let probe = LifecycleBackendProbe()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let context = try await makeContext("PostCommitAutosave", probe: probe, debouncer: debouncer)
+        try addPage("First recovery revision", to: context.controller)
+        let first = context.controller.session.document
+        await debouncer.waitUntilPending()
+        await probe.block(.afterFilesystemWrite, intent: .autosave)
+        debouncer.fireAll()
+        await probe.waitUntilBlocked()
+
+        try addPage("Second recovery revision", to: context.controller)
+        let second = context.controller.session.document
+        await probe.release()
+        await debouncer.waitUntilPending()
+        debouncer.fireAll()
+        await probe.waitForEvent(.afterFilesystemWrite, intent: .autosave, count: 2)
+
+        let recovery = try await ProjectPackageStore().read(
+            from: DocumentLifecycleBackend.recoveryURL(for: context.controller.currentProjectID, in: context.recoveryDirectory)
+        )
+        XCTAssertEqual(recovery.document, second)
+        XCTAssertNil(context.controller.failure)
+        let autosaveOrder = await probe.completedWriteOrder().filter { $0.intent == .autosave }
+        XCTAssertEqual(
+            autosaveOrder,
+            [
+                CompletedLifecycleWrite(intent: .autosave, revision: first.revision),
+                CompletedLifecycleWrite(intent: .autosave, revision: second.revision),
+            ]
+        )
+    }
+
+    // SF-0301-005, SF-0306-003, SF-0306-004 — explicit Save drains a
+    // post-commit autosave, learns its recovery identity, and removes only
+    // that owned recovery after the durable revision succeeds.
+    func testManualSaveDrainsPostCommitAutosaveAndCleansOwnedRecovery() async throws {
+        let probe = LifecycleBackendProbe()
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let context = try await makeContext("PostCommitAutosaveSave", probe: probe, debouncer: debouncer)
+        try addPage("Durable after recovery", to: context.controller)
+        await debouncer.waitUntilPending()
+        await probe.block(.afterFilesystemWrite, intent: .autosave)
+        debouncer.fireAll()
+        await probe.waitUntilBlocked()
+
+        let save = Task { await context.controller.save() }
+        await Task.yield()
+        await probe.release()
+        let saved = await save.value
+        XCTAssertTrue(saved)
+
+        let autosaveWrites = await probe.writeCount(.autosave)
+        let saveWrites = await probe.writeCount(.save)
+        XCTAssertEqual(autosaveWrites, 1)
+        XCTAssertEqual(saveWrites, 1)
+        XCTAssertEqual(context.controller.phase, .clean)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(
+            for: context.controller.currentProjectID,
+            in: context.recoveryDirectory
+        )
+        let retired = try await ProjectPackageStore().isRetiredRecoveryTombstone(
+            at: recoveryURL,
+            projectID: context.controller.currentProjectID
+        )
+        XCTAssertTrue(retired)
     }
 
     // SF-0301-005, SF-0306-003, SF-0306-004, SF-0306-005
@@ -308,6 +417,176 @@ final class DocumentLifecycleRaceTests: XCTestCase {
         }
     }
 
+    // SF-0301-004, SF-0306-003, SF-0306-004, SF-0306-005 — a newer
+    // transition claims ownership before it displays its authorization. That
+    // claim must cancel an older Open at the pre-adoption recovery-retirement
+    // seam, preserving both the active canonical state and recovery bytes.
+    func testSupersedingTransitionPreventsOlderOpenFromRetiringRecoveryOrAdopting() async throws {
+        let probe = LifecycleBackendProbe()
+        let context = try await makeContext("SupersedingTransition", probe: probe)
+        try await seedRecoveryCandidate(in: context)
+        try addPage("Original document remains active", to: context.controller)
+
+        var staleIncoming = ProjectCreation.blank()
+        staleIncoming.pages[0].name = "Stale incoming project"
+        try await ProjectPackageStore().write(ProjectPackage(document: staleIncoming), to: context.incoming)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(
+            for: context.controller.currentProjectID,
+            in: context.recoveryDirectory
+        )
+        let recoveryBytes = try Data(contentsOf: recoveryURL)
+
+        await probe.block(.beforeRecoveryDeletion, intent: .discardRecovery)
+        let olderOpen = Task { @MainActor in
+            await context.controller.requestOpen(context.incoming)
+        }
+        await resolveDiscardIfPresented(context.controller)
+        await probe.waitUntilBlocked()
+        let expected = context.controller.stateSnapshot
+
+        // This newer request remains at its real unsaved-changes prompt while
+        // the first operation is released. Observing that prompt proves it has
+        // claimed the attempt before the older backend is allowed to commit.
+        let newerTransition = Task { @MainActor in
+            await context.controller.requestNewDocument()
+        }
+        await waitUntil {
+            context.controller.pendingUnsavedChangesPrompt?.transition == .newDocument
+        }
+        let newerPrompt = try XCTUnwrap(context.controller.pendingUnsavedChangesPrompt)
+
+        await probe.release()
+        let olderResult = await olderOpen.value
+        XCTAssertEqual(olderResult, .cancelled)
+        assertState(context.controller.stateSnapshot, equals: expected, includingEpoch: true)
+        XCTAssertNil(context.controller.failure)
+        XCTAssertEqual(try Data(contentsOf: recoveryURL), recoveryBytes)
+        let readOperations = await probe.operations(at: .beforeRead)
+        XCTAssertEqual(readOperations.filter { $0.intent == .open }.count, 2)
+
+        context.controller.resolveUnsavedChanges(.cancel, promptID: newerPrompt.id)
+        let newerResult = await newerTransition.value
+        XCTAssertEqual(newerResult, .cancelled)
+    }
+
+    // SF-0301-004, SF-0306-003, SF-0306-004, SF-0306-005 — the lifecycle
+    // attempt must remain authoritative through the descriptor layer's final
+    // logical-retirement exchange, not merely until it starts recovery I/O.
+    func testSupersedingTransitionAtFinalRecoveryRetirementCommitPreservesCandidateAndBytes() async throws {
+        let probe = LifecycleBackendProbe()
+        let retirementBarrier = RecoveryRetirementCommitBarrier()
+        let backend = DocumentLifecycleBackend(
+            store: ProjectPackageStore(ioObserver: retirementBarrier),
+            observer: probe
+        )
+        let context = try await makeContext(
+            "SupersedingRetirementCommit",
+            backend: backend,
+            probe: probe
+        )
+        try await seedRecoveryCandidate(in: context)
+        try addPage("Original document remains active", to: context.controller)
+        let originalCandidate = try XCTUnwrap(context.controller.recoveryCandidate)
+
+        var staleIncoming = ProjectCreation.blank()
+        staleIncoming.pages[0].name = "Stale incoming project"
+        try await ProjectPackageStore().write(ProjectPackage(document: staleIncoming), to: context.incoming)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(
+            for: context.controller.currentProjectID,
+            in: context.recoveryDirectory
+        )
+        let recoveryBytes = try Data(contentsOf: recoveryURL)
+
+        let olderOpen = Task { @MainActor in
+            await context.controller.requestOpen(context.incoming)
+        }
+        await resolveDiscardIfPresented(context.controller)
+        await retirementBarrier.waitUntilReached()
+        let expected = context.controller.stateSnapshot
+        XCTAssertEqual(expected.recoveryCandidate, originalCandidate)
+
+        let newerTransition = Task { @MainActor in
+            await context.controller.requestNewDocument()
+        }
+        await waitUntil {
+            context.controller.pendingUnsavedChangesPrompt?.transition == .newDocument
+        }
+        let newerPrompt = try XCTUnwrap(context.controller.pendingUnsavedChangesPrompt)
+
+        await retirementBarrier.release()
+        let olderResult = await olderOpen.value
+        XCTAssertEqual(olderResult, .cancelled)
+        assertState(context.controller.stateSnapshot, equals: expected, includingEpoch: true)
+        XCTAssertEqual(try Data(contentsOf: recoveryURL), recoveryBytes)
+        XCTAssertEqual(context.controller.recoveryCandidate, originalCandidate)
+        XCTAssertNil(context.controller.failure)
+
+        context.controller.resolveUnsavedChanges(.cancel, promptID: newerPrompt.id)
+        let newerResult = await newerTransition.value
+        XCTAssertEqual(newerResult, .cancelled)
+    }
+
+    // SF-0301-004, SF-0306-003, SF-0306-004, SF-0306-005 — standalone
+    // Discard holds the same final-commit lease as transition-owned cleanup.
+    // A New boundary that wins while the descriptor layer is ready to retire
+    // bytes cancels the exchange and leaves the old artifact recoverable.
+    func testNewDocumentSupersedesStandaloneRecoveryDiscardAtFinalCommit() async throws {
+        let probe = LifecycleBackendProbe()
+        let retirementBarrier = RecoveryRetirementCommitBarrier()
+        let backend = DocumentLifecycleBackend(
+            store: ProjectPackageStore(ioObserver: retirementBarrier),
+            observer: probe
+        )
+        let context = try await makeContext(
+            "StandaloneDiscardRetirementCommit",
+            backend: backend,
+            probe: probe
+        )
+        try await seedRecoveryCandidate(in: context)
+        let originalCandidate = try XCTUnwrap(context.controller.recoveryCandidate)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(
+            for: context.controller.currentProjectID,
+            in: context.recoveryDirectory
+        )
+        let recoveryBytes = try Data(contentsOf: recoveryURL)
+
+        let discard = Task { @MainActor in
+            await context.controller.discardRecovery()
+        }
+        await retirementBarrier.waitUntilReached()
+
+        let oldEpoch = context.controller.currentLifecycleEpoch
+        let newDocument = Task { @MainActor in
+            await context.controller.requestNewDocument()
+        }
+        await waitForEpochChange(context.controller, from: oldEpoch)
+        await retirementBarrier.release()
+
+        await discard.value
+        let newDocumentResult = await newDocument.value
+        XCTAssertEqual(newDocumentResult, .completed)
+        XCTAssertEqual(context.controller.phase, .clean)
+        XCTAssertNil(context.controller.fileURL)
+        XCTAssertNil(context.controller.failure)
+        XCTAssertEqual(context.controller.session.document.pages.map(\.name), ["Home", "Not Found"])
+        XCTAssertEqual(try Data(contentsOf: recoveryURL), recoveryBytes)
+        let retired = try await ProjectPackageStore().isRetiredRecoveryTombstone(
+            at: recoveryURL,
+            projectID: originalCandidate.package.projectID
+        )
+        XCTAssertFalse(retired)
+
+        let relaunched = makeController(
+            backend: DocumentLifecycleBackend(),
+            probe: LifecycleBackendProbe(),
+            debouncer: ManualLifecycleAutosaveDebouncer(),
+            recoveryDirectory: context.recoveryDirectory
+        )
+        await relaunched.discoverUntitledRecoveryCandidate()
+        XCTAssertEqual(relaunched.recoveryCandidate?.fingerprint, originalCandidate.fingerprint)
+        XCTAssertEqual(relaunched.recoveryCandidate?.package, originalCandidate.package)
+    }
+
     private func makeContext(
         _ name: String,
         backend: DocumentLifecycleBackend? = nil,
@@ -324,7 +603,11 @@ final class DocumentLifecycleRaceTests: XCTestCase {
         )
         let durable = fixture("\(name)-Durable.siteforge")
         let saved = await controller.save(to: durable)
-        XCTAssertTrue(saved)
+        let saveDiagnostics = await resolvedBackend.diagnosticRecords()
+        XCTAssertTrue(
+            saved,
+            "Initial durable save failed: phase=\(controller.phase), failure=\(String(describing: controller.failure)), adopted=\(controller.fileURL != nil), diagnostics: \(String(describing: saveDiagnostics.last))"
+        )
         let projectID = controller.currentProjectID
         let durableBytes = try Data(contentsOf: durable)
         await probe.reset()
@@ -516,6 +799,39 @@ private struct CompletedLifecycleWrite: Equatable, Sendable {
     let revision: UInt64
 }
 
+private actor RecoveryRetirementCommitBarrier: ProjectPackageIOObserving {
+    private var hasReached = false
+    private var released = false
+    private var reachWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func reached(_ checkpoint: ProjectPackageIOCheckpoint) async {
+        guard checkpoint == .recoveryDeletionReadyToCommit, !hasReached else { return }
+        hasReached = true
+        let waiters = reachWaiters
+        reachWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            if released {
+                continuation.resume()
+            } else {
+                releaseContinuation = continuation
+            }
+        }
+    }
+
+    func waitUntilReached() async {
+        if hasReached { return }
+        await withCheckedContinuation { reachWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
 final class ManualLifecycleAutosaveDebouncer: LifecycleAutosaveDebouncing, @unchecked Sendable {
     private let lock = NSLock()
     private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
@@ -590,6 +906,7 @@ private actor LifecycleBackendProbe: LifecycleBackendObserving {
     private var blockWaiters: [CheckedContinuation<Void, Never>] = []
     private var eventWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var barrierCancellationRequested = false
 
     func reached(_ checkpoint: LifecycleBackendCheckpoint, operation: LifecycleOperationIdentity) async {
         events.append(Event(checkpoint: checkpoint, operation: operation))
@@ -604,12 +921,30 @@ private actor LifecycleBackendProbe: LifecycleBackendObserving {
         let pendingBlockWaiters = blockWaiters
         blockWaiters.removeAll()
         pendingBlockWaiters.forEach { $0.resume() }
-        await withCheckedContinuation { releaseContinuation = $0 }
+        // A backend operation can be cancelled while a deterministic test
+        // barrier holds it. Treat that as an observation boundary, not as an
+        // uninterruptible filesystem operation: the production backend checks
+        // cancellation immediately after this callback. Resuming here lets
+        // the test prove that explicit Save drains a running autosave instead
+        // of deadlocking behind its own instrumentation.
+        await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                if barrierCancellationRequested || Task.isCancelled {
+                    barrierCancellationRequested = false
+                    continuation.resume()
+                } else {
+                    releaseContinuation = continuation
+                }
+            }
+        }, onCancel: {
+            Task { await self.releaseForCancellation() }
+        })
     }
 
     func block(_ checkpoint: LifecycleBackendCheckpoint, intent: LifecycleOperationIntent) {
         barrier = BarrierRule(checkpoint: checkpoint, intent: intent)
         blocked = false
+        barrierCancellationRequested = false
         releaseContinuation = nil
     }
 
@@ -620,15 +955,21 @@ private actor LifecycleBackendProbe: LifecycleBackendObserving {
 
     func release() {
         barrier = nil
-        releaseContinuation?.resume()
-        releaseContinuation = nil
+        barrierCancellationRequested = false
+        resumeBarrier()
+    }
+
+    private func releaseForCancellation() {
+        barrierCancellationRequested = true
+        resumeBarrier()
     }
 
     func reset() {
         events.removeAll()
         barrier = nil
         blocked = false
-        releaseContinuation = nil
+        barrierCancellationRequested = false
+        resumeBarrier()
     }
 
     func operations(at checkpoint: LifecycleBackendCheckpoint) -> [LifecycleOperationIdentity] {
@@ -652,5 +993,11 @@ private actor LifecycleBackendProbe: LifecycleBackendObserving {
         while events.filter({ $0.checkpoint == checkpoint && $0.operation.intent == intent }).count < count {
             await withCheckedContinuation { eventWaiters.append($0) }
         }
+    }
+
+    private func resumeBarrier() {
+        let continuation = releaseContinuation
+        releaseContinuation = nil
+        continuation?.resume()
     }
 }

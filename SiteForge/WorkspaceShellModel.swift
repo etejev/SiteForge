@@ -284,11 +284,18 @@ enum WorkspaceMetrics {
         }
         let horizontal = composition.value(after: "-SiteForgeUITestWindowAlignment")
             .flatMap(WorkspaceUITestWindowAlignment.init(rawValue:))
-            ?? .left
         let vertical = composition.value(after: "-SiteForgeUITestWindowVerticalAlignment")
             .flatMap(WorkspaceUITestWindowVerticalAlignment.init(rawValue:))
-            ?? .top
-        return WorkspaceUITestWindowPlacement(horizontal: horizontal, vertical: vertical)
+        // Window placement is an explicit Debug/UI-test geometry override,
+        // not a side effect of enabling the general automation composition.
+        // Generic keyboard and accessibility journeys exercise the production
+        // minimum and window behavior; only pointer journeys that name an
+        // edge receive the AppKit fitting bridge.
+        guard horizontal != nil || vertical != nil else { return nil }
+        return WorkspaceUITestWindowPlacement(
+            horizontal: horizontal ?? .left,
+            vertical: vertical ?? .top
+        )
     }
 
     static func uiTestWindowFrame(
@@ -452,6 +459,7 @@ final class WorkspaceShellState: ObservableObject {
     @Published var isPreviewPresented = false {
         didSet {
             if isPreviewPresented {
+                cancelDragDrop()
                 cancelInsertion(resetTool: true)
                 cancelTransform()
                 cancelGuideEditing()
@@ -490,6 +498,9 @@ final class WorkspaceShellState: ObservableObject {
     private var selectionScene: SelectionSceneSnapshot?
     private var pendingSelectionAfterInsertion: NodeID?
     private var retainedTextEditingFrame: WorldRect?
+    private var activePointerDragTransfer: LocalLayerDragTransfer?
+    private var activePointerDropCallback: LocalLayerDragCallbackToken?
+    private var pointerDragCallbackGeneration: UInt64 = 0
 
     init(
         documentSession: DocumentSession = DocumentSession(),
@@ -523,6 +534,7 @@ final class WorkspaceShellState: ObservableObject {
 
     func selectTool(_ tool: CanvasTool) {
         if selectedTool != tool {
+            cancelDragDrop()
             cancelInsertion(resetTool: false)
             cancelTransform()
             cancelGuideEditing()
@@ -547,6 +559,7 @@ final class WorkspaceShellState: ObservableObject {
 
     func selectPage(_ pageID: PageID) {
         guard pages.contains(where: { $0.id == pageID }) else { return }
+        cancelDragDrop()
         cancelInsertion(resetTool: true)
         cancelTransform()
         cancelGuideEditing()
@@ -591,6 +604,7 @@ final class WorkspaceShellState: ObservableObject {
             viewportFailure = nil
             announceViewport(command.name)
             recordViewportDiagnostic(command.name, start: start, result: .success, failure: nil)
+            cancelDragDrop()
             scheduleScenePreparation()
         } catch let error as CanvasViewportError {
             viewportState = committed
@@ -610,6 +624,7 @@ final class WorkspaceShellState: ObservableObject {
             viewportFailure = nil
             announceViewport(operation)
             recordViewportDiagnostic(operation, start: start, result: .success, failure: nil)
+            cancelDragDrop()
             scheduleScenePreparation()
         } catch let error as CanvasViewportError {
             viewportState = committed
@@ -629,6 +644,7 @@ final class WorkspaceShellState: ObservableObject {
         do {
             try viewportState.pan(by: delta)
             viewportFailure = nil
+            cancelDragDrop()
             scheduleScenePreparation()
         } catch let error as CanvasViewportError {
             viewportState = committed
@@ -644,6 +660,7 @@ final class WorkspaceShellState: ObservableObject {
         do {
             try viewportState.resize(to: size, pixelRatio: pixelRatio)
             viewportFailure = nil
+            cancelDragDrop()
             scheduleScenePreparation()
         } catch let error as CanvasViewportError {
             viewportState = committed
@@ -1854,7 +1871,10 @@ final class WorkspaceShellState: ObservableObject {
     func isDragInsertionPreview(before targetID: NodeID) -> Bool {
         guard let preview = activeDragDropPreview,
               let destination = dragDestination(before: targetID) else { return false }
-        return preview.destination == destination || preview.committedDestination == destination
+        // This is a pre-commit hierarchy view, so the visible marker belongs
+        // to the requested row boundary. `committedDestination` is the
+        // post-removal index used only by the canonical move command.
+        return preview.destination == destination
     }
 
     func isDragNestingPreview(in targetID: NodeID) -> Bool {
@@ -1867,15 +1887,152 @@ final class WorkspaceShellState: ObservableObject {
         guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else {
             return .disabled(.pageUnavailable)
         }
+        if let selectionError = dragDropSelectionError(for: sourceID) {
+            return .disabled(selectionError)
+        }
         let identity = DragOperationIdentity(sessionID: DragSessionID(), documentID: documentSession.document.id, pageID: pageID, revision: documentSession.document.revision, sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration)
         return dragDropRegistry.availability(for: .init(identity: identity, sourceNodeID: sourceID, destination: destination, provenance: provenance), in: documentSession.document, context: dragDropValidationContext)
+    }
+
+    /// Named accessibility actions remain discoverable when a row is focused,
+    /// but an unavailable action must explain its typed reason rather than
+    /// silently doing nothing. This only changes editor convenience state.
+    func announceDragDropUnavailable(_ reason: String) {
+        lastDragDropAnnouncement = reason
+        announcementPoster.post(reason)
+    }
+
+    /// Opens the only scene-local capability accepted from an asynchronous
+    /// AppKit drag provider. Cancellation and every document boundary clear it.
+    func beginPointerDrag(sourceID: NodeID) -> LocalLayerDragTransfer? {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else { return nil }
+        cancelDragDrop()
+        if let selectionError = dragDropSelectionError(for: sourceID) {
+            rejectDragDropStart(
+                sourceID: sourceID,
+                pageID: pageID,
+                plan: plan,
+                error: selectionError,
+                provenance: .pointer
+            )
+            return nil
+        }
+        let identity = dragDropSession.begin(
+            documentID: documentSession.document.id,
+            pageID: pageID,
+            revision: documentSession.document.revision,
+            sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration
+        )
+        let transfer = LocalLayerDragTransfer(sessionID: identity.sessionID, sourceNodeID: sourceID)
+        activePointerDragTransfer = transfer
+        activePointerDropCallback = nil
+        dragDropFailure = nil
+        lastDragDropAnnouncement = "Dragging object"
+        announcementPoster.post(lastDragDropAnnouncement)
+        return transfer
+    }
+
+    @discardableResult
+    func beginPointerDropCallback() -> LocalLayerDragCallbackToken? {
+        guard let transfer = activePointerDragTransfer,
+              pointerDragMatchesActiveSession(transfer) else { return nil }
+        pointerDragCallbackGeneration &+= 1
+        let token = LocalLayerDragCallbackToken(
+            sessionID: transfer.sessionID,
+            generation: pointerDragCallbackGeneration
+        )
+        activePointerDropCallback = token
+        return token
+    }
+
+    @discardableResult
+    func previewPointerDrag(
+        _ transfer: LocalLayerDragTransfer,
+        destination: DragDestination,
+        callback: LocalLayerDragCallbackToken
+    ) -> Bool {
+        guard pointerDragMatchesActiveSession(transfer),
+              activePointerDropCallback == callback,
+              callback.sessionID == transfer.sessionID,
+              let identity = dragDropSession.identity else {
+            return false
+        }
+        return previewDragDrop(DragDropCommand(
+            identity: identity,
+            sourceNodeID: transfer.sourceNodeID,
+            destination: destination,
+            provenance: .pointer
+        ))
+    }
+
+    /// Synchronous automation and unit tests use the same capability path but
+    /// acquire their callback token at the call boundary.
+    @discardableResult
+    func previewPointerDrag(_ transfer: LocalLayerDragTransfer, destination: DragDestination) -> Bool {
+        guard let callback = beginPointerDropCallback() else { return false }
+        return previewPointerDrag(transfer, destination: destination, callback: callback)
+    }
+
+    @discardableResult
+    func commitPointerDrag(
+        _ transfer: LocalLayerDragTransfer,
+        destination: DragDestination,
+        callback: LocalLayerDragCallbackToken
+    ) -> Bool {
+        guard pointerDragMatchesActiveSession(transfer),
+              activePointerDropCallback == callback,
+              callback.sessionID == transfer.sessionID else { return false }
+        if case .drafting = dragDropSession.phase,
+           !previewPointerDrag(transfer, destination: destination, callback: callback) {
+            return false
+        }
+        guard case .previewing(let preview) = dragDropSession.phase,
+              preview.sourceNodeID == transfer.sourceNodeID,
+              preview.destination == destination else {
+            return false
+        }
+        activePointerDragTransfer = nil
+        invalidatePointerDropCallbacks()
+        return commitDragDrop(provenance: .pointer)
+    }
+
+    @discardableResult
+    func commitPointerDrag(_ transfer: LocalLayerDragTransfer, destination: DragDestination) -> Bool {
+        guard let callback = beginPointerDropCallback() else { return false }
+        return commitPointerDrag(transfer, destination: destination, callback: callback)
+    }
+
+    /// Moving between layer-row drop targets clears only the visual insertion
+    /// hint. The source capability remains valid until explicit cancellation,
+    /// completion, or a lifecycle/document boundary.
+    func clearPointerDragPreview() {
+        guard activePointerDragTransfer != nil else { return }
+        invalidatePointerDropCallbacks()
+        dragDropSession.clearPreview()
     }
 
     @discardableResult
     func previewDragDrop(sourceID: NodeID, destination: DragDestination, provenance: DragDropProvenance) -> Bool {
         guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else { return false }
+        if let selectionError = dragDropSelectionError(for: sourceID) {
+            cancelDragDrop()
+            rejectDragDropStart(
+                sourceID: sourceID,
+                pageID: pageID,
+                plan: plan,
+                error: selectionError,
+                provenance: provenance
+            )
+            return false
+        }
         let identity = dragDropSession.begin(documentID: documentSession.document.id, pageID: pageID, revision: documentSession.document.revision, sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration)
         let command = DragDropCommand(identity: identity, sourceNodeID: sourceID, destination: destination, provenance: provenance)
+        return previewDragDrop(command)
+    }
+
+    @discardableResult
+    private func previewDragDrop(_ command: DragDropCommand) -> Bool {
         do {
             let prepared = try dragDropRegistry.prepare(command, in: documentSession.document, context: dragDropValidationContext)
             dragDropSession.preview(prepared.preview)
@@ -1892,8 +2049,9 @@ final class WorkspaceShellState: ObservableObject {
         } catch { return false }
     }
 
-    func commitDragDrop(provenance: DragDropProvenance) {
-        guard let preview = dragDropSession.commit() else { return }
+    @discardableResult
+    func commitDragDrop(provenance: DragDropProvenance) -> Bool {
+        guard let preview = dragDropSession.commit() else { return false }
         let command = DragDropCommand(identity: preview.identity, sourceNodeID: preview.sourceNodeID, destination: preview.destination, provenance: provenance)
         let start = DispatchTime.now().uptimeNanoseconds
         do {
@@ -1904,11 +2062,17 @@ final class WorkspaceShellState: ObservableObject {
             announcementPoster.post(lastDragDropAnnouncement)
             recordDragDropDiagnostic(command, start: start, result: .success, failure: nil)
             dragDropSession.deactivate()
+            activePointerDragTransfer = nil
+            invalidatePointerDropCallbacks()
             refreshSelectionScene(boundary: .rendererGeneration)
+            return true
         } catch let error as DragDropError {
             dragDropSession.fail(error); dragDropFailure = error
             recordDragDropDiagnostic(command, start: start, result: error == .cancelled ? .cancelled : .failure, failure: error)
         } catch { dragDropSession.fail(.staleRevision); dragDropFailure = .staleRevision }
+        activePointerDragTransfer = nil
+        invalidatePointerDropCallbacks()
+        return false
     }
 
     func performDragDrop(sourceID: NodeID, destination: DragDestination, provenance: DragDropProvenance) {
@@ -1939,10 +2103,70 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func cancelDragDrop() {
-        guard dragDropSession.identity != nil else { return }
+        let wasActive = dragDropSession.identity != nil || activePointerDragTransfer != nil
+        activePointerDragTransfer = nil
+        invalidatePointerDropCallbacks()
+        guard wasActive else { return }
         dragDropSession.cancel(); dragDropFailure = nil
         lastDragDropAnnouncement = "Drag cancelled; document unchanged"
         announcementPoster.post(lastDragDropAnnouncement)
+    }
+
+    private func pointerDragMatchesActiveSession(_ transfer: LocalLayerDragTransfer) -> Bool {
+        guard activePointerDragTransfer == transfer,
+              let identity = dragDropSession.identity else { return false }
+        return identity.sessionID == transfer.sessionID
+    }
+
+    /// Dragging is a single-object operation in this slice. The canonical
+    /// drag registry remains selection-agnostic; this scene-owned bridge
+    /// applies the noncanonical selection contract uniformly to pointer,
+    /// keyboard, menu, contextual, accessibility, and automation entry paths.
+    private func dragDropSelectionError(for sourceID: NodeID) -> DragDropError? {
+        guard selectionState.orderedIDs.contains(sourceID) else {
+            return .sourceNotSelected
+        }
+        guard selectionState.count == 1 else {
+            return .multipleSelectionUnsupported
+        }
+        return nil
+    }
+
+    private func rejectDragDropStart(
+        sourceID: NodeID,
+        pageID: PageID,
+        plan: CanvasRenderPlan,
+        error: DragDropError,
+        provenance: DragDropProvenance
+    ) {
+        let identity = dragDropSession.begin(
+            documentID: documentSession.document.id,
+            pageID: pageID,
+            revision: documentSession.document.revision,
+            sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration
+        )
+        let command = DragDropCommand(
+            identity: identity,
+            sourceNodeID: sourceID,
+            destination: .root(pageID, index: 0),
+            provenance: provenance
+        )
+        dragDropSession.fail(error)
+        dragDropFailure = error
+        lastDragDropAnnouncement = error.localizedDescription
+        announcementPoster.post(lastDragDropAnnouncement)
+        recordDragDropDiagnostic(
+            command,
+            start: DispatchTime.now().uptimeNanoseconds,
+            result: .failure,
+            failure: error
+        )
+    }
+
+    private func invalidatePointerDropCallbacks() {
+        pointerDragCallbackGeneration &+= 1
+        activePointerDropCallback = nil
     }
 
     private var dragDropValidationContext: DragDropValidationContext {
@@ -2196,11 +2420,15 @@ final class WorkspaceShellState: ObservableObject {
             size: WorldSize(width: Double(viewportPreset.width), height: 900)
         )
         try? viewportState.setContentBounds(bounds)
+        cancelDragDrop()
         scheduleScenePreparation()
     }
 
     private func synchronizeViewportDocumentBoundary(_ document: CanonicalDocument) {
-        if let identity = dragDropSession.identity, identity.documentID != document.id || identity.revision != document.revision {
+        if case .committing = dragDropSession.phase {
+            // The synchronous drag transaction owns this exact revision transition.
+        } else if let identity = dragDropSession.identity,
+                  identity.documentID != document.id || identity.revision != document.revision {
             cancelDragDrop()
         }
         if case .committing = textEditingSession.phase {
@@ -2269,7 +2497,9 @@ final class WorkspaceShellState: ObservableObject {
 
     private func scheduleScenePreparation() {
         preparationTask?.cancel()
-        let activeNodes = documentSession.document.pages.first(where: { $0.id == effectiveSelectedPageID })?.nodes ?? []
+        let activeNodes = documentSession.document.pages
+            .first(where: { $0.id == effectiveSelectedPageID })?
+            .canonicalDepthFirstNodes() ?? []
         let objects = activeNodes.map {
             CanvasViewportSceneObject(id: $0.id, bounds: viewportState.contentBounds)
         }
@@ -2299,7 +2529,9 @@ final class WorkspaceShellState: ObservableObject {
             viewportGeneration: viewportState.generation,
             scale: viewportState.pixelRatio
         )
-        let activeNodes = documentSession.document.pages.first(where: { $0.id == effectiveSelectedPageID })?.nodes ?? []
+        let activeNodes = documentSession.document.pages
+            .first(where: { $0.id == effectiveSelectedPageID })?
+            .canonicalDepthFirstNodes() ?? []
         let objects = activeNodes.enumerated().map { index, node in
             let column = index % 10
             let row = index / 10
@@ -2402,7 +2634,7 @@ final class WorkspaceShellState: ObservableObject {
         let rendered = Dictionary(uniqueKeysWithValues: plan.authoredObjects.map { ($0.id, $0) })
         var fallbackOrder = plan.authoredObjects.count
         let targets = documentSession.document.pages.flatMap { page in
-            page.nodes.map { node -> SelectionTargetSnapshot in
+            page.canonicalDepthFirstNodes().map { node -> SelectionTargetSnapshot in
                 let object = rendered[node.id]
                 defer { fallbackOrder += 1 }
                 let parentID: NodeID? = if case .node(let id) = node.parent { id } else { nil }

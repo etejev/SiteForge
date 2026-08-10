@@ -93,18 +93,24 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             WorkspaceMetrics.requestedWindowSize(arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"]),
             WorkspaceMetrics.minimumWindowSize
         )
-        XCTAssertTrue(WorkspaceMetrics.usesDeterministicUITestPlacement(
+        XCTAssertFalse(WorkspaceMetrics.usesDeterministicUITestPlacement(
             composition: DebugTestComposition(
                 arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"],
                 enabled: true
             )
         ))
-        XCTAssertEqual(
+        XCTAssertNil(
             WorkspaceMetrics.requestedUITestWindowPlacement(composition: DebugTestComposition(
                 arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"],
                 enabled: true
+            ))
+        )
+        XCTAssertEqual(
+            WorkspaceMetrics.effectiveMinimumWindowSize(composition: DebugTestComposition(
+                arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"],
+                enabled: true
             )),
-            WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .top)
+            WorkspaceMetrics.minimumWindowSize
         )
         XCTAssertNil(WorkspaceMetrics.requestedWindowSize(arguments: ["SiteForge"]))
     }

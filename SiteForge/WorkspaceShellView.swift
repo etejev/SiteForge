@@ -98,7 +98,12 @@ private struct RecoveryCandidateBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Label("A newer valid recovery candidate is available.", systemImage: "clock.arrow.circlepath")
+            Label(
+                controller.canRestoreRecovery
+                    ? "A newer valid recovery candidate is available."
+                    : "A recovery artifact needs secure cleanup.",
+                systemImage: "clock.arrow.circlepath"
+            )
             Spacer()
             Button("Inspect Details") { controller.isRecoveryDetailsPresented = true }
                 .accessibilityIdentifier("recovery.inspect")
@@ -107,6 +112,12 @@ private struct RecoveryCandidateBar: View {
             Button("Restore") { Task { _ = await controller.requestRestoreRecovery() } }
                 .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("recovery.restore")
+                .disabled(!controller.canRestoreRecovery)
+                .accessibilityHint(
+                    controller.canRestoreRecovery
+                        ? "Restores the newer validated recovery candidate."
+                        : "Unavailable until the obsolete recovery artifact is discarded."
+                )
         }
         .padding(.horizontal, 12)
         .frame(height: 38)
@@ -146,6 +157,7 @@ private struct WindowCloseGuard: NSViewRepresentable {
             if controller.consumeCloseAuthorization() {
                 return priorDelegate?.windowShouldClose?(sender) ?? true
             }
+            state.cancelDragDrop()
             if state.textEditingSession.isActive {
                 state.commitTextEditing()
                 guard !state.textEditingSession.isActive else { return false }
@@ -318,6 +330,61 @@ private struct NavigatorLayerRow: View {
 
     private var isSelected: Bool { state.selectionState.orderedIDs.contains(target.id) }
     private var isPrimary: Bool { state.selectionState.primaryID == target.id }
+    private var moveBeforeAvailability: DragDropAvailability? {
+        guard let source = state.selectionState.primaryID,
+              let destination = state.dragDestination(before: target.id) else { return nil }
+        return state.dragDropAvailability(
+            sourceID: source,
+            destination: destination,
+            provenance: .contextualMenu
+        )
+    }
+    private var nestAvailability: DragDropAvailability? {
+        guard let source = state.selectionState.primaryID,
+              let destination = state.dragDestination(nestingIn: target.id) else { return nil }
+        return state.dragDropAvailability(
+            sourceID: source,
+            destination: destination,
+            provenance: .contextualMenu
+        )
+    }
+    private var dragAccessibilityHint: String {
+        let base = "Press Return to select. Use Up and Down Arrow to traverse objects. Drag to move, or use accessible actions to place the selected layer."
+        let unavailable = [moveBeforeAvailability?.disabledReason, nestAvailability?.disabledReason]
+            .compactMap { $0 }
+            .sorted()
+        if unavailable.isEmpty, state.selectionState.primaryID == nil {
+            return base + " Select an available layer before using Move Before or Nest In."
+        }
+        guard !unavailable.isEmpty else { return base }
+        return base + " Unavailable actions: " + unavailable.joined(separator: " ")
+    }
+
+    private func performAccessibilityMoveBefore() {
+        guard let availability = moveBeforeAvailability,
+              availability.isEnabled,
+              let destination = state.dragDestination(before: target.id),
+              let source = state.selectionState.primaryID else {
+            state.announceDragDropUnavailable(
+                moveBeforeAvailability?.disabledReason ?? "Select an available layer before moving it."
+            )
+            return
+        }
+        state.performDragDrop(sourceID: source, destination: destination, provenance: .accessibility)
+    }
+
+    private func performAccessibilityNest() {
+        guard let availability = nestAvailability,
+              availability.isEnabled,
+              let destination = state.dragDestination(nestingIn: target.id),
+              let source = state.selectionState.primaryID else {
+            state.announceDragDropUnavailable(
+                nestAvailability?.disabledReason ?? "Select an available layer before nesting it."
+            )
+            return
+        }
+        state.performDragDrop(sourceID: source, destination: destination, provenance: .accessibility)
+    }
 
     var body: some View {
         VStack(spacing: 2) {
@@ -357,18 +424,14 @@ private struct NavigatorLayerRow: View {
             }
             .accessibilityLabel(target.name)
             .accessibilityValue("\(target.isLocked ? "Locked; " : "")\(isPrimary ? "Primary selection" : isSelected ? "Selected" : "Not selected")")
-            .accessibilityHint("Press Return to select. Use Up and Down Arrow to traverse objects. Drag to move, or use accessible actions to place the selected layer.")
+            .accessibilityHint(dragAccessibilityHint)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .accessibilityIdentifier("navigator.layer.\(target.id.description)")
             .accessibilityAction(named: "Move selected layer before \(target.name)") {
-                guard let destination = state.dragDestination(before: target.id),
-                      let source = state.selectionState.primaryID else { return }
-                state.performDragDrop(sourceID: source, destination: destination, provenance: .accessibility)
+                performAccessibilityMoveBefore()
             }
             .accessibilityAction(named: "Nest selected layer in \(target.name)") {
-                guard let destination = state.dragDestination(nestingIn: target.id),
-                      let source = state.selectionState.primaryID else { return }
-                state.performDragDrop(sourceID: source, destination: destination, provenance: .accessibility)
+                performAccessibilityNest()
             }
             .contextMenu {
                 Button("Move Before") {
@@ -376,13 +439,15 @@ private struct NavigatorLayerRow: View {
                           let source = state.selectionState.primaryID else { return }
                     state.performDragDrop(sourceID: source, destination: destination, provenance: .contextualMenu)
                 }
-                .disabled(state.selectionState.primaryID == nil)
+                .disabled(moveBeforeAvailability?.isEnabled != true)
+                .accessibilityHint(moveBeforeAvailability?.disabledReason ?? "Select an available layer to move.")
                 Button("Nest In") {
                     guard let destination = state.dragDestination(nestingIn: target.id),
                           let source = state.selectionState.primaryID else { return }
                     state.performDragDrop(sourceID: source, destination: destination, provenance: .contextualMenu)
                 }
-                .disabled(state.selectionState.primaryID == nil)
+                .disabled(nestAvailability?.isEnabled != true)
+                .accessibilityHint(nestAvailability?.disabledReason ?? "Select an available layer to nest.")
                 Button("Edit Text") {
                     state.beginTextEditing(nodeID: target.id, provenance: .contextualMenu)
                 }
@@ -399,7 +464,10 @@ private struct NavigatorLayerRow: View {
         // its selection button: AppKit must be able to begin a drag without the
         // button's activation gesture consuming the pointer sequence.
         .onDrag {
-            LayerDragPayload.provider(for: target.id)
+            guard let transfer = state.beginPointerDrag(sourceID: target.id) else {
+                return NSItemProvider()
+            }
+            return LayerDragPayload.provider(for: transfer)
         }
         .onDrop(of: [LayerDragPayload.contentType], delegate: LayerDropDelegate(targetID: target.id, state: state))
     }
@@ -410,30 +478,32 @@ private struct LayerDropDelegate: DropDelegate {
     @ObservedObject var state: WorkspaceShellState
 
     func validateDrop(info: DropInfo) -> Bool {
-        guard let item = info.itemProviders(for: [LayerDragPayload.contentType]).first else { return false }
+        guard let item = info.itemProviders(for: [LayerDragPayload.contentType]).first,
+              let callback = state.beginPointerDropCallback() else { return false }
         item.loadDataRepresentation(forTypeIdentifier: LayerDragPayload.contentType.identifier) { data, _ in
-            guard let source = LayerDragPayload.nodeID(from: data) else { return }
+            guard let transfer = LayerDragPayload.transfer(from: data) else { return }
             Task { @MainActor in
                 guard let destination = state.dragDestination(before: targetID) else { return }
-                _ = state.previewDragDrop(sourceID: source, destination: destination, provenance: .pointer)
+                _ = state.previewPointerDrag(transfer, destination: destination, callback: callback)
             }
         }
         return true
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        guard let item = info.itemProviders(for: [LayerDragPayload.contentType]).first else { return false }
+        guard let item = info.itemProviders(for: [LayerDragPayload.contentType]).first,
+              let callback = state.beginPointerDropCallback() else { return false }
         item.loadDataRepresentation(forTypeIdentifier: LayerDragPayload.contentType.identifier) { data, _ in
-            guard let source = LayerDragPayload.nodeID(from: data) else { return }
+            guard let transfer = LayerDragPayload.transfer(from: data) else { return }
             Task { @MainActor in
                 guard let destination = state.dragDestination(before: targetID) else { return }
-                state.performDragDrop(sourceID: source, destination: destination, provenance: .pointer)
+                _ = state.commitPointerDrag(transfer, destination: destination, callback: callback)
             }
         }
         return true
     }
 
-    func dropExited(info: DropInfo) { state.cancelDragDrop() }
+    func dropExited(info: DropInfo) { state.clearPointerDragPreview() }
 }
 
 /// The Layers navigator only accepts this process-owned representation. Generic
@@ -444,23 +514,23 @@ private enum LayerDragPayload {
         conformingTo: .data
     )
 
-    static func provider(for nodeID: NodeID) -> NSItemProvider {
+    static func provider(for transfer: LocalLayerDragTransfer) -> NSItemProvider {
         let provider = NSItemProvider()
         provider.registerDataRepresentation(
             forTypeIdentifier: contentType.identifier,
-            // Drag delivery crosses the system drag server even for two views
-            // in the same scene; the custom UTI remains the acceptance gate.
-            visibility: .all
+            // The capability never leaves this process. A custom UTI and the
+            // scene-local session token together reject foreign drag payloads.
+            visibility: .ownProcess
         ) { completion in
-            completion(Data(nodeID.description.utf8), nil)
+            completion(try? JSONEncoder().encode(transfer), nil)
             return nil
         }
         return provider
     }
 
-    static func nodeID(from data: Data?) -> NodeID? {
-        guard let data, let value = String(data: data, encoding: .utf8) else { return nil }
-        return NodeID(uuidString: value)
+    static func transfer(from data: Data?) -> LocalLayerDragTransfer? {
+        guard let data else { return nil }
+        return try? JSONDecoder().decode(LocalLayerDragTransfer.self, from: data)
     }
 }
 
@@ -668,10 +738,16 @@ private struct CanvasPlaceholderView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("canvas.viewport.surface")
                 .onAppear {
-                    state.resizeViewport(
-                        to: ViewportSize(width: geometry.size.width, height: geometry.size.height),
-                        pixelRatio: Double(NSScreen.main?.backingScaleFactor ?? 2)
-                    )
+                    // GeometryReader is still composing its SwiftUI update at
+                    // this point. Publish viewport state on the next main-run
+                    // loop turn so a launch never mutates ObservableObject
+                    // state from within the view update transaction.
+                    DispatchQueue.main.async {
+                        state.resizeViewport(
+                            to: ViewportSize(width: geometry.size.width, height: geometry.size.height),
+                            pixelRatio: Double(NSScreen.main?.backingScaleFactor ?? 2)
+                        )
+                    }
                 }
             }
         }
@@ -2005,6 +2081,12 @@ private final class NativeCanvasViewportView: NSView {
         wantsLayer = true
         contentContainer.name = "renderer.authored-content"
         overlayContainer.name = "renderer.editor-overlays"
+        // The viewport's coordinate contract is top-left-origin. CALayer
+        // subtrees do not inherit NSView.isFlipped, so declare it on each
+        // owned container to keep tiles, overlays, clipping, and hit-test
+        // geometry in the same coordinate system as CanvasViewportState.
+        contentContainer.isGeometryFlipped = true
+        overlayContainer.isGeometryFlipped = true
         contentContainer.masksToBounds = true
         overlayContainer.masksToBounds = true
         layer?.addSublayer(contentContainer)
@@ -2838,10 +2920,27 @@ private final class TransformHandleControlView: NSView {
     override func mouseUp(with event: NSEvent) { owner?.endTransformGesture() }
 }
 
-private final class CanvasContentTileLayer: CALayer {
+/// Native raster presentation only. The authored scene remains the headless
+/// source of truth; this layer must not retain editor drafts or diagnostics.
+final class CanvasContentTileLayer: CALayer {
     var viewportState: CanvasViewportState?
     var objects: [CanvasRenderObject] = []
     var tileOrigin = CGPoint.zero
+
+    override init() {
+        super.init()
+        isGeometryFlipped = true
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+        isGeometryFlipped = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        isGeometryFlipped = true
+    }
 
     override func draw(in context: CGContext) {
         guard let viewportState else { return }
@@ -2854,15 +2953,26 @@ private final class CanvasContentTileLayer: CALayer {
                 height: object.frame.size.height * viewportState.zoom.value
             )
             context.saveGState()
+            // AppKit text drawing can antialias slightly outside its layout
+            // rect. The authored render object, not the text subsystem, owns
+            // the paint boundary, so always clip to its frame as well as any
+            // ancestor/content clip. This keeps committed text truthful to
+            // the same visible and hit-testable bounds as every other object.
+            var effectiveClip = rect
             if let clip = object.clipRect,
                let clipOrigin = try? viewportState.transform.worldToViewport(clip.origin) {
-                context.clip(to: CGRect(
+                effectiveClip = effectiveClip.intersection(CGRect(
                     x: clipOrigin.x - tileOrigin.x,
                     y: clipOrigin.y - tileOrigin.y,
                     width: clip.size.width * viewportState.zoom.value,
                     height: clip.size.height * viewportState.zoom.value
                 ))
             }
+            guard !effectiveClip.isNull, !effectiveClip.isEmpty else {
+                context.restoreGState()
+                continue
+            }
+            context.clip(to: effectiveClip)
             let color: NSColor = switch object.style {
             case .canvas: .underPageBackgroundColor
             case .page: .controlAccentColor.withAlphaComponent(0.16)
@@ -2875,7 +2985,48 @@ private final class CanvasContentTileLayer: CALayer {
             context.setStrokeColor(NSColor.separatorColor.cgColor)
             context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
             context.stroke(rect)
+            if object.style == .textPlaceholder, let text = object.plainText, !text.isEmpty {
+                drawCommittedPlainText(
+                    text,
+                    in: rect,
+                    zoom: viewportState.zoom.value,
+                    context: context
+                )
+            }
             context.restoreGState()
         }
+    }
+
+    private func drawCommittedPlainText(
+        _ text: String,
+        in rect: CGRect,
+        zoom: Double,
+        context: CGContext
+    ) {
+        let inset = max(3, 4 * zoom)
+        let textRect = rect.insetBy(dx: inset, dy: inset)
+        guard textRect.width > 0, textRect.height > 0 else { return }
+        let fontSize = min(max(11 * zoom, 9), max(9, textRect.height - inset))
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: fontSize),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraph,
+            ]
+        )
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        // CanvasContentTileLayer has an explicit flipped layer geometry, so
+        // its CGContext already carries the viewport's Y-down transform.
+        // Advertising another flipped AppKit context would mirror committed
+        // text within the tile and decouple it from its authored frame.
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        attributed.draw(
+            with: textRect,
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]
+        )
     }
 }

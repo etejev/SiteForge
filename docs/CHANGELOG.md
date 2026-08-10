@@ -6,8 +6,11 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
-- Bounded local Layers drag-and-drop authoring: transactional sibling reorder and frame nesting through stable identities, deterministic insertion previews, exact undo/redo, and noncanonical drag-session state. An explicitly declared internal drag type keeps generic text and Finder payloads outside the local move path.
+- Bounded local Layers drag-and-drop authoring: transactional sibling reorder and frame nesting through stable identities, deterministic insertion previews, exact undo/redo, and noncanonical drag-session state. The source-level pointer capability supports bounded same-page “before row” placement, including compatible cross-parent placement; nesting is available through the shared contextual, named-accessibility, and automation registry paths. An explicitly declared internal drag type keeps generic text and Finder payloads outside the local move path. End-to-end native drag terminal cleanup remains a documented later boundary.
 - Reproducible 100-/10,000-node drag-preparation evidence plus a retained running-app Layers contextual reorder/undo/redo screenshot; drag session, payload, preview, and indicators remain excluded from packages, history, autosave/recovery, and preview/export snapshots.
+
+- Final audit-correction closure: strict current-schema helper source is included in the Xcode target and every headless verification/evidence compile; schema-v1/v2 historical payloads use strict isolated adapters and immutable package goldens; lifecycle Save freezes its original lexical destination identity before awaiting coordination; recovery-candidate and current-recovery ownership are distinct; stale pre-adoption recovery cleanup is attempt-gated; and committed plain text is now proven to change only its clipped native canvas-tile pixels.
+- A final audit report, explicit residual-risk ledger, and OD-014 for trusted app-owned staging/quarantine/recovery-tombstone retention and reclamation. The macOS same-UID final-rename/unlink race is no longer overstated as universally prevented.
 
 - Native inline plain-text editing on the canvas with stable session/document/page/revision/renderer/node identity, genuine AppKit caret and selection behavior, multiline insertion/deletion/replacement, copy/cut/paste, marked-text composition, and shared pointer, keyboard, menu, contextual, accessibility, and automation activation.
 - One atomic canonical `content.text` transaction and exact inverse per completed edit, with deterministic undo/redo, package/history round trips, autosave/recovery, selection/Layers/layout/renderer/hit-test adoption, bounded dirty regions, and exact Escape/stale/cancellation neutrality.
@@ -89,7 +92,7 @@ This file records user-visible behavior during development. It is not a substitu
 
 - Canonical document serialization is schema v3: explicitly authored guides are strict, versioned canonical members; schema-v2 documents migrate deterministically to no authored guides, while snap candidates, measurements, ruler interaction, suppression, and previews remain noncanonical.
 - The geometry representation carried forward into canonical schema v3 is unchanged: move/resize commits author the existing stable `layout.x`, `layout.y`, `layout.width`, and `layout.height` properties, while transform sessions, pointer drafts, handles, and previews remain noncanonical and excluded from packages, history, preview, and export-facing snapshots.
-- Canonical schema v2 now uses the existing ordered property/provenance representation for frame geometry, initial style, and bounded plain text without a format-version change; supported schema-v1 packages continue through the strict migration adapter.
+- Current canonical schema v3 preserves the existing ordered property/provenance representation for frame geometry, initial style, bounded plain text, and authored guides. Schema-v2 packages add only an empty guide collection; supported schema-v1 packages continue through the strict migration adapter.
 - Canonical graph validation now uses precomputed child membership and iterative traversal, avoiding quadratic membership checks and recursive-stack growth on bounded large documents.
 - Renderer scene revision/generation changes can retain bounded dirty-region planning when authored object identity and surface identity remain compatible, instead of forcing an unrelated full authored-scene raster.
 
@@ -99,17 +102,17 @@ This file records user-visible behavior during development. It is not a substitu
 - Toolbar and Edit-menu Undo/Redo validation now reflects the real transactional document history while convenience UI state remains separate from the canonical model.
 - Canonical document primitives are sendable across the package store's background actor boundary while remaining UI-independent.
 - Validated open and recovery operations install history only after off-main revision, identity, ordering, and inverse validation; rejected history establishes a clean non-crossable baseline.
-- Canonical document serialization is schema v2. Schema-v1 packages remain readable and deterministically gain minimum page/root identities when legacy documents are empty or rootless.
+- Current canonical document serialization is schema v3. Schema-v2 packages deterministically gain empty authored guides, while schema-v1 packages remain readable and deterministically gain minimum page/root identities when legacy documents are empty or rootless.
 - New-project creation now establishes the complete approved blank structure as one clean history baseline; it does not record default seeding as user edits.
 - File-menu New and Open now enter the same launch coordinator as the initial experience, while package I/O and validation remain in the actor-isolated lifecycle backend.
 - Opening a project publishes actual loading stages and checks cancellation before the single validated adoption boundary; the prior canonical document remains active after cancellation or failure.
 - Requirement status now distinguishes verified foundation slices from full generated-site, canvas-renderer, accessibility-release, and performance acceptance; policy and synthetic-page tests are labeled as smoke evidence rather than renderer benchmarks.
 - Chrome appearance now resolves native material, opaque accessibility fallback, separator strength, and active-window emphasis from one shared policy while leaving canonical document state and canvas hit testing unchanged.
 - The bounded canvas placeholder now adapts to the available viewport so its empty-state copy remains readable at the supported minimum window size.
-- Existing package replacement now requires the exact previously validated digest, byte count, device, and inode; same-directory staging commits with exclusive create or an identity-checked atomic swap and preserves owner, group, mode, extended ACL, and approved extended attributes.
-- Lifecycle reads, saves, autosaves, recovery writes, and document transitions now carry a typed epoch, operation, document/project, revision, destination, and intent identity; every document-adoption boundary invalidates prior work.
+- Existing package replacement requires the exact previously validated digest, byte count, device, and inode at the descriptor-bound validation seams; same-directory staging commits with exclusive create or an identity-checked atomic swap and preserves owner, group, mode, extended ACL, and approved extended attributes. It intentionally retains ambiguous displaced artifacts rather than reversing/reopening/unlinking a raced name.
+- Lifecycle reads, saves, autosaves, recovery writes, and document transitions carry a typed epoch, operation, document/project, revision, destination, and intent identity; a typed pre-adoption transition attempt also gates authorization/recovery retirement before a document boundary can invalidate prior work.
 - Manual Save now deterministically cancels or drains pending autosave work. An edit made during Save leaves the captured revision durable while the newer active revision remains modified and recoverable.
-- Current canonical schema v2 now requires every document and page field and never applies legacy defaults; schema-v1 compatibility uses a separate explicit migration adapter.
+- Current canonical schema v3 requires every document, page, node, and guide field and never applies legacy defaults; schema-v2 and schema-v1 compatibility use separate explicit migration adapters.
 - Project open, revert, Save, and Save As now pass through one balanced security-scope and file-coordination owner; bookmarks remain machine-local app state rather than portable package content.
 - File and Edit commands now resolve the focused window's document context instead of application-global state; Release builds ignore all automation-only process arguments.
 - Accessibility evidence now distinguishes semantic automation from OS-level manual inspection and records the real environment and limitations without claiming unperformed VoiceOver speech or accessibility-setting exercise.
@@ -127,14 +130,16 @@ This file records user-visible behavior during development. It is not a substitu
 - Direct or transactional removal can no longer leave a project with an invalid empty page list, and duplicate published routes are rejected before commit.
 - New, Open, Revert, recovery Restore, and window Close now share one native Save/Discard/Cancel decision boundary; cancellation and failed saves preserve the exact active document, history, identity, location, fingerprint, and lifecycle presentation.
 - Modified untitled projects now autosave to app-owned, project-identity-keyed recovery storage and can be discovered, restored, saved durably, or discarded after relaunch without writing beside user project files.
-- Opening no longer rereads a path to fingerprint validated content, and concurrent replacement, delete/recreate, same-inode modification, hard-link, source/destination/ancestor symlink, sparse-input, recovery-collision, and deletion-failure cases preserve the last committed document and external bytes.
+- Opening no longer rereads a path to fingerprint validated content, and the deterministic concurrent-replacement, delete/recreate, same-inode modification, hard-link, source/destination/ancestor symlink, sparse-input, recovery-collision, and retirement-failure cases preserve the last committed document and external bytes at their exercised seams. The remaining macOS final-syscall limitation is documented in ADR-0007/OD-014.
 - Stale lifecycle success, failure, and cancellation can no longer reattach canonical state, metadata, history, recovery state, failure state, or UI phase after New, Open, Revert, Restore, or Close; autosave burst coalescing and revision order are now verified without wall-clock sleeps.
 - Terminal or non-incrementable document revisions now fail with a typed actionable error while preserving the exact committed document and command history instead of risking integer overflow.
 - External project change or deletion now enters explicit conflict state without replacing the active canonical project; relocation updates the durable URL and persistent access while preserving document content.
 
 ### Known limitations
 
-- History schema v1 is intentionally bounded to the current command kernel; future command types, checkpoints, coalescing metadata, and migrations require explicit schema support.
+- Current history schema v2 is intentionally bounded to the current command kernel; schema v1 has an explicit compatibility adapter. Future command types, checkpoints, coalescing metadata, immutable historical golden inputs, and migrations require explicit schema support.
+- Foundation exact-key checks run after Foundation JSON parsing, which collapses duplicate keys; a duplicate-key-preserving parser remains a future hardening task.
+- Trusted app-owned staging/quarantine/recovery-tombstone reclamation requires owner resolution of OD-014. No automatic cleanup claims protection against a hostile same-UID final-syscall race.
 - The canvas editing interface and Preview behavior remain bounded placeholders for later work items.
 - Local alpha packaging is unsigned and not notarized.
 - Final sandbox/distribution verification remains pending owner-approved publisher and trust configuration; the local Release candidate is deliberately unsigned.

@@ -4,11 +4,11 @@ import XCTest
 
 @MainActor
 final class DocumentLifecycleTests: XCTestCase {
-    nonisolated(unsafe) private var fixtureLease: RepositoryTestFixture!
+    nonisolated(unsafe) private var fixtureLease: ApplicationOwnedTestFixture!
 
     nonisolated override func setUpWithError() throws {
         try super.setUpWithError()
-        fixtureLease = try RepositoryTestFixture.create("lifecycle")
+        fixtureLease = try ApplicationOwnedTestFixture.create("lifecycle")
     }
 
     nonisolated override func tearDownWithError() throws {
@@ -372,7 +372,11 @@ final class DocumentLifecycleTests: XCTestCase {
         let durable = fixture("RecoveredUntitled.siteforge")
         let durableSave = await relaunched.save(to: durable)
         XCTAssertTrue(durableSave)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: recoveryURL.path))
+        let retiredAfterSave = try await ProjectPackageStore().isRetiredRecoveryTombstone(
+            at: recoveryURL,
+            projectID: writer.currentProjectID
+        )
+        XCTAssertTrue(retiredAfterSave)
 
         let discardDebouncer = ManualLifecycleAutosaveDebouncer()
         let discardWriter = makeController(
@@ -389,7 +393,230 @@ final class DocumentLifecycleTests: XCTestCase {
         await discardReader.discoverUntitledRecoveryCandidate()
         XCTAssertNotNil(discardReader.recoveryCandidate)
         await discardReader.discardRecovery()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: discardURL.path))
+        let retiredAfterDiscard = try await ProjectPackageStore().isRetiredRecoveryTombstone(
+            at: discardURL,
+            projectID: discardWriter.currentProjectID
+        )
+        XCTAssertTrue(retiredAfterDiscard)
+    }
+
+    // SF-0306-003, SF-0306-004, SF-1504-004 — untitled recovery discovery
+    // treats the canonical public filename as the expected project-identity
+    // binding. A syntactically valid package is not an authority to recover
+    // under another project's name, and noncanonical names remain untouched.
+    func testUntitledRecoveryDiscoveryRequiresCanonicalFilenameAndMatchingProjectIdentity() async throws {
+        let expectedProjectID = ProjectID()
+        let recoveredProjectID = ProjectID()
+        let recoveredDocumentSession = DocumentSession(document: ProjectCreation.blank())
+        try recoveredDocumentSession.execute(.insertPage(InsertPageCommand(
+            page: DocumentPage(name: "Recovered Untitled"),
+            index: recoveredDocumentSession.document.pages.count
+        )))
+        let recoveryPackage = ProjectPackage(
+            projectID: recoveredProjectID,
+            createdAt: ProjectTimestamp("2026-08-09T12:00:00.000Z"),
+            modifiedAt: ProjectTimestamp("2026-08-09T12:01:00.000Z"),
+            document: recoveredDocumentSession.document
+        )
+        let store = ProjectPackageStore()
+
+        let mismatchedDirectory = fixture("untitled-recovery-mismatched", isDirectory: true)
+        try await store.prepareRecoveryDirectory(mismatchedDirectory)
+        let mismatchedURL = DocumentLifecycleBackend.recoveryURL(
+            for: expectedProjectID,
+            in: mismatchedDirectory
+        )
+        try await store.write(
+            recoveryPackage,
+            to: mismatchedURL,
+            policy: .recovery(recoveredProjectID)
+        )
+        let mismatchedBytes = try Data(contentsOf: mismatchedURL)
+
+        let mismatchedReader = makeController(recoveryDirectory: mismatchedDirectory)
+        await mismatchedReader.discoverUntitledRecoveryCandidate()
+        XCTAssertNil(mismatchedReader.recoveryCandidate)
+        await mismatchedReader.discardRecovery()
+        XCTAssertEqual(try Data(contentsOf: mismatchedURL), mismatchedBytes)
+        let mismatchedRetired = try await store.isRetiredRecoveryTombstone(
+            at: mismatchedURL,
+            projectID: expectedProjectID
+        )
+        XCTAssertFalse(mismatchedRetired)
+
+        let noncanonicalDirectory = fixture("untitled-recovery-noncanonical", isDirectory: true)
+        try await store.prepareRecoveryDirectory(noncanonicalDirectory)
+        let noncanonicalURL = noncanonicalDirectory.appendingPathComponent(
+            "\(recoveredProjectID.description.uppercased()).siteforge-recovery"
+        )
+        try await store.write(
+            recoveryPackage,
+            to: noncanonicalURL,
+            policy: .recovery(recoveredProjectID)
+        )
+        let noncanonicalBytes = try Data(contentsOf: noncanonicalURL)
+
+        let noncanonicalReader = makeController(recoveryDirectory: noncanonicalDirectory)
+        await noncanonicalReader.discoverUntitledRecoveryCandidate()
+        XCTAssertNil(noncanonicalReader.recoveryCandidate)
+        await noncanonicalReader.discardRecovery()
+        XCTAssertEqual(try Data(contentsOf: noncanonicalURL), noncanonicalBytes)
+
+        let matchingDirectory = fixture("untitled-recovery-matching", isDirectory: true)
+        try await store.prepareRecoveryDirectory(matchingDirectory)
+        let matchingURL = DocumentLifecycleBackend.recoveryURL(
+            for: recoveredProjectID,
+            in: matchingDirectory
+        )
+        try await store.write(
+            recoveryPackage,
+            to: matchingURL,
+            policy: .recovery(recoveredProjectID)
+        )
+
+        let matchingReader = makeController(recoveryDirectory: matchingDirectory)
+        await matchingReader.discoverUntitledRecoveryCandidate()
+        XCTAssertEqual(matchingReader.recoveryCandidate?.package.projectID, recoveredProjectID)
+        await matchingReader.discardRecovery()
+        XCTAssertNil(matchingReader.recoveryCandidate)
+        let matchingRetired = try await store.isRetiredRecoveryTombstone(
+            at: matchingURL,
+            projectID: recoveredProjectID
+        )
+        XCTAssertTrue(matchingRetired)
+    }
+
+    // SF-0306-003, SF-0306-004, SF-1504-004 — a presented foreign untitled
+    // candidate and the scene's current document own distinct recovery
+    // proofs. Restoring B may retire C only after the user discards C, while
+    // B itself stays available until it is promoted into the current scene.
+    func testUntitledCandidateRestoreDoesNotConflateCurrentRecoveryOwnership() async throws {
+        let recoveryDirectory = fixture("untitled-candidate-restore", isDirectory: true)
+        let candidateDebouncer = ManualLifecycleAutosaveDebouncer()
+        let candidateWriter = makeController(
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: candidateDebouncer
+        )
+        try addPage("Candidate B", to: candidateWriter)
+        await flushAutosave(candidateWriter, with: candidateDebouncer)
+        let candidateID = candidateWriter.currentProjectID
+        let candidateURL = DocumentLifecycleBackend.recoveryURL(for: candidateID, in: recoveryDirectory)
+        let candidateBytes = try Data(contentsOf: candidateURL)
+
+        let currentDebouncer = ManualLifecycleAutosaveDebouncer()
+        let reader = makeController(
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: currentDebouncer
+        )
+        await reader.discoverUntitledRecoveryCandidate()
+        XCTAssertEqual(reader.recoveryCandidate?.package.projectID, candidateID)
+
+        try addPage("Current C", to: reader)
+        await flushAutosave(reader, with: currentDebouncer)
+        let currentID = reader.currentProjectID
+        let currentURL = DocumentLifecycleBackend.recoveryURL(for: currentID, in: recoveryDirectory)
+        let currentBytes = try Data(contentsOf: currentURL)
+        XCTAssertTrue(reader.isModified)
+
+        let restored = await transition(reader, decision: .discard) {
+            await reader.requestRestoreRecovery()
+        }
+        XCTAssertEqual(restored, .completed)
+        XCTAssertEqual(reader.currentProjectID, candidateID)
+        XCTAssertTrue(reader.session.document.pages.contains { $0.name == "Candidate B" })
+        XCTAssertFalse(reader.session.document.pages.contains { $0.name == "Current C" })
+        XCTAssertEqual(try Data(contentsOf: candidateURL), candidateBytes)
+        let currentRetired = try await ProjectPackageStore().isRetiredRecoveryTombstone(
+            at: currentURL,
+            projectID: currentID
+        )
+        XCTAssertTrue(currentRetired)
+        XCTAssertNotEqual(try Data(contentsOf: currentURL), currentBytes)
+    }
+
+    // SF-0306-003, SF-0306-004, SF-1504-004 — discarding a foreign candidate
+    // cannot make the current document appear clean or retire its independent
+    // recovery artifact.
+    func testDiscardForeignUntitledCandidatePreservesCurrentModifiedRecovery() async throws {
+        let recoveryDirectory = fixture("untitled-candidate-discard", isDirectory: true)
+        let candidateDebouncer = ManualLifecycleAutosaveDebouncer()
+        let candidateWriter = makeController(
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: candidateDebouncer
+        )
+        try addPage("Candidate B", to: candidateWriter)
+        await flushAutosave(candidateWriter, with: candidateDebouncer)
+        let candidateID = candidateWriter.currentProjectID
+        let candidateURL = DocumentLifecycleBackend.recoveryURL(for: candidateID, in: recoveryDirectory)
+
+        let currentDebouncer = ManualLifecycleAutosaveDebouncer()
+        let reader = makeController(
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: currentDebouncer
+        )
+        await reader.discoverUntitledRecoveryCandidate()
+        XCTAssertEqual(reader.recoveryCandidate?.package.projectID, candidateID)
+        try addPage("Current C", to: reader)
+        await flushAutosave(reader, with: currentDebouncer)
+        let currentID = reader.currentProjectID
+        let currentURL = DocumentLifecycleBackend.recoveryURL(for: currentID, in: recoveryDirectory)
+        let currentBytes = try Data(contentsOf: currentURL)
+        let currentDocument = reader.session.document
+
+        await reader.discardRecovery()
+
+        XCTAssertNil(reader.recoveryCandidate)
+        XCTAssertTrue(reader.isModified)
+        XCTAssertEqual(reader.phase, .modified)
+        XCTAssertEqual(reader.session.document, currentDocument)
+        XCTAssertEqual(try Data(contentsOf: currentURL), currentBytes)
+        let candidateRetired = try await ProjectPackageStore().isRetiredRecoveryTombstone(
+            at: candidateURL,
+            projectID: candidateID
+        )
+        XCTAssertTrue(candidateRetired)
+    }
+
+    // SF-0306-003, SF-0306-004 — discarding a current-project candidate
+    // clears its old expectation. The next autosave can replace the exact
+    // project-bound tombstone instead of reporting a false identity conflict.
+    func testDiscardCurrentRecoveryAllowsNextAutosaveFromRetiredMarker() async throws {
+        let recoveryDirectory = fixture("current-candidate-discard", isDirectory: true)
+        let durableURL = fixture("current-candidate-discard.siteforge")
+        let writerDebouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: writerDebouncer
+        )
+        let initialSave = await writer.save(to: durableURL)
+        XCTAssertTrue(initialSave)
+        try addPage("Initial recovery", to: writer)
+        await flushAutosave(writer, with: writerDebouncer)
+
+        let readerDebouncer = ManualLifecycleAutosaveDebouncer()
+        let reader = makeController(
+            recoveryDirectory: recoveryDirectory,
+            autosaveDebouncer: readerDebouncer
+        )
+        let opened = await reader.requestOpen(durableURL)
+        XCTAssertEqual(opened, .completed)
+        XCTAssertNotNil(reader.recoveryCandidate)
+        await reader.discardRecovery()
+        XCTAssertNil(reader.recoveryCandidate)
+        XCTAssertNil(reader.failure)
+
+        try addPage("Recovery after discard", to: reader)
+        await flushAutosave(reader, with: readerDebouncer)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(
+            for: reader.currentProjectID,
+            in: recoveryDirectory
+        )
+        let written = try await ProjectPackageStore().readOwnedRecoverySnapshot(
+            from: recoveryURL,
+            expectedProjectID: reader.currentProjectID
+        )
+        XCTAssertTrue(written.package.document.pages.contains { $0.name == "Recovery after discard" })
+        XCTAssertNil(reader.failure)
     }
 
     func testRestoreRecoveryCancellationPreservesCurrentEditAndHistory() async throws {

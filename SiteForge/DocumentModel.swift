@@ -99,6 +99,20 @@ struct AuthoredGuide: Codable, Equatable, Identifiable, Sendable {
         self.position = position
         self.provenance = provenance
     }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, pageID, axis, position, provenance
+    }
+
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(GuideID.self, forKey: .id)
+        pageID = try container.decode(PageID.self, forKey: .pageID)
+        axis = try container.decode(GuideAxis.self, forKey: .axis)
+        position = try container.decode(Double.self, forKey: .position)
+        provenance = try container.decode(GuideProvenance.self, forKey: .provenance)
+    }
 }
 
 struct PropertyKey: Codable, Hashable, RawRepresentable, Sendable {
@@ -107,12 +121,62 @@ struct PropertyKey: Codable, Hashable, RawRepresentable, Sendable {
     init(rawValue: String) {
         self.rawValue = rawValue
     }
+
+    init(from decoder: Decoder) throws {
+        // `RawRepresentable` keys have always been encoded as one JSON string.
+        // Keep that stable wire form; a keyed decoder here would make every
+        // existing current-schema property invalid rather than stricter.
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 enum PropertyValue: Codable, Equatable, Sendable {
     case string(String)
     case number(Double)
     case boolean(Bool)
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case string, number, boolean }
+    private enum PayloadKeys: String, CodingKey, CaseIterable { case _0 }
+
+    init(from decoder: Decoder) throws {
+        let strict = SiteForgeDecodingPolicy.requiresExactKeys(decoder)
+        if strict { try requireExactlyOneCase(CodingKeys.self, in: decoder) }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let cases = container.allKeys
+        guard cases.count == 1, let key = cases.first else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Property values require exactly one case.")
+            )
+        }
+        let payloadDecoder = try container.superDecoder(forKey: key)
+        try requireExactKeys(PayloadKeys.self, in: payloadDecoder, when: strict)
+        let payload = try payloadDecoder.container(keyedBy: PayloadKeys.self)
+        switch key {
+        case .string: self = .string(try payload.decode(String.self, forKey: ._0))
+        case .number: self = .number(try payload.decode(Double.self, forKey: ._0))
+        case .boolean: self = .boolean(try payload.decode(Bool.self, forKey: ._0))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .string(let value):
+            var payload = container.nestedContainer(keyedBy: PayloadKeys.self, forKey: .string)
+            try payload.encode(value, forKey: ._0)
+        case .number(let value):
+            var payload = container.nestedContainer(keyedBy: PayloadKeys.self, forKey: .number)
+            try payload.encode(value, forKey: ._0)
+        case .boolean(let value):
+            var payload = container.nestedContainer(keyedBy: PayloadKeys.self, forKey: .boolean)
+            try payload.encode(value, forKey: ._0)
+        }
+    }
 }
 
 enum PropertyOrigin: String, Codable, Equatable, Sendable {
@@ -137,6 +201,17 @@ struct NodeProperty: Codable, Equatable, Identifiable, Sendable {
         self.value = value
         self.origin = origin
     }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, key, value, origin }
+
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(PropertyID.self, forKey: .id)
+        key = try container.decode(PropertyKey.self, forKey: .key)
+        value = try container.decode(PropertyValue.self, forKey: .value)
+        origin = try container.decode(PropertyOrigin.self, forKey: .origin)
+    }
 }
 
 enum NodeKind: String, Codable, CaseIterable, Sendable {
@@ -151,6 +226,18 @@ struct PageRoute: Codable, Equatable, Hashable, RawRepresentable, Sendable {
 
     init(rawValue: String) {
         self.rawValue = rawValue
+    }
+
+    init(from decoder: Decoder) throws {
+        // Routes are a stable raw-string value in every supported document
+        // schema. Strict current-schema validation applies to their owning
+        // closed records, while this scalar rejects non-string representations.
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
@@ -176,6 +263,40 @@ enum ProjectCreationKind: String, Codable, Equatable, Sendable {
 enum NodeParent: Codable, Equatable, Sendable {
     case page(PageID)
     case node(NodeID)
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case page, node }
+    private enum PayloadKeys: String, CodingKey, CaseIterable { case _0 }
+
+    init(from decoder: Decoder) throws {
+        let strict = SiteForgeDecodingPolicy.requiresExactKeys(decoder)
+        if strict { try requireExactlyOneCase(CodingKeys.self, in: decoder) }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let cases = container.allKeys
+        guard cases.count == 1, let key = cases.first else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Node parents require exactly one case.")
+            )
+        }
+        let payloadDecoder = try container.superDecoder(forKey: key)
+        try requireExactKeys(PayloadKeys.self, in: payloadDecoder, when: strict)
+        let payload = try payloadDecoder.container(keyedBy: PayloadKeys.self)
+        switch key {
+        case .page: self = .page(try payload.decode(PageID.self, forKey: ._0))
+        case .node: self = .node(try payload.decode(NodeID.self, forKey: ._0))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .page(let value):
+            var payload = container.nestedContainer(keyedBy: PayloadKeys.self, forKey: .page)
+            try payload.encode(value, forKey: ._0)
+        case .node(let value):
+            var payload = container.nestedContainer(keyedBy: PayloadKeys.self, forKey: .node)
+            try payload.encode(value, forKey: ._0)
+        }
+    }
 }
 
 struct DocumentNode: Codable, Equatable, Identifiable, Sendable {
@@ -200,6 +321,21 @@ struct DocumentNode: Codable, Equatable, Identifiable, Sendable {
         self.parent = parent
         self.childIDs = childIDs
         self.properties = properties
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, kind, name, parent, childIDs, properties
+    }
+
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(NodeID.self, forKey: .id)
+        kind = try container.decode(NodeKind.self, forKey: .kind)
+        name = try container.decode(String.self, forKey: .name)
+        parent = try container.decode(NodeParent.self, forKey: .parent)
+        childIDs = try container.decode([NodeID].self, forKey: .childIDs)
+        properties = try container.decode([NodeProperty].self, forKey: .properties)
     }
 }
 
@@ -236,11 +372,12 @@ struct DocumentPage: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, name, route, role, provenance, rootNodeIDs, nodes
     }
 
     init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(PageID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
@@ -296,6 +433,32 @@ struct DocumentPage: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+extension DocumentPage {
+    /// The canonical ownership lists, not storage order, define authoring order.
+    /// Documents are validated before adoption; this iterative walk intentionally
+    /// avoids recursion for deep but valid user-authored hierarchies. It is
+    /// also defensive for an in-process, not-yet-validated construction: a
+    /// duplicate ID must not turn a convenience traversal into a dictionary
+    /// precondition trap.
+    func canonicalDepthFirstNodes() -> [DocumentNode] {
+        var nodesByID: [NodeID: DocumentNode] = [:]
+        nodesByID.reserveCapacity(nodes.count)
+        for node in nodes where nodesByID[node.id] == nil {
+            nodesByID[node.id] = node
+        }
+        var ordered: [DocumentNode] = []
+        ordered.reserveCapacity(nodes.count)
+        var visited = Set<NodeID>()
+        var pending = Array(rootNodeIDs.reversed())
+        while let id = pending.popLast() {
+            guard visited.insert(id).inserted, let node = nodesByID[id] else { continue }
+            ordered.append(node)
+            pending.append(contentsOf: node.childIDs.reversed())
+        }
+        return ordered
+    }
+}
+
 struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
     let id: DocumentID
     var revision: UInt64
@@ -321,11 +484,12 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
     }
 
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, revision, creationKind, templateID, pages, guides
     }
 
     init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(DocumentID.self, forKey: .id)
         revision = try container.decode(UInt64.self, forKey: .revision)
@@ -663,16 +827,48 @@ enum DocumentSerializer {
     private struct CurrentEnvelope: Codable {
         let schemaVersion: Int
         let document: CanonicalDocument
+
+        private enum CodingKeys: String, CodingKey, CaseIterable { case schemaVersion, document }
+
+        init(schemaVersion: Int, document: CanonicalDocument) {
+            self.schemaVersion = schemaVersion
+            self.document = document
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+            document = try container.decode(CanonicalDocument.self, forKey: .document)
+        }
     }
 
     private struct SchemaOneEnvelope: Decodable {
         let schemaVersion: Int
         let document: SchemaOneDocument
+
+        private enum CodingKeys: String, CodingKey, CaseIterable { case schemaVersion, document }
+
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+            document = try container.decode(SchemaOneDocument.self, forKey: .document)
+        }
     }
 
     private struct SchemaTwoEnvelope: Decodable {
         let schemaVersion: Int
         let document: SchemaTwoDocument
+
+        private enum CodingKeys: String, CodingKey, CaseIterable { case schemaVersion, document }
+
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+            document = try container.decode(SchemaTwoDocument.self, forKey: .document)
+        }
     }
 
     private struct SchemaTwoDocument: Decodable {
@@ -682,11 +878,12 @@ enum DocumentSerializer {
         let templateID: TemplateID?
         let pages: [DocumentPage]
 
-        private enum CodingKeys: String, CodingKey {
+        private enum CodingKeys: String, CodingKey, CaseIterable {
             case id, revision, creationKind, templateID, pages
         }
 
         init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(DocumentID.self, forKey: .id)
             revision = try container.decode(UInt64.self, forKey: .revision)
@@ -721,6 +918,21 @@ enum DocumentSerializer {
         let revision: UInt64
         let pages: [SchemaOnePage]
 
+        private enum CodingKeys: String, CodingKey, CaseIterable { case id, revision, pages }
+
+        init(from decoder: Decoder) throws {
+            // Schema 1 allowed an explicitly empty page *list* while it was
+            // being normalized into the blank-project baseline. It did not
+            // allow the ownership collection itself to be omitted: accepting
+            // that would turn a truncated package into a new blank project.
+            // Reject future keys and require the original collection field.
+            try requireKnownKeys(CodingKeys.self, in: decoder)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(DocumentID.self, forKey: .id)
+            revision = try container.decode(UInt64.self, forKey: .revision)
+            pages = try container.decode([SchemaOnePage].self, forKey: .pages)
+        }
+
         func migrated() -> CanonicalDocument {
             let migratedPages = pages.isEmpty
                 ? BlankProjectDefaults.pages(documentID: id, provenance: .migratedLegacy)
@@ -741,11 +953,12 @@ enum DocumentSerializer {
         let rootNodeIDs: [NodeID]
         let nodes: [DocumentNode]
 
-        private enum CodingKeys: String, CodingKey {
+        private enum CodingKeys: String, CodingKey, CaseIterable {
             case id, name, rootNodeIDs, nodes
         }
 
         init(from decoder: Decoder) throws {
+            try requireKnownKeys(CodingKeys.self, in: decoder)
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(PageID.self, forKey: .id)
             name = try container.decode(String.self, forKey: .name)
@@ -814,19 +1027,25 @@ enum DocumentSerializer {
         switch header.schemaVersion {
         case 1:
             do {
-                document = try decoder.decode(SchemaOneEnvelope.self, from: data).document.migrated()
+                let historicalDecoder = JSONDecoder()
+                historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                document = try historicalDecoder.decode(SchemaOneEnvelope.self, from: data).document.migrated()
             } catch {
                 throw DocumentSerializationError.malformedInput
             }
         case 2:
             do {
-                document = try decoder.decode(SchemaTwoEnvelope.self, from: data).document.migrated()
+                let historicalDecoder = JSONDecoder()
+                historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                document = try historicalDecoder.decode(SchemaTwoEnvelope.self, from: data).document.migrated()
             } catch {
                 throw DocumentSerializationError.malformedInput
             }
         case currentSchemaVersion:
             do {
-                document = try decoder.decode(CurrentEnvelope.self, from: data).document
+                let strictDecoder = JSONDecoder()
+                strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                document = try strictDecoder.decode(CurrentEnvelope.self, from: data).document
             } catch {
                 throw DocumentSerializationError.malformedInput
             }
@@ -840,5 +1059,13 @@ enum DocumentSerializer {
             throw DocumentSerializationError.invalidModel(error)
         }
         return document
+    }
+
+    static func schemaVersion(in data: Data) throws -> Int {
+        do {
+            return try JSONDecoder().decode(SchemaHeader.self, from: data).schemaVersion
+        } catch {
+            throw DocumentSerializationError.malformedInput
+        }
     }
 }

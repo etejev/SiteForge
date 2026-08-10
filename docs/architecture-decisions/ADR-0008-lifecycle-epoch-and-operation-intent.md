@@ -33,7 +33,7 @@ The main-actor lifecycle coordinator owns a monotonically advancing typed `Lifec
 - a destination kind and sanitized destination token; and
 - a typed intent: New, Open, Save, Save As, Revert, Autosave, Restore, Discard Recovery, Close, or Discover Recovery.
 
-New, Open, Revert, Restore, Close, and successful incoming-document adoption advance the epoch. The boundary invalidates active operation IDs and cancels or drains prior read, manual-save, autosave, and recovery work as appropriate. Every success, failure, and cancellation path must match its full identity and active-operation registration before it can update the document, project metadata, URL, fingerprint, history, recovery candidate, failure state, or lifecycle phase. A stale or cancelled result is state-neutral.
+New, Open, Revert, Restore, Close, and successful incoming-document adoption advance the epoch. A separate typed transition attempt is claimed before destructive authorization or recovery retirement begins, and is checked at the backend's pre-retirement seam; this closes the period before an adoption boundary can advance the epoch. The boundary invalidates active operation IDs and cancels or drains prior read, manual-save, autosave, and recovery work as appropriate. Every success, failure, and cancellation path must match its full identity and active-operation registration before it can update the document, project metadata, URL, fingerprint, history, recovery candidate, failure state, or lifecycle phase. A stale or cancelled result is state-neutral.
 
 ### Save and autosave ordering
 
@@ -69,12 +69,12 @@ Lifecycle diagnostics record intent, revision, destination kind, and hashed oper
 
 - Lifecycle operations must carry and validate a larger identity at every completion boundary.
 - Document adoption may advance the epoch more than once during a user-visible operation; callers must treat the epoch as an opaque invalidation token, not a revision number.
-- Cancellation cannot undo a filesystem commit that already completed. ADR-0007 guarantees conditional external-byte preservation, while the lifecycle identity prevents stale state adoption.
+- Cancellation cannot undo a filesystem commit that already completed. ADR-0007 supplies the exercised descriptor-bound conditional checks but documents the remaining macOS final-syscall limitation; lifecycle identity prevents stale state adoption.
 - Future lifecycle intents must be added explicitly and tested at document-adoption boundaries.
 
 ## Verification
 
-`DocumentLifecycleRaceTests` contains eleven deterministic tests. Save and executing autosave are crossed with New, Open, Revert, Restore, and Close; pending and executing autosave are followed immediately by Save; Save As is crossed with a pending autosave; edit-during-Save proves the durable/active revision split; burst coalescing proves exact write count and ordering; and stale success, stale failure, and cancellation at two backend boundaries prove state neutrality. Assertions cover canonical document, project identity, URL, fingerprint, history, recovery candidate, lifecycle phase, durable/external bytes, operation intent, and redacted diagnostics. `./sf verify` passes with 115 unit tests and 14 UI tests.
+`DocumentLifecycleRaceTests` contains deterministic barrier tests. Save and executing autosave are crossed with New, Open, Revert, Restore, and Close; pending and executing autosave are followed immediately by Save; Save As is crossed with a pending autosave; edit-during-Save proves the durable/active revision split; burst coalescing proves exact write count and ordering; and stale success, stale failure, cancellation, and a superseded pre-retirement Open prove state neutrality. Assertions cover canonical document, project identity, URL, fingerprint, history, recovery candidate, lifecycle phase, durable/external bytes at the supported seams, operation intent, and redacted diagnostics. Final current totals are recorded by the final implementation audit.
 
 ## Reversal
 

@@ -534,8 +534,14 @@ struct CommandRegistry {
             if sourceParent == value.destination, sourceIndex < adjustedIndex { adjustedIndex -= 1 }
             try insertNodeReference(value.nodeID, parent: value.destination, at: adjustedIndex, into: &document.pages[location.page])
             document.pages[location.page].nodes[location.node].parent = value.destination
+            // `MoveNodeCommand.index` is interpreted before removal. When the node
+            // moved backwards within one collection, undo must compensate for its
+            // current earlier position before restoring the original later index.
+            let inverseIndex = sourceParent == value.destination && sourceIndex > value.index
+                ? sourceIndex + 1
+                : sourceIndex
             return CommandMutation(inverse: .moveNode(MoveNodeCommand(
-                pageID: value.pageID, nodeID: value.nodeID, destination: sourceParent, index: sourceIndex
+                pageID: value.pageID, nodeID: value.nodeID, destination: sourceParent, index: inverseIndex
             )))
 
         case .setProperty(let value):

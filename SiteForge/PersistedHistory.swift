@@ -8,7 +8,10 @@ enum TransactionIdentifierDomain: StableIdentifierDomain {
 typealias TransactionID = StableIdentifier<TransactionIdentifierDomain>
 
 struct PersistedHistorySnapshot: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    /// Version two fixes the v1 inverse-index encoding for a node moved backwards
+    /// within its current parent. V1 remains readable through a deterministic
+    /// in-memory migration so existing packages retain exact undo behavior.
+    static let currentSchemaVersion = 2
 
     let format: String
     let schemaVersion: Int
@@ -34,7 +37,7 @@ struct PersistedHistorySnapshot: Codable, Equatable, Sendable {
         self.redoEntries = redoEntries
     }
 
-    private init(
+    fileprivate init(
         format: String,
         schemaVersion: Int,
         documentID: DocumentID,
@@ -189,6 +192,10 @@ actor PersistedHistoryStore {
 }
 
 private extension PersistedHistoryStore {
+    struct HistorySchemaHeader: Decodable {
+        let schemaVersion: Int
+    }
+
     static func encode(_ snapshot: PersistedHistorySnapshot) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -202,14 +209,28 @@ private extension PersistedHistoryStore {
     ) throws -> PersistedHistorySnapshot {
         try cancellation.check()
         guard data.count <= maximumHistoryBytes else { throw PersistedHistoryError.oversized }
-        let snapshot: PersistedHistorySnapshot
-        do { snapshot = try JSONDecoder().decode(PersistedHistorySnapshot.self, from: data) }
+        let header: HistorySchemaHeader
+        do { header = try JSONDecoder().decode(HistorySchemaHeader.self, from: data) }
+        catch { throw PersistedHistoryError.corrupt }
+        let decoded: PersistedHistorySnapshot
+        do {
+            if header.schemaVersion == PersistedHistorySnapshot.currentSchemaVersion {
+                try validateCurrentSchemaShape(data)
+                let decoder = JSONDecoder()
+                decoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                decoded = try decoder.decode(PersistedHistorySnapshot.self, from: data)
+            } else {
+                // Migration inputs deliberately retain their historical decoder.
+                // A newer writer's current schema must never silently drop an
+                // unrecognized field, but a supported legacy schema is decoded
+                // before its explicit in-memory migration below.
+                decoded = try JSONDecoder().decode(PersistedHistorySnapshot.self, from: data)
+            }
+        }
         catch { throw PersistedHistoryError.corrupt }
         try cancellation.check()
-        guard snapshot.format == "app.siteforge.persisted-history" else { throw PersistedHistoryError.corrupt }
-        guard snapshot.schemaVersion == PersistedHistorySnapshot.currentSchemaVersion else {
-            throw PersistedHistoryError.unsupportedSchema(snapshot.schemaVersion)
-        }
+        guard decoded.format == "app.siteforge.persisted-history" else { throw PersistedHistoryError.corrupt }
+        let snapshot = try migrate(decoded)
         guard snapshot.undoEntries.count + snapshot.redoEntries.count <= maximumEntryCount else {
             throw PersistedHistoryError.oversized
         }
@@ -219,6 +240,92 @@ private extension PersistedHistoryStore {
         }
         try validateEntries(snapshot, document: document, cancellation: cancellation)
         return snapshot
+    }
+
+    /// Current persisted history is a closed schema. Swift's synthesized
+    /// Codable decoding accepts unknown keyed fields, so validate the command
+    /// envelope before decoding. The canonical document types then apply their
+    /// own strict decoder policy recursively to embedded page, node, property,
+    /// and guide values.
+    static func validateCurrentSchemaShape(_ data: Data) throws {
+        let root: [String: Any]
+        do {
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw PersistedHistoryError.corrupt
+            }
+            root = object
+        } catch { throw PersistedHistoryError.corrupt }
+        try requireExactJSONKeys(
+            root,
+            ["format", "schemaVersion", "documentID", "documentRevision", "boundaryRevision", "undoEntries", "redoEntries"]
+        )
+        try validateHistoryEntries(root["undoEntries"])
+        try validateHistoryEntries(root["redoEntries"])
+    }
+
+    static func validateHistoryEntries(_ value: Any?) throws {
+        guard let entries = value as? [Any] else { throw PersistedHistoryError.corrupt }
+        for value in entries {
+            guard let entry = value as? [String: Any] else { throw PersistedHistoryError.corrupt }
+            try requireExactJSONKeys(
+                entry,
+                ["id", "parentRevision", "resultRevision", "commandName", "label", "timestamp", "affectedIdentifiers", "forward", "inverse"]
+            )
+            guard let targets = entry["affectedIdentifiers"] as? [Any] else {
+                throw PersistedHistoryError.corrupt
+            }
+            for value in targets {
+                guard let target = value as? [String: Any] else { throw PersistedHistoryError.corrupt }
+                try requireExactJSONKeys(target, ["namespace", "rawValue"])
+            }
+            try validateDocumentCommand(entry["forward"])
+            try validateDocumentCommand(entry["inverse"])
+        }
+    }
+
+    static func validateDocumentCommand(_ value: Any?) throws {
+        guard let command = value as? [String: Any], command.count == 1,
+              let (caseName, wrapper) = command.first,
+              let payload = wrapper as? [String: Any] else {
+            throw PersistedHistoryError.corrupt
+        }
+        try requireExactJSONKeys(payload, ["_0"])
+        let value = payload["_0"]
+        switch caseName {
+        case "insertPage": try requireCommandPayload(value, keys: ["page", "index"])
+        case "removePage": try requireCommandPayload(value, keys: ["pageID"])
+        case "renamePage": try requireCommandPayload(value, keys: ["pageID", "name"])
+        case "insertNode": try requireCommandPayload(value, keys: ["pageID", "node", "index"])
+        case "removeNode": try requireCommandPayload(value, keys: ["pageID", "nodeID"])
+        case "moveNode": try requireCommandPayload(value, keys: ["pageID", "nodeID", "destination", "index"])
+        case "setProperty":
+            guard let payload = value as? [String: Any] else { throw PersistedHistoryError.corrupt }
+            // `insertionIndex` is omitted by Codable when nil; both current
+            // encodings are closed and preserve the same explicit semantics.
+            let keys = Set(payload.keys)
+            let required = Set(["pageID", "nodeID", "property"])
+            guard keys == required || keys == required.union(["insertionIndex"]) else {
+                throw PersistedHistoryError.corrupt
+            }
+        case "removeProperty": try requireCommandPayload(value, keys: ["pageID", "nodeID", "propertyID"])
+        case "insertGuide": try requireCommandPayload(value, keys: ["guide", "index"])
+        case "setGuidePosition": try requireCommandPayload(value, keys: ["guideID", "position"])
+        case "removeGuide": try requireCommandPayload(value, keys: ["guideID"])
+        case "batch":
+            guard let commands = value as? [Any] else { throw PersistedHistoryError.corrupt }
+            for command in commands { try validateDocumentCommand(command) }
+        default:
+            throw PersistedHistoryError.corrupt
+        }
+    }
+
+    static func requireCommandPayload(_ value: Any?, keys: Set<String>) throws {
+        guard let payload = value as? [String: Any] else { throw PersistedHistoryError.corrupt }
+        try requireExactJSONKeys(payload, keys)
+    }
+
+    static func requireExactJSONKeys(_ value: [String: Any], _ expected: Set<String>) throws {
+        guard Set(value.keys) == expected else { throw PersistedHistoryError.corrupt }
     }
 
     static func validateEntries(
@@ -231,7 +338,10 @@ private extension PersistedHistoryStore {
         let registry = CommandRegistry()
         for entry in all {
             try cancellation.check()
-            guard entry.resultRevision == entry.parentRevision + 1 else { throw PersistedHistoryError.revisionMismatch }
+            let (expectedResultRevision, overflow) = entry.parentRevision.addingReportingOverflow(1)
+            guard !overflow, entry.resultRevision == expectedResultRevision else {
+                throw PersistedHistoryError.revisionMismatch
+            }
             guard entry.commandName == entry.forward.name,
                   entry.label == registry.descriptor(for: entry.commandName).title,
                   entry.affectedIdentifiers == entry.forward.targets,
@@ -274,6 +384,57 @@ private extension PersistedHistoryStore {
 
     static func sameContent(_ lhs: CanonicalDocument, _ rhs: CanonicalDocument) -> Bool {
         lhs.id == rhs.id && lhs.pages == rhs.pages && lhs.guides == rhs.guides
+    }
+
+    static func migrate(_ snapshot: PersistedHistorySnapshot) throws -> PersistedHistorySnapshot {
+        switch snapshot.schemaVersion {
+        case PersistedHistorySnapshot.currentSchemaVersion:
+            return snapshot
+        case 1:
+            return PersistedHistorySnapshot(
+                format: snapshot.format,
+                schemaVersion: PersistedHistorySnapshot.currentSchemaVersion,
+                documentID: snapshot.documentID,
+                documentRevision: snapshot.documentRevision,
+                boundaryRevision: snapshot.boundaryRevision,
+                undoEntries: try snapshot.undoEntries.map(migratingVersionOneEntry),
+                redoEntries: try snapshot.redoEntries.map(migratingVersionOneEntry)
+            )
+        default:
+            throw PersistedHistoryError.unsupportedSchema(snapshot.schemaVersion)
+        }
+    }
+
+    /// In v1, a backwards same-parent move recorded its inverse index after
+    /// removal, although `MoveNodeCommand.index` is defined before removal.
+    /// The forward/inverse pair identifies exactly that legacy encoding.
+    static func migratingVersionOneEntry(_ entry: HistoryEntry) throws -> HistoryEntry {
+        guard case .moveNode(let forward) = entry.forward,
+              case .moveNode(let inverse) = entry.inverse,
+              forward.pageID == inverse.pageID,
+              forward.nodeID == inverse.nodeID,
+              forward.destination == inverse.destination,
+              inverse.index > forward.index else {
+            return entry
+        }
+        let (correctedIndex, overflow) = inverse.index.addingReportingOverflow(1)
+        guard !overflow else { throw PersistedHistoryError.inverseMismatch }
+        return HistoryEntry(
+            id: entry.id,
+            parentRevision: entry.parentRevision,
+            resultRevision: entry.resultRevision,
+            commandName: entry.commandName,
+            label: entry.label,
+            timestamp: entry.timestamp,
+            affectedIdentifiers: entry.affectedIdentifiers,
+            forward: entry.forward,
+            inverse: .moveNode(MoveNodeCommand(
+                pageID: inverse.pageID,
+                nodeID: inverse.nodeID,
+                destination: inverse.destination,
+                index: correctedIndex
+            ))
+        )
     }
 
     static func removingOldest(from snapshot: PersistedHistorySnapshot) -> PersistedHistorySnapshot {

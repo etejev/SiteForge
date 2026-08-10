@@ -6,19 +6,19 @@
 
 ## Context
 
-Canonical schema v2 added page routes, roles, provenance, creation kind, template identity, and mandatory page roots. Reusing compatibility defaults inside current-model `Codable` decoding made a damaged v2 payload indistinguishable from a supported schema-v1 migration. Separately, unchecked revision increment could trap at the unsigned integer boundary and leave no representable revision for a transaction result.
+Canonical schema v2 added page routes, roles, provenance, creation kind, template identity, and mandatory page roots; schema v3 adds the authored-guide collection. Reusing compatibility defaults inside current-model `Codable` decoding made a damaged current payload indistinguishable from a supported legacy migration. Separately, unchecked revision increment could trap at the unsigned integer boundary and leave no representable revision for a transaction result.
 
 Compatibility also needs retained evidence independent of the current encoder. Tests assembled legacy payloads from current output, so a shared regression could change both the implementation and its alleged historical fixture.
 
 ## Decision
 
-Current schema v2 decodes strictly. Every current canonical document and page field is required; an absent optional template identity must still be represented by an explicit JSON `null`. Missing fields, empty page lists, and rootless pages are rejected rather than repaired.
+Current schema v3 decodes strictly. Every current canonical document, page, node, and authored-guide field is required; an absent optional template identity must still be represented by an explicit JSON `null`. Missing fields, unexpected keys, empty page lists, and rootless pages are rejected rather than repaired. JSON decoding still uses Foundation's object model, which collapses duplicate keys before the exact-key policy runs; duplicate-key rejection remains a recorded future parser-hardening boundary.
 
-Schema v1 has its own private decoding DTO and the only supported compatibility adapter. It deterministically supplies migrated-legacy metadata, the approved Home/Not Found minimum for an empty legacy document, and one stable minimum root for a rootless legacy page. The adapter result must pass all current canonical validation before package adoption. Missing or incompatible persisted history remains isolated by ADR-0003.
+Schema v2 has a private compatibility adapter that adds an empty authored-guide collection. Schema v1 has a separate private decoding DTO that deterministically supplies migrated-legacy metadata, the approved Home/Not Found minimum for an empty legacy document, and one stable minimum root for a rootless legacy page. Both adapter results must pass all current canonical validation before package adoption. Missing or incompatible persisted history remains isolated by ADR-0003.
 
 `UInt64.max` is not a valid persisted document revision. A session at `UInt64.max - 1` cannot accept another transaction and returns a typed, non-mutating `revisionExhausted` error. Revision arithmetic is checked even after that precondition, preserving the last committed document and history if the boundary is reached.
 
-Two tracked package-v1/schema-v1 fixtures are immutable compatibility inputs: one empty document and one rootless page. Their raw package SHA-256 checksums and provenance are recorded beside the Base64 fixtures. Tests decode those bytes, assert exact migrated identities and structure, establish a clean history baseline, and deterministically save and reopen the current representation.
+Three tracked package-v1 compatibility fixtures are immutable inputs: two schema-v1 inputs (one empty document and one rootless page) and one schema-v2 minimum document. Their raw package SHA-256 checksums and provenance are recorded beside the Base64 fixtures. Tests decode those bytes, assert exact migrated identities and structure, establish a clean history baseline where applicable, add only empty guides for schema v2, and deterministically save and reopen the current representation.
 
 ## Consequences
 

@@ -15,9 +15,9 @@ A new blank project contains exactly two pages in navigator order: Home at `/` w
 
 Blank creation records explicit blank-default provenance and establishes the complete document at revision zero as one clean history baseline. Template creation uses a separate template provenance and typed template identity. Published routes are unique, and canonical validation rejects an empty page list, invalid routes, duplicate special roles, missing roots, or inconsistent creation provenance.
 
-Canonical document schema v2 stores routes, roles, provenance, and creation kind. Supported schema-v1 payloads are decoded before adoption. Missing page metadata receives explicit migrated-legacy provenance; empty legacy documents receive Home and Not Found, and rootless legacy pages receive one minimum root. Migrated page/root identifiers are deterministically derived from existing document or page identity so repeated opens yield the same result. Persisted history that no longer matches the migrated canonical state is isolated by ADR-0003 and opens on a clean baseline.
+Canonical document schema v3 stores routes, roles, provenance, creation kind, and the later authored-guide collection. Supported schema-v2 payloads migrate only by adding an empty guide collection; supported schema-v1 payloads are decoded before adoption. Missing page metadata receives explicit migrated-legacy provenance; empty legacy documents receive Home and Not Found, and rootless legacy pages receive one minimum root. Migrated page/root identifiers are deterministically derived from existing document or page identity so repeated opens yield the same result. Persisted history that no longer matches the migrated canonical state is isolated by ADR-0003 and opens on a clean baseline.
 
-ADR-0009 makes this a strict schema boundary: current schema v2 never invokes these defaults, and the compatibility behavior exists only in the schema-v1 adapter proven by immutable historical package fixtures.
+ADR-0009 makes this a strict schema boundary: current schema v3 never invokes these defaults; the schema-v2 adapter adds only empty guides; and the blank-default compatibility behavior exists only in the schema-v1 adapter proven by immutable historical package fixtures.
 
 ## Consequences
 

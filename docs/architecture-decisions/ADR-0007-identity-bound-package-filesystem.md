@@ -31,13 +31,13 @@ ADR-0008 defines lifecycle epoch, operation intent, and Save/autosave coordinati
 
 ### Validated read snapshot
 
-The parent directory is opened with macOS `O_NOFOLLOW_ANY`, and the final member is opened relative to that descriptor with `O_NOFOLLOW`. Only regular files are accepted. Before allocation, descriptor size is checked against the unchanged 8-MiB package limit. Bytes are read in 64-KiB chunks; a second `fstat` must match the initial device, inode, size, modification time, and change time.
+Each path component is opened relative to the preceding directory descriptor with `O_NOFOLLOW`; the final member is likewise opened relative to its verified parent with `O_NOFOLLOW`. This component-by-component design is the macOS implementation used here; it does not claim a nonexistent `O_NOFOLLOW_ANY` flag. Only regular files are accepted. Before allocation, descriptor size is checked against the unchanged 8-MiB package limit. Bytes are read in 64-KiB chunks; a second `fstat` must match the initial device, inode, size, modification time, and change time.
 
 The immutable result contains the exact bytes, SHA-256 digest, byte count, device/inode identity, owner, group, mode, link count, extended ACL text, and bounded approved extended attributes. Package parsing and lifecycle durable state consume that same result. No path is reopened merely to fingerprint previously validated bytes.
 
 ### Conditional replacement
 
-Every write creates an exclusive same-directory staging file with mode `0600`, writes and synchronizes deterministic package bytes, applies the approved security metadata, and synchronizes again. Creation commits with `RENAME_EXCL`. Replacement requires the exact previously captured digest, byte count, device, and inode, plus unchanged security metadata immediately before commit. It commits with macOS `RENAME_SWAP`, validates that the displaced object is the expected object, rolls the swap back on mismatch, removes only the proven expected object, and synchronizes the directory.
+Every write creates an exclusive same-directory staging file with mode `0600`, writes and synchronizes deterministic package bytes, applies the approved security metadata, and synchronizes again. Creation commits with `RENAME_EXCL`. Replacement requires the exact previously captured digest, byte count, device, and inode, plus unchanged security metadata immediately before commit. It commits with macOS `RENAME_SWAP` and validates the public result. The implementation intentionally never reverses a completed swap, reopens an ambiguous displaced name, or unlinks it: those actions could delete data an external process has raced into that name. The displaced staging/quarantine artifact is retained for a separately authorized, trusted-root maintenance policy.
 
 The opened parent directory identity is revalidated against the destination path before commit. If a path or ancestor is deleted, recreated, replaced, or changed to a symlink, the operation fails without following the replacement or modifying its target. Advisory locks are not treated as a correctness boundary.
 
@@ -54,7 +54,7 @@ Other extended attributes are not copied implicitly. Attribute-name, attribute-v
 
 ### Recovery ownership
 
-Recovery storage is the app-owned directory selected by the lifecycle layer, normally below Application Support and injected as a repository-local fixture in tests. The directory must be owned by the current effective user and have no group/world permissions. Recovery files must additionally be owner-restricted, single-link regular files whose validated package project identity matches the recovery key. Delete requires the exact validated candidate fingerprint; unlink failure retains candidate state and returns a typed actionable error. Unrelated, malformed, mismatched, replaced, or symlinked artifacts are preserved.
+Recovery storage is the app-owned directory selected by the lifecycle layer, normally below Application Support and injected as application-owned temporary storage in low-level tests. The directory must be owned by the current effective user and have no group/world permissions. Recovery files must additionally be owner-restricted, single-link regular files whose validated package project identity matches the recovery key. Retirement requires the exact validated candidate fingerprint and atomically exchanges the artifact with a versioned, project-bound marker containing no raw project identifier; it is logical retirement, not an unsafe physical unlink. A merely empty owner-restricted file is never accepted as a marker. Retirement failure retains candidate state and returns a typed actionable error. Unrelated, malformed, mismatched, replaced, or symlinked artifacts are preserved at the exercised seams.
 
 ## Alternatives considered
 
@@ -69,7 +69,7 @@ Recovery storage is the app-owned directory selected by the lifecycle layer, nor
 ### Positive
 
 - Open cannot adopt one package while recording another file's fingerprint.
-- Replacement rejects concurrent external changes at the commit boundary and preserves their bytes.
+- Replacement rejects the deterministic pre-commit and post-commit race cases covered by the descriptor and barrier tests without following a replacement path.
 - Symbolic links, ancestor swaps, hard links, foreign ownership, and oversized sparse files have explicit bounded outcomes.
 - Existing POSIX and approved macOS confidentiality metadata survives replacement.
 - Recovery collision and deletion behavior is typed, retryable, and identity-bound.
@@ -79,12 +79,14 @@ Recovery storage is the app-owned directory selected by the lifecycle layer, nor
 - The implementation uses macOS-specific descriptor and rename APIs and must remain isolated behind the package store.
 - Replacement performs additional metadata reads, synchronization, and post-swap validation.
 - The xattr allowlist is intentionally conservative and may need an explicit future compatibility decision.
+- macOS exposes no expected-inode conditional rename or unlink primitive. A hostile same-UID process can still race the final syscall after the last validation; the implementation must not claim universal external-byte preservation for that platform gap.
+- Retained staging, quarantine, and recovery tombstone artifacts need an owner-approved app-owned maintenance/retention policy (OD-014) rather than speculative deletion.
 - This boundary does not claim protection from a privileged process, kernel/filesystem failure, or a process continuously racing after a completed commit.
 - App Sandbox scopes, persistent bookmarks, and coordinated user-selected file access are supplied separately by ADR-0010 rather than duplicated here.
 
 ## Verification
 
-`IdentityBoundFileSystemTests` uses actor barriers at snapshot capture, destination validation, post-swap validation, and recovery deletion. Eleven tests cover source replacement and symlink swap, destination replacement, same-byte delete/recreate with a new inode, destination and ancestor symlink swaps, same-inode modification before commit and after atomic swap, rollback of a changed displaced object, oversized sparse files, hard links and foreign-owner policy, real mode/ACL/xattr preservation, malformed and mismatched recovery collisions, permission-denied deletion with retained-candidate retry, and exact lifecycle/disk preservation. Existing tests retain interruption, static-symlink, deterministic-package, diagnostic-redaction, autosave, reopen, and recovery coverage. ADR-0008 adds deterministic lifecycle-race coverage above this unchanged boundary. `./sf verify` passes with 115 unit tests and 14 UI tests after `SF-CORRECTION-003`.
+`IdentityBoundFileSystemTests` uses actor barriers at snapshot capture, destination validation, post-swap validation, and recovery retirement. The suite covers source replacement and symlink swap, destination replacement, same-byte delete/recreate with a new inode, destination and ancestor symlink swaps, same-inode modification before commit and after atomic swap, oversized sparse files, hard links and foreign-owner policy, real mode/ACL/xattr preservation, malformed, mismatched, and empty-file recovery collisions, retirement failure with retained-candidate retry, and exact lifecycle/disk preservation for the exercised seams. Existing tests retain interruption, static-symlink, deterministic-package, diagnostic-redaction, autosave, reopen, and recovery coverage. ADR-0008 adds deterministic lifecycle-race coverage above this unchanged boundary. Final current totals are recorded by the final implementation audit rather than this historical checkpoint.
 
 ## Reversal
 

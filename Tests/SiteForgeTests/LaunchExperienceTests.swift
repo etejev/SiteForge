@@ -4,11 +4,11 @@ import XCTest
 @MainActor
 final class LaunchExperienceTests: XCTestCase {
     nonisolated(unsafe) private var fixtureDirectory: URL!
-    nonisolated(unsafe) private var fixtureLease: RepositoryTestFixture!
+    nonisolated(unsafe) private var fixtureLease: ApplicationOwnedTestFixture!
 
     nonisolated override func setUpWithError() throws {
         try super.setUpWithError()
-        fixtureLease = try RepositoryTestFixture.create("launch")
+        fixtureLease = try ApplicationOwnedTestFixture.create("launch")
         fixtureDirectory = fixtureLease.url
     }
 

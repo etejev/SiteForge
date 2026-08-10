@@ -10,6 +10,7 @@ mkdir -p "$BUILD_ROOT" "${OUTPUT:h}"
 cd "$ROOT"
 xcrun swiftc -parse-as-library -O -swift-version 6 \
   -framework WebKit \
+  SiteForge/StrictDecoding.swift \
   SiteForge/DocumentModel.swift \
   SiteForge/LayoutEngine.swift \
   Benchmarks/AuthoringEngineRunway/RunwayBenchmarkSupport.swift \

@@ -189,6 +189,49 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertEqual(session.document.pages[0].nodes[0].childIDs, [childNodeID, insertedID])
     }
 
+    // SF-0306-005, SF-0307-005, SF-0408-005 — indexes are pre-removal positions.
+    func testSameParentBackwardMoveInverseRestoresOriginalOrdering() throws {
+        let first = NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000010")!)
+        let second = NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000011")!)
+        let third = NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000012")!)
+        let root = DocumentNode(
+            id: rootNodeID,
+            kind: .frame,
+            name: "Root",
+            parent: .page(pageID),
+            childIDs: [first, second, third]
+        )
+        let document = CanonicalDocument(
+            id: documentID,
+            pages: [DocumentPage(
+                id: pageID,
+                name: "Home",
+                rootNodeIDs: [rootNodeID],
+                nodes: [
+                    root,
+                    DocumentNode(id: first, kind: .frame, name: "First", parent: .node(rootNodeID)),
+                    DocumentNode(id: second, kind: .frame, name: "Second", parent: .node(rootNodeID)),
+                    DocumentNode(id: third, kind: .frame, name: "Third", parent: .node(rootNodeID)),
+                ]
+            )]
+        )
+        let session = DocumentSession(document: document)
+
+        try session.execute(.moveNode(MoveNodeCommand(
+            pageID: pageID,
+            nodeID: third,
+            destination: .node(rootNodeID),
+            index: 0
+        )))
+        XCTAssertEqual(session.document.pages[0].nodes[0].childIDs, [third, first, second])
+
+        try session.undo()
+        XCTAssertEqual(session.document.pages, document.pages)
+
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes[0].childIDs, [third, first, second])
+    }
+
     // SF-0305-001, SF-0306-005, SF-0307-005
     func testPropertyRemovalInverseRestoresOriginalOrder() throws {
         let session = DocumentSession(document: populatedDocument())
@@ -326,6 +369,134 @@ final class CommandKernelTests: XCTestCase {
         }
     }
 
+    // SF-0302-004, SF-0303-005, SF-1702-004 — current schemas are closed;
+    // accepting a future field and rewriting without it would silently lose data.
+    func testCurrentSchemaRejectsUnknownCanonicalFieldsAtEveryOwnedLevel() throws {
+        let encoded = try DocumentSerializer.encode(populatedDocument())
+        let cases: [(String, (inout [String: Any]) -> Void)] = [
+            ("envelope", { $0["futureEnvelopeField"] = true }),
+            ("document", { envelope in
+                var document = envelope["document"] as! [String: Any]
+                document["futureDocumentField"] = true
+                envelope["document"] = document
+            }),
+            ("page", { envelope in
+                var document = envelope["document"] as! [String: Any]
+                var pages = document["pages"] as! [[String: Any]]
+                pages[0]["futurePageField"] = true
+                document["pages"] = pages
+                envelope["document"] = document
+            }),
+            ("node", { envelope in
+                var document = envelope["document"] as! [String: Any]
+                var pages = document["pages"] as! [[String: Any]]
+                var nodes = pages[0]["nodes"] as! [[String: Any]]
+                nodes[0]["futureNodeField"] = true
+                pages[0]["nodes"] = nodes
+                document["pages"] = pages
+                envelope["document"] = document
+            }),
+            ("property", { envelope in
+                var document = envelope["document"] as! [String: Any]
+                var pages = document["pages"] as! [[String: Any]]
+                var nodes = pages[0]["nodes"] as! [[String: Any]]
+                var properties = nodes[1]["properties"] as! [[String: Any]]
+                properties[0]["futurePropertyField"] = true
+                nodes[1]["properties"] = properties
+                pages[0]["nodes"] = nodes
+                document["pages"] = pages
+                envelope["document"] = document
+            }),
+        ]
+        for (name, edit) in cases {
+            let candidate = try editingEnvelope(encoded, edit: edit)
+            XCTAssertThrowsError(try DocumentSerializer.decode(candidate), "Unknown \(name) field") { error in
+                XCTAssertEqual(error as? DocumentSerializationError, .malformedInput)
+            }
+        }
+    }
+
+    // SF-0302-004, SF-0303-005, SF-1702-004 — closed current-schema enum
+    // envelopes and nested payloads must not be silently rewritten without
+    // future semantics that the current model cannot preserve.
+    func testCurrentSchemaRejectsUnknownEnumAndNestedValueFields() throws {
+        var document = populatedDocument()
+        document.guides = [AuthoredGuide(
+            id: GuideID(UUID(uuidString: "00000000-0000-0000-0000-000000000013")!),
+            pageID: pageID,
+            axis: .vertical,
+            position: 12
+        )]
+        let encoded = try DocumentSerializer.encode(document)
+        let cases: [(String, (inout [String: Any]) -> Void)] = [
+            ("node parent case", { envelope in
+                var document = envelope["document"] as! [String: Any]
+                var pages = document["pages"] as! [[String: Any]]
+                var nodes = pages[0]["nodes"] as! [[String: Any]]
+                var parent = nodes[1]["parent"] as! [String: Any]
+                parent["futureParent"] = ["_0": "not-a-node"]
+                nodes[1]["parent"] = parent
+                pages[0]["nodes"] = nodes
+                document["pages"] = pages
+                envelope["document"] = document
+            }),
+            ("node parent payload", { envelope in
+                var document = envelope["document"] as! [String: Any]
+                var pages = document["pages"] as! [[String: Any]]
+                var nodes = pages[0]["nodes"] as! [[String: Any]]
+                var parent = nodes[1]["parent"] as! [String: Any]
+                var payload = parent["node"] as! [String: Any]
+                payload["futurePayload"] = true
+                parent["node"] = payload
+                nodes[1]["parent"] = parent
+                pages[0]["nodes"] = nodes
+                document["pages"] = pages
+                envelope["document"] = document
+            }),
+            ("property value case", { envelope in
+                var document = envelope["document"] as! [String: Any]
+                var pages = document["pages"] as! [[String: Any]]
+                var nodes = pages[0]["nodes"] as! [[String: Any]]
+                var properties = nodes[1]["properties"] as! [[String: Any]]
+                var value = properties[0]["value"] as! [String: Any]
+                value["futureValue"] = ["_0": true]
+                properties[0]["value"] = value
+                nodes[1]["properties"] = properties
+                pages[0]["nodes"] = nodes
+                document["pages"] = pages
+                envelope["document"] = document
+            }),
+            ("property value payload", { envelope in
+                var document = envelope["document"] as! [String: Any]
+                var pages = document["pages"] as! [[String: Any]]
+                var nodes = pages[0]["nodes"] as! [[String: Any]]
+                var properties = nodes[1]["properties"] as! [[String: Any]]
+                var value = properties[0]["value"] as! [String: Any]
+                var payload = value["string"] as! [String: Any]
+                payload["futurePayload"] = true
+                value["string"] = payload
+                properties[0]["value"] = value
+                nodes[1]["properties"] = properties
+                pages[0]["nodes"] = nodes
+                document["pages"] = pages
+                envelope["document"] = document
+            }),
+            ("guide", { envelope in
+                var document = envelope["document"] as! [String: Any]
+                var guides = document["guides"] as! [[String: Any]]
+                guides[0]["futureGuide"] = true
+                document["guides"] = guides
+                envelope["document"] = document
+            }),
+        ]
+        for (name, edit) in cases {
+            let candidate = try editingEnvelope(encoded, edit: edit)
+            XCTAssertThrowsError(try DocumentSerializer.decode(candidate), "Unknown \(name) field") { error in
+                XCTAssertEqual(error as? DocumentSerializationError, .malformedInput)
+            }
+        }
+    }
+
     // SF-0307-004, SF-1702-004
     func testTerminalRevisionIsRejectedWithoutOverflowOrMutation() throws {
         let valid = try DocumentSerializer.encode(populatedDocument())
@@ -430,5 +601,14 @@ private func editingCurrentDocument(
     var document = try XCTUnwrap(envelope["document"] as? [String: Any])
     edit(&document)
     envelope["document"] = document
+    return try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+}
+
+private func editingEnvelope(
+    _ data: Data,
+    edit: (inout [String: Any]) -> Void
+) throws -> Data {
+    var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    edit(&envelope)
     return try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
 }

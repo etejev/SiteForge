@@ -10,6 +10,7 @@ mkdir -p "$BUILD_ROOT" "${OUTPUT:h}"
 cd "$ROOT"
 xcrun swiftc -parse-as-library -O -swift-version 6 \
   -framework CoreVideo \
+  SiteForge/StrictDecoding.swift \
   SiteForge/DocumentModel.swift \
   SiteForge/CanvasViewport.swift \
   SiteForge/CanvasRendererCore.swift \

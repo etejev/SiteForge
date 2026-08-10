@@ -82,6 +82,17 @@ struct ProjectPackageCompatibility: Codable, Equatable, Sendable {
         self.minimumPackageReaderVersion = minimumPackageReaderVersion
         self.minimumDocumentSchemaVersion = minimumDocumentSchemaVersion
     }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case minimumPackageReaderVersion, minimumDocumentSchemaVersion
+    }
+
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        minimumPackageReaderVersion = try container.decode(Int.self, forKey: .minimumPackageReaderVersion)
+        minimumDocumentSchemaVersion = try container.decode(Int.self, forKey: .minimumDocumentSchemaVersion)
+    }
 }
 
 struct ProjectPackage: Equatable, Sendable {
@@ -247,6 +258,8 @@ actor ProjectPackageStore {
             let data = try Self.makeContainer(for: package)
             await record(.write, projectID: package.projectID, started: started, error: nil)
             return data
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             await record(.write, projectID: package.projectID, started: started, error: error)
             throw error
@@ -259,6 +272,8 @@ actor ProjectPackageStore {
             let package = try Self.parseContainer(data, cancellation: cancellation)
             await record(.read, projectID: package.projectID, started: started, error: nil)
             return package
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             await record(.read, projectID: nil, started: started, error: error)
             throw error
@@ -288,6 +303,8 @@ actor ProjectPackageStore {
             )
             await record(.write, projectID: package.projectID, started: started, error: nil)
             return fingerprint
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             let typed = Self.mapIOError(error)
             await record(.write, projectID: package.projectID, started: started, error: typed)
@@ -332,6 +349,8 @@ actor ProjectPackageStore {
             }
             await record(.read, projectID: package.projectID, started: started, error: nil)
             return ValidatedProjectPackageRead(package: package, file: file)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             let typed = Self.mapIOError(error)
             await record(.read, projectID: nil, started: started, error: typed)
@@ -347,20 +366,56 @@ actor ProjectPackageStore {
         try fileSystem.validateOwnedRecoveryDirectory(directory)
     }
 
+    func isRetiredRecoveryTombstone(
+        at url: URL,
+        projectID: ProjectID
+    ) throws -> Bool {
+        try fileSystem.isRetiredRecoveryTombstone(
+            at: url,
+            projectID: projectID,
+            maximumBytes: Self.maximumPackageBytes
+        )
+    }
+
     func removeOwnedRecovery(
         at url: URL,
         projectID: ProjectID,
-        expected: PackageFingerprint? = nil
+        expected: PackageFingerprint? = nil,
+        commitAuthorizer: (any ProjectPackageConditionalCommitAuthorizing)? = nil
     ) async throws {
-        let read = try await readOwnedRecoverySnapshot(from: url, expectedProjectID: projectID)
-        guard expected == nil || read.file.fingerprint == expected else {
-            throw ProjectPackageError.unsafeRecoveryArtifact
-        }
-        try await fileSystem.removeOwnedRecovery(at: url, expected: read.file.fingerprint)
+        // The descriptor layer captures a single final bounded snapshot and
+        // invokes this closed parser over those exact bytes before its
+        // identity-conditional exchange. The caller's project ID therefore
+        // cannot relabel a same-fingerprint artifact from another project.
+        // This is deliberately not a path re-open: the parser consumes the
+        // descriptor-bound snapshot that the delete operation is about to
+        // conditionally retire.
+        guard let expected else { throw ProjectPackageError.unsafeRecoveryArtifact }
+        let cancellation = cancellation
+        try await fileSystem.removeOwnedRecovery(
+            at: url,
+            projectID: projectID,
+            expected: expected,
+            ownershipValidator: { snapshot in
+                let package = try Self.parseContainer(snapshot.bytes, cancellation: cancellation)
+                guard package.projectID == projectID else {
+                    throw ProjectPackageError.unsafeRecoveryArtifact
+                }
+            },
+            commitAuthorizer: commitAuthorizer
+        )
     }
 }
 
 private extension ProjectPackageStore {
+    /// Future package versions may legitimately carry fields this build cannot
+    /// understand. Decode only the stable routing header before applying the
+    /// closed current-schema manifest contract.
+    struct ManifestHeader: Decodable {
+        let format: String
+        let packageVersion: Int
+    }
+
     struct Manifest: Codable {
         let format: String
         let packageVersion: Int
@@ -370,6 +425,43 @@ private extension ProjectPackageStore {
         let modifiedAt: ProjectTimestamp
         let compatibility: ProjectPackageCompatibility
         let members: [MemberDescriptor]
+
+        private enum CodingKeys: String, CodingKey, CaseIterable {
+            case format, packageVersion, documentSchemaVersion, projectID, createdAt, modifiedAt, compatibility, members
+        }
+
+        init(
+            format: String,
+            packageVersion: Int,
+            documentSchemaVersion: Int,
+            projectID: ProjectID,
+            createdAt: ProjectTimestamp,
+            modifiedAt: ProjectTimestamp,
+            compatibility: ProjectPackageCompatibility,
+            members: [MemberDescriptor]
+        ) {
+            self.format = format
+            self.packageVersion = packageVersion
+            self.documentSchemaVersion = documentSchemaVersion
+            self.projectID = projectID
+            self.createdAt = createdAt
+            self.modifiedAt = modifiedAt
+            self.compatibility = compatibility
+            self.members = members
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            format = try container.decode(String.self, forKey: .format)
+            packageVersion = try container.decode(Int.self, forKey: .packageVersion)
+            documentSchemaVersion = try container.decode(Int.self, forKey: .documentSchemaVersion)
+            projectID = try container.decode(ProjectID.self, forKey: .projectID)
+            createdAt = try container.decode(ProjectTimestamp.self, forKey: .createdAt)
+            modifiedAt = try container.decode(ProjectTimestamp.self, forKey: .modifiedAt)
+            compatibility = try container.decode(ProjectPackageCompatibility.self, forKey: .compatibility)
+            members = try container.decode([MemberDescriptor].self, forKey: .members)
+        }
     }
 
     struct MemberDescriptor: Codable, Equatable {
@@ -377,6 +469,24 @@ private extension ProjectPackageStore {
         let role: ProjectPackageMemberRole
         let byteCount: Int
         let sha256: String
+
+        private enum CodingKeys: String, CodingKey, CaseIterable { case path, role, byteCount, sha256 }
+
+        init(path: String, role: ProjectPackageMemberRole, byteCount: Int, sha256: String) {
+            self.path = path
+            self.role = role
+            self.byteCount = byteCount
+            self.sha256 = sha256
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            path = try container.decode(String.self, forKey: .path)
+            role = try container.decode(ProjectPackageMemberRole.self, forKey: .role)
+            byteCount = try container.decode(Int.self, forKey: .byteCount)
+            sha256 = try container.decode(String.self, forKey: .sha256)
+        }
     }
 
     static func makeContainer(for package: ProjectPackage) throws -> Data {
@@ -424,18 +534,25 @@ private extension ProjectPackageStore {
         guard let manifestData = byPath[manifestPath]?.data else { throw ProjectPackageError.missingManifest }
         guard let documentData = byPath[documentPath]?.data else { throw ProjectPackageError.missingDocument }
 
+        let header: ManifestHeader
+        do {
+            header = try JSONDecoder().decode(ManifestHeader.self, from: manifestData)
+        } catch {
+            throw ProjectPackageError.corruptManifest
+        }
+        try cancellation.check()
+        guard header.format == "app.siteforge.project-package" else {
+            throw ProjectPackageError.corruptManifest
+        }
+        guard header.packageVersion == ProjectPackage.currentPackageVersion else {
+            throw ProjectPackageError.unsupportedPackageVersion(header.packageVersion)
+        }
+
         let manifest: Manifest
         do {
             manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
         } catch {
             throw ProjectPackageError.corruptManifest
-        }
-        try cancellation.check()
-        guard manifest.format == "app.siteforge.project-package" else {
-            throw ProjectPackageError.corruptManifest
-        }
-        guard manifest.packageVersion == ProjectPackage.currentPackageVersion else {
-            throw ProjectPackageError.unsupportedPackageVersion(manifest.packageVersion)
         }
         guard (DocumentSerializer.minimumSupportedSchemaVersion...DocumentSerializer.currentSchemaVersion)
             .contains(manifest.documentSchemaVersion) else {
@@ -452,9 +569,15 @@ private extension ProjectPackageStore {
 
         let document: CanonicalDocument
         do {
+            let declaredDocumentSchema = try DocumentSerializer.schemaVersion(in: documentData)
+            guard declaredDocumentSchema == manifest.documentSchemaVersion else {
+                throw ProjectPackageError.corruptManifest
+            }
             document = try DocumentSerializer.decode(documentData, checkpoint: cancellation.check)
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as ProjectPackageError {
+            throw error
         } catch let error as DocumentSerializationError {
             if case .unsupportedSchema(let version) = error {
                 throw ProjectPackageError.unsupportedDocumentSchema(version)
@@ -498,7 +621,9 @@ private extension ProjectPackageStore {
               manifest.modifiedAt.date != nil,
               manifest.modifiedAt >= manifest.createdAt,
               manifest.compatibility.minimumPackageReaderVersion > 0,
-              manifest.compatibility.minimumDocumentSchemaVersion > 0 else {
+              manifest.compatibility.minimumDocumentSchemaVersion > 0,
+              manifest.compatibility.minimumPackageReaderVersion <= manifest.packageVersion,
+              manifest.compatibility.minimumDocumentSchemaVersion <= manifest.documentSchemaVersion else {
             throw ProjectPackageError.malformedMetadata
         }
         guard manifest.compatibility.minimumDocumentSchemaVersion <= DocumentSerializer.currentSchemaVersion else {

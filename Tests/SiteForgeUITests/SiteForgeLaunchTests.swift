@@ -411,8 +411,8 @@ final class SiteForgeLaunchTests: XCTestCase {
     }
 
     private func launchWorkspace(
-        windowAlignment: TestWindowAlignment = .left,
-        verticalAlignment: TestWindowVerticalAlignment = .top
+        windowAlignment: TestWindowAlignment? = nil,
+        verticalAlignment: TestWindowVerticalAlignment? = nil
     ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
@@ -420,21 +420,25 @@ final class SiteForgeLaunchTests: XCTestCase {
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-AppleKeyboardUIMode", "3",
             "-SiteForgeUITestMode", "YES",
-            "-SiteForgeUITestWindowAlignment", windowAlignment.rawValue,
-            "-SiteForgeUITestWindowVerticalAlignment", verticalAlignment.rawValue,
             "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
         ]
+        if let windowAlignment {
+            application.launchArguments += ["-SiteForgeUITestWindowAlignment", windowAlignment.rawValue]
+        }
+        if let verticalAlignment {
+            application.launchArguments += ["-SiteForgeUITestWindowVerticalAlignment", verticalAlignment.rawValue]
+        }
         application.launch()
         application.activate()
 
-        if !application.windows.firstMatch.waitForExistence(timeout: 2) {
-            application.typeKey("n", modifierFlags: .command)
-        }
         XCTAssertTrue(application.windows.firstMatch.waitForExistence(timeout: 5))
         let newProject = application.buttons["launch.newBlankProject"]
-        if newProject.waitForExistence(timeout: 2) {
-            newProject.click()
+        guard newProject.waitForExistence(timeout: 2) else {
+            attachReadinessDiagnostics(for: application)
+            XCTFail("Welcome action did not become available before workspace creation.")
+            return application
         }
+        newProject.click()
         application.activate()
         XCTAssertTrue(waitForWorkspaceReady(application))
         return application
@@ -476,12 +480,35 @@ final class SiteForgeLaunchTests: XCTestCase {
             case "recovery": "launch.recovery.restore"
             default: "launch.experience"
             }
-            XCTAssertTrue(
-                application.descendants(matching: .any)[stateIdentifier].waitForExistence(timeout: 5),
-                "Launch state \(scenario) did not become ready."
-            )
+            let stateIsReady = application.descendants(matching: .any)[stateIdentifier]
+                .waitForExistence(timeout: 5)
+            if !stateIsReady {
+                attachReadinessDiagnostics(for: application)
+            }
+            XCTAssertTrue(stateIsReady, "Launch state \(scenario) did not become ready.")
         }
         return application
+    }
+
+    /// XCTest may report termination before the prior process relinquishes its
+    /// accessibility server connection. A bounded predicate keeps one test's
+    /// launch scenario from becoming the next scenario's foreground window.
+    private func terminateAndWait(
+        _ application: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) {
+        guard application.state != .notRunning else { return }
+        application.terminate()
+        let stopped = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { object, _ in
+                    (object as? XCUIApplication)?.state == .notRunning
+                },
+                object: application
+            )],
+            timeout: timeout
+        ) == .completed
+        XCTAssertTrue(stopped, "The prior SiteForge UI-test process did not terminate cleanly.")
     }
 
     private func hasKeyboardFocus(_ element: XCUIElement) -> Bool {
@@ -1134,12 +1161,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         let indeterminate = launchScenario("loadingIndeterminate")
         XCTAssertTrue(indeterminate.descendants(matching: .any)["launch.progress.indeterminate"].waitForExistence(timeout: 5))
         XCTAssertTrue(indeterminate.buttons["launch.cancel"].waitForExistence(timeout: 5))
-        indeterminate.terminate()
+        terminateAndWait(indeterminate)
 
         let determinate = launchScenario("loadingDeterminate")
         XCTAssertTrue(determinate.descendants(matching: .any)["launch.progress.determinate"].waitForExistence(timeout: 5))
         XCTAssertTrue(determinate.staticTexts["Restoring document history…"].waitForExistence(timeout: 5))
-        determinate.terminate()
+        terminateAndWait(determinate)
 
         let nonCancelable = launchScenario("loadingNonCancelable")
         XCTAssertTrue(nonCancelable.descendants(matching: .any)["launch.nonCancelable"].waitForExistence(timeout: 5))
@@ -1153,7 +1180,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(failure.buttons["launch.retry"].exists)
         XCTAssertTrue(failure.buttons["launch.chooseAnother"].exists)
         XCTAssertTrue(failure.buttons["launch.retry"].isHittable)
-        failure.terminate()
+        terminateAndWait(failure)
 
         let recovery = launchScenario("recovery")
         for identifier in ["launch.recovery.inspect", "launch.recovery.discard", "launch.recovery.restore"] {
@@ -1172,7 +1199,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         var application = launchIntegrationOpen(project, base64Fixture: valid)
         XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
         XCTAssertTrue(pageRow(named: "Home", in: application).exists)
-        application.terminate()
+        terminateAndWait(application)
 
         application = launchIntegrationOpen(
             project,
@@ -1210,7 +1237,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(restore.waitForExistence(timeout: 5))
         application.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 5))
-        application.terminate()
+        terminateAndWait(application)
 
         application = trackedApplication()
         application.launchArguments += [
@@ -1314,7 +1341,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             application.typeKey("\t", modifierFlags: [])
             XCTAssertTrue(application.descendants(matching: .any)["workspace.shell"].exists)
             attachScreenshot(named: "workspace-\(name)")
-            application.terminate()
+            terminateAndWait(application)
         }
     }
 
@@ -1360,7 +1387,7 @@ final class SiteForgeLaunchTests: XCTestCase {
                 application.descendants(matching: .any)[expectedIdentifier].waitForExistence(timeout: 5),
                 scenario
             )
-            application.terminate()
+            terminateAndWait(application)
         }
     }
 }

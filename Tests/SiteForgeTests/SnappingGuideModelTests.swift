@@ -102,10 +102,10 @@ final class SnappingGuideModelTests: XCTestCase {
         XCTAssertEqual(bytes, try DocumentSerializer.encode(fixture.document))
         XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":3"))
         XCTAssertEqual(try DocumentSerializer.decode(bytes), fixture.document)
-        let legacy = String(decoding: try DocumentSerializer.encode(ProjectCreation.blank()), as: UTF8.self)
-            .replacingOccurrences(of: "\"schemaVersion\":3", with: "\"schemaVersion\":2")
-            .replacingOccurrences(of: ",\"guides\":[]", with: "")
-        XCTAssertTrue(try DocumentSerializer.decode(Data(legacy.utf8)).guides.isEmpty)
+        // Immutable schema-2 migration evidence lives in
+        // `ProjectPackageTests`; this guide-specific test only proves the
+        // current schema-3 round-trip. Generating a fake old payload here
+        // would not independently establish historical wire compatibility.
         var missingGuideObject = try XCTUnwrap(
             JSONSerialization.jsonObject(with: bytes) as? [String: Any]
         )

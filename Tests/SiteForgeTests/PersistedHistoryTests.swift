@@ -222,12 +222,117 @@ final class PersistedHistoryTests: XCTestCase {
             entries[0]["resultRevision"] = 44; object["undoEntries"] = entries
         }
         cases.append((revisionMismatch, .revisionMismatch))
+        let overflowingRevision = try mutate(valid.data) { object in
+            var entries = object["undoEntries"] as! [[String: Any]]
+            entries[0]["parentRevision"] = NSNumber(value: UInt64.max)
+            object["undoEntries"] = entries
+        }
+        cases.append((overflowingRevision, .revisionMismatch))
 
         for (data, expected) in cases {
             let store = PersistedHistoryStore()
             let result = try await store.load(from: package(valid.package, historyData: data))
             XCTAssertEqual(result, .cleanBaseline(expected))
         }
+    }
+
+    // SF-0307-004 — history schema v2 is closed. A compatible decoder may
+    // not silently erase future transaction, target, or command semantics.
+    func testCurrentHistorySchemaRejectsUnknownEnvelopeEntryTargetAndCommandFields() async throws {
+        let valid = try await makeValidHistoryFixture(entryCount: 1)
+        let cases: [Data] = [
+            try mutate(valid.data) { $0["futureHistoryField"] = true },
+            try mutate(valid.data) { object in
+                var entries = object["undoEntries"] as! [[String: Any]]
+                entries[0]["futureEntryField"] = true
+                object["undoEntries"] = entries
+            },
+            try mutate(valid.data) { object in
+                var entries = object["undoEntries"] as! [[String: Any]]
+                var targets = entries[0]["affectedIdentifiers"] as! [[String: Any]]
+                targets[0]["futureTargetField"] = true
+                entries[0]["affectedIdentifiers"] = targets
+                object["undoEntries"] = entries
+            },
+            try mutate(valid.data) { object in
+                var entries = object["undoEntries"] as! [[String: Any]]
+                var forward = entries[0]["forward"] as! [String: Any]
+                var wrapper = forward["insertPage"] as! [String: Any]
+                var payload = wrapper["_0"] as! [String: Any]
+                payload["futureCommandField"] = true
+                wrapper["_0"] = payload
+                forward["insertPage"] = wrapper
+                entries[0]["forward"] = forward
+                object["undoEntries"] = entries
+            },
+        ]
+
+        for data in cases {
+            let result = try await PersistedHistoryStore().load(from: package(valid.package, historyData: data))
+            XCTAssertEqual(result, .cleanBaseline(.corrupt))
+        }
+    }
+
+    // SF-0306-004, SF-0306-005, SF-0307-004 — v1 persisted the inverse
+    // index of a backwards same-parent move after removal. Loading it must
+    // repair history without changing canonical package state.
+    func testVersionOneSameParentBackwardMoveMigratesToExactUndoInverse() async throws {
+        let first = NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000110")!)
+        let second = NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000111")!)
+        let third = NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000112")!)
+        let rootID = NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000113")!)
+        let pageID = PageID(UUID(uuidString: "00000000-0000-0000-0000-000000000114")!)
+        let original = CanonicalDocument(pages: [DocumentPage(
+            id: pageID,
+            name: "History move",
+            rootNodeIDs: [rootID],
+            nodes: [
+                DocumentNode(id: rootID, kind: .frame, name: "Root", parent: .page(pageID), childIDs: [first, second, third]),
+                DocumentNode(id: first, kind: .frame, name: "First", parent: .node(rootID)),
+                DocumentNode(id: second, kind: .frame, name: "Second", parent: .node(rootID)),
+                DocumentNode(id: third, kind: .frame, name: "Third", parent: .node(rootID)),
+            ]
+        )])
+        let session = DocumentSession(document: original)
+        try session.execute(.moveNode(MoveNodeCommand(
+            pageID: pageID, nodeID: third, destination: .node(rootID), index: 0
+        )))
+        let currentData = try await PersistedHistoryStore().encodeRetained(session.historySnapshot())
+        let v1Data = try mutate(currentData) { object in
+            object["schemaVersion"] = 1
+            var entries = object["undoEntries"] as! [[String: Any]]
+            var inverse = entries[0]["inverse"] as! [String: Any]
+            var wrapper = inverse["moveNode"] as! [String: Any]
+            var payload = wrapper["_0"] as! [String: Any]
+            payload["index"] = 2 // Exact v1 pre-fix encoding; v2 stores 3.
+            wrapper["_0"] = payload
+            inverse["moveNode"] = wrapper
+            entries[0]["inverse"] = inverse
+            object["undoEntries"] = entries
+        }
+        let result = try await PersistedHistoryStore().load(from: package(
+            ProjectPackage(document: session.document), historyData: v1Data
+        ))
+        guard case .restored(let migrated) = result else {
+            return XCTFail("A supported v1 history must migrate rather than isolate")
+        }
+        XCTAssertEqual(migrated.schemaVersion, PersistedHistorySnapshot.currentSchemaVersion)
+        guard case .moveNode(let inverse) = migrated.undoEntries[0].inverse else {
+            return XCTFail("Expected migrated move inverse")
+        }
+        XCTAssertEqual(inverse.index, 3)
+
+        let reopened = DocumentSession(document: session.document)
+        try reopened.installValidatedHistory(migrated)
+        try reopened.undo()
+        XCTAssertEqual(reopened.document.pages, original.pages)
+        try reopened.redo()
+        // Revisions are monotonic transaction identities: undo and redo
+        // restore exact authored content while each applies its own commit.
+        XCTAssertEqual(reopened.document.id, session.document.id)
+        XCTAssertEqual(reopened.document.pages, session.document.pages)
+        XCTAssertEqual(reopened.document.guides, session.document.guides)
+        XCTAssertEqual(reopened.document.revision, session.document.revision + 2)
     }
 
     func testInverseIdentityMismatchAndCanonicalDocumentSurvival() async throws {

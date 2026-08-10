@@ -33,6 +33,11 @@ SOURCE_TESTS = {
         "BlankProjectTests",
         "InsertionModelTests",
     ),
+    "StrictDecoding.swift": (
+        "CommandKernelTests",
+        "ProjectPackageTests",
+        "PersistedHistoryTests",
+    ),
     "FileAccessBoundary.swift": (
         "FileAccessBoundaryTests",
         "DocumentLifecycleTests",
@@ -87,6 +92,7 @@ SOURCE_TESTS = {
         "WorkspaceMaterialPolicyTests",
         "SelectionModelTests",
         "InsertionModelTests",
+        "CanvasTextRenderingTests",
         "SiteForgeLaunchTests",
     ),
 }

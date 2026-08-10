@@ -93,6 +93,34 @@ final class ProjectPackageTests: XCTestCase {
         }
     }
 
+    // SF-0301-004, SF-0301-007, SF-0301-008 — descriptor-backed reads retain
+    // cancellation as a neutral result rather than misclassifying validation
+    // cancellation as an I/O failure that a lifecycle caller could publish.
+    func testCancellationDuringReadSnapshotRemainsNeutral() async throws {
+        let destination = try fixtureDirectory().appendingPathComponent("cancel-read.siteforge")
+        try await ProjectPackageStore().write(package(), to: destination)
+        let barrier = DeterministicCancellationBarrier(blockAt: 4)
+        let diagnostics = ProjectPackageDiagnostics()
+        let store = ProjectPackageStore(
+            diagnostics: diagnostics,
+            cancellation: CooperativeCancellationCheckpoint(barrier.check)
+        )
+        let task = Task { try await store.readSnapshot(from: destination) }
+
+        await barrier.waitUntilBlocked()
+        task.cancel()
+        barrier.release()
+
+        do {
+            _ = try await task.value
+            XCTFail("Cancelled snapshot validation must not return a package")
+        } catch is CancellationError {
+            // Intentionally state-neutral.
+        }
+        let records = await diagnostics.records
+        XCTAssertTrue(records.isEmpty)
+    }
+
     // SF-0301-005, SF-0303-005, SF-0303-008, SF-1702-008
     func testImmutableSchemaOneEmptyGoldenMigratesDeterministicallyAndWithoutHistory() async throws {
         let store = ProjectPackageStore()
@@ -159,6 +187,58 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(reopened, first)
     }
 
+    // SF-0301-005, SF-0303-005, SF-0303-008, SF-1702-008 — schema 2 is an
+    // immutable retained compatibility input, not a dynamically relabeled
+    // current payload. Its digest locks the historical on-disk shape.
+    func testImmutableSchemaTwoGoldenMigratesGuidesToEmptyAndRoundTripsDeterministically() async throws {
+        let store = ProjectPackageStore()
+        let legacyPackage = try legacyGolden(
+            named: "schema-v2-minimum",
+            sha256: "c2ebf92c01924cccd9fe6db5a48bbe4d23a6273d03526f41ed5f744efcbe7739"
+        )
+
+        let first = try await store.decode(legacyPackage)
+        let second = try await store.decode(legacyPackage)
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.projectID.description, "12000000-0000-0000-0000-000000000002")
+        XCTAssertEqual(first.document.id.description, "22000000-0000-0000-0000-000000000002")
+        XCTAssertEqual(first.document.revision, 2)
+        XCTAssertEqual(first.document.guides, [])
+        XCTAssertEqual(first.document.pages.map(\.name), ["Schema Two Home"])
+        XCTAssertNoThrow(try first.document.validate())
+
+        let savedOnce = try await store.encode(first)
+        let savedTwice = try await store.encode(first)
+        XCTAssertEqual(savedOnce, savedTwice)
+        let reopened = try await store.decode(savedOnce)
+        XCTAssertEqual(reopened, first)
+    }
+
+    // SF-0301-004, SF-0301-005, SF-1702-004 — a newer canonical payload
+    // cannot be relabeled as an older schema and silently discard fields such
+    // as guides during migration.
+    func testCurrentDocumentCannotBeRelabeledAsHistoricalSchema() throws {
+        var document = ProjectCreation.blank()
+        document.guides = [
+            AuthoredGuide(
+                pageID: try XCTUnwrap(document.pages.first?.id),
+                axis: .vertical,
+                position: 120
+            )
+        ]
+        let current = try DocumentSerializer.encode(document)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: current) as? [String: Any])
+
+        for schema in [1, 2] {
+            var relabeled = object
+            relabeled["schemaVersion"] = schema
+            let bytes = try JSONSerialization.data(withJSONObject: relabeled, options: [.sortedKeys])
+            XCTAssertThrowsError(try DocumentSerializer.decode(bytes)) { error in
+                XCTAssertEqual(error as? DocumentSerializationError, .malformedInput)
+            }
+        }
+    }
+
     // SF-0301-004, SF-0301-005, SF-1702-004, SF-1702-008
     func testInvalidSchemaOneGoldenVariantsAreRejectedWithoutCompatibilityDefaults() async throws {
         let store = ProjectPackageStore()
@@ -197,9 +277,15 @@ final class ProjectPackageTests: XCTestCase {
 
         let loaded = try await store.read(from: destination)
         XCTAssertEqual(loaded.document.pages[0].name, "After")
-        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains {
-            $0.hasPrefix(".siteforge-stage-")
-        })
+        // The descriptor-bound swap deliberately retains the displaced old
+        // entry: a same-UID process could replace the staging name before an
+        // unsafe pathname cleanup. Prove the retained artifact is complete
+        // prior-package bytes, not a partial write or second destination.
+        let stagingNames = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix(".siteforge-stage-") }
+        XCTAssertEqual(stagingNames.count, 1)
+        let retained = try await store.read(from: directory.appendingPathComponent(stagingNames[0]))
+        XCTAssertEqual(retained.document.pages[0].name, "Before")
     }
 
     // SF-0301-004, SF-1702-004
@@ -286,6 +372,65 @@ final class ProjectPackageTests: XCTestCase {
         }
         await XCTAssertThrowsProjectPackageError(.incompatibleReaderVersion(99)) {
             try await store.decode(encodeArchive(readerVersion))
+        }
+    }
+
+    // SF-0301-004, SF-0303-005, SF-1702-004 — manifest/document records are
+    // closed at their current versions; opaque optional members remain separate.
+    func testCurrentManifestAndDocumentUnknownFieldsAndSchemaMismatchAreRejected() async throws {
+        let store = ProjectPackageStore()
+        let valid = try await store.encode(package())
+        let members = try decodeArchive(valid)
+
+        let manifestUnknown = try editingManifest(in: members) { $0["futureManifestField"] = true }
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) {
+            try await store.decode(encodeArchive(manifestUnknown))
+        }
+        let futureManifest = try editingManifest(in: members) {
+            $0["packageVersion"] = ProjectPackage.currentPackageVersion + 1
+            $0["futureManifestField"] = true
+        }
+        await XCTAssertThrowsProjectPackageError(.unsupportedPackageVersion(ProjectPackage.currentPackageVersion + 1)) {
+            try await store.decode(encodeArchive(futureManifest))
+        }
+        let compatibilityUnknown = try editingManifest(in: members) { manifest in
+            var compatibility = manifest["compatibility"] as! [String: Any]
+            compatibility["futureCompatibilityField"] = true
+            manifest["compatibility"] = compatibility
+        }
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) {
+            try await store.decode(encodeArchive(compatibilityUnknown))
+        }
+        let descriptorUnknown = try editingManifest(in: members) { manifest in
+            var descriptors = manifest["members"] as! [[String: Any]]
+            descriptors[0]["futureDescriptorField"] = true
+            manifest["members"] = descriptors
+        }
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) {
+            try await store.decode(encodeArchive(descriptorUnknown))
+        }
+        let mismatchedSchema = try editingManifest(in: members) { $0["documentSchemaVersion"] = 2 }
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) {
+            try await store.decode(encodeArchive(mismatchedSchema))
+        }
+        let incompatibleDeclaredMinimum = try editingManifest(in: members) { manifest in
+            var compatibility = manifest["compatibility"] as! [String: Any]
+            compatibility["minimumDocumentSchemaVersion"] = 4
+            manifest["compatibility"] = compatibility
+        }
+        await XCTAssertThrowsProjectPackageError(.malformedMetadata) {
+            try await store.decode(encodeArchive(incompatibleDeclaredMinimum))
+        }
+
+        let documentMember = try XCTUnwrap(members.first(where: { $0.path == "document.json" }))
+        var documentEnvelope = try XCTUnwrap(JSONSerialization.jsonObject(with: documentMember.data) as? [String: Any])
+        var document = try XCTUnwrap(documentEnvelope["document"] as? [String: Any])
+        document["futureDocumentField"] = true
+        documentEnvelope["document"] = document
+        let unknownDocument = try JSONSerialization.data(withJSONObject: documentEnvelope, options: [.sortedKeys])
+        let repacked = try replacingDocumentAndIntegrity(in: members, with: unknownDocument)
+        await XCTAssertThrowsProjectPackageError(.corruptDocument) {
+            try await store.decode(encodeArchive(repacked))
         }
     }
 

@@ -37,6 +37,18 @@ Status: Open
 - Options: unsigned technical alpha, Developer ID direct distribution, Mac App Store, or both signed channels.
 - Safe temporary assumption: local and GitHub prerelease artifacts only; no claim that Gatekeeper will trust them.
 
+## OD-014 — Trusted app-owned artifact retention and reclamation
+
+Status: Open — non-blocking safety boundary
+
+- Needed by: before any automatic cleanup policy for retained package staging/quarantine files or recovery tombstones.
+- Context: the identity-bound filesystem intentionally does not reverse a completed swap, reopen an ambiguous displaced name, or unlink a name after a raced replacement. Recovery Discard performs logical retirement through an owned tombstone. These choices preserve unknown external data at the tested seams but can leave owned artifacts for later maintenance.
+- Recommended default: retain these artifacts under verified app-owned directories; expose no automatic deletion beyond the identity-bound retirement path until a maintenance operation can prove an owned trusted root and define user-visible recovery semantics.
+- Alternatives: bounded age/size reclamation under a verified app-owned root; explicit user-initiated cleanup with diagnostics; or a future platform primitive that offers expected-inode conditional unlink/rename.
+- Tradeoffs: automatic reclamation limits disk use but risks deleting an artifact after ownership has changed; conservative retention preserves safety but needs a size/visibility policy.
+- Safe temporary assumption: logical retirement, typed retry, and retained staging/quarantine artifacts only. Do not claim universal protection against a hostile same-UID process racing the final macOS rename/unlink syscall.
+- Affected requirements: `SF-0301-004`, `SF-0301-005`, `SF-0306-003`, `SF-0306-004`, `SF-1504-003`, `SF-1504-004`, `SF-1603-004`, `SF-1604-004`, and `SF-1702-004`.
+
 ## OD-003 — Blank-project default page set
 
 Status: Approved — 2026-07-19

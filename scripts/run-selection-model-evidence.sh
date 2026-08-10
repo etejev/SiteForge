@@ -6,6 +6,7 @@ OUTPUT="$ROOT/docs/evidence/selection-model-foundation/measurements.json"
 BINARY="${TMPDIR%/}/SiteForge/selection-model-evidence"
 
 xcrun swiftc -O -swift-version 6 \
+  "$ROOT/SiteForge/StrictDecoding.swift" \
   "$ROOT/SiteForge/DocumentModel.swift" \
   "$ROOT/SiteForge/CanvasViewport.swift" \
   "$ROOT/SiteForge/CanvasRendererCore.swift" \

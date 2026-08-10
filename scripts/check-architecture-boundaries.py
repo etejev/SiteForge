@@ -2,14 +2,15 @@
 """Enforce the Milestone 0 headless dependency and scene-ownership boundaries."""
 
 from pathlib import Path
+import os
 import re
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_SLICE = ["SiteForge/DocumentModel.swift"]
+MODEL_SLICE = ["SiteForge/StrictDecoding.swift", "SiteForge/DocumentModel.swift"]
 ENGINE_SLICE = [
-    "SiteForge/DocumentModel.swift",
+    *MODEL_SLICE,
     "SiteForge/CommandKernel.swift",
     "SiteForge/IdentityBoundFileSystem.swift",
     "SiteForge/ProjectPackage.swift",
@@ -20,21 +21,17 @@ RUNWAY_HEADLESS_SLICE = [
     "Benchmarks/AuthoringEngineRunway/RunwayCore.swift",
     "Benchmarks/AuthoringEngineRunway/RunwayHTMLExport.swift",
 ]
-CANVAS_VIEWPORT_SLICE = [
-    "SiteForge/DocumentModel.swift",
+CANVAS_VIEWPORT_SLICE = MODEL_SLICE + [
     "SiteForge/CanvasViewport.swift",
 ]
-LAYOUT_ENGINE_SLICE = [
-    "SiteForge/DocumentModel.swift",
+LAYOUT_ENGINE_SLICE = MODEL_SLICE + [
     "SiteForge/LayoutEngine.swift",
 ]
-CANVAS_RENDERER_SLICE = [
-    "SiteForge/DocumentModel.swift",
+CANVAS_RENDERER_SLICE = MODEL_SLICE + [
     "SiteForge/CanvasViewport.swift",
     "SiteForge/CanvasRendererCore.swift",
 ]
-SELECTION_MODEL_SLICE = [
-    "SiteForge/DocumentModel.swift",
+SELECTION_MODEL_SLICE = MODEL_SLICE + [
     "SiteForge/CanvasViewport.swift",
     "SiteForge/CanvasRendererCore.swift",
     "SiteForge/SelectionModel.swift",
@@ -71,7 +68,22 @@ def imports(path: str) -> set[str]:
 
 def typecheck(name: str, sources: list[str]) -> None:
     command = ["xcrun", "swiftc", "-typecheck", "-swift-version", "6", *sources]
-    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+    # `swiftc` otherwise inherits a user-profile module cache. CI sandboxes and
+    # clean local checkouts may not be allowed to write there, which would make
+    # the headless boundary gate depend on a machine-specific path rather than
+    # its explicit source list. Callers can still provide a cache explicitly.
+    cache_root = Path(os.environ.get("TMPDIR", "/tmp")) / "SiteForge" / "headless-module-cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    environment.setdefault("CLANG_MODULE_CACHE_PATH", str(cache_root / "clang"))
+    environment.setdefault("SWIFT_MODULE_CACHE_PATH", str(cache_root / "swift"))
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env=environment,
+    )
     if result.returncode:
         fail(f"Headless {name} slice failed to type-check:\n{result.stdout}{result.stderr}")
 
@@ -97,6 +109,8 @@ typecheck("inline-text-editing-contract", INLINE_TEXT_MODEL_SLICE)
 typecheck("drag-drop-contract", DRAG_DROP_MODEL_SLICE)
 
 project = (ROOT / "SiteForge.xcodeproj/project.pbxproj").read_text()
+if "StrictDecoding.swift in Sources" not in project:
+    fail("StrictDecoding.swift must be compiled into the application target with the canonical model.")
 if "WorkspaceSceneComposition.swift in Sources" not in project:
     fail("WorkspaceSceneComposition.swift is not compiled into the application target.")
 if "CanvasViewport.swift in Sources" not in project:
