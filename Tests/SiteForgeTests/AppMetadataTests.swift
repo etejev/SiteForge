@@ -64,7 +64,7 @@ final class AppMetadataTests: XCTestCase {
         let second = PageID(UUID(uuidString: "30000000-0000-0000-0000-000000000002")!)
         let order = ShellFocusTraversal.order(pageIDs: [first, second])
         XCTAssertEqual(order, [
-            .navigatorPages, .navigatorLayers, .navigatorPage(first),
+            .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents, .navigatorPage(first),
             .navigatorPage(second), .viewportPreset, .viewportZoomOut, .viewportZoomIn,
             .viewportReset, .viewportFit, .viewportCanvas,
             .inspectorLayout, .inspectorStyle, .inspectorAdvanced, .inspectorAccessibility,
@@ -81,6 +81,33 @@ final class AppMetadataTests: XCTestCase {
         }
         XCTAssertEqual(ShellFocusTraversal.adjacent(to: nil, direction: .forward, pageIDs: [first]), .navigatorPages)
         XCTAssertEqual(ShellFocusTraversal.adjacent(to: nil, direction: .reverse, pageIDs: [second]), .inspectorAccessibility)
+    }
+
+    // SF-0201-002, SF-0201-006, SF-0201-008
+    @MainActor
+    func testElementsCatalogIsOrderedTruthfulAndDoesNotCreateCanonicalState() {
+        XCTAssertEqual(ElementCatalogItem.allCases.map(\.rawValue), [
+            "section", "stack", "grid", "frame", "text", "button", "link", "divider", "navbar", "footer"
+        ])
+        XCTAssertEqual(ElementCatalogItem.frame.availability, .available(.frame))
+        XCTAssertEqual(ElementCatalogItem.text.availability, .available(.text))
+        XCTAssertTrue(ElementCatalogItem.frame.capabilityContract.contains("transactional Frame"))
+        XCTAssertTrue(ElementCatalogItem.text.capabilityContract.contains("plain-Text"))
+        for item in ElementCatalogItem.allCases where item != .frame && item != .text {
+            guard case .unavailable(let reason) = item.availability else {
+                return XCTFail("\(item) must not expose an unimplemented authoring command")
+            }
+            XCTAssertFalse(reason.isEmpty)
+            XCTAssertEqual(item.capabilityContract, reason)
+            XCTAssertTrue(item.accessibilityDescription.contains("Not available yet"))
+        }
+        let state = WorkspaceShellState()
+        let document = state.documentSession.document
+        for item in ElementCatalogItem.allCases {
+            if case .available(let tool) = item.availability { state.selectTool(tool) }
+        }
+        XCTAssertEqual(state.documentSession.document, document)
+        XCTAssertFalse(state.canUndo)
     }
 
     // SF-0201-006, SF-0201-008, SF-1902-006, SF-1902-008

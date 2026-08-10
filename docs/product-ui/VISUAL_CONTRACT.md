@@ -10,8 +10,9 @@ testable and keeps later product slices from presenting unavailable features as
 working software.
 
 `SF-PRODUCT-UI-001` establishes the shared window, launch, material, spacing,
-and state foundation. It implements no Element, Asset, Component, responsive,
-CMS, export, or publishing workflow.
+and state foundation. `SF-PRODUCT-UI-002` adds the truthful product-navigation
+foundation. It does not implement general Element, Asset, Component,
+responsive, CMS, export, or publishing workflows.
 
 ## Native window and scene
 
@@ -36,10 +37,14 @@ may contain only the bounded commands implemented by the command registry;
 unimplemented commands are not represented as enabled lookalikes.
 
 The left-side navigation architecture is Pages, Layers, Elements, Assets, and
-Components. Pages and Layers are currently implemented. Elements, Assets, and
-Components remain future destinations and must either be absent or visibly
-unavailable with a concise reason such as “Available in a later SiteForge
-milestone.” They must not imply editable or loaded content.
+Components. Pages and Layers remain functional. Elements is a real accessible
+catalogue: Section, Stack, Grid, Frame; Text, Button, Link, Divider; Navbar,
+and Footer have stable identities, icons, shortcuts/capability contracts, and
+availability state. Only Frame and plain Text route to the verified insertion
+registry today. Every other entry is disabled and says why it is not available;
+it must not create canonical content, history, or package state. Assets and
+Components are explicit accessible unavailable destinations until their
+separate storage/definition work exists.
 
 The inspector architecture is Design, Layout, Content, Interactions, and
 Accessibility. Current Layout, bounded design/style, geometry, guides, and
@@ -101,13 +106,13 @@ other private data.
 ## Implemented versus future capability
 
 Implemented now: one full-size native scene/window, project lifecycle states,
-Pages/Layers, a bounded canvas/renderer/overlay system, selection, insertion,
+Pages/Layers, the bounded Elements catalogue (Frame/plain Text only), a bounded canvas/renderer/overlay system, selection, insertion,
 transforms, guides, bounded plain-text editing, local drag/reorder, inspector
 summaries, native materials, and the central command/history/persistence
 boundaries documented in `docs/IMPLEMENTATION_STATUS.md`.
 
-Explicitly future: Elements/Assets/Components destinations and authoring,
-general property editing, gradients/effects, responsive editing, CMS,
+Explicitly future: container/basic/site Element authoring beyond Frame/plain
+Text, Asset storage/import, Component definitions/instances, general property editing, gradients/effects, responsive editing, CMS,
 production typography, asset import/placement, external drag/drop, export,
 publishing, plugins, and release acceptance. Naming these destinations in this
 contract does not make them implemented.
@@ -121,3 +126,8 @@ manifest at `docs/evidence/product-ui-001/README.md`. Existing requirements
 `SF-1505-007`, `SF-1505-008`, and `SF-1605-002`, `SF-1605-006`,
 `SF-1605-007`, `SF-1605-008` remain bounded/partial where the specification
 requires later authoring or release-scale acceptance.
+
+`SF-PRODUCT-UI-002` adds catalogue identity/availability/nonmutation unit
+coverage and an actual-app Elements/Assets/Components navigation journey. The
+same requirement IDs remain bounded/partial; this is a truthful navigation
+foundation, not an asset, component, or full element-authoring implementation.

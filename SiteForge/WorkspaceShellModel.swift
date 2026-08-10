@@ -47,9 +47,80 @@ enum CanvasTool: String, CaseIterable, Identifiable {
 enum NavigatorTab: String, CaseIterable, Identifiable {
     case pages
     case layers
+    case elements
+    case assets
+    case components
 
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
+}
+
+enum ElementCatalogAvailability: Equatable {
+    case available(CanvasTool)
+    case unavailable(String)
+}
+
+enum ElementCatalogItem: String, CaseIterable, Identifiable {
+    case section, stack, grid, frame, text, button, link, divider, navbar, footer
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var category: String {
+        switch self {
+        case .section, .stack, .grid, .frame: "Layout"
+        case .text, .button, .link, .divider: "Basic"
+        case .navbar, .footer: "Site"
+        }
+    }
+    var systemImage: String {
+        switch self {
+        case .section: "rectangle.split.3x1"
+        case .stack: "square.3.layers.3d"
+        case .grid: "square.grid.2x2"
+        case .frame: "rectangle.dashed"
+        case .text: "textformat"
+        case .button: "capsule"
+        case .link: "link"
+        case .divider: "minus"
+        case .navbar: "rectangle.topthird.inset.filled"
+        case .footer: "rectangle.bottomthird.inset.filled"
+        }
+    }
+    var keyboardPath: String {
+        switch self {
+        case .frame: "F"
+        case .text: "T"
+        default: "No shortcut"
+        }
+    }
+    var availability: ElementCatalogAvailability {
+        switch self {
+        case .frame: .available(.frame)
+        case .text: .available(.text)
+        case .section, .stack, .grid:
+            .unavailable("Layout containers require the next container-authoring milestone.")
+        case .button, .link, .divider:
+            .unavailable("This basic element is not available until its canonical content command is implemented.")
+        case .navbar, .footer:
+            .unavailable("Site sections are not available until responsive site structure is implemented.")
+        }
+    }
+    /// The precise bounded behavior this row is allowed to expose.  This is
+    /// editor-catalogue metadata, never an authored node or package member.
+    var capabilityContract: String {
+        switch availability {
+        case .available(.frame): "Arms the existing transactional Frame insertion path."
+        case .available(.text): "Arms the existing transactional plain-Text insertion path."
+        case .available: "No other insertion capability is currently available."
+        case .unavailable(let reason): reason
+        }
+    }
+    var accessibilityDescription: String {
+        switch availability {
+        case .available: "\(title), \(category) element. Shortcut \(keyboardPath). Inserts through the verified command registry."
+        case .unavailable: "\(title), \(category) element. Not available yet. \(capabilityContract)"
+        }
+    }
 }
 
 enum InspectorTab: String, CaseIterable, Identifiable {
@@ -89,6 +160,9 @@ enum ShellRegion: String, CaseIterable {
 enum ShellFocus: Hashable {
     case navigatorPages
     case navigatorLayers
+    case navigatorElements
+    case navigatorAssets
+    case navigatorComponents
     case navigatorPage(PageID)
     case navigatorLayer(NodeID)
     case viewportPreset
@@ -111,7 +185,7 @@ enum ShellFocusDirection {
 enum ShellFocusTraversal {
     static func order(pageIDs: [PageID], layerIDs: [NodeID] = []) -> [ShellFocus] {
         [
-            .navigatorPages, .navigatorLayers,
+            .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents,
         ] + pageIDs.map(ShellFocus.navigatorPage) + layerIDs.map(ShellFocus.navigatorLayer) + [
             .viewportPreset, .viewportZoomOut, .viewportZoomIn,
             .viewportReset, .viewportFit, .viewportCanvas,
@@ -140,6 +214,9 @@ extension ShellFocus {
         switch self {
         case .navigatorPages: "navigator.tab.pages"
         case .navigatorLayers: "navigator.tab.layers"
+        case .navigatorElements: "navigator.tab.elements"
+        case .navigatorAssets: "navigator.tab.assets"
+        case .navigatorComponents: "navigator.tab.components"
         case let .navigatorPage(id): NavigatorPageAccessibility.identifier(for: id)
         case let .navigatorLayer(id): "navigator.layer.\(id.description)"
         case .viewportPreset: "canvas.viewport.preset"

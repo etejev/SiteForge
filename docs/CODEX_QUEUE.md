@@ -4,17 +4,25 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-None.
+- [ ] `SF-PRODUCT-UI-003` Establish truthful inspector navigation and unavailable Content/Interactions foundations.
+  - Bounded scope: align the current inspector navigation with the visual contract while retaining working selection/layout summaries; represent unfinished Content and Interactions as accessible unavailable states with reasons. Do not implement property mutation, responsive editing, effects, export, or publishing.
+  - Dependencies: `SF-PRODUCT-UI-002`.
 
 ## IN PROGRESS
 
 None.
 
+## DONE
+
+- [x] `SF-PRODUCT-UI-002` Establish product navigation, native menu architecture, and a truthful Elements-pane foundation.
+  - Requirements: bounded evidence for `SF-0201-002`, `SF-0201-006`, `SF-0201-008`, `SF-0203-006`, and `SF-1505-006` through `SF-1505-008`. The normative modules remain Partial where later elements, content editing, assets, components, export, and release acceptance are unproven.
+  - Result: Pages/Layers remain functional; Elements is a scene-local noncanonical catalogue with stable identities, category/order, icon, keyboard path, availability, and capability contract. Only Frame and plain Text arm the existing verified insertion path. Section, Stack, Grid, Button, Link, Divider, Navbar, Footer, Assets, and Components expose truthful unavailable reasons and cannot mutate canonical document, history, or package state. The native menu names the existing tool group Insert, and the expanded navigator participates in complete forward/reverse keyboard traversal.
+  - Verification: focused catalogue plus keyboard/navigator UI journeys passed 3/3. `./sf verify` passed on 2026-08-10 with 291 unit and 30 UI tests (321 total), zero failures; repository, security, traceability, architecture, migration, evidence, and fixture-hygiene checks passed. Evidence: `docs/evidence/product-ui-002/README.md`.
+  - Explicitly deferred: actual Section/Stack/Grid/Button/Link/Divider/Navbar/Footer authoring, asset storage/import, component definitions/instances, property editing, responsive behavior, gradients/effects, export, publishing, OS-level VoiceOver/settings acceptance, and release acceptance.
+
 ## BLOCKED
 
 None.
-
-## DONE
 
 - [x] `SF-PRODUCT-UI-001` Establish the full-window launch and final-product visual-system foundation.
   - Requirements: bounded evidence for `SF-0201-002`, `SF-0201-003`, `SF-0201-006`, `SF-0201-008`, `SF-1505-006` through `SF-1505-008`, and `SF-1605-002`, `SF-1605-006` through `SF-1605-008`. These normative requirements remain Partial where later authoring, performance, and release acceptance is unproven.

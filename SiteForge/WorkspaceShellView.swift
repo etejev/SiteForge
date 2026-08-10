@@ -275,7 +275,15 @@ private struct NavigatorView: View {
                 identifierPrefix: "navigator.tab",
                 title: \NavigatorTab.title,
                 focus: focus,
-                focusValue: { $0 == .pages ? .navigatorPages : .navigatorLayers }
+                focusValue: {
+                    switch $0 {
+                    case .pages: .navigatorPages
+                    case .layers: .navigatorLayers
+                    case .elements: .navigatorElements
+                    case .assets: .navigatorAssets
+                    case .components: .navigatorComponents
+                    }
+                }
             )
 
             if state.navigatorTab == .pages {
@@ -294,7 +302,7 @@ private struct NavigatorView: View {
                 }
                 .accessibilityLabel("Pages navigator")
                 .accessibilityIdentifier("navigator.pages.list")
-            } else {
+            } else if state.navigatorTab == .layers {
                 if state.layerTargets.isEmpty {
                     ContentUnavailableView {
                         Label("No Selectable Layers", systemImage: "square.3.layers.3d")
@@ -314,12 +322,85 @@ private struct NavigatorView: View {
                     .accessibilityLabel("Layers navigator")
                     .accessibilityIdentifier("navigator.layers.list")
                 }
+            } else if state.navigatorTab == .elements {
+                ElementsCatalogView(state: state)
+            } else {
+                FutureNavigatorDestinationView(tab: state.navigatorTab)
             }
         }
         .padding(10)
         .workspaceChrome(.navigator)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.navigator.rawValue)
+    }
+}
+
+private struct ElementsCatalogView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(["Layout", "Basic", "Site"], id: \.self) { category in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(category).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(ElementCatalogItem.allCases.filter { $0.category == category }) { item in
+                            ElementCatalogRow(item: item, state: state)
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .accessibilityLabel("Elements catalog")
+        .accessibilityIdentifier("navigator.elements.catalog")
+    }
+}
+
+private struct ElementCatalogRow: View {
+    let item: ElementCatalogItem
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        let availability = item.availability
+        Button {
+            if case .available(let tool) = availability { state.selectTool(tool) }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: item.systemImage).frame(width: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title)
+                    Text(item.keyboardPath).font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if case .unavailable = availability {
+                    Image(systemName: "clock").foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled({ if case .unavailable = availability { true } else { false } }())
+        .accessibilityIdentifier("navigator.elements.\(item.rawValue)")
+        .accessibilityLabel(item.title)
+        .accessibilityHint(item.accessibilityDescription)
+    }
+}
+
+private struct FutureNavigatorDestinationView: View {
+    let tab: NavigatorTab
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("\(tab.title) Not Available Yet", systemImage: tab == .assets ? "photo.on.rectangle" : "square.stack.3d.up")
+        } description: {
+            Text(tab == .assets
+                 ? "Asset storage and import are planned for a later SiteForge milestone."
+                 : "Component definitions and instances are planned for a later SiteForge milestone.")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("\(tab.title) not available yet")
+        .accessibilityIdentifier("navigator.\(tab.rawValue).unavailable")
     }
 }
 

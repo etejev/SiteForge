@@ -810,6 +810,43 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["status.document"].exists)
     }
 
+    // SF-0201-002, SF-0201-006, SF-0201-008
+    @MainActor
+    func testProductNavigatorProvidesTruthfulElementsAssetsAndComponentsDestinations() throws {
+        let application = launchWorkspace()
+
+        let elements = application.buttons["navigator.tab.elements"]
+        XCTAssertTrue(waitForHittable(elements, in: application))
+        elements.click()
+        XCTAssertTrue(application.descendants(matching: .any)["navigator.elements.catalog"].exists)
+
+        let frame = application.buttons["navigator.elements.frame"]
+        let text = application.buttons["navigator.elements.text"]
+        XCTAssertTrue(frame.isEnabled)
+        XCTAssertTrue(text.isEnabled)
+        XCTAssertEqual(frame.label, "Frame")
+        XCTAssertEqual(text.label, "Text")
+        for identifier in ["section", "stack", "grid", "button", "link", "divider", "navbar", "footer"] {
+            let item = application.buttons["navigator.elements.\(identifier)"]
+            XCTAssertTrue(item.exists, identifier)
+            XCTAssertFalse(item.isEnabled, identifier)
+        }
+
+        frame.click()
+        XCTAssertEqual(application.buttons["toolbar.tool.frame"].value as? String, "Selected")
+        application.typeKey(.escape, modifierFlags: [])
+
+        let assets = application.buttons["navigator.tab.assets"]
+        XCTAssertTrue(waitForHittable(assets, in: application))
+        assets.click()
+        XCTAssertTrue(application.descendants(matching: .any)["navigator.assets.unavailable"].exists)
+
+        let components = application.buttons["navigator.tab.components"]
+        XCTAssertTrue(waitForHittable(components, in: application))
+        components.click()
+        XCTAssertTrue(application.descendants(matching: .any)["navigator.components.unavailable"].exists)
+    }
+
     // SF-0201-006, SF-0201-008, SF-1902-008
     @MainActor
     func testWorkspaceReadinessDoesNotDependOnPreviewPointerVisibility() throws {
@@ -997,6 +1034,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(application.buttons["navigator.tab.layers"], in: application))
         application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["navigator.tab.elements"], in: application))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["navigator.tab.assets"], in: application))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["navigator.tab.components"], in: application))
+        application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(pageRow(named: "Home", in: application), in: application))
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(pageRow(named: "Not Found", in: application), in: application))
@@ -1047,6 +1090,9 @@ final class SiteForgeLaunchTests: XCTestCase {
             application.descendants(matching: .any)["canvas.viewport.preset"],
             pageRow(named: "Not Found", in: application),
             pageRow(named: "Home", in: application),
+            application.buttons["navigator.tab.components"],
+            application.buttons["navigator.tab.assets"],
+            application.buttons["navigator.tab.elements"],
             application.buttons["navigator.tab.layers"],
             pages,
         ]
