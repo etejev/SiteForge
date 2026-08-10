@@ -16,6 +16,13 @@ None.
 
 ## DONE
 
+- [x] `SF-PRODUCT-UI-001` Establish the full-window launch and final-product visual-system foundation.
+  - Requirements: bounded evidence for `SF-0201-002`, `SF-0201-003`, `SF-0201-006`, `SF-0201-008`, `SF-1505-006` through `SF-1505-008`, and `SF-1605-002`, `SF-1605-006` through `SF-1605-008`. These normative requirements remain Partial where later authoring, performance, and release acceptance is unproven.
+  - Result: welcome, loading, recovery, failure, and workspace share one normal native macOS window. First launch uses `NSScreen.visibleFrame` (menu bar/Dock respected; no full-screen Space); native autosave restores valid user geometry and falls back from malformed/off-screen/under-minimum restoration. Explicit Debug/UI-test edge placement remains higher priority and Release-isolated. `docs/product-ui/VISUAL_CONTRACT.md` defines the native menu, unified chrome, navigation/inspector architecture, material/contrast/focus/spacing rules, and truthful future-capability boundary.
+  - Verification: `./sf verify` passed on 2026-08-09 with 290 unit and 29 UI tests, zero failures; repository/security/traceability/architecture/migration/evidence checks passed. `docs/evidence/product-ui-001/README.md` retains the reproducible visual-state review route.
+  - Explicitly deferred: Elements/Assets/Components implementation, Content/Interactions editing, gradients/effects, responsive/CMS, export, publishing, release accessibility QA, and final hardware performance budgets.
+
+
 - [x] `SF-AUTHORING-009` Implement the bounded drag-and-drop authoring foundation.
   - Requirements: `SF-0408-001` through `SF-0408-008` (bounded local reorder/nest/place slice; the normative module remains Partial overall).
   - Acceptance: establish one scene-owned drag session with stable source, destination, insertion-point, document, page, revision, and renderer identities; route the implemented pointer, contextual, named-accessibility, and automation paths through one typed transactional registry; preserve exact preview/commit parity, cancellation and stale-result neutrality, undo/redo, persistence/recovery, deterministic ordering, accessibility, redaction, and bounded scale. External imports, connected resources, cross-project transfer, broad asset-library work, and export generation require separately bounded acceptance.

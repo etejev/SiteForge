@@ -329,6 +329,56 @@ enum WorkspaceMetrics {
     }
 }
 
+/// A small, value-only policy for the normal macOS window. It deliberately
+/// has no relationship to canonical project state: AppKit owns restoration,
+/// while the policy only decides whether a restored frame is safe to retain.
+enum WorkspaceWindowPresentation {
+    static let frameAutosaveName = "SiteForge.workspace.window"
+
+    static func acceptsRestoredFrame(
+        _ frame: CGRect,
+        visibleFrame: CGRect,
+        minimumFrameSize: CGSize
+    ) -> Bool {
+        guard frame.isFiniteRect,
+              visibleFrame.isFiniteRect,
+              frame.width >= minimumFrameSize.width,
+              frame.height >= minimumFrameSize.height,
+              frame.intersects(visibleFrame) else { return false }
+
+        // A restored frame must retain a meaningful visible title-bar/pointer
+        // target. This rejects an old display's completely off-screen frame
+        // without unnecessarily recentering a user-positioned workspace.
+        return frame.intersection(visibleFrame).width >= 96
+            && frame.intersection(visibleFrame).height >= 96
+    }
+
+    static func initialFrame(
+        visibleFrame: CGRect,
+        restoredFrame: CGRect?,
+        minimumFrameSize: CGSize
+    ) -> CGRect {
+        if let restoredFrame,
+           acceptsRestoredFrame(
+            restoredFrame,
+            visibleFrame: visibleFrame,
+            minimumFrameSize: minimumFrameSize
+           ) {
+            return restoredFrame
+        }
+        // `visibleFrame` is AppKit's usable display area: it excludes the
+        // menu bar and Dock while remaining a normal (non-Space) window.
+        return visibleFrame
+    }
+}
+
+private extension CGRect {
+    var isFiniteRect: Bool {
+        [minX, minY, width, height].allSatisfy(\.isFinite)
+            && width > 0 && height > 0
+    }
+}
+
 enum WorkspaceUITestWindowAlignment: String {
     case left
     case right

@@ -115,6 +115,52 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertNil(WorkspaceMetrics.requestedWindowSize(arguments: ["SiteForge"]))
     }
 
+    // SF-0201-002, SF-0201-003, SF-0201-008
+    func testNormalWindowPresentationUsesUsableScreenAndSafelyRetainsRestoration() {
+        let visible = CGRect(x: 0, y: 24, width: 1_800, height: 1_076)
+        let minimumFrame = CGSize(width: 1_100, height: 752)
+        let restored = CGRect(x: 180, y: 120, width: 1_240, height: 820)
+
+        XCTAssertTrue(WorkspaceWindowPresentation.acceptsRestoredFrame(
+            restored,
+            visibleFrame: visible,
+            minimumFrameSize: minimumFrame
+        ))
+        XCTAssertEqual(
+            WorkspaceWindowPresentation.initialFrame(
+                visibleFrame: visible,
+                restoredFrame: restored,
+                minimumFrameSize: minimumFrame
+            ),
+            restored
+        )
+        XCTAssertEqual(
+            WorkspaceWindowPresentation.initialFrame(
+                visibleFrame: visible,
+                restoredFrame: CGRect(x: -1_500, y: 0, width: 1_240, height: 820),
+                minimumFrameSize: minimumFrame
+            ),
+            visible,
+            "An invalid old-display frame must fall back to the normal usable display, never fullscreen."
+        )
+    }
+
+    // SF-0201-002, SF-0201-008
+    func testNormalWindowPresentationRejectsUndersizedAndMalformedRestoration() {
+        let visible = CGRect(x: 0, y: 24, width: 1_600, height: 900)
+        let minimumFrame = CGSize(width: 1_100, height: 752)
+        XCTAssertFalse(WorkspaceWindowPresentation.acceptsRestoredFrame(
+            CGRect(x: 20, y: 20, width: 1_099, height: 752),
+            visibleFrame: visible,
+            minimumFrameSize: minimumFrame
+        ))
+        XCTAssertFalse(WorkspaceWindowPresentation.acceptsRestoredFrame(
+            CGRect(x: CGFloat.nan, y: 20, width: 1_200, height: 800),
+            visibleFrame: visible,
+            minimumFrameSize: minimumFrame
+        ))
+    }
+
     // SF-0201-008, SF-1605-008, SF-1902-008
     func testConstrainedDisplayPlacementPreservesProductionMetricsAndExposesEveryRequestedEdge() {
         let visibleFrame = CGRect(x: 0, y: 0, width: 1_024, height: 768)

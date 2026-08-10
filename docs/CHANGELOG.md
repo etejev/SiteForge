@@ -6,6 +6,8 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Full-window product UI foundation: SiteForge now configures welcome, loading, recovery/failure, and editor as one normal macOS workspace window. First launch fills the usable display area without entering a separate full-screen Space; valid user geometry restores through AppKit and invalid restoration safely falls back. The new visual contract documents the native menu, unified chrome, future navigation/inspector architecture, materials, spacing, accessibility states, and clear boundaries for unfinished capabilities.
+
 - Bounded local Layers drag-and-drop authoring: transactional sibling reorder and frame nesting through stable identities, deterministic insertion previews, exact undo/redo, and noncanonical drag-session state. The source-level pointer capability supports bounded same-page “before row” placement, including compatible cross-parent placement; nesting is available through the shared contextual, named-accessibility, and automation registry paths. An explicitly declared internal drag type keeps generic text and Finder payloads outside the local move path. End-to-end native drag terminal cleanup remains a documented later boundary.
 - Reproducible 100-/10,000-node drag-preparation evidence plus a retained running-app Layers contextual reorder/undo/redo screenshot; drag session, payload, preview, and indicators remain excluded from packages, history, autosave/recovery, and preview/export snapshots.
 

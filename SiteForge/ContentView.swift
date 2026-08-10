@@ -23,6 +23,18 @@ struct ContentView: View {
                 LaunchExperienceView(controller: launchExperience)
             }
         }
+        // This bridge deliberately belongs to the scene root rather than the
+        // editor shell: welcome, loading, recovery and the workspace are one
+        // native document window with one restoration policy.
+        .background {
+            // UI-test edge/minimum placement is deliberately attached by the
+            // workspace shell after its accessibility hierarchy exists. It
+            // avoids a launch-time geometry race without leaking into Release.
+            if DebugTestComposition.current().boolValue(after: "-SiteForgeUITestMode") != true {
+                WorkspaceWindowConfigurator()
+                    .frame(width: 0, height: 0)
+            }
+        }
         .preferredColorScheme(WorkspaceMaterialPolicy.preferredColorScheme())
         .alert(
             launchExperience.lifecycle.pendingUnsavedChangesPrompt?.transition.title ?? "Save changes?",

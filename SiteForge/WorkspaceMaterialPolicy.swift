@@ -218,6 +218,7 @@ final class WorkspaceWindowConfigurationView: NSView {
     private var configurationScheduled = false
     private var originalWindowMinimumSize: CGSize?
     private var requestedWindowFrameSize: CGSize?
+    private var didApplyNormalPresentation = false
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -263,6 +264,8 @@ final class WorkspaceWindowConfigurationView: NSView {
                 // a hosted test display.
                 window.setFrame(frame, display: true, animate: false)
             }
+        } else if DebugTestComposition.current().boolValue(after: "-SiteForgeUITestMode") != true {
+            applyNormalPresentationIfNeeded(to: window)
         }
     }
 
@@ -276,6 +279,7 @@ final class WorkspaceWindowConfigurationView: NSView {
         configurationScheduled = false
         originalWindowMinimumSize = nil
         requestedWindowFrameSize = nil
+        didApplyNormalPresentation = false
     }
 
     private func installPlacementObserversIfNeeded() {
@@ -319,6 +323,30 @@ final class WorkspaceWindowConfigurationView: NSView {
     private func applyUITestMinimumSize(to window: NSWindow) {
         guard let originalWindowMinimumSize else { return }
         window.minSize = WorkspaceMetrics.effectiveMinimumWindowSize()
+    }
+
+    private func applyNormalPresentationIfNeeded(to window: NSWindow) {
+        guard !didApplyNormalPresentation,
+              let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame else { return }
+        didApplyNormalPresentation = true
+
+        window.minSize = WorkspaceMetrics.minimumWindowSize
+        window.setFrameAutosaveName(WorkspaceWindowPresentation.frameAutosaveName)
+        let restored = window.setFrameUsingName(WorkspaceWindowPresentation.frameAutosaveName)
+            ? window.frame : nil
+        let minimumFrameSize = WorkspaceMetrics.requestedWindowFrameSize(
+            contentSize: WorkspaceMetrics.minimumWindowSize,
+            currentFrameSize: window.frame.size,
+            currentContentLayoutSize: window.contentLayoutRect.size
+        )
+        let desired = WorkspaceWindowPresentation.initialFrame(
+            visibleFrame: visibleFrame,
+            restoredFrame: restored,
+            minimumFrameSize: minimumFrameSize
+        )
+        if !window.frame.isApproximatelyEqual(to: desired) {
+            window.setFrame(desired, display: true, animate: false)
+        }
     }
 }
 

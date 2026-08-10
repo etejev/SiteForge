@@ -1736,7 +1736,7 @@ struct SiteForgeCommands: Commands {
                 .disabled(launchExperience?.isWorkspaceVisible != true || state?.canRedo != true)
         }
 
-        CommandMenu("Tools") {
+        CommandMenu("Insert") {
             ForEach(CanvasTool.allCases) { tool in
                 Button {
                     state?.selectTool(tool)
