@@ -410,7 +410,16 @@ actor FileAccessService {
     }
 
     nonisolated static func key(for url: URL) -> String {
-        SHA256.hash(data: Data(url.standardizedFileURL.path.utf8))
+        // Bookmark lookup is an authorization alias, not a filesystem trust
+        // decision. Normalize the OS-owned /var alias lexically; resolving a
+        // non-existent child can otherwise produce a different spelling after
+        // the first save. Descriptor-bound I/O independently rejects untrusted
+        // symlink traversal at use time.
+        let path = url.path
+        let canonicalPath = path == "/var" || path.hasPrefix("/var/")
+            ? "/private" + path
+            : path
+        return SHA256.hash(data: Data(canonicalPath.utf8))
             .map { String(format: "%02x", $0) }.joined()
     }
 }
@@ -444,6 +453,17 @@ final class ProjectFilePresenter: NSObject, NSFilePresenter, @unchecked Sendable
     func presentedItemDidMove(to newURL: URL) {
         lock.withLock { itemURL = newURL }
         handler(.moved(newURL))
+    }
+
+    // The lifecycle controller owns canonical adoption on the main actor; the
+    // presenter itself has no buffered file state to flush. Relinquish promptly
+    // so an external coordinated writer or mover cannot wait on that actor.
+    func relinquishPresentedItem(toWriter writer: @escaping @Sendable ((@Sendable () -> Void)?) -> Void) {
+        writer(nil)
+    }
+
+    func relinquishPresentedItem(toReader reader: @escaping @Sendable ((@Sendable () -> Void)?) -> Void) {
+        reader(nil)
     }
 
     func accommodatePresentedItemDeletion(completionHandler: @escaping @Sendable (Error?) -> Void) {

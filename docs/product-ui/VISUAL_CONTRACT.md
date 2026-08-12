@@ -11,22 +11,27 @@ working software.
 
 `SF-PRODUCT-UI-001` establishes the shared window, launch, material, spacing,
 and state foundation. `SF-PRODUCT-UI-002` adds the truthful product-navigation
-foundation. It does not implement general Element, Asset, Component,
-responsive, CMS, export, or publishing workflows.
+foundation. `SF-PRODUCT-UI-003` establishes inspector navigation, truthful
+unavailable Content and Interactions destinations, legible bounded Frame
+defaults, and normal maximized-window presentation. These milestones do not
+implement general Element, Asset, Component, property, interaction, responsive,
+CMS, export, or publishing workflows.
 
 ## Native window and scene
 
-- SiteForge uses a normal, resizable macOS document window. On first launch it
-  occupies the current screen’s AppKit `visibleFrame`, which respects the menu
-  bar and Dock; it does **not** enter a separate full-screen Space.
+- SiteForge uses one native, resizable macOS document window. On first launch
+  it is maximized to `NSScreen.visibleFrame`; the menu bar and Dock remain
+  available and SiteForge never enters a separate full-screen Space.
+- Valid user resize and position restoration takes precedence on later launch;
+  malformed/off-screen/under-minimum restoration falls back safely.
 - Welcome, project creation, opening/loading, recovery, failure/retry, preview
   presentation, and the workspace are states of the same native window.
 - AppKit’s frame autosave restores a valid user-resized/repositioned workspace.
   A malformed, off-screen, or under-minimum restoration falls back to the
   usable display frame. The editor content minimum remains 1100 × 700 points.
 - Debug/UI-test constrained-display placement is an explicit Debug-only seam.
-  Release composition ignores every automation argument and keeps normal
-  minimum-size/restoration behavior.
+  Release composition ignores every automation argument and retains normal
+  visible-frame/maximized presentation and restoration behavior.
 
 ## Application navigation
 
@@ -46,11 +51,13 @@ it must not create canonical content, history, or package state. Assets and
 Components are explicit accessible unavailable destinations until their
 separate storage/definition work exists.
 
-The inspector architecture is Design, Layout, Content, Interactions, and
-Accessibility. Current Layout, bounded design/style, geometry, guides, and
-Accessibility summaries are truthful inspection surfaces. Content and
-Interactions require their later canonical-property/interaction slices; they
-must not appear as editable simulated controls before then.
+The inspector order is Design, Layout, Content, Interactions, and
+Accessibility. Design is a read-only appearance summary; Layout retains the
+bounded geometry, transform, guide, and snapping controls; Accessibility is a
+read-only selection summary. Content and Interactions are intentionally
+selectable native unavailable surfaces: each states why it cannot operate and
+what later canonical milestone is required. They expose no simulated editable
+fields, interaction controls, command, history, package, or canonical mutation.
 
 ## Surface system
 
@@ -68,6 +75,19 @@ must not appear as editable simulated controls before then.
 - Canvas remains visually distinct from surrounding chrome through material
   boundaries, native separators, and its under-page background—not static
   gradients or simulated glass.
+- **Coordinate convention:** canonical world, viewport, and device space use
+  a top-left origin with X increasing right and Y increasing down. AppKit
+  pointer/input conversion, Core Animation content tiles, editor overlays,
+  selection handles, guides/snapping, hit testing, inline text editing, and
+  preview/export-facing scene snapshots consume that convention directly. The
+  tile drawing boundary performs the one required Core Graphics Y-up → canvas
+  Y-down conversion before AppKit draws text; individual labels never rotate
+  or compensate for a coordinate mismatch.
+- A newly inserted blank Frame has a deterministic restrained authored surface:
+  a neutral fill, thin separator border, and its canonical `Frame` name. When
+  selected, an editor-only accent outline and context chip identify the Frame,
+  its dimensions, and parent. The chip, outline, handles, and selection state
+  never enter the canonical package, history, preview, or export snapshots.
 
 ## Spacing, type, controls, and responsive rules
 
@@ -81,6 +101,12 @@ must not appear as editable simulated controls before then.
   help, or accessibility labels whenever their action is not self-evident.
 - Navigator: 210–300 pt; inspector: 280–360 pt; canvas keeps a 500 pt minimum.
   The 1100 × 700 editor minimum prevents clipping/overlap in normal use.
+- The viewport header remains visible above the canvas. It contains a labeled
+  preview-viewport preset (Desktop 1440, Tablet, or Mobile), zoom out/current
+  percentage/zoom in, Actual Size, Fit to Canvas, and Fit to Document. At
+  explicitly constrained Debug/UI-test geometry these remain real named native
+  controls; an overflow affordance, when required by a later narrower layout,
+  must stay visible rather than hiding functional controls behind automation.
 - At explicitly constrained Debug/UI-test geometry, tests may expose safe
   screen edges while retaining the production metrics as the Release contract.
 
@@ -107,8 +133,9 @@ other private data.
 
 Implemented now: one full-size native scene/window, project lifecycle states,
 Pages/Layers, the bounded Elements catalogue (Frame/plain Text only), a bounded canvas/renderer/overlay system, selection, insertion,
-transforms, guides, bounded plain-text editing, local drag/reorder, inspector
-summaries, native materials, and the central command/history/persistence
+transforms, guides, bounded plain-text editing, local drag/reorder, the ordered
+read-only Design/Layout/Accessibility inspector summaries, native unavailable
+Content/Interactions destinations, native materials, and the central command/history/persistence
 boundaries documented in `docs/IMPLEMENTATION_STATUS.md`.
 
 Explicitly future: container/basic/site Element authoring beyond Frame/plain
@@ -131,3 +158,23 @@ requires later authoring or release-scale acceptance.
 coverage and an actual-app Elements/Assets/Components navigation journey. The
 same requirement IDs remain bounded/partial; this is a truthful navigation
 foundation, not an asset, component, or full element-authoring implementation.
+
+`SF-PRODUCT-UI-003` adds inspector identity/availability/nonmutation unit
+coverage, complete forward/reverse inspector focus traversal, a visible selected
+Frame journey with undo/redo, normal maximized visible-frame restoration policy
+coverage, and an actual-app Content/Interactions unavailable-state journey.
+Reproducible visual review paths, including each inspector tab, empty, single,
+multiple, and locked selection variants, are recorded in
+`docs/evidence/product-ui-003/README.md`.
+
+## Testing workflow
+
+- During bounded implementation, use focused tests or `./sf test changed`.
+  Documentation-only changes use repository/traceability checks; uncertain
+  change mapping uses `./sf test half`.
+- Use focused real-app UI journeys for the changed surface while iterating.
+  `./sf verify` is the local completion gate, required before a milestone is
+  committed or pushed and after cross-cutting persistence/history/schema,
+  shared-shell/focus, security, or CI-tooling changes.
+- GitHub Actions remains the authoritative post-push full gate. No READY item
+  is marked complete from focused or changed-only testing.

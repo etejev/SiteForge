@@ -346,7 +346,12 @@ struct InsertionCommandRegistry: Sendable {
             property(command.nodeID, "layout.y", .number(command.geometry.origin.y), placementOrigin),
             property(command.nodeID, "layout.width", .number(command.geometry.size.width), .defaulted),
             property(command.nodeID, "layout.height", .number(command.geometry.size.height), .defaulted),
-            property(command.nodeID, "style.fill", .string(command.kind == .frame ? "canvas" : "text-placeholder"), .defaulted),
+            // A blank frame must still be legible as a structural container.
+            // These deterministic canonical defaults are authored appearance;
+            // the selection outline and contextual measurement label remain
+            // editor-only overlays.
+            property(command.nodeID, "style.fill", .string(command.kind == .frame ? "surface" : "text-placeholder"), .defaulted),
+            property(command.nodeID, "style.border", .string(command.kind == .frame ? "subtle" : "none"), .defaulted),
         ]
         if let text = command.text {
             properties.append(property(command.nodeID, "content.text", .string(text), .defaulted))

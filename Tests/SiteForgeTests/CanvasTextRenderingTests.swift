@@ -34,7 +34,7 @@ final class CanvasTextRenderingTests: XCTestCase {
         let changed = changedPixels(from: withoutText, to: withText, width: 300)
         XCTAssertFalse(changed.isEmpty)
         XCTAssertTrue(
-            changed.allSatisfy { (32..<212).contains($0.x) && (24..<66).contains($0.y) },
+            changed.allSatisfy { (32..<212).contains($0.x) && (16..<66).contains($0.y) },
             "Committed-text pixels escaped the authored frame: \(pixelBounds(changed))"
         )
 
@@ -60,9 +60,70 @@ final class CanvasTextRenderingTests: XCTestCase {
         )
         XCTAssertFalse(clippedChanged.isEmpty)
         XCTAssertTrue(
-            clippedChanged.allSatisfy { (32..<72).contains($0.x) && (24..<66).contains($0.y) },
+            clippedChanged.allSatisfy { (32..<72).contains($0.x) && (16..<66).contains($0.y) },
             "Committed-text pixels escaped the authored clip: \(pixelBounds(clippedChanged))"
         )
+
+        let namedFrame = CanvasRenderObject(
+            id: NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000202")!),
+            frame: base.frame,
+            clipRect: base.clipRect,
+            paintOrder: 0,
+            style: .frameSurface,
+            isVisible: true,
+            accessibilityLabel: "Frame object",
+            displayName: "Frame"
+        )
+        let unnamedFrame = CanvasRenderObject(
+            id: namedFrame.id,
+            frame: namedFrame.frame,
+            clipRect: namedFrame.clipRect,
+            paintOrder: namedFrame.paintOrder,
+            style: namedFrame.style,
+            isVisible: namedFrame.isVisible,
+            accessibilityLabel: namedFrame.accessibilityLabel
+        )
+        let frameLabelPixels = changedPixels(
+            from: rasterizedBytes(object: unnamedFrame, viewport: viewport),
+            to: rasterizedBytes(object: namedFrame, viewport: viewport),
+            width: 300
+        )
+        XCTAssertFalse(frameLabelPixels.isEmpty)
+        XCTAssertTrue(
+            frameLabelPixels.allSatisfy { (32..<212).contains($0.x) && (16..<66).contains($0.y) },
+            "Frame-name pixels escaped the authored frame: \(pixelBounds(frameLabelPixels))"
+        )
+    }
+
+    // SF-0401-001, SF-0401-004, SF-0402-006, SF-0405-006, SF-0406-001 —
+    // the shared AppKit/Core Graphics tile boundary performs exactly one
+    // reversible Y conversion across canonical viewport values.
+    func testFrameAndTextUseOneUprightTopLeftTileConventionAcrossViewportMatrix() throws {
+        let tileBounds = CGRect(x: 0, y: 0, width: 320, height: 240)
+        for zoom in [CanvasZoom.minimum, .actualSize, CanvasZoom.maximum] {
+            for pixelRatio in [try CanvasPixelRatio(1), try CanvasPixelRatio(2)] {
+                for worldOrigin in [WorldPoint(x: -32, y: -24), WorldPoint(x: 20, y: 16)] {
+                    let transform = try CanvasCoordinateTransform(
+                        worldOrigin: worldOrigin,
+                        zoom: zoom,
+                        pixelRatio: pixelRatio
+                    )
+                    let canonicalOrigin = WorldPoint(x: worldOrigin.x + 16, y: worldOrigin.y + 14)
+                    let viewportOrigin = try transform.worldToViewport(canonicalOrigin)
+                    let canonicalRect = CGRect(
+                        x: viewportOrigin.x,
+                        y: viewportOrigin.y,
+                        width: 40 * zoom.value,
+                        height: 28 * zoom.value
+                    )
+                    let rasterRect = CanvasTileTextCoordinateSpace.drawingRect(for: canonicalRect, in: tileBounds)
+                    XCTAssertEqual(rasterRect.minX, canonicalRect.minX, accuracy: 0.000_001)
+                    XCTAssertEqual(rasterRect.height, canonicalRect.height, accuracy: 0.000_001)
+                    XCTAssertTrue(abs((rasterRect.minY + canonicalRect.maxY) - tileBounds.height) < 0.000_001)
+                    XCTAssertEqual(try transform.viewportToWorld(viewportOrigin), canonicalOrigin)
+                }
+            }
+        }
     }
 
     private func rasterizedBytes(object: CanvasRenderObject, viewport: CanvasViewportState) -> Data {

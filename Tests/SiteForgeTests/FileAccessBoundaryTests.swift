@@ -2,11 +2,14 @@ import XCTest
 @testable import SiteForge
 
 final class FileAccessBoundaryTests: XCTestCase {
-    private var fixtureLease: RepositoryTestFixture!
+    // These exercises pass real packages through descriptor-bound I/O. Keep
+    // that system boundary inside the test host's owned temporary container;
+    // a checkout can live beneath a File Provider or a user-selected folder.
+    private var fixtureLease: ApplicationOwnedTestFixture!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        fixtureLease = try RepositoryTestFixture.create("file-access")
+        fixtureLease = try ApplicationOwnedTestFixture.create("file-access")
     }
 
     override func tearDownWithError() throws {
@@ -55,10 +58,14 @@ final class FileAccessBoundaryTests: XCTestCase {
             coordinator: FileCoordinatorProbe()
         )
 
+        let projectKeyBeforeSave = FileAccessService.key(for: projectURL)
         try await first.authorizeUserSelection(projectURL)
+        let persistedBeforeSave = await bookmarks.bookmark(for: projectKeyBeforeSave)
+        XCTAssertNotNil(persistedBeforeSave)
         try await first.withAccess(to: projectURL, intent: .save) {
             try Data("created".utf8).write(to: $0)
         }
+        XCTAssertEqual(FileAccessService.key(for: projectURL), projectKeyBeforeSave)
         let relaunched = FileAccessService(
             policy: .sandboxedUserSelectedReadWrite,
             runtime: runtime,

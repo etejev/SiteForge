@@ -4,15 +4,21 @@ Codex processes the first READY item whose dependencies are satisfied. Keep item
 
 ## READY
 
-- [ ] `SF-PRODUCT-UI-003` Establish truthful inspector navigation and unavailable Content/Interactions foundations.
-  - Bounded scope: align the current inspector navigation with the visual contract while retaining working selection/layout summaries; represent unfinished Content and Interactions as accessible unavailable states with reasons. Do not implement property mutation, responsive editing, effects, export, or publishing.
-  - Dependencies: `SF-PRODUCT-UI-002`.
+None.
 
 ## IN PROGRESS
 
 None.
 
 ## DONE
+
+- [x] `SF-PRODUCT-UI-003` Establish Inspector navigation, visible selected-frame presentation, normal maximized-window launch, and tiered local testing foundations.
+  - Requirements: bounded evidence for `SF-0201-002`, `SF-0201-003`, `SF-0201-006`, `SF-0201-008`, `SF-0203-006`, `SF-0203-008`, and `SF-1505-006` through `SF-1505-008`. The normative modules remain Partial where general property editing, interaction authoring, responsive behavior, export, and release acceptance are unproven.
+  - Bounded scope: align Inspector navigation with the visual contract while retaining working selection/layout, geometry, guide, snapping, and accessibility summaries; make fresh canonical Frames visibly legible with deterministic surface defaults while retaining editor-only selection context; launch into a normal maximized `NSScreen.visibleFrame` window (menu bar and Dock remain available) and preserve a later user move/resize; retain deterministic constrained Debug/UI-test geometry; and document tiered local feedback versus final full gates. Do not implement property mutation, responsive editing, effects, export, or publishing.
+  - Result: Inspector order is Design, Layout, Content, Interactions, Accessibility. Content/Interactions are accessible truthful unavailable destinations with no canonical/history/package mutation. Blank project roots remain structural and nonvisual; the empty canvas offers real named Frame/Text actions. Those actions construct current document/page/revision identity before arming, execute one canonical insertion transaction, and explicitly request identity-gated scene/renderer adoption; Frame/Text, Layers, selection, accessibility, undo/redo, and persistence therefore share the inserted `NodeID` and frame. Fresh Frames store deterministic neutral surface/border defaults; blue outline/context stay editor-only. Canonical world/viewport/device space is top-left/Y-down and the tile boundary is the only Core Graphics text conversion, keeping Frame labels/plain Text upright. Production launch is normal maximized `NSScreen.visibleFrame`, never native full-screen; Debug/UI-test placement remains Release-isolated.
+  - Verification: focused chain regression passed 1/1 and asserts availability → committed revision → matching render-plan revision/NodeID → Layers/selection → redacted diagnostic → undo/redo for both Frame and Text. Focused actual-app blank/renderer, material/canvas, and selected-Frame journeys passed 3/3. Final `./sf verify` passed on 2026-08-12 with 297 unit and 32 UI tests (329 total), zero failures; repository, secret, traceability, architecture, migration, evidence, and fixture-hygiene checks passed. Evidence: `docs/evidence/product-ui-003/README.md`.
+  - Explicitly deferred: general property editing, interaction authoring, responsive controls, gradients/effects, assets/components workflows, production typography, export/publishing, OS-level VoiceOver/settings acceptance, cross-hardware visual/performance acceptance, and release acceptance.
+  - Dependencies: `SF-PRODUCT-UI-002`.
 
 - [x] `SF-PRODUCT-UI-002` Establish product navigation, native menu architecture, and a truthful Elements-pane foundation.
   - Requirements: bounded evidence for `SF-0201-002`, `SF-0201-006`, `SF-0201-008`, `SF-0203-006`, and `SF-1505-006` through `SF-1505-008`. The normative modules remain Partial where later elements, content editing, assets, components, export, and release acceptance are unproven.

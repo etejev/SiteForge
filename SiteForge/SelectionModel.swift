@@ -56,12 +56,42 @@ struct SelectionTargetSnapshot: Equatable, Sendable {
     let pageID: PageID
     let parentID: NodeID?
     let name: String
+    let kind: NodeKind
+    let parentName: String?
     let frame: WorldRect
     let clipRect: WorldRect?
     let paintOrder: Int
     let isVisible: Bool
     let isLocked: Bool
     let isAvailable: Bool
+
+    init(
+        id: NodeID,
+        pageID: PageID,
+        parentID: NodeID?,
+        name: String,
+        kind: NodeKind = .frame,
+        parentName: String? = nil,
+        frame: WorldRect,
+        clipRect: WorldRect?,
+        paintOrder: Int,
+        isVisible: Bool,
+        isLocked: Bool,
+        isAvailable: Bool
+    ) {
+        self.id = id
+        self.pageID = pageID
+        self.parentID = parentID
+        self.name = name
+        self.kind = kind
+        self.parentName = parentName
+        self.frame = frame
+        self.clipRect = clipRect
+        self.paintOrder = paintOrder
+        self.isVisible = isVisible
+        self.isLocked = isLocked
+        self.isAvailable = isAvailable
+    }
 
     var isFullyClipped: Bool {
         guard let clipRect else { return false }
@@ -419,7 +449,20 @@ struct SelectionOverlayPlanner: Sendable {
             let kind = primary
                 ? (target.isLocked ? "selection-primary-locked" : "selection-primary")
                 : (target.isLocked ? "selection-secondary-locked" : "selection-secondary")
-            return CanvasEditorOverlay(id: CanvasOverlayID(id.rawValue), objectID: id, frame: frame, kind: kind)
+            let label: String?
+            if primary, target.kind == .frame {
+                let parent = target.parentName ?? "Page"
+                label = "\(target.name) · \(Int(target.frame.size.width)) × \(Int(target.frame.size.height)) · \(parent)"
+            } else {
+                label = nil
+            }
+            return CanvasEditorOverlay(
+                id: CanvasOverlayID(id.rawValue),
+                objectID: id,
+                frame: frame,
+                kind: kind,
+                label: label
+            )
         }
         let oldFrames = previous?.overlays.map(\.frame) ?? []
         let dirty = uniqueRegions(oldFrames + overlays.map(\.frame))

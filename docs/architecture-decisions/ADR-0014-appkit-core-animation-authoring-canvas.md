@@ -77,6 +77,16 @@ Core Animation tiles, real scene rendering, hit testing, editor overlays, and ac
 
 `CanvasRendererCore.swift` now defines a Foundation-only immutable scene contract and bounded plan keyed by document, revision, scene, scene generation, viewport generation, and Retina scale. The AppKit viewport adopts bounded 512-device-pixel Core Animation content tiles under a dedicated authored-content container; focus and future selection overlays live in a separate editor-only container. Preview-facing snapshots are created only from authored scene objects, so overlays are unrepresentable in that boundary. Hit testing and accessibility consume the same stable scene identity but remain independent adapters.
 
+The canonical coordinate convention is top-left origin with X increasing right
+and Y increasing down across world, viewport, and device units. AppKit events,
+hit testing, selection/transform overlays and handles, guides/snapping, inline
+text editing, Core Animation tile placement, and preview/export-facing
+snapshots all use that convention. Core Graphics raster contexts are Y-up, so
+`CanvasContentTileLayer` owns the sole explicit conversion before AppKit text
+drawing. This prevents authored Frame labels and plain Text from becoming
+vertically mirrored while preserving one shared geometry source; no individual
+label or overlay applies a compensating rotation.
+
 Retained named-host evidence records full planning, one-object dirty planning, and reverse-order hit testing at 100 and 10,000 objects, raw samples, memory, an idle display-link probe, and limitations. The 10,000-object full and dirty paths exceeded 16.67 ms in every retained sample. Tile adoption still invalidates bounded affected surfaces and viewport-only pan/zoom uses a compositor transform, but whole-snapshot validation/diffing requires later incremental indexing. This checkpoint therefore confirms the selected ownership split without establishing OD-001 release budgets or selecting Metal.
 
 ## Production checkpoint: SF-AUTHORING-004

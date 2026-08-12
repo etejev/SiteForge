@@ -3,7 +3,7 @@ import XCTest
 @testable import SiteForge
 
 final class ProjectResourceTests: XCTestCase {
-    private var fixtures: [RepositoryTestFixture] = []
+    private var fixtures: [ApplicationOwnedTestFixture] = []
 
     override func tearDownWithError() throws {
         for fixture in fixtures.reversed() { try fixture.cleanup() }
@@ -165,8 +165,8 @@ final class ProjectResourceTests: XCTestCase {
         XCTAssertThrowsError(try outside.cleanup())
     }
 
-    private func makeFixture() throws -> RepositoryTestFixture {
-        let fixture = try RepositoryTestFixture.create("resources")
+    private func makeFixture() throws -> ApplicationOwnedTestFixture {
+        let fixture = try ApplicationOwnedTestFixture.create("resources")
         fixtures.append(fixture)
         return fixture
     }

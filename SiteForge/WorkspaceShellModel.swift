@@ -124,13 +124,45 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
 }
 
 enum InspectorTab: String, CaseIterable, Identifiable {
+    case design
     case layout
-    case style
-    case advanced
+    case content
+    case interactions
     case accessibility
 
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
+
+    var availability: InspectorTabAvailability {
+        switch self {
+        case .design, .layout, .accessibility:
+            .available
+        case .content:
+            .unavailable(
+                reason: "General content properties are not available yet.",
+                nextStep: "Edit supported plain text directly on the canvas; broader content editing requires a later canonical property-editing milestone."
+            )
+        case .interactions:
+            .unavailable(
+                reason: "Interaction authoring is not available yet.",
+                nextStep: "Interaction data will require a later canonical interaction-model milestone."
+            )
+        }
+    }
+
+    var accessibilityDescription: String {
+        switch availability {
+        case .available:
+            "\(title) inspector tab."
+        case let .unavailable(reason, nextStep):
+            "\(title) inspector tab. Not available yet. \(reason) \(nextStep)"
+        }
+    }
+}
+
+enum InspectorTabAvailability: Equatable {
+    case available
+    case unavailable(reason: String, nextStep: String)
 }
 
 enum ViewportPreset: String, CaseIterable, Identifiable {
@@ -169,11 +201,13 @@ enum ShellFocus: Hashable {
     case viewportZoomOut
     case viewportZoomIn
     case viewportReset
+    case viewportFitCanvas
     case viewportFit
     case viewportCanvas
+    case inspectorDesign
     case inspectorLayout
-    case inspectorStyle
-    case inspectorAdvanced
+    case inspectorContent
+    case inspectorInteractions
     case inspectorAccessibility
 }
 
@@ -188,8 +222,8 @@ enum ShellFocusTraversal {
             .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents,
         ] + pageIDs.map(ShellFocus.navigatorPage) + layerIDs.map(ShellFocus.navigatorLayer) + [
             .viewportPreset, .viewportZoomOut, .viewportZoomIn,
-            .viewportReset, .viewportFit, .viewportCanvas,
-            .inspectorLayout, .inspectorStyle, .inspectorAdvanced, .inspectorAccessibility,
+            .viewportReset, .viewportFitCanvas, .viewportFit, .viewportCanvas,
+            .inspectorDesign, .inspectorLayout, .inspectorContent, .inspectorInteractions, .inspectorAccessibility,
         ]
     }
 
@@ -223,11 +257,13 @@ extension ShellFocus {
         case .viewportZoomOut: "canvas.zoom.out"
         case .viewportZoomIn: "canvas.zoom.in"
         case .viewportReset: "canvas.zoom.reset"
+        case .viewportFitCanvas: "canvas.zoom.fitCanvas"
         case .viewportFit: "canvas.zoom.fit"
         case .viewportCanvas: "canvas.interaction"
+        case .inspectorDesign: "inspector.tab.design"
         case .inspectorLayout: "inspector.tab.layout"
-        case .inspectorStyle: "inspector.tab.style"
-        case .inspectorAdvanced: "inspector.tab.advanced"
+        case .inspectorContent: "inspector.tab.content"
+        case .inspectorInteractions: "inspector.tab.interactions"
         case .inspectorAccessibility: "inspector.tab.accessibility"
         }
     }
@@ -2310,7 +2346,15 @@ final class WorkspaceShellState: ObservableObject {
                 disabled = nil
             }
         }
-        return .init(activePageID: effectiveSelectedPageID ?? PageID(), sceneID: canvasRenderPlan?.identity.sceneID ?? CanvasViewportSceneID(), rendererGeneration: canvasRenderPlan?.identity.sceneGeneration ?? UInt64.max, availableNodeIDs: Set(selectionScene?.targets.filter(\.isAvailable).map(\.id) ?? []), isLifecycleAvailable: disabled == nil, lifecycleDisabledReason: disabled)
+        // Layers/drag ownership is canonical and may include nonvisual
+        // structural containers. Rendering still excludes geometry-less blank
+        // roots, but they must remain valid parents for a typed move command.
+        let canonicalIDs = Set(
+            documentSession.document.pages
+                .first(where: { $0.id == effectiveSelectedPageID })?
+                .nodes.map(\.id) ?? []
+        )
+        return .init(activePageID: effectiveSelectedPageID ?? PageID(), sceneID: canvasRenderPlan?.identity.sceneID ?? CanvasViewportSceneID(), rendererGeneration: canvasRenderPlan?.identity.sceneGeneration ?? UInt64.max, availableNodeIDs: canonicalIDs, isLifecycleAvailable: disabled == nil, lifecycleDisabledReason: disabled)
     }
 
     private func recordDragDropDiagnostic(_ command: DragDropCommand, start: UInt64, result: DragDropDiagnosticResult, failure: DragDropError?) {
@@ -2331,7 +2375,14 @@ final class WorkspaceShellState: ObservableObject {
 
     private var insertionValidationContext: InsertionValidationContext {
         let page = pages.first(where: { $0.id == effectiveSelectedPageID })
-        let available = selectionScene.map { Set($0.targets.filter(\.isAvailable).map(\.id)) }
+        // Structural page roots intentionally do not produce render objects,
+        // but they remain valid canonical insertion destinations for an empty
+        // page. All other parent availability continues to come from the
+        // currently adopted renderer/selection scene.
+        let available = selectionScene.map {
+            Set($0.targets.filter(\.isAvailable).map(\.id))
+                .union(page?.rootNodeIDs ?? [])
+        }
         let lifecycleAvailable: Bool
         let reason: String?
         if isPreviewPresented {
@@ -2388,10 +2439,21 @@ final class WorkspaceShellState: ObservableObject {
         provenance: InsertionProvenance,
         nodeID: NodeID
     ) -> AuthoringInsertionCommand? {
-        guard let identity = insertionSession.identity,
+        guard let pageID = effectiveSelectedPageID,
               let parentID = insertionParentID,
-              let page = pages.first(where: { $0.id == identity.pageID }),
+              let page = pages.first(where: { $0.id == pageID }),
               let parent = page.nodes.first(where: { $0.id == parentID }) else { return nil }
+        // Availability queries occur before a tool is armed. They must model
+        // the same current document/page/revision boundary as the eventual
+        // session, without mutating editor state or falsely disabling a real
+        // visible insertion action on an empty canvas.
+        let identity = insertionSession.identity ?? InsertionOperationIdentity(
+            documentID: documentSession.document.id,
+            pageID: pageID,
+            revision: documentSession.document.revision,
+            generation: insertionSession.generation
+        )
+        guard page.id == identity.pageID else { return nil }
         let geometry = InsertionGeometry.defaultValue(for: kind, at: point)
         if kind == .frame {
             return .frame(FrameInsertionCommand(
@@ -2462,6 +2524,16 @@ final class WorkspaceShellState: ObservableObject {
             _ = try documentSession.execute(prepared.documentCommand)
             insertionFailure = nil
             pendingSelectionAfterInsertion = prepared.node.id
+            // Combine publication is intentionally asynchronous with respect
+            // to this synchronous transaction. Start the next render request
+            // here as well so post-commit selection adoption is deterministic
+            // and never depends on a structural-root fallback scene.
+            scheduleScenePreparation()
+            // The viewport preparer is an auxiliary accessibility/viewport
+            // snapshot. A successful canonical insertion must not wait for
+            // that asynchronous preparation before publishing its authored
+            // render scene to the live canvas.
+            scheduleRendererPreparation()
             lastInsertionAnnouncement = "Inserted \(kind.rawValue)"
             announcementPoster.post(lastInsertionAnnouncement)
             recordInsertionDiagnostic(
@@ -2624,9 +2696,7 @@ final class WorkspaceShellState: ObservableObject {
 
     private func scheduleScenePreparation() {
         preparationTask?.cancel()
-        let activeNodes = documentSession.document.pages
-            .first(where: { $0.id == effectiveSelectedPageID })?
-            .canonicalDepthFirstNodes() ?? []
+        let activeNodes = renderableNodesForActivePage()
         let objects = activeNodes.map {
             CanvasViewportSceneObject(id: $0.id, bounds: viewportState.contentBounds)
         }
@@ -2656,19 +2726,21 @@ final class WorkspaceShellState: ObservableObject {
             viewportGeneration: viewportState.generation,
             scale: viewportState.pixelRatio
         )
-        let activeNodes = documentSession.document.pages
-            .first(where: { $0.id == effectiveSelectedPageID })?
-            .canonicalDepthFirstNodes() ?? []
+        let activeNodes = renderableNodesForActivePage()
         let objects = activeNodes.enumerated().map { index, node in
-            let column = index % 10
-            let row = index / 10
-            let fallback = WorldRect(
-                origin: WorldPoint(x: 48 + Double(column * 120), y: 48 + Double(row * 88)),
-                size: WorldSize(width: 104, height: 68)
-            )
-            let frame = node.insertionGeometry?.frame ?? fallback
+            // `renderableNodesForActivePage` excludes structural roots, whose
+            // absent geometry is intentional and must never be replaced with a
+            // visual/debug fallback rectangle.
+            let frame = node.insertionGeometry!.frame
             let style: CanvasPaintStyle = switch node.kind {
-            case .frame: node.parent == .page(effectiveSelectedPageID ?? PageID()) ? .page : .container
+            case .frame:
+                if node.parent == .page(effectiveSelectedPageID ?? PageID()) {
+                    .page
+                } else if node.insertionStringProperty("style.fill") == "surface" {
+                    .frameSurface
+                } else {
+                    .container
+                }
             case .text: .textPlaceholder
             case .image: .imagePlaceholder
             case .component: .container
@@ -2681,10 +2753,10 @@ final class WorkspaceShellState: ObservableObject {
                 style: style,
                 isVisible: !node.selectionBooleanProperty("hidden"),
                 accessibilityLabel: node.kind == .text ? "Text object" : node.name,
-                plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil
+                plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
+                displayName: node.kind == .frame ? node.name : nil
             )
         }
-        guard !objects.isEmpty else { return }
         let scene = CanvasRenderSceneSnapshot(identity: identity, surfaceID: renderSurfaceID, objects: objects)
         let overlays = CanvasEditorOverlaySnapshot(identity: identity, overlays: [])
         let viewport = viewportState
@@ -2761,8 +2833,13 @@ final class WorkspaceShellState: ObservableObject {
         let rendered = Dictionary(uniqueKeysWithValues: plan.authoredObjects.map { ($0.id, $0) })
         var fallbackOrder = plan.authoredObjects.count
         let targets = documentSession.document.pages.flatMap { page in
-            page.canonicalDepthFirstNodes().map { node -> SelectionTargetSnapshot in
+            let names = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0.name) })
+            return page.canonicalDepthFirstNodes().compactMap { node -> SelectionTargetSnapshot? in
                 let object = rendered[node.id]
+                // A one-node blank-project root is never visual or
+                // selectable. Legacy/nonblank hierarchy roots remain
+                // available to the bounded Layers drag-ownership contract.
+                guard object != nil || page.nodes.count > 1 else { return nil }
                 defer { fallbackOrder += 1 }
                 let parentID: NodeID? = if case .node(let id) = node.parent { id } else { nil }
                 return SelectionTargetSnapshot(
@@ -2770,12 +2847,14 @@ final class WorkspaceShellState: ObservableObject {
                     pageID: page.id,
                     parentID: parentID,
                     name: node.name,
+                    kind: node.kind,
+                    parentName: parentID.flatMap { names[$0] },
                     frame: object?.frame ?? viewportState.contentBounds,
                     clipRect: object?.clipRect,
                     paintOrder: object?.paintOrder ?? fallbackOrder,
-                    isVisible: object?.isVisible == true,
+                    isVisible: object?.isVisible ?? true,
                     isLocked: node.selectionBooleanProperty("locked"),
-                    isAvailable: object != nil
+                    isAvailable: object != nil || page.nodes.count > 1
                 )
             }
         }
@@ -2785,6 +2864,16 @@ final class WorkspaceShellState: ObservableObject {
             activeContainerID: selectionState.activeContainerID,
             targets: targets
         )
+    }
+
+    /// Only nodes with canonical authored geometry enter the viewport scene.
+    /// Page roots intentionally have no geometry and therefore remain a
+    /// nonvisual ownership boundary for an otherwise empty blank project.
+    private func renderableNodesForActivePage() -> [DocumentNode] {
+        documentSession.document.pages
+            .first(where: { $0.id == effectiveSelectedPageID })?
+            .canonicalDepthFirstNodes()
+            .filter { $0.insertionGeometry != nil } ?? []
     }
 
     private func adoptSelectionScene(

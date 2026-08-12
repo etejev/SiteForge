@@ -4,11 +4,11 @@ import XCTest
 @MainActor
 final class PersistedHistoryTests: XCTestCase {
     nonisolated(unsafe) private var fixtureDirectory: URL!
-    nonisolated(unsafe) private var fixtureLease: RepositoryTestFixture!
+    nonisolated(unsafe) private var fixtureLease: ApplicationOwnedTestFixture!
 
     nonisolated override func setUpWithError() throws {
         try super.setUpWithError()
-        fixtureLease = try RepositoryTestFixture.create("history")
+        fixtureLease = try ApplicationOwnedTestFixture.create("history")
         fixtureDirectory = fixtureLease.url
     }
 

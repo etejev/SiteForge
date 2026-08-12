@@ -46,7 +46,13 @@ struct WorkspaceShellView: View {
             ZStack {
                 Color(nsColor: .underPageBackgroundColor)
                 WindowCloseGuard(state: state).frame(width: 0, height: 0)
-                WorkspaceWindowConfigurator().frame(width: 0, height: 0)
+                // Production presentation is installed at the scene root so
+                // welcome/loading/recovery share the same maximized window.
+                // The shell owns only the deterministic UI-test placement
+                // bridge, after its accessibility hierarchy is available.
+                if DebugTestComposition.current().boolValue(after: "-SiteForgeUITestMode") == true {
+                    WorkspaceWindowConfigurator().frame(width: 0, height: 0)
+                }
                 WorkspaceWindowTabRouterInstaller(
                     router: tabRouter,
                     focus: $focusedControl,
@@ -228,6 +234,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     @Binding var selection: Tab
     let identifierPrefix: String
     let title: (Tab) -> String
+    let accessibilityDescription: (Tab) -> String?
     let focus: FocusState<ShellFocus?>.Binding
     let focusValue: (Tab) -> ShellFocus
 
@@ -255,6 +262,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
                 .focusable()
                 .focused(focus, equals: focusValue(tab))
                 .accessibilityIdentifier("\(identifierPrefix).\(tab.rawValue)")
+                .accessibilityHint(accessibilityDescription(tab) ?? "")
                 .accessibilityAddTraits(selection == tab ? .isSelected : [])
             }
         }
@@ -274,6 +282,7 @@ private struct NavigatorView: View {
                 selection: $state.navigatorTab,
                 identifierPrefix: "navigator.tab",
                 title: \NavigatorTab.title,
+                accessibilityDescription: { _ in nil },
                 focus: focus,
                 focusValue: {
                     switch $0 {
@@ -677,7 +686,7 @@ private struct CanvasPlaceholderView: View {
             Divider()
 
             GeometryReader { geometry in
-                ZStack {
+                ZStack(alignment: .topLeading) {
                     NativeCanvasViewport(
                         state: state,
                         isKeyboardFocused: focus.wrappedValue == .viewportCanvas,
@@ -813,6 +822,27 @@ private struct CanvasPlaceholderView: View {
                             .controlSize(.small)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
+                    } else if state.canvasRenderPlan?.authoredObjects.isEmpty == true {
+                        // ContentUnavailableView expands to its proposed
+                        // canvas size on macOS, which would turn its empty
+                        // area into an invisible pointer shield. This bounded
+                        // compact form leaves the rest of the real canvas
+                        // available for pointer insertion and selection.
+                        VStack(spacing: 10) {
+                            Label("Your canvas is empty", systemImage: "rectangle.dashed")
+                                .font(.headline)
+                            Text("Start with a Frame or plain Text. Blank-project roots are structural and are not rendered.")
+                                .multilineTextAlignment(.center)
+                                .font(.callout)
+                            Text("Use the visible Frame or Text actions above the canvas.")
+                        }
+                        // Keep the central world-space canvas available to the
+                        // real Frame/Text pointer workflow; these named start
+                        // actions intentionally live above that interaction
+                        // area rather than becoming an invisible click shield.
+                        .frame(maxWidth: 360)
+                        .padding(.top, 24)
+                        .accessibilityIdentifier("canvas.empty.state")
                     }
                 }
                 .background(Color(nsColor: .underPageBackgroundColor))
@@ -844,9 +874,11 @@ private struct ViewportControlsView: View {
     @State private var focusSceneID = ViewportPresetFocusSceneID()
 
     var body: some View {
-        HStack(spacing: 10) {
-            Label("Viewport", systemImage: "display")
+        VStack(spacing: 4) {
+        HStack(spacing: 8) {
+            Label("Preview", systemImage: "display")
                 .font(.caption.weight(.semibold))
+                .accessibilityHint("Preview preset only. Responsive authoring is not available yet.")
 
             NativeViewportPresetControl(
                 selection: $state.viewportPreset,
@@ -895,25 +927,57 @@ private struct ViewportControlsView: View {
             .focused(focus, equals: .viewportZoomIn)
             .accessibilityIdentifier("canvas.zoom.in")
 
-            Button("Actual size", systemImage: "1.magnifyingglass") {
+            Button("Actual Size", systemImage: "1.magnifyingglass") {
                 state.performViewportCommand(CanvasViewportCommand(.actualSize))
             }
             .labelStyle(.iconOnly)
+            .help("Actual Size")
+            .accessibilityLabel("Actual Size")
             .focusable()
             .focused(focus, equals: .viewportReset)
             .accessibilityIdentifier("canvas.zoom.reset")
 
-            Button("Fit document", systemImage: "arrow.up.left.and.arrow.down.right") {
+            Button("Fit to Canvas", systemImage: "arrow.left.and.right") {
+                state.performViewportCommand(CanvasViewportCommand(.fitWidth))
+            }
+            .labelStyle(.iconOnly)
+            .help("Fit to Canvas")
+            .accessibilityLabel("Fit to Canvas")
+            .focusable()
+            .focused(focus, equals: .viewportFitCanvas)
+            .accessibilityIdentifier("canvas.zoom.fitCanvas")
+
+            Button("Fit to Document", systemImage: "arrow.up.left.and.arrow.down.right") {
                 state.performViewportCommand(CanvasViewportCommand(.fitDocument))
             }
             .labelStyle(.iconOnly)
+            .help("Fit to Document")
+            .accessibilityLabel("Fit to Document")
             .focusable()
             .focused(focus, equals: .viewportFit)
             .accessibilityIdentifier("canvas.zoom.fit")
         }
+        if state.canvasRenderPlan?.authoredObjects.isEmpty == true {
+            HStack(spacing: 8) {
+                Text("Empty canvas")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Insert Frame") {
+                    state.performDefaultInsertion(.frame, provenance: .accessibility)
+                }
+                .accessibilityIdentifier("canvas.empty.insert.frame")
+                .disabled(!state.insertionAvailability(.frame).isEnabled)
+                Button("Insert Text") {
+                    state.performDefaultInsertion(.text, provenance: .accessibility)
+                }
+                .accessibilityIdentifier("canvas.empty.insert.text")
+                .disabled(!state.insertionAvailability(.text).isEnabled)
+            }
+        }
+        }
         .controlSize(.small)
         .padding(.horizontal, 12)
-        .frame(height: 42)
+        .padding(.vertical, 5)
         .workspaceChrome(.viewportControls)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("canvas.viewport.controls")
@@ -1529,18 +1593,32 @@ private struct InspectorView: View {
                 selection: $state.inspectorTab,
                 identifierPrefix: "inspector.tab",
                 title: \InspectorTab.title,
+                accessibilityDescription: { $0.accessibilityDescription },
                 focus: focus,
                 focusValue: {
                     switch $0 {
+                    case .design: .inspectorDesign
                     case .layout: .inspectorLayout
-                    case .style: .inspectorStyle
-                    case .advanced: .inspectorAdvanced
+                    case .content: .inspectorContent
+                    case .interactions: .inspectorInteractions
                     case .accessibility: .inspectorAccessibility
                     }
                 }
             )
 
-            if state.selectionState.isEmpty {
+            if case let .unavailable(reason, nextStep) = state.inspectorTab.availability {
+                ContentUnavailableView(
+                    "\(state.inspectorTab.title) Not Available Yet",
+                    systemImage: state.inspectorTab == .content ? "text.cursor" : "bolt.slash",
+                    description: Text("\(reason) \(nextStep)")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("\(state.inspectorTab.title) unavailable. Not available yet.")
+                .accessibilityValue(reason)
+                .accessibilityHint(nextStep)
+                .accessibilityIdentifier("inspector.\(state.inspectorTab.rawValue).unavailable")
+            } else if state.selectionState.isEmpty {
                 ContentUnavailableView(
                     "Nothing Selected",
                     systemImage: "slider.horizontal.3",
@@ -1558,93 +1636,7 @@ private struct InspectorView: View {
                         Label("Locked — inspection only", systemImage: "lock.fill")
                             .foregroundStyle(.secondary)
                     }
-                    Text(state.transformGeometrySummary)
-                        .monospacedDigit()
-                        .accessibilityLabel("Selection geometry")
-                        .accessibilityValue(state.transformGeometrySummary)
-                        .accessibilityIdentifier("inspector.transform.geometry")
-                    Text("Broader editable properties are intentionally deferred to a later authoring slice.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if state.selectionState.count == 1 {
-                        HStack {
-                            Button("Move Right 1 px") {
-                                state.performTransform(
-                                    .move(
-                                        delta: .init(dx: 1, dy: 0),
-                                        constraint: .horizontal
-                                    ),
-                                    provenance: .accessibility
-                                )
-                            }
-                            .accessibilityIdentifier("inspector.transform.moveRight")
-                            Button("Increase Width 1 px") {
-                                state.performTransform(
-                                    .resize(
-                                        handle: .right,
-                                        delta: .init(dx: 1, dy: 0),
-                                        constraint: .horizontal
-                                    ),
-                                    provenance: .accessibility
-                                )
-                            }
-                            .accessibilityIdentifier("inspector.transform.increaseWidth")
-                        }
-                        .controlSize(.small)
-                    }
-                    Divider()
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Guides & Snapping").font(.headline)
-                        Text(state.snappingStatus)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .accessibilityIdentifier("inspector.snapping.status")
-                        HStack {
-                            Button("Add H Guide") {
-                                state.addGuide(
-                                    axis: .horizontal,
-                                    position: state.viewportState.visibleWorldRect.origin.y + 100,
-                                    provenance: .accessibility
-                                )
-                            }
-                            .accessibilityLabel("Add horizontal guide")
-                            .accessibilityIdentifier("inspector.guide.addHorizontal")
-                            Button("Add V Guide") {
-                                state.addGuide(
-                                    axis: .vertical,
-                                    position: state.viewportState.visibleWorldRect.origin.x + 100,
-                                    provenance: .accessibility
-                                )
-                            }
-                            .accessibilityLabel("Add vertical guide")
-                            .accessibilityIdentifier("inspector.guide.addVertical")
-                        }
-                        .controlSize(.small)
-                        if state.selectedGuideID != nil {
-                            Text(state.selectedGuideSummary)
-                                .monospacedDigit()
-                                .accessibilityIdentifier("inspector.guide.summary")
-                            HStack {
-                                Button("Move +1") {
-                                    state.moveSelectedGuide(by: 1, provenance: .accessibility)
-                                }
-                                .accessibilityLabel("Move selected guide one point")
-                                .accessibilityIdentifier("inspector.guide.move")
-                                Button("Remove") {
-                                    state.removeSelectedGuide(provenance: .accessibility)
-                                }
-                                .accessibilityLabel("Remove selected guide")
-                                .accessibilityIdentifier("inspector.guide.remove")
-                            }
-                            .controlSize(.small)
-                        }
-                        Toggle("Suppress snapping", isOn: Binding(
-                            get: { state.isSnappingSuppressed },
-                            set: { state.setSnappingSuppressed($0) }
-                        ))
-                        .toggleStyle(.checkbox)
-                        .accessibilityIdentifier("inspector.snapping.suppress")
-                    }
+                    inspectorDetails
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1658,6 +1650,95 @@ private struct InspectorView: View {
         .workspaceChrome(.inspector)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.inspector.rawValue)
+    }
+
+    @ViewBuilder
+    private var inspectorDetails: some View {
+        switch state.inspectorTab {
+        case .design:
+            Text("Design summary")
+                .font(.headline)
+            Text("Current appearance is read-only in this bounded inspector foundation.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.design.summary")
+        case .layout:
+            Text(state.transformGeometrySummary)
+                .monospacedDigit()
+                .accessibilityLabel("Selection geometry")
+                .accessibilityValue(state.transformGeometrySummary)
+                .accessibilityIdentifier("inspector.transform.geometry")
+            Text("Broader editable properties are intentionally deferred to a later authoring slice.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if state.selectionState.count == 1 {
+                HStack {
+                    Button("Move Right 1 px") {
+                        state.performTransform(.move(delta: .init(dx: 1, dy: 0), constraint: .horizontal), provenance: .accessibility)
+                    }
+                    .accessibilityIdentifier("inspector.transform.moveRight")
+                    Button("Increase Width 1 px") {
+                        state.performTransform(.resize(handle: .right, delta: .init(dx: 1, dy: 0), constraint: .horizontal), provenance: .accessibility)
+                    }
+                    .accessibilityIdentifier("inspector.transform.increaseWidth")
+                }
+                .controlSize(.small)
+            }
+            Divider()
+            guideAndSnappingDetails
+        case .accessibility:
+            Text("Accessibility summary")
+                .font(.headline)
+            Text("\(state.selectionSummary). \(state.selectionState.count == 1 ? "Primary selection is available for inspection." : "Multiple selection remains inspection-only.")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.accessibility.summary")
+        case .content, .interactions:
+            EmptyView()
+        }
+    }
+
+    private var guideAndSnappingDetails: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Guides & Snapping").font(.headline)
+            Text(state.snappingStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.snapping.status")
+            HStack {
+                Button("Add H Guide") {
+                    state.addGuide(axis: .horizontal, position: state.viewportState.visibleWorldRect.origin.y + 100, provenance: .accessibility)
+                }
+                .accessibilityLabel("Add horizontal guide")
+                .accessibilityIdentifier("inspector.guide.addHorizontal")
+                Button("Add V Guide") {
+                    state.addGuide(axis: .vertical, position: state.viewportState.visibleWorldRect.origin.x + 100, provenance: .accessibility)
+                }
+                .accessibilityLabel("Add vertical guide")
+                .accessibilityIdentifier("inspector.guide.addVertical")
+            }
+            .controlSize(.small)
+            if state.selectedGuideID != nil {
+                Text(state.selectedGuideSummary)
+                    .monospacedDigit()
+                    .accessibilityIdentifier("inspector.guide.summary")
+                HStack {
+                    Button("Move +1") { state.moveSelectedGuide(by: 1, provenance: .accessibility) }
+                        .accessibilityLabel("Move selected guide one point")
+                        .accessibilityIdentifier("inspector.guide.move")
+                    Button("Remove") { state.removeSelectedGuide(provenance: .accessibility) }
+                        .accessibilityLabel("Remove selected guide")
+                        .accessibilityIdentifier("inspector.guide.remove")
+                }
+                .controlSize(.small)
+            }
+            Toggle("Suppress snapping", isOn: Binding(
+                get: { state.isSnappingSuppressed },
+                set: { state.setSnappingSuppressed($0) }
+            ))
+            .toggleStyle(.checkbox)
+            .accessibilityIdentifier("inspector.snapping.suppress")
+        }
     }
 }
 
@@ -1895,6 +1976,7 @@ struct SiteForgeCommands: Commands {
                 .keyboardShortcut("0", modifiers: .command)
             Button("Fit Document") { state?.performViewportCommand(CanvasViewportCommand(.fitDocument)) }
                 .keyboardShortcut("1", modifiers: .command)
+            Button("Fit to Canvas") { state?.performViewportCommand(CanvasViewportCommand(.fitWidth)) }
             Divider()
             Button("Pan Left") { state?.performViewportCommand(CanvasViewportCommand(.panLeft)) }
                 .keyboardShortcut(.leftArrow, modifiers: .option)
@@ -2670,6 +2752,26 @@ private final class NativeCanvasViewportView: NSView {
                 layer.lineWidth = overlay.kind.contains("primary") ? 3 : 1.5
                 if overlay.kind.contains("locked") { layer.lineDashPattern = [4, 3] }
                 overlayContainer.addSublayer(layer)
+                if let label = overlay.label {
+                    let labelLayer = CATextLayer()
+                    labelLayer.name = "renderer.overlay.selection-context.\(overlay.objectID.description)"
+                    labelLayer.string = label
+                    labelLayer.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+                    labelLayer.fontSize = 11
+                    labelLayer.foregroundColor = NSColor.white.cgColor
+                    labelLayer.backgroundColor = NSColor.controlAccentColor.cgColor
+                    labelLayer.cornerRadius = 4
+                    labelLayer.alignmentMode = .center
+                    labelLayer.contentsScale = window?.backingScaleFactor ?? 2
+                    let width = min(max(120, CGFloat(label.count) * 6.4 + 12), max(120, bounds.width - layer.frame.minX - 4))
+                    labelLayer.frame = CGRect(
+                        x: layer.frame.minX,
+                        y: max(0, layer.frame.minY - 22),
+                        width: width,
+                        height: 18
+                    )
+                    overlayContainer.addSublayer(labelLayer)
+                }
             }
         }
         if let preview = insertionPreviewOverlay,
@@ -3058,14 +3160,22 @@ final class CanvasContentTileLayer: CALayer {
             case .canvas: .underPageBackgroundColor
             case .page: .controlAccentColor.withAlphaComponent(0.16)
             case .container: .controlAccentColor.withAlphaComponent(0.28)
+            case .frameSurface: .controlBackgroundColor.withAlphaComponent(0.92)
             case .imagePlaceholder: .systemPurple.withAlphaComponent(0.22)
             case .textPlaceholder: .labelColor.withAlphaComponent(0.12)
             }
             context.setFillColor(color.cgColor)
             context.fill(rect)
-            context.setStrokeColor(NSColor.separatorColor.cgColor)
+            context.setStrokeColor(
+                (object.style == .frameSurface
+                    ? NSColor.separatorColor.withAlphaComponent(0.85)
+                    : NSColor.separatorColor).cgColor
+            )
             context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
             context.stroke(rect)
+            if object.style == .frameSurface, let name = object.displayName {
+                drawFrameName(name, in: rect, zoom: viewportState.zoom.value, context: context)
+            }
             if object.style == .textPlaceholder, let text = object.plainText, !text.isEmpty {
                 drawCommittedPlainText(
                     text,
@@ -3098,16 +3208,61 @@ final class CanvasContentTileLayer: CALayer {
                 .paragraphStyle: paragraph,
             ]
         )
+        drawAppKitText(attributed, in: textRect, context: context)
+    }
+
+    private func drawFrameName(
+        _ name: String,
+        in rect: CGRect,
+        zoom: Double,
+        context: CGContext
+    ) {
+        let labelRect = rect.insetBy(dx: max(6, 8 * zoom), dy: max(5, 7 * zoom))
+        guard labelRect.width > 20, labelRect.height > 12 else { return }
+        let attributed = NSAttributedString(
+            string: name,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: max(10, 12 * zoom), weight: .medium),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        )
+        drawAppKitText(attributed, in: labelRect, context: context)
+    }
+
+    /// Converts AppKit text drawing once at the tile boundary. The canonical
+    /// world, viewport, device, Core Animation, overlay, event, hit-test, and
+    /// snapshot convention is top-left origin with Y increasing down. A tile
+    /// CGContext is Y-up, so this helper supplies the exact inverse transform
+    /// and translated draw rectangle required for upright glyphs at their
+    /// authored top-left coordinates. Individual authored labels never apply
+    /// bespoke rotations or compensating transforms.
+    private func drawAppKitText(_ attributed: NSAttributedString, in rect: CGRect, context: CGContext) {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        // CanvasContentTileLayer has an explicit flipped layer geometry, so
-        // its CGContext already carries the viewport's Y-down transform.
-        // Advertising another flipped AppKit context would mirror committed
-        // text within the tile and decouple it from its authored frame.
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.translateBy(x: 0, y: bounds.height)
+        context.scaleBy(x: 1, y: -1)
+        let drawingRect = CanvasTileTextCoordinateSpace.drawingRect(for: rect, in: bounds)
+        // The outer authored clip was installed before converting this
+        // CoreGraphics context. Reinstall its tile-local counterpart after
+        // conversion so glyph antialiasing never escapes the canonical frame.
+        context.clip(to: drawingRect)
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
         attributed.draw(
-            with: textRect,
+            with: drawingRect,
             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]
+        )
+    }
+}
+
+enum CanvasTileTextCoordinateSpace {
+    static func drawingRect(for topLeftRect: CGRect, in tileBounds: CGRect) -> CGRect {
+        CGRect(
+            x: topLeftRect.minX,
+            y: tileBounds.height - topLeftRect.maxY,
+            width: topLeftRect.width,
+            height: topLeftRect.height
         )
     }
 }

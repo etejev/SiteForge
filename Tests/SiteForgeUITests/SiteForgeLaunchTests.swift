@@ -33,7 +33,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.buttons["toolbar.tool.text"].click()
         let textPoint = canvas.coordinate(withNormalizedOffset: .init(dx: 0.55, dy: 0.50))
         textPoint.click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
         application.typeKey(.escape, modifierFlags: [])
         XCTAssertEqual(application.buttons["toolbar.tool.select"].value as? String, "Selected")
 
@@ -149,14 +149,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachScreenshot(named: "SF-AUTHORING-005 cancelled preview")
 
         XCTAssertTrue(
-            waitForValue(canvas, containing: "rendered objects 3"),
+            waitForValue(canvas, containing: "rendered objects 2"),
             "Unexpected canvas state after frame/text insertion: \(String(describing: canvas.value))"
         )
         application.typeKey("z", modifierFlags: .command)
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
         XCTAssertTrue(application.buttons["toolbar.redo"].isEnabled)
         application.typeKey("z", modifierFlags: [.command, .shift])
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 3"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
         XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
 
         application.buttons["navigator.tab.layers"].click()
@@ -178,18 +178,19 @@ final class SiteForgeLaunchTests: XCTestCase {
         canvas.coordinate(withNormalizedOffset: .init(dx: 0.30, dy: 0.35)).click()
         application.buttons["toolbar.tool.frame"].click()
         canvas.coordinate(withNormalizedOffset: .init(dx: 0.60, dy: 0.50)).click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 3"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
 
         application.buttons["navigator.tab.layers"].click()
         let layers = application.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "navigator.layer."))
         expectation(for: NSPredicate { _, _ in layers.count >= 3 }, evaluatedWith: application)
         waitForExpectations(timeout: 5)
-        let values = layers.allElementsBoundByAccessibilityElement
-        XCTAssertGreaterThanOrEqual(values.count, 3)
-        values[2].click()
-        XCTAssertTrue((values[2].value as? String)?.contains("Primary selection") == true)
-        values[1].rightClick()
+        let frames = layers.matching(NSPredicate(format: "label == %@", "Frame"))
+            .allElementsBoundByAccessibilityElement
+        XCTAssertEqual(frames.count, 2)
+        frames[1].click()
+        XCTAssertTrue((frames[1].value as? String)?.contains("Primary selection") == true)
+        frames[0].rightClick()
         let moveBefore = application.menuItems["Move Before"]
         XCTAssertTrue(moveBefore.waitForExistence(timeout: 3))
         XCTAssertTrue(moveBefore.isEnabled)
@@ -211,7 +212,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.buttons["toolbar.tool.frame"].click()
         let insertion = canvas.coordinate(withNormalizedOffset: .init(dx: 0.35, dy: 0.35))
         insertion.click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
         application.buttons["toolbar.tool.select"].click()
 
         let geometry = application.descendants(matching: .any)["inspector.transform.geometry"]
@@ -288,7 +289,7 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         application.buttons["toolbar.tool.frame"].click()
         canvas.coordinate(withNormalizedOffset: .init(dx: 0.40, dy: 0.40)).click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
         application.buttons["toolbar.tool.select"].click()
 
         let addHorizontal = application.buttons["inspector.guide.addHorizontal"]
@@ -345,12 +346,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
         let rendered = NSPredicate { object, _ in
-            // The renderer owns the active page only; the other blank-project page is not part of this scene.
-            ((object as? XCUIElement)?.value as? String)?.contains("rendered objects 1") == true
+            // Structural blank-project roots are intentionally nonvisual; the
+            // active page begins with zero authored render objects.
+            ((object as? XCUIElement)?.value as? String)?.contains("rendered objects 0") == true
         }
         expectation(for: rendered, evaluatedWith: canvas)
         waitForExpectations(timeout: 5)
         XCTAssertEqual(canvas.label, "Canvas viewport")
+        let emptyState = application.descendants(matching: .any)["canvas.empty.state"]
+        XCTAssertTrue(emptyState.waitForExistence(timeout: 5))
+        XCTAssertTrue(application.buttons["canvas.empty.insert.frame"].isHittable)
+        XCTAssertTrue(application.buttons["canvas.empty.insert.text"].isHittable)
         canvas.click()
         XCTAssertTrue((canvas.value as? String)?.contains("interactions 1") == true)
     }
@@ -389,7 +395,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue((layers[2].value as? String)?.contains("Primary selection") == true)
     }
 
-    private var fixtureLease: RepositoryTestFixture!
+    private var fixtureLease: ApplicationOwnedTestFixture!
     private var launchedApplications: [XCUIApplication] = []
     private var fixtureRoot: URL { fixtureLease.url }
     private var recoveryDirectory: URL {
@@ -398,8 +404,11 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        // The launched Debug app owns creation; the UI runner's sandbox only reserves the path.
-        fixtureLease = try RepositoryTestFixture.reserve("ui")
+        // Integration packages and recovery artifacts exercise descriptor-bound
+        // application-owned I/O. Keep them in the same private temporary
+        // container policy used by the package tests—not in a checkout whose
+        // ancestor can be mediated by a File Provider.
+        fixtureLease = try ApplicationOwnedTestFixture.create("ui")
     }
 
     override func tearDownWithError() throws {
@@ -407,6 +416,8 @@ final class SiteForgeLaunchTests: XCTestCase {
             application.terminate()
         }
         launchedApplications.removeAll()
+        try fixtureLease?.cleanup()
+        fixtureLease = nil
         try super.tearDownWithError()
     }
 
@@ -799,10 +810,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["navigator.pages.list"].exists)
         XCTAssertEqual(pageRows(in: application).count, 2)
         XCTAssertTrue(application.descendants(matching: .any)["canvas.viewport.controls"].exists)
-        XCTAssertTrue(application.buttons["inspector.tab.layout"].exists)
-        XCTAssertTrue(application.buttons["inspector.tab.style"].exists)
-        XCTAssertTrue(application.buttons["inspector.tab.advanced"].exists)
-        XCTAssertTrue(application.buttons["inspector.tab.accessibility"].exists)
+        for tab in ["design", "layout", "content", "interactions", "accessibility"] {
+            XCTAssertTrue(application.buttons["inspector.tab.\(tab)"].exists, tab)
+        }
         XCTAssertTrue(application.descendants(matching: .any)["status.zoom"].exists)
         XCTAssertTrue(application.descendants(matching: .any)["status.breakpoint"].exists)
         XCTAssertTrue(application.descendants(matching: .any)["status.selectionPath"].exists)
@@ -845,6 +855,74 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForHittable(components, in: application))
         components.click()
         XCTAssertTrue(application.descendants(matching: .any)["navigator.components.unavailable"].exists)
+    }
+
+    // SF-0201-002, SF-0201-006, SF-0201-008, SF-1505-006 through SF-1505-008
+    @MainActor
+    func testInspectorProvidesTruthfulUnavailableContentAndInteractionsDestinations() throws {
+        let application = launchWorkspace(windowAlignment: .right)
+        let design = application.buttons["inspector.tab.design"]
+        let layout = application.buttons["inspector.tab.layout"]
+        let content = application.buttons["inspector.tab.content"]
+        let interactions = application.buttons["inspector.tab.interactions"]
+        let accessibility = application.buttons["inspector.tab.accessibility"]
+
+        for (tab, identifier) in [
+            (design, "design"),
+            (layout, "layout"),
+            (accessibility, "accessibility"),
+        ] {
+            XCTAssertTrue(waitForHittable(tab, in: application))
+            tab.click()
+            attachScreenshot(named: "SF-PRODUCT-UI-003 inspector \(identifier)")
+        }
+
+        XCTAssertTrue(waitForHittable(content, in: application))
+        XCTAssertEqual(content.label, "Content")
+        XCTAssertTrue(content.isEnabled)
+        content.click()
+        let contentUnavailable = application.descendants(matching: .any)["inspector.content.unavailable"]
+        XCTAssertTrue(contentUnavailable.waitForExistence(timeout: 5))
+        XCTAssertTrue(contentUnavailable.label.localizedCaseInsensitiveContains("Content unavailable"))
+        XCTAssertTrue(contentUnavailable.label.localizedCaseInsensitiveContains("not available yet"))
+        XCTAssertTrue(application.descendants(matching: .button)["inspector.transform.moveRight"].exists == false)
+        attachScreenshot(named: "SF-PRODUCT-UI-003 inspector content unavailable")
+
+        XCTAssertTrue(waitForHittable(interactions, in: application))
+        XCTAssertEqual(interactions.label, "Interactions")
+        interactions.click()
+        let interactionsUnavailable = application.descendants(matching: .any)["inspector.interactions.unavailable"]
+        XCTAssertTrue(interactionsUnavailable.waitForExistence(timeout: 5))
+        XCTAssertTrue(interactionsUnavailable.label.localizedCaseInsensitiveContains("Interactions unavailable"))
+        XCTAssertTrue(interactionsUnavailable.label.localizedCaseInsensitiveContains("not available yet"))
+        attachScreenshot(named: "SF-PRODUCT-UI-003 inspector interactions unavailable")
+    }
+
+    // SF-0203-006, SF-0405-004, SF-0405-006, SF-1505-006
+    @MainActor
+    func testInsertedFrameHasVisibleAuthoredSurfaceAndSeparateSelectionContext() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        application.buttons["toolbar.tool.frame"].click()
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.46, dy: 0.46)).click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+
+        let frame = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Frame"))
+            .firstMatch
+        XCTAssertTrue(frame.waitForExistence(timeout: 5))
+        XCTAssertTrue(application.descendants(matching: .any)["status.selectionPath"].waitForExistence(timeout: 5))
+        attachScreenshot(named: "SF-PRODUCT-UI-003 selected frame surface and context")
+
+        let undo = application.buttons["toolbar.undo"]
+        XCTAssertTrue(waitForHittable(undo, in: application))
+        undo.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0"))
+        let redo = application.buttons["toolbar.redo"]
+        XCTAssertTrue(waitForHittable(redo, in: application))
+        redo.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
     }
 
     // SF-0201-006, SF-0201-008, SF-1902-008
@@ -947,7 +1025,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         textTool.click()
         XCTAssertTrue(waitForHittable(canvas, in: application))
         canvas.coordinate(withNormalizedOffset: .init(dx: 0.55, dy: 0.50)).click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
         application.buttons["toolbar.tool.select"].click()
 
         func openSelectedTextEditor() {
@@ -1003,7 +1081,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("f", modifierFlags: [])
         XCTAssertTrue(application.staticTexts["Tool: Frame"].waitForExistence(timeout: 2))
         canvas.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5)).click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
 
         let undo = application.buttons["toolbar.undo"]
         let redo = application.buttons["toolbar.redo"]
@@ -1011,7 +1089,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForHittable(undo, in: application))
         XCTAssertGreaterThanOrEqual(undo.frame.minX, TestWindowGeometry.safeScreenInset)
         undo.click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0"))
 
         XCTAssertTrue(waitForHittable(redo, in: application))
         XCTAssertLessThanOrEqual(
@@ -1019,7 +1097,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             screenWidth - TestWindowGeometry.safeScreenInset
         )
         redo.click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
     }
 
     // SF-0201-006, SF-0602-006, SF-1902-006
@@ -1055,6 +1133,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.reset"], in: application))
         application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.fitCanvas"], in: application))
+        application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.fit"], in: application))
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(
@@ -1062,16 +1142,18 @@ final class SiteForgeLaunchTests: XCTestCase {
             in: application
         ))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.layout"], in: application))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.design"], in: application))
 
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.style"], in: application))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.layout"], in: application))
         application.typeKey("\t", modifierFlags: [])
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.advanced"], in: application))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.content"], in: application))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.interactions"], in: application))
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(accessibility, in: application))
         application.typeKey("\t", modifierFlags: .shift)
-        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.advanced"], in: application))
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["inspector.tab.interactions"], in: application))
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(accessibility, in: application))
         application.typeKey("\t", modifierFlags: [])
@@ -1079,11 +1161,13 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         let reverseTraversal: [XCUIElement] = [
             accessibility,
-            application.buttons["inspector.tab.advanced"],
-            application.buttons["inspector.tab.style"],
+            application.buttons["inspector.tab.interactions"],
+            application.buttons["inspector.tab.content"],
             application.buttons["inspector.tab.layout"],
+            application.buttons["inspector.tab.design"],
             application.descendants(matching: .any)["canvas.interaction"],
             application.buttons["canvas.zoom.fit"],
+            application.buttons["canvas.zoom.fitCanvas"],
             application.buttons["canvas.zoom.reset"],
             application.buttons["canvas.zoom.in"],
             application.buttons["canvas.zoom.out"],
@@ -1128,12 +1212,21 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("0", modifierFlags: .command)
         XCTAssertTrue(waitForValue(canvas, containing: "Zoom 100 percent"))
 
+        let fitCanvas = application.buttons["canvas.zoom.fitCanvas"]
+        XCTAssertTrue(fitCanvas.isHittable)
+        let beforeFitCanvas = try XCTUnwrap(canvas.value as? String)
+        fitCanvas.click()
+        XCTAssertTrue(waitForValueToChange(canvas, from: beforeFitCanvas))
+
         let beforePan = try XCTUnwrap(canvas.value as? String)
         application.typeKey(.rightArrow, modifierFlags: .option)
         XCTAssertTrue(waitForValueToChange(canvas, from: beforePan))
 
-        application.buttons["canvas.zoom.fit"].click()
-        XCTAssertTrue((canvas.value as? String)?.contains("Zoom") == true)
+        let fitDocument = application.buttons["canvas.zoom.fit"]
+        XCTAssertTrue(fitDocument.isHittable)
+        let beforeFitDocument = try XCTUnwrap(canvas.value as? String)
+        fitDocument.click()
+        XCTAssertTrue(waitForValueToChange(canvas, from: beforeFitDocument))
         XCTAssertTrue(application.buttons["canvas.zoom.reset"].isHittable)
         XCTAssertTrue(application.descendants(matching: .any)["canvas.viewport.surface"].exists)
     }
@@ -1146,9 +1239,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         for command in ["New", "Open…", "Save", "Save As…", "Revert to Saved"] {
             XCTAssertTrue(application.menuItems[command].exists, command)
         }
-        XCTAssertTrue(application.menuItems["New"].isEnabled)
-        XCTAssertTrue(application.menuItems["Open…"].isEnabled)
-        XCTAssertTrue(application.menuItems["Save"].isEnabled)
+        // Scene command routing is established as the workspace adopts its
+        // document. Assert the real enabled state through a bounded predicate
+        // rather than sampling a transient menu snapshot.
+        XCTAssertTrue(waitForEnabled(application.menuItems["New"]))
+        XCTAssertTrue(waitForEnabled(application.menuItems["Open…"]))
+        XCTAssertTrue(waitForEnabled(application.menuItems["Save"]))
         application.typeKey(.escape, modifierFlags: [])
 
         let status = application.descendants(matching: .any)["status.document"]
@@ -1232,7 +1328,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         for identifier in ["launch.recovery.inspect", "launch.recovery.discard", "launch.recovery.restore"] {
             XCTAssertTrue(recovery.buttons[identifier].exists, identifier)
         }
-        XCTAssertTrue(recovery.buttons["launch.recovery.restore"].isHittable)
+        XCTAssertTrue(
+            waitForHittable(
+                recovery.buttons["launch.recovery.restore"],
+                in: recovery
+            ),
+            "Restore must become a genuinely interactable default recovery action."
+        )
         recovery.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(recovery.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 2))
     }
@@ -1266,6 +1368,9 @@ final class SiteForgeLaunchTests: XCTestCase {
     func testProductionRecoveryDiscoverySupportsKeyboardRestoreAndDiscard() throws {
         let recoveryBytes = legacyFixtureURL(named: "schema-v1-rootless")
         let recovery = recoveryDirectory.appendingPathComponent(
+            // The immutable package's project ID is deliberately distinct
+            // from its document ID. Recovery ownership binds the filename to
+            // the project ID from the package manifest.
             "11000000-0000-0000-0000-000000000002.siteforge-recovery"
         )
         var application = trackedApplication()
@@ -1328,7 +1433,28 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue((canvas.value as? String)?.contains("interactions 1") == true)
 
         application.buttons["navigator.tab.layers"].click()
-        XCTAssertTrue(application.descendants(matching: .any)["navigator.layers.list"].exists)
+        XCTAssertTrue(application.descendants(matching: .any)["navigator.empty"].exists)
+        XCTAssertTrue(application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "navigator.layer."))
+            .allElementsBoundByAccessibilityElement.isEmpty)
+
+        // A blank project has only a structural root, which must not be
+        // fabricated into a visual/Layer object. Use the real named empty
+        // action before requiring canonical content and its adopted layer.
+        application.buttons["navigator.tab.pages"].click()
+        let insertFrame = application.buttons["canvas.empty.insert.frame"]
+        XCTAssertTrue(waitForHittable(insertFrame, in: application))
+        insertFrame.click()
+        XCTAssertTrue(waitForValue(
+            application.descendants(matching: .any)["canvas.interaction"].firstMatch,
+            containing: "rendered objects 1"
+        ))
+        XCTAssertTrue(waitForValue(
+            application.descendants(matching: .any)["status.selectionPath"],
+            containing: "Frame"
+        ))
+
+        application.buttons["navigator.tab.layers"].click()
         XCTAssertFalse(application.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "navigator.layer."))
             .allElementsBoundByAccessibilityElement.isEmpty)

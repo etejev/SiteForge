@@ -7,7 +7,7 @@ final class ProjectPackageTests: XCTestCase {
     private let documentID = DocumentID(UUID(uuidString: "20000000-0000-0000-0000-000000000001")!)
     private let pageID = PageID(UUID(uuidString: "30000000-0000-0000-0000-000000000001")!)
 
-    private var fixtures: [RepositoryTestFixture] = []
+    private var fixtures: [ApplicationOwnedTestFixture] = []
 
     override func tearDownWithError() throws {
         for fixture in fixtures.reversed() { try fixture.cleanup() }
@@ -16,7 +16,10 @@ final class ProjectPackageTests: XCTestCase {
     }
 
     private func fixtureDirectory() throws -> URL {
-        let fixture = try RepositoryTestFixture.create("packages")
+        // Package I/O is descriptor-bound production code. Exercise it below
+        // the test host's owned temporary directory, not a checkout that may
+        // itself be mediated by a File Provider.
+        let fixture = try ApplicationOwnedTestFixture.create("packages")
         fixtures.append(fixture)
         return fixture.url
     }
@@ -185,6 +188,31 @@ final class ProjectPackageTests: XCTestCase {
         let resaved = try await store.encode(first)
         let reopened = try await store.decode(resaved)
         XCTAssertEqual(reopened, first)
+    }
+
+    // SF-0301-004, SF-0301-006, SF-0303-005 — recovery discovery reads the
+    // exact app-owned artifact through the same strict snapshot path used at
+    // launch. The filename is bound to the package manifest's project ID,
+    // which is intentionally not the document ID in this migration golden.
+    func testOwnedLegacyRecoveryArtifactBindsManifestProjectIdentity() async throws {
+        let store = ProjectPackageStore()
+        let directory = try fixtureDirectory().appendingPathComponent("recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(directory)
+        let projectID = ProjectID(UUID(uuidString: "11000000-0000-0000-0000-000000000002")!)
+        let artifact = DocumentLifecycleBackend.recoveryURL(for: projectID, in: directory)
+        let bytes = try legacyGolden(
+            named: "schema-v1-rootless",
+            sha256: "ef1455c5eb9055ec97fb5d41562686226e9db040313a4609e769cc5f7f44694d"
+        )
+        try bytes.write(to: artifact, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: artifact.path)
+
+        let read = try await store.readOwnedRecoverySnapshot(
+            from: artifact,
+            expectedProjectID: projectID
+        )
+        XCTAssertEqual(read.package.projectID, projectID)
+        XCTAssertEqual(read.package.document.revision, 4)
     }
 
     // SF-0301-005, SF-0303-005, SF-0303-008, SF-1702-008 — schema 2 is an

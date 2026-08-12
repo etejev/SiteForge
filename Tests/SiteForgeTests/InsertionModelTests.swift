@@ -13,6 +13,10 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(frame.node.kind, .frame)
         XCTAssertEqual(frame.node.parent, .node(fixture.rootID))
         XCTAssertEqual(frame.geometry.size, .init(width: 240, height: 160))
+        XCTAssertEqual(frame.node.insertionStringProperty("style.fill"), "surface")
+        XCTAssertEqual(frame.node.insertionStringProperty("style.border"), "subtle")
+        XCTAssertEqual(frame.node.insertionProperty("style.fill")?.origin, .defaulted)
+        XCTAssertEqual(frame.node.insertionProperty("style.border")?.origin, .defaulted)
         XCTAssertEqual(text.node.kind, .text)
         XCTAssertEqual(text.node.insertionStringProperty("content.text"), "Text")
         XCTAssertEqual(text.geometry.size, .init(width: 120, height: 24))
@@ -197,6 +201,62 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertFalse(state.selectionState.orderedIDs.contains(inserted))
     }
 
+    // SF-0405-002, SF-0405-003, SF-0405-006 — a visible empty-canvas action
+    // is enabled from the current lifecycle boundary before any tool session
+    // exists, then follows the same canonical commit/adoption path as every
+    // other insertion entry point.
+    func testEmptyCanvasAvailabilityEnablesHeaderActionBeforeArmingAndAdoptsFrameAndText() async throws {
+        let state = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank()))
+        state.resizeViewport(to: .init(width: 900, height: 600), pixelRatio: 2)
+        for _ in 0..<200 where state.canvasRenderPlan == nil { await Task.yield() }
+        XCTAssertTrue(state.insertionAvailability(.frame).isEnabled)
+        XCTAssertTrue(state.insertionAvailability(.text).isEnabled)
+
+        let baselineRevision = state.documentSession.document.revision
+        state.performDefaultInsertion(.frame, provenance: .accessibility)
+        for _ in 0..<200 where state.canvasRenderPlan?.authoredObjects.count != 1 { await Task.yield() }
+        let frame = try XCTUnwrap(state.selectionState.primaryID)
+        XCTAssertEqual(state.documentSession.document.revision, baselineRevision + 1)
+        XCTAssertEqual(state.canvasRenderPlan?.authoredObjects.map(\.id), [frame])
+        XCTAssertEqual(state.canvasRenderPlan?.identity.revision, state.documentSession.document.revision)
+        XCTAssertTrue(state.layerTargets.contains { $0.id == frame })
+        XCTAssertTrue(state.canUndo)
+        var diagnostics = await state.insertionDiagnostics.snapshot()
+        for _ in 0..<200 where diagnostics.isEmpty {
+            await Task.yield()
+            diagnostics = await state.insertionDiagnostics.snapshot()
+        }
+        let diagnostic = try XCTUnwrap(diagnostics.last)
+        XCTAssertEqual(diagnostic.commandType, "insert-frame")
+        XCTAssertEqual(diagnostic.parentRevision, baselineRevision)
+        XCTAssertEqual(diagnostic.resultRevision, baselineRevision + 1)
+        XCTAssertEqual(diagnostic.result, .success)
+        XCTAssertEqual(diagnostic.sanitizedIdentifiers.count, 2)
+        XCTAssertTrue(diagnostic.sanitizedIdentifiers.allSatisfy { $0.count == 8 })
+
+        state.undo()
+        for _ in 0..<200 where state.canvasRenderPlan?.authoredObjects.isEmpty == false { await Task.yield() }
+        XCTAssertTrue(state.canvasRenderPlan?.authoredObjects.isEmpty == true)
+        state.redo()
+        for _ in 0..<200 where state.canvasRenderPlan?.authoredObjects.map(\.id) != [frame] { await Task.yield() }
+        XCTAssertEqual(state.canvasRenderPlan?.authoredObjects.map(\.id), [frame])
+
+        let textState = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank()))
+        textState.resizeViewport(to: .init(width: 900, height: 600), pixelRatio: 2)
+        for _ in 0..<200 where textState.canvasRenderPlan == nil { await Task.yield() }
+        textState.performDefaultInsertion(.text, provenance: .accessibility)
+        for _ in 0..<200 where textState.canvasRenderPlan?.authoredObjects.count != 1 { await Task.yield() }
+        let text = try XCTUnwrap(textState.selectionState.primaryID)
+        XCTAssertEqual(textState.canvasRenderPlan?.authoredObjects.map(\.id), [text])
+        XCTAssertEqual(textState.canvasRenderPlan?.identity.revision, textState.documentSession.document.revision)
+        XCTAssertEqual(
+            textState.documentSession.document.pages
+                .flatMap(\.nodes)
+                .first(where: { $0.id == text })?.kind,
+            .text
+        )
+    }
+
     // SF-0405-004, SF-0405-007
     func testCommittedNodesIntegrateWithLayoutRendererHitTestingAndBoundedInvalidation() throws {
         let fixture = makeFixture()
@@ -219,6 +279,24 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(core.hitTest(.init(x: 25, y: 35), in: plan), fixture.textID)
         XCTAssertEqual(core.previewSnapshot(from: scene).objects.first?.plainText, "Text")
         XCTAssertEqual(plan.authoredObjects.count, 1)
+    }
+
+    // SF-0203-006, SF-0405-004, SF-0405-006 — frame appearance is canonical;
+    // selection context remains an editor-only overlay.
+    func testFrameSurfaceDefaultsSurviveUndoRedoAndDeterministicRoundTripWithoutSelectionMetadata() throws {
+        let fixture = makeFixture()
+        let prepared = try prepare(.frame, fixture: fixture, nodeID: fixture.frameID)
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(prepared.documentCommand)
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains("surface"))
+        XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("selection-primary"))
+        let reopened = try DocumentSerializer.decode(encoded)
+        XCTAssertEqual(reopened.pages[0].nodes.first { $0.id == fixture.frameID }?.insertionStringProperty("style.fill"), "surface")
+        try session.undo()
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == fixture.frameID })
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == fixture.frameID }, prepared.node)
     }
 
     // SF-0405-008

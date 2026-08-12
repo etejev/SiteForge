@@ -321,7 +321,7 @@ final class WorkspaceWindowConfigurationView: NSView {
     }
 
     private func applyUITestMinimumSize(to window: NSWindow) {
-        guard let originalWindowMinimumSize else { return }
+        guard originalWindowMinimumSize != nil else { return }
         window.minSize = WorkspaceMetrics.effectiveMinimumWindowSize()
     }
 
@@ -348,6 +348,7 @@ final class WorkspaceWindowConfigurationView: NSView {
             window.setFrame(desired, display: true, animate: false)
         }
     }
+
 }
 
 private extension CGRect {

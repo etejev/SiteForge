@@ -26,7 +26,7 @@ struct CanvasRenderRequestIdentity: Codable, Hashable, Sendable {
 }
 
 enum CanvasPaintStyle: String, Codable, Hashable, Sendable {
-    case canvas, page, container, imagePlaceholder, textPlaceholder
+    case canvas, page, container, frameSurface, imagePlaceholder, textPlaceholder
 }
 
 struct CanvasRenderObject: Codable, Hashable, Sendable {
@@ -38,6 +38,9 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     let isVisible: Bool
     let accessibilityLabel: String
     let plainText: String?
+    /// A canonical node name is safe to render as authored chrome. It is
+    /// deliberately distinct from editor-only selection labels and handles.
+    let displayName: String?
 
     init(
         id: NodeID,
@@ -47,7 +50,8 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         style: CanvasPaintStyle,
         isVisible: Bool,
         accessibilityLabel: String,
-        plainText: String? = nil
+        plainText: String? = nil,
+        displayName: String? = nil
     ) {
         self.id = id
         self.frame = frame
@@ -57,6 +61,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.isVisible = isVisible
         self.accessibilityLabel = accessibilityLabel
         self.plainText = plainText
+        self.displayName = displayName
     }
 }
 
@@ -65,6 +70,23 @@ struct CanvasEditorOverlay: Codable, Hashable, Sendable {
     let objectID: NodeID
     let frame: WorldRect
     let kind: String
+    /// Selection context is editor-only and intentionally excluded from the
+    /// authored render scene, package, history, preview, and export snapshots.
+    let label: String?
+
+    init(
+        id: CanvasOverlayID,
+        objectID: NodeID,
+        frame: WorldRect,
+        kind: String,
+        label: String? = nil
+    ) {
+        self.id = id
+        self.objectID = objectID
+        self.frame = frame
+        self.kind = kind
+        self.label = label
+    }
 }
 
 struct CanvasRenderSceneSnapshot: Codable, Equatable, Sendable {
@@ -276,7 +298,9 @@ struct CanvasRendererCore: Sendable {
         guard scene.schemaVersion == CanvasRenderSceneSnapshot.currentSchemaVersion else {
             throw CanvasRendererError.unsupportedSchema(scene.schemaVersion)
         }
-        guard !scene.objects.isEmpty else { throw CanvasRendererError.emptyScene }
+        // An empty scene is a valid, explicit blank-project state. Keeping it
+        // renderable means the canvas can adopt a real empty plan rather than
+        // retaining a stale scene or fabricating a root-node rectangle.
         guard scene.objects.count <= CanvasRendererPolicy.maximumObjects else {
             throw CanvasRendererError.objectLimitExceeded(scene.objects.count)
         }

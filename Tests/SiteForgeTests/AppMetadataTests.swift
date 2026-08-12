@@ -66,8 +66,8 @@ final class AppMetadataTests: XCTestCase {
         XCTAssertEqual(order, [
             .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents, .navigatorPage(first),
             .navigatorPage(second), .viewportPreset, .viewportZoomOut, .viewportZoomIn,
-            .viewportReset, .viewportFit, .viewportCanvas,
-            .inspectorLayout, .inspectorStyle, .inspectorAdvanced, .inspectorAccessibility,
+            .viewportReset, .viewportFitCanvas, .viewportFit, .viewportCanvas,
+            .inspectorDesign, .inspectorLayout, .inspectorContent, .inspectorInteractions, .inspectorAccessibility,
         ])
         for (index, value) in order.enumerated() {
             XCTAssertEqual(
@@ -81,6 +81,35 @@ final class AppMetadataTests: XCTestCase {
         }
         XCTAssertEqual(ShellFocusTraversal.adjacent(to: nil, direction: .forward, pageIDs: [first]), .navigatorPages)
         XCTAssertEqual(ShellFocusTraversal.adjacent(to: nil, direction: .reverse, pageIDs: [second]), .inspectorAccessibility)
+    }
+
+    // SF-0201-002, SF-0201-006, SF-0201-008, SF-1505-006 through SF-1505-008
+    @MainActor
+    func testInspectorNavigationIsOrderedTruthfulAndNoncanonical() throws {
+        XCTAssertEqual(InspectorTab.allCases, [.design, .layout, .content, .interactions, .accessibility])
+        XCTAssertEqual(InspectorTab.design.availability, .available)
+        XCTAssertEqual(InspectorTab.layout.availability, .available)
+        XCTAssertEqual(InspectorTab.accessibility.availability, .available)
+
+        for tab in [InspectorTab.content, .interactions] {
+            guard case let .unavailable(reason, nextStep) = tab.availability else {
+                return XCTFail("\(tab) must be an unavailable inspector destination")
+            }
+            XCTAssertFalse(reason.isEmpty)
+            XCTAssertFalse(nextStep.isEmpty)
+            XCTAssertTrue(tab.accessibilityDescription.contains("Not available yet"))
+        }
+
+        let state = WorkspaceShellState()
+        let document = state.documentSession.document
+        let revision = document.revision
+        for tab in InspectorTab.allCases {
+            state.inspectorTab = tab
+        }
+        XCTAssertEqual(state.documentSession.document, document)
+        XCTAssertEqual(state.documentSession.document.revision, revision)
+        XCTAssertFalse(state.canUndo)
+        XCTAssertFalse(state.canRedo)
     }
 
     // SF-0201-002, SF-0201-006, SF-0201-008

@@ -2,6 +2,31 @@ import XCTest
 @testable import SiteForge
 
 final class CanvasRendererTests: XCTestCase {
+    // SF-0201-003, SF-0407-001, SF-0407-003
+    func testExplicitBlankSceneAdoptsWithoutFabricatingRenderableObjects() throws {
+        let fixture = try makeFixture(count: 1)
+        let scene = CanvasRenderSceneSnapshot(
+            identity: fixture.scene.identity,
+            surfaceID: fixture.scene.surfaceID,
+            objects: []
+        )
+
+        let plan = try CanvasRendererCore().prepare(
+            scene: scene,
+            overlays: .init(identity: scene.identity, overlays: []),
+            viewport: fixture.viewport
+        )
+
+        XCTAssertTrue(plan.authoredObjects.isEmpty)
+        XCTAssertTrue(plan.accessibilityElements.isEmpty)
+        XCTAssertNil(CanvasRendererCore().hitTest(.init(x: 50, y: 50), in: plan))
+        XCTAssertEqual(plan.deterministicDigest, try CanvasRendererCore().prepare(
+            scene: scene,
+            overlays: .init(identity: scene.identity, overlays: []),
+            viewport: fixture.viewport
+        ).deterministicDigest)
+    }
+
     // SF-0407-001, SF-0407-003, SF-0407-008
     func testDeterministicPaintOrderAndReverseHitTesting() throws {
         let fixture = try makeFixture(count: 3, overlapping: true)
