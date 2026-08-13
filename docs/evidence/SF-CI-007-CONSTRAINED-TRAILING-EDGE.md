@@ -23,7 +23,7 @@ Environment: local macOS arm64 Xcode-beta test destination.
 - `./sf test half` passed 301 unit/integration tests.
 - A project-root override test wrote both a matching `.xcresult` and `.log` to a temporary override root.
 - Each of the four affected journeys passed in a fresh local application process: status Commit/Cancel, Inspector destinations, Preview pointer presentation, and toolbar Undo/Redo pointer interaction.
-- Hosted run `31671468329` then proved the lower window edge alone was insufficient: its real Commit button extended below the test-safe inset. The four-placement policy now reserves both vertical insets.
+- Hosted run `31671468329` then proved the lower window edge alone was insufficient: its real Commit button extended below the test-safe inset. The four-placement policy reserves both vertical insets. Hosted run `31673619911` showed that the welcome surface still imposed a 700-point SwiftUI content minimum across the welcome-to-workspace transition, preventing the constrained AppKit frame from taking effect. The launch surface now consumes the same explicit constrained Debug/UI-test minimum policy as the workspace; production and generic UI tests retain 1100×700.
 - Complete `./sf verify` passed on 2026-08-13: repository/security/traceability/architecture/migration/evidence checks, 303 unit/integration tests, and 33 UI tests.
 
 No production window behavior, Release composition, or command availability was changed by this correction. Hosted workflow evidence remains pending the corrective commit.

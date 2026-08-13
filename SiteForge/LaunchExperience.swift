@@ -563,8 +563,13 @@ struct LaunchExperienceView: View {
                 .padding(48)
         }
         .frame(
-            minWidth: WorkspaceMetrics.minimumWindowSize.width,
-            minHeight: WorkspaceMetrics.minimumWindowSize.height
+            // A named constrained UI-test placement is the one non-product
+            // composition allowed to fit vertically.  Keeping the launch
+            // surface on the same policy as the workspace prevents its
+            // SwiftUI content minimum from pinning an otherwise valid
+            // bottom-aligned test window at 700 points after the transition.
+            minWidth: WorkspaceMetrics.effectiveMinimumWindowSize().width,
+            minHeight: WorkspaceMetrics.effectiveMinimumWindowSize().height
         )
         .accessibilityIdentifier("launch.experience")
         .task {
