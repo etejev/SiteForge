@@ -651,6 +651,8 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var transformSession = TransformSession()
     @Published private(set) var transformFailure: TransformError?
     @Published private(set) var lastTransformAnnouncement = "Transform inactive"
+    @Published private(set) var geometryInspectorFailure: GeometryInspectorError?
+    @Published private(set) var lastGeometryInspectorAnnouncement = "Layout Inspector inactive"
     @Published private(set) var snapResolution: SnapResolution?
     @Published private(set) var isSnappingSuppressed = false
     @Published private(set) var selectedGuideID: GuideID?
@@ -683,6 +685,7 @@ final class WorkspaceShellState: ObservableObject {
     private let dragDropRegistry = DragDropCommandRegistry()
     private let textEditingRegistry = InlineTextCommandRegistry()
     private let transformRegistry = TransformCommandRegistry()
+    private let geometryInspectorRegistry = GeometryInspectorCommandRegistry()
     private let snapResolver = SnapResolver()
     private let guideRegistry = GuideCommandRegistry()
     private let renderSurfaceID = CanvasRenderSurfaceID()
@@ -692,6 +695,7 @@ final class WorkspaceShellState: ObservableObject {
     let dragDropDiagnostics = DragDropDiagnostics()
     let textEditingDiagnostics = TextEditDiagnostics()
     let transformDiagnostics = TransformDiagnostics()
+    let geometryInspectorDiagnostics = GeometryInspectorDiagnostics()
     let snapDiagnostics = SnapDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
     private let announcementPoster: AccessibilityAnnouncementPoster
@@ -960,6 +964,149 @@ final class WorkspaceShellState: ObservableObject {
             geometry.size.width,
             geometry.size.height
         )
+    }
+
+    /// Fixed Inspector fields read the same authored values consumed by the
+    /// transform, renderer, selection, and package pipelines. Draft strings
+    /// remain in the view and never enter this state or the canonical model.
+    func geometryInspectorValue(for field: GeometryInspectorField) -> GeometryInspectorValue {
+        geometryInspectorRegistry.value(
+            for: field,
+            in: documentSession.document,
+            context: transformValidationContext
+        )
+    }
+
+    var geometryInspectorSelectionKey: String {
+        selectionState.orderedIDs.map(\.description).joined(separator: ",")
+            + ":\(documentSession.document.revision)"
+    }
+
+    var geometryInspectorApplicabilityMessage: String? {
+        guard let pageID = effectiveSelectedPageID,
+              let page = documentSession.document.pages.first(where: { $0.id == pageID }) else {
+            return nil
+        }
+        let unsupported = selectionState.orderedIDs.compactMap { id in
+            page.nodes.first(where: { $0.id == id })
+        }.filter { !GeometryInspectorCommandRegistry.supportsFixedGeometry($0.kind) }
+        guard !unsupported.isEmpty else { return nil }
+        return "\(unsupported.count) selected object\(unsupported.count == 1 ? "" : "s") do not support fixed geometry and will remain unchanged."
+    }
+
+    func geometryInspectorAvailability(for field: GeometryInspectorField) -> TransformAvailability {
+        guard let plan = canvasRenderPlan,
+              let pageID = effectiveSelectedPageID,
+              !selectionState.isEmpty else {
+            return .disabled("Select an object with editable geometry after the canvas is ready.")
+        }
+        let command = GeometryInspectorCommand(
+            identity: .init(
+                editID: GeometryInspectorEditID(),
+                documentID: documentSession.document.id,
+                pageID: pageID,
+                revision: documentSession.document.revision,
+                sceneID: plan.identity.sceneID,
+                rendererGeneration: plan.identity.sceneGeneration
+            ),
+            orderedNodeIDs: selectionState.orderedIDs,
+            field: field,
+            value: field.requiresPositiveValue ? TransformPolicy.minimumDimension : 0,
+            provenance: .automation
+        )
+        do {
+            _ = try geometryInspectorRegistry.prepare(
+                command, in: documentSession.document, context: transformValidationContext
+            )
+            return .enabled
+        } catch {
+            return .disabled(error.localizedDescription)
+        }
+    }
+
+    @discardableResult
+    func commitGeometryInspectorValue(
+        _ value: Double,
+        field: GeometryInspectorField,
+        provenance: GeometryInspectorProvenance
+    ) -> Bool {
+        guard let plan = canvasRenderPlan, let pageID = effectiveSelectedPageID else { return false }
+        let command = GeometryInspectorCommand(
+            identity: .init(
+                editID: GeometryInspectorEditID(),
+                documentID: documentSession.document.id,
+                pageID: pageID,
+                revision: documentSession.document.revision,
+                sceneID: plan.identity.sceneID,
+                rendererGeneration: plan.identity.sceneGeneration
+            ),
+            orderedNodeIDs: selectionState.orderedIDs,
+            field: field,
+            value: value,
+            provenance: provenance
+        )
+        let started = DispatchTime.now().uptimeNanoseconds
+        do {
+            let prepared = try geometryInspectorRegistry.prepare(
+                command, in: documentSession.document, context: transformValidationContext
+            )
+            _ = try documentSession.execute(prepared.documentCommand)
+            geometryInspectorFailure = nil
+            let subset = prepared.skippedNodeIDs.isEmpty
+                ? ""
+                : "; \(prepared.skippedNodeIDs.count) unsupported selection\(prepared.skippedNodeIDs.count == 1 ? "" : "s") unchanged"
+            lastGeometryInspectorAnnouncement = "\(field.title) committed\(subset)"
+            announcementPoster.post(lastGeometryInspectorAnnouncement)
+            recordGeometryInspectorDiagnostic(command, started: started, success: true, failure: nil)
+            return true
+        } catch let error as GeometryInspectorError {
+            geometryInspectorFailure = error
+            lastGeometryInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastGeometryInspectorAnnouncement)
+            recordGeometryInspectorDiagnostic(command, started: started, success: false, failure: error)
+            return false
+        } catch let error as CommandExecutionError {
+            let mapped: GeometryInspectorError = switch error {
+            case .cancelled: .cancelled
+            case .revisionExhausted: .revisionExhausted
+            case .disabled: .staleRevision
+            case .invalidResult: .invalidValue
+            }
+            geometryInspectorFailure = mapped
+            lastGeometryInspectorAnnouncement = mapped.localizedDescription
+            announcementPoster.post(lastGeometryInspectorAnnouncement)
+            recordGeometryInspectorDiagnostic(command, started: started, success: false, failure: mapped)
+            return false
+        } catch {
+            return false
+        }
+    }
+
+    func cancelGeometryInspectorDraft() {
+        geometryInspectorFailure = nil
+        lastGeometryInspectorAnnouncement = "Layout Inspector edit cancelled"
+        announcementPoster.post(lastGeometryInspectorAnnouncement)
+    }
+
+    private func recordGeometryInspectorDiagnostic(
+        _ command: GeometryInspectorCommand,
+        started: UInt64,
+        success: Bool,
+        failure: GeometryInspectorError?
+    ) {
+        let result: GeometryInspectorDiagnosticResult = success ? .success : failure == .cancelled
+            ? .cancelled
+            : [.staleDocument, .staleRevision, .staleRenderer].contains(failure ?? .invalidValue)
+                ? .stale
+                : .failure
+        let record = GeometryInspectorDiagnosticFactory.make(
+            command: command,
+            durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000,
+            resultRevision: success ? documentSession.document.revision : nil,
+            result: result,
+            failure: failure
+        )
+        Task { await geometryInspectorDiagnostics.append(record) }
     }
 
     func selectionAvailability(_ name: SelectionCommandName) -> SelectionCommandAvailability {

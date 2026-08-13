@@ -139,6 +139,271 @@ enum TransformPolicy {
     static let handleHitRadius = 10.0
 }
 
+// MARK: - Fixed geometry Inspector
+
+/// Inspector fields deliberately address the existing canonical layout
+/// properties. They do not introduce sizing modes, constraints, or an editor
+/// geometry cache.
+enum GeometryInspectorField: String, CaseIterable, Hashable, Sendable {
+    case x
+    case y
+    case width
+    case height
+
+    var title: String {
+        switch self {
+        case .x: "X"
+        case .y: "Y"
+        case .width: "Width"
+        case .height: "Height"
+        }
+    }
+
+    var propertyKey: String { "layout.\(rawValue)" }
+
+    var requiresPositiveValue: Bool {
+        self == .width || self == .height
+    }
+}
+
+enum GeometryInspectorIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "geometry-inspector"
+}
+typealias GeometryInspectorEditID = StableIdentifier<GeometryInspectorIdentifierDomain>
+
+enum GeometryInspectorProvenance: String, Codable, CaseIterable, Sendable {
+    case pointer
+    case keyboard
+    case accessibility
+    case automation
+}
+
+struct GeometryInspectorOperationIdentity: Equatable, Sendable {
+    let editID: GeometryInspectorEditID
+    let documentID: DocumentID
+    let pageID: PageID
+    let revision: UInt64
+    let sceneID: CanvasViewportSceneID
+    let rendererGeneration: UInt64
+}
+
+struct GeometryInspectorCommand: Equatable, Sendable {
+    let identity: GeometryInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let field: GeometryInspectorField
+    let value: Double
+    let provenance: GeometryInspectorProvenance
+}
+
+enum GeometryInspectorError: Error, Equatable, LocalizedError, Sendable {
+    case lifecycleUnavailable(String)
+    case emptySelection
+    case duplicateTarget
+    case staleDocument
+    case staleRevision
+    case staleRenderer
+    case pageUnavailable
+    case selectionMismatch
+    case revisionExhausted
+    case missingTarget
+    case lockedTarget
+    case hiddenTarget
+    case unavailableTarget
+    case noApplicableTargets
+    case invalidValue
+    case cancelled
+
+    var errorDescription: String? {
+        switch self {
+        case .lifecycleUnavailable(let reason): reason
+        case .emptySelection: "Select an object with editable geometry first."
+        case .duplicateTarget: "A geometry edit cannot contain the same object twice."
+        case .staleDocument: "A different document now owns this Inspector edit."
+        case .staleRevision: "The document changed before the Inspector edit could commit."
+        case .staleRenderer: "A newer canvas scene replaced this Inspector edit."
+        case .pageUnavailable: "The active page is no longer available."
+        case .selectionMismatch: "The selection changed before the Inspector edit could commit."
+        case .revisionExhausted: "The document revision cannot accept another geometry edit."
+        case .missingTarget: "A selected object no longer exists."
+        case .lockedTarget: "Locked objects can be inspected but not edited."
+        case .hiddenTarget: "Hidden objects cannot be edited from Layout."
+        case .unavailableTarget: "An object is unavailable in the current canvas scene."
+        case .noApplicableTargets: "The selected objects do not support fixed geometry editing."
+        case .invalidValue: "Enter a finite value within the supported geometry range. Width and Height must be at least 1."
+        case .cancelled: "The Inspector edit was cancelled; committed geometry is unchanged."
+        }
+    }
+}
+
+struct PreparedGeometryInspectorEdit: Equatable, Sendable {
+    let identity: GeometryInspectorOperationIdentity
+    let field: GeometryInspectorField
+    let value: Double
+    /// IDs deliberately excluded because their node kind has no fixed geometry
+    /// contract. UI presents this count explicitly instead of coercing them.
+    let skippedNodeIDs: [NodeID]
+    let documentCommand: DocumentCommand
+}
+
+enum GeometryInspectorValue: Equatable, Sendable {
+    case unavailable(String)
+    case single(value: Double, origin: PropertyOrigin)
+    case mixed
+}
+
+struct GeometryInspectorCommandRegistry: Sendable {
+    static let requirementIDs: Set<String> = [
+        "SF-0403-001", "SF-0403-002", "SF-0403-003", "SF-0403-004",
+        "SF-0403-005", "SF-0403-006", "SF-0403-007", "SF-0403-008",
+    ]
+
+    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid]
+
+    static func supportsFixedGeometry(_ kind: NodeKind) -> Bool {
+        supportedKinds.contains(kind)
+    }
+
+    func value(
+        for field: GeometryInspectorField,
+        in document: CanonicalDocument,
+        context: TransformValidationContext
+    ) -> GeometryInspectorValue {
+        guard !context.selectedNodeIDs.isEmpty else {
+            return .unavailable("Select an object with editable geometry first.")
+        }
+        let nodes = context.selectedNodeIDs.compactMap { id in
+            document.pages.first(where: { $0.id == context.activePageID })?.nodes.first(where: { $0.id == id })
+        }.filter { Self.supportsFixedGeometry($0.kind) }
+        guard !nodes.isEmpty else {
+            return .unavailable("The selected objects do not support fixed geometry editing.")
+        }
+        let values = nodes.compactMap { node -> (Double, PropertyOrigin)? in
+            guard let property = node.insertionProperty(field.propertyKey),
+                  case let .number(value) = property.value,
+                  value.isFinite else { return nil }
+            return (value, property.origin)
+        }
+        guard values.count == nodes.count, let first = values.first else {
+            return .unavailable("The selected objects have invalid authored geometry.")
+        }
+        return values.dropFirst().allSatisfy { $0.0 == first.0 }
+            ? .single(value: first.0, origin: first.1)
+            : .mixed
+    }
+
+    func prepare(
+        _ command: GeometryInspectorCommand,
+        in document: CanonicalDocument,
+        context: TransformValidationContext,
+        cancellation: TransformCancellation = .never
+    ) throws -> PreparedGeometryInspectorEdit {
+        guard !cancellation.isCancelled() else { throw GeometryInspectorError.cancelled }
+        guard context.isLifecycleAvailable else {
+            throw GeometryInspectorError.lifecycleUnavailable(
+                context.lifecycleDisabledReason ?? "Layout editing is unavailable during the current document operation."
+            )
+        }
+        guard command.identity.documentID == document.id else { throw GeometryInspectorError.staleDocument }
+        guard command.identity.revision == document.revision else { throw GeometryInspectorError.staleRevision }
+        guard document.revision < UInt64.max else { throw GeometryInspectorError.revisionExhausted }
+        guard command.identity.pageID == context.activePageID,
+              let page = document.pages.first(where: { $0.id == context.activePageID }) else {
+            throw GeometryInspectorError.pageUnavailable
+        }
+        guard command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration else {
+            throw GeometryInspectorError.staleRenderer
+        }
+        guard !command.orderedNodeIDs.isEmpty else { throw GeometryInspectorError.emptySelection }
+        guard Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count else {
+            throw GeometryInspectorError.duplicateTarget
+        }
+        guard command.orderedNodeIDs == context.selectedNodeIDs else {
+            throw GeometryInspectorError.selectionMismatch
+        }
+        guard Self.isValid(command.value, for: command.field) else { throw GeometryInspectorError.invalidValue }
+
+        var commands: [DocumentCommand] = []
+        var skipped: [NodeID] = []
+        for id in command.orderedNodeIDs {
+            guard !cancellation.isCancelled() else { throw GeometryInspectorError.cancelled }
+            guard let node = page.nodes.first(where: { $0.id == id }) else {
+                throw GeometryInspectorError.missingTarget
+            }
+            guard Self.supportsFixedGeometry(node.kind) else {
+                skipped.append(id)
+                continue
+            }
+            guard !node.insertionBooleanProperty("locked") else { throw GeometryInspectorError.lockedTarget }
+            guard !node.insertionBooleanProperty("hidden") else { throw GeometryInspectorError.hiddenTarget }
+            guard context.availableNodeIDs.contains(id) else { throw GeometryInspectorError.unavailableTarget }
+            guard let property = node.insertionProperty(command.field.propertyKey) else {
+                skipped.append(id)
+                continue
+            }
+            commands.append(.setProperty(.init(
+                pageID: page.id,
+                nodeID: id,
+                property: .init(id: property.id, key: property.key, value: .number(command.value), origin: .authored)
+            )))
+        }
+        guard !commands.isEmpty else { throw GeometryInspectorError.noApplicableTargets }
+        let documentCommand = DocumentCommand.batch(commands)
+        guard CommandRegistry().availability(for: documentCommand, in: document).isEnabled else {
+            throw GeometryInspectorError.invalidValue
+        }
+        return .init(
+            identity: command.identity,
+            field: command.field,
+            value: command.value,
+            skippedNodeIDs: skipped,
+            documentCommand: documentCommand
+        )
+    }
+
+    static func isValid(_ value: Double, for field: GeometryInspectorField) -> Bool {
+        guard value.isFinite, abs(value) <= LayoutPolicy.maximumDimension else { return false }
+        return !field.requiresPositiveValue || value >= TransformPolicy.minimumDimension
+    }
+}
+
+enum GeometryInspectorNumberParser {
+    static func parse(_ input: String, locale: Locale = .current) -> Result<Double, GeometryInspectorError> {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .failure(.invalidValue) }
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.isLenient = false
+        // A draft such as `-` or `12.` is useful while typing, but is not a
+        // complete canonical number and must never commit merely because
+        // NumberFormatter accepts a numeric prefix.
+        let decimalSeparator = formatter.decimalSeparator ?? "."
+        guard trimmed != "+", trimmed != "-", trimmed != "−",
+              !trimmed.hasSuffix(decimalSeparator) else {
+            return .failure(.invalidValue)
+        }
+        let allowed = CharacterSet.decimalDigits.union(CharacterSet(charactersIn:
+            "+-−" + decimalSeparator + (formatter.groupingSeparator ?? "")
+        ))
+        guard trimmed.unicodeScalars.allSatisfy(allowed.contains) else {
+            return .failure(.invalidValue)
+        }
+        guard let number = formatter.number(from: trimmed) else { return .failure(.invalidValue) }
+        let value = number.doubleValue
+        return value.isFinite ? .success(value) : .failure(.invalidValue)
+    }
+
+    static func format(_ value: Double, locale: Locale = .current) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 3
+        formatter.minimumFractionDigits = 0
+        return formatter.string(from: value as NSNumber) ?? String(format: "%.3f", value)
+    }
+}
+
 struct TransformCommandRegistry: Sendable {
     static let requirementIDs: Set<String> = [
         "SF-0403-001", "SF-0403-002", "SF-0403-003", "SF-0403-004",
@@ -549,6 +814,62 @@ enum TransformDiagnosticFactory {
 
     private static func sanitize(_ id: NodeID) -> String {
         let digest = SHA256.hash(data: Data(("transform:" + id.description).utf8))
+        return "node-" + digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// MARK: - Fixed geometry Inspector diagnostics
+
+/// Kept distinct from gesture diagnostics so a direct Inspector edit cannot
+/// masquerade as a move or resize in support data. Records intentionally carry
+/// only stable-ID digests and typed outcome categories.
+enum GeometryInspectorDiagnosticResult: String, Codable, Sendable {
+    case success, failure, cancelled, stale
+}
+
+struct GeometryInspectorDiagnosticRecord: Codable, Equatable, Sendable {
+    let requirementIDs: [String]
+    let operationType: String
+    let provenance: GeometryInspectorProvenance
+    let sanitizedIdentifiers: [String]
+    let durationMilliseconds: Double
+    let parentRevision: UInt64
+    let resultRevision: UInt64?
+    let affectedObjectCount: Int
+    let result: GeometryInspectorDiagnosticResult
+    let failureCategory: String?
+}
+
+actor GeometryInspectorDiagnostics {
+    private var records: [GeometryInspectorDiagnosticRecord] = []
+    func append(_ record: GeometryInspectorDiagnosticRecord) { records.append(record) }
+    func snapshot() -> [GeometryInspectorDiagnosticRecord] { records }
+}
+
+enum GeometryInspectorDiagnosticFactory {
+    static func make(
+        command: GeometryInspectorCommand,
+        durationMilliseconds: Double,
+        resultRevision: UInt64?,
+        result: GeometryInspectorDiagnosticResult,
+        failure: GeometryInspectorError?
+    ) -> GeometryInspectorDiagnosticRecord {
+        GeometryInspectorDiagnosticRecord(
+            requirementIDs: GeometryInspectorCommandRegistry.requirementIDs.sorted(),
+            operationType: "geometry-inspector.\(command.field.rawValue)",
+            provenance: command.provenance,
+            sanitizedIdentifiers: command.orderedNodeIDs.map(sanitize),
+            durationMilliseconds: max(0, durationMilliseconds),
+            parentRevision: command.identity.revision,
+            resultRevision: resultRevision,
+            affectedObjectCount: command.orderedNodeIDs.count,
+            result: result,
+            failureCategory: failure.map { String(describing: $0).prefix(64).description }
+        )
+    }
+
+    private static func sanitize(_ id: NodeID) -> String {
+        let digest = SHA256.hash(data: Data(("geometry-inspector:" + id.description).utf8))
         return "node-" + digest.prefix(6).map { String(format: "%02x", $0) }.joined()
     }
 }

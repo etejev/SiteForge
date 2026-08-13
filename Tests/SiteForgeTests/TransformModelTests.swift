@@ -486,6 +486,124 @@ final class TransformModelTests: XCTestCase {
         let records = await diagnostics.snapshot()
         XCTAssertEqual(records, [record])
     }
+
+    // SF-0403-001, SF-0403-002, SF-0403-004, SF-0403-005, SF-0403-008
+    func testGeometryInspectorCommitsApplicableSubsetAtomicallyWithUndoAndPersistence() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        fixture.document.pages[0].nodes[2].kind = .text
+        fixture.selectedIDs = [fixture.nodeID, fixture.secondNodeID]
+        let registry = GeometryInspectorCommandRegistry()
+
+        XCTAssertEqual(registry.value(for: .x, in: fixture.document, context: fixture.context), .mixed)
+        let prepared = try registry.prepare(
+            fixture.inspectorCommand(field: .x, value: 42),
+            in: fixture.document,
+            context: fixture.context
+        )
+        XCTAssertEqual(prepared.skippedNodeIDs, [])
+        guard case let .batch(children) = prepared.documentCommand else {
+            return XCTFail("Inspector edit must be one atomic property batch")
+        }
+        XCTAssertEqual(children.count, 2)
+
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(prepared.documentCommand)
+        XCTAssertEqual(session.document.nodeGeometry(fixture.nodeID)?.frame.origin.x, 42)
+        XCTAssertEqual(session.document.nodeGeometry(fixture.secondNodeID)?.frame.origin.x, 42)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+
+        _ = try session.undo()
+        XCTAssertEqual(session.document.nodeGeometry(fixture.nodeID)?.frame.origin.x, 10)
+        XCTAssertEqual(session.document.nodeGeometry(fixture.secondNodeID)?.frame.origin.x, 200)
+        _ = try session.redo()
+        XCTAssertEqual(session.document.nodeGeometry(fixture.nodeID)?.frame.origin.x, 42)
+        XCTAssertEqual(session.document.nodeGeometry(fixture.secondNodeID)?.frame.origin.x, 42)
+    }
+
+    // SF-0403-003, SF-0403-004, SF-0403-006, SF-0403-008
+    func testGeometryInspectorRejectsInvalidStaleAndUnavailableValuesWithoutMutation() throws {
+        let fixture = makeFixture()
+        let registry = GeometryInspectorCommandRegistry()
+        let original = try DocumentSerializer.encode(fixture.document)
+
+        for value in [Double.nan, Double.infinity, -1, LayoutPolicy.maximumDimension + 1] {
+            XCTAssertThrowsError(try registry.prepare(
+                fixture.inspectorCommand(field: .width, value: value),
+                in: fixture.document,
+                context: fixture.context
+            ))
+        }
+        XCTAssertThrowsError(try registry.prepare(
+            fixture.inspectorCommand(field: .x, value: 33, revision: fixture.document.revision + 1),
+            in: fixture.document,
+            context: fixture.context
+        )) { XCTAssertEqual($0 as? GeometryInspectorError, .staleRevision) }
+        XCTAssertThrowsError(try registry.prepare(
+            fixture.inspectorCommand(field: .x, value: 33),
+            in: fixture.document,
+            context: fixture.context(selectedIDs: fixture.selectedIDs, availableIDs: [])
+        )) { XCTAssertEqual($0 as? GeometryInspectorError, .unavailableTarget) }
+        XCTAssertEqual(try DocumentSerializer.encode(fixture.document), original)
+
+        XCTAssertEqual(GeometryInspectorNumberParser.parse("", locale: Locale(identifier: "en_US")), .failure(.invalidValue))
+        XCTAssertEqual(GeometryInspectorNumberParser.parse("-", locale: Locale(identifier: "en_US")), .failure(.invalidValue))
+        XCTAssertEqual(GeometryInspectorNumberParser.parse("12.", locale: Locale(identifier: "en_US")), .failure(.invalidValue))
+        XCTAssertEqual(GeometryInspectorNumberParser.parse("12abc", locale: Locale(identifier: "en_US")), .failure(.invalidValue))
+        XCTAssertEqual(GeometryInspectorNumberParser.parse("12,5", locale: Locale(identifier: "fr_FR")), .success(12.5))
+    }
+
+    // SF-0403-001, SF-0403-004, SF-0403-008
+    func testGeometryInspectorSupportsOnlyDeclaredNodeKindsAndRedactsDiagnostics() throws {
+        let registry = GeometryInspectorCommandRegistry()
+        for kind in [NodeKind.frame, .text, .section, .stack, .grid] {
+            var fixture = makeFixture()
+            fixture.document.pages[0].nodes[1].kind = kind
+            applyStructuralDefaults(for: kind, to: &fixture.document.pages[0].nodes[1])
+            let prepared = try registry.prepare(
+                fixture.inspectorCommand(field: .height, value: 88),
+                in: fixture.document,
+                context: fixture.context
+            )
+            XCTAssertEqual(prepared.skippedNodeIDs, [], "\(kind) must use fixed geometry when declared applicable")
+        }
+
+        var unsupported = makeFixture()
+        unsupported.document.pages[0].nodes[1].kind = .image
+        XCTAssertThrowsError(try registry.prepare(
+            unsupported.inspectorCommand(field: .x, value: 20),
+            in: unsupported.document,
+            context: unsupported.context
+        )) { XCTAssertEqual($0 as? GeometryInspectorError, .noApplicableTargets) }
+
+        var subset = makeFixture(selectedIDs: [])
+        subset.document.pages[0].nodes[2].kind = .image
+        subset.selectedIDs = [subset.nodeID, subset.secondNodeID]
+        let partial = try registry.prepare(
+            subset.inspectorCommand(field: .y, value: 55),
+            in: subset.document,
+            context: subset.context
+        )
+        XCTAssertEqual(partial.skippedNodeIDs, [subset.secondNodeID])
+        guard case let .batch(commands) = partial.documentCommand else {
+            return XCTFail("Applicable subset must still be one atomic batch")
+        }
+        XCTAssertEqual(commands.count, 1)
+
+        let fixture = makeFixture()
+        let command = fixture.inspectorCommand(field: .width, value: 222)
+        let record = GeometryInspectorDiagnosticFactory.make(
+            command: command,
+            durationMilliseconds: 0.2,
+            resultRevision: fixture.document.revision + 1,
+            result: .success,
+            failure: nil
+        )
+        XCTAssertEqual(record.operationType, "geometry-inspector.width")
+        XCTAssertEqual(record.requirementIDs, (1...8).map { "SF-0403-00\($0)" })
+        XCTAssertFalse(record.sanitizedIdentifiers.joined().contains(fixture.nodeID.description))
+        XCTAssertFalse(String(describing: record).contains("/Users/"))
+    }
 }
 
 private struct TransformFixture {
@@ -534,6 +652,27 @@ private struct TransformFixture {
             ),
             orderedNodeIDs: orderedIDs ?? selectedIDs,
             operation: operation,
+            provenance: .automation
+        )
+    }
+
+    func inspectorCommand(
+        field: GeometryInspectorField,
+        value: Double,
+        revision: UInt64? = nil
+    ) -> GeometryInspectorCommand {
+        GeometryInspectorCommand(
+            identity: .init(
+                editID: GeometryInspectorEditID(UUID(uuidString: "94000000-0000-4000-8000-000000000099")!),
+                documentID: document.id,
+                pageID: pageID,
+                revision: revision ?? document.revision,
+                sceneID: sceneID,
+                rendererGeneration: rendererGeneration
+            ),
+            orderedNodeIDs: selectedIDs,
+            field: field,
+            value: value,
             provenance: .automation
         )
     }
@@ -625,6 +764,23 @@ private func makeGeometryNode(
             )
         }
     )
+}
+
+private func applyStructuralDefaults(for kind: NodeKind, to node: inout DocumentNode) {
+    let values: [(String, PropertyValue)]
+    switch kind {
+    case .section:
+        values = [("layout.container.kind", .string("section")), ("layout.padding", .number(48)), ("layout.axis", .string("vertical"))]
+    case .stack:
+        values = [("layout.container.kind", .string("stack")), ("layout.axis", .string("vertical")), ("layout.padding", .number(24)), ("layout.gap", .number(24)), ("layout.align", .string("start"))]
+    case .grid:
+        values = [("layout.container.kind", .string("grid")), ("layout.padding", .number(24)), ("layout.gap", .number(24)), ("layout.grid.columns", .number(2)), ("layout.grid.placement", .string("row-major"))]
+    case .frame, .text, .image, .component:
+        values = []
+    }
+    node.properties.append(contentsOf: values.map { key, value in
+        NodeProperty(key: PropertyKey(rawValue: key), value: value, origin: .defaulted)
+    })
 }
 
 private func booleanProperty(_ key: String, _ value: Bool) -> NodeProperty {

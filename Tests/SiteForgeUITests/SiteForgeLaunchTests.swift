@@ -246,17 +246,64 @@ final class SiteForgeLaunchTests: XCTestCase {
         )
         attachScreenshot(named: "SF-AUTHORING-006 pointer resize")
 
-        let moveButton = application.buttons["inspector.transform.moveRight"]
-        let resizeButton = application.buttons["inspector.transform.increaseWidth"]
-        XCTAssertTrue(moveButton.exists)
-        XCTAssertTrue(resizeButton.exists)
         let afterPointerResize = try XCTUnwrap(geometry.value as? String)
-        moveButton.click()
+        let xField = application.textFields["inspector.layout.x"]
+        let yField = application.textFields["inspector.layout.y"]
+        let widthField = application.textFields["inspector.layout.width"]
+        let heightField = application.textFields["inspector.layout.height"]
+        XCTAssertTrue(xField.waitForExistence(timeout: 5))
+        XCTAssertTrue(yField.waitForExistence(timeout: 5))
+        XCTAssertTrue(widthField.waitForExistence(timeout: 5))
+        XCTAssertTrue(heightField.waitForExistence(timeout: 5))
+        XCTAssertEqual(xField.label, "X geometry")
+        XCTAssertTrue((xField.value as? String)?.contains("authored") == true)
+        xField.click()
+        xField.typeKey("a", modifierFlags: .command)
+        xField.typeText("121")
+        xField.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForValueToChange(geometry, from: afterPointerResize))
         let afterNumericMove = try XCTUnwrap(geometry.value as? String)
-        resizeButton.click()
+        yField.click()
+        yField.typeKey("a", modifierFlags: .command)
+        yField.typeText("122")
+        yField.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericMove))
-        attachScreenshot(named: "SF-AUTHORING-006 numeric move and resize")
+        let afterNumericY = try XCTUnwrap(geometry.value as? String)
+        widthField.click()
+        widthField.typeKey("a", modifierFlags: .command)
+        widthField.typeText("241")
+        widthField.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericY))
+        let afterNumericWidth = try XCTUnwrap(geometry.value as? String)
+        heightField.click()
+        heightField.typeKey("a", modifierFlags: .command)
+        heightField.typeText("161")
+        heightField.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericWidth))
+
+        // Native focus loss commits a complete draft through the same typed
+        // registry; no text-field draft becomes canonical while it is typed.
+        let afterReturnCommit = try XCTUnwrap(geometry.value as? String)
+        xField.click()
+        xField.typeKey("a", modifierFlags: .command)
+        xField.typeText("131")
+        yField.click()
+        XCTAssertTrue(waitForValueToChange(geometry, from: afterReturnCommit))
+        // Retain an evidence frame after the real viewport has fitted the
+        // selected canonical object; the attachment must show both fields and
+        // their corresponding editor-only bounds rather than a clipped edge.
+        let fit = application.buttons["canvas.zoom.fitCanvas"]
+        XCTAssertTrue(fit.isHittable)
+        fit.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-011 fixed geometry fields")
+
+        let committedWidth = widthField.value as? String
+        widthField.click()
+        widthField.typeKey("a", modifierFlags: .command)
+        widthField.typeText("0")
+        widthField.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(widthField.value as? String, committedWidth)
 
         let objectCenter = resizeDestination.withOffset(.init(dx: -130, dy: 0))
         let moveDestination = objectCenter.withOffset(.init(dx: 20, dy: -10))

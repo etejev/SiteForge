@@ -1671,22 +1671,11 @@ private struct InspectorView: View {
                 .accessibilityLabel("Selection geometry")
                 .accessibilityValue(state.transformGeometrySummary)
                 .accessibilityIdentifier("inspector.transform.geometry")
-            Text("Broader editable properties are intentionally deferred to a later authoring slice.")
+            Text("Fixed geometry edits are authored values. Sizing modes, constraints, and automatic sizing remain unavailable.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if state.selectionState.count == 1 {
-                HStack {
-                    Button("Move Right 1 px") {
-                        state.performTransform(.move(delta: .init(dx: 1, dy: 0), constraint: .horizontal), provenance: .accessibility)
-                    }
-                    .accessibilityIdentifier("inspector.transform.moveRight")
-                    Button("Increase Width 1 px") {
-                        state.performTransform(.resize(handle: .right, delta: .init(dx: 1, dy: 0), constraint: .horizontal), provenance: .accessibility)
-                    }
-                    .accessibilityIdentifier("inspector.transform.increaseWidth")
-                }
-                .controlSize(.small)
-            }
+            GeometryInspectorFieldsView(state: state)
+                .id(state.geometryInspectorSelectionKey)
             Divider()
             guideAndSnappingDetails
         case .accessibility:
@@ -1742,6 +1731,155 @@ private struct InspectorView: View {
             .toggleStyle(.checkbox)
             .accessibilityIdentifier("inspector.snapping.suppress")
         }
+    }
+}
+
+/// Scene-local string drafts for canonical fixed-geometry fields. The view is
+/// intentionally the only owner of incomplete locale input; `WorkspaceShellState`
+/// receives one validated number only at the native commit boundary.
+private struct GeometryInspectorFieldsView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @FocusState private var focusedField: GeometryInspectorField?
+    @State private var drafts: [GeometryInspectorField: String] = [:]
+    @State private var validationMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Geometry").font(.headline)
+            ForEach(GeometryInspectorField.allCases, id: \.self) { field in
+                fieldRow(field)
+            }
+            if let applicability = state.geometryInspectorApplicabilityMessage {
+                Text(applicability)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.layout.applicability")
+            }
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("inspector.layout.validation")
+            }
+            Text(state.lastGeometryInspectorAnnouncement)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.layout.announcement")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Layout geometry")
+        .accessibilityIdentifier("inspector.layout.geometryFields")
+        .onExitCommand {
+            guard focusedField != nil else { return }
+            restoreDrafts()
+            focusedField = nil
+            state.cancelGeometryInspectorDraft()
+        }
+    }
+
+    @ViewBuilder
+    private func fieldRow(_ field: GeometryInspectorField) -> some View {
+        let value = state.geometryInspectorValue(for: field)
+        let availability = state.geometryInspectorAvailability(for: field)
+        HStack(spacing: 8) {
+            Text(field.title)
+                .frame(width: 44, alignment: .leading)
+            TextField(field.title, text: draftBinding(for: field, value: value))
+                .textFieldStyle(.roundedBorder)
+                .monospacedDigit()
+                .focused($focusedField, equals: field)
+                .onSubmit { commit(field, provenance: .keyboard) }
+                .onChange(of: focusedField) { previous, current in
+                    if previous == field, current != field {
+                        // FocusState changes are applied while SwiftUI is
+                        // reconciling this view. Defer only to the next main
+                        // event turn so the native focus transfer completes
+                        // before the atomic model publication; this is not a
+                        // timer or retry, and the typed identity check keeps a
+                        // stale selection/document state neutral.
+                        DispatchQueue.main.async {
+                            guard focusedField != field else { return }
+                            commit(field, provenance: .pointer)
+                        }
+                    }
+                }
+                .disabled(!availability.isEnabled)
+                .accessibilityLabel("\(field.title) geometry")
+                .accessibilityValue(accessibilityValue(for: value))
+                .accessibilityHint(availability.disabledReason ?? "Enter a finite value and press Return to commit. Escape restores the committed value.")
+                .accessibilityIdentifier("inspector.layout.\(field.rawValue)")
+            provenanceLabel(for: value)
+                .frame(width: 64, alignment: .trailing)
+        }
+    }
+
+    private func draftBinding(
+        for field: GeometryInspectorField,
+        value: GeometryInspectorValue
+    ) -> Binding<String> {
+        Binding(
+            get: { drafts[field] ?? displayValue(for: value) },
+            set: {
+                drafts[field] = $0
+                validationMessage = nil
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func provenanceLabel(for value: GeometryInspectorValue) -> some View {
+        switch value {
+        case .single(_, let origin):
+            Text(origin == .authored ? "Authored" : "Default")
+                .font(.caption2).foregroundStyle(.secondary)
+                .accessibilityLabel(origin == .authored ? "Authored value" : "Defaulted value")
+        case .mixed:
+            Text("Mixed").font(.caption2).foregroundStyle(.secondary)
+                .accessibilityLabel("Mixed values")
+        case .unavailable:
+            Text("Unavailable").font(.caption2).foregroundStyle(.secondary)
+                .accessibilityLabel("Unavailable")
+        }
+    }
+
+    private func displayValue(for value: GeometryInspectorValue) -> String {
+        switch value {
+        case .single(let value, _): GeometryInspectorNumberParser.format(value)
+        case .mixed, .unavailable: ""
+        }
+    }
+
+    private func accessibilityValue(for value: GeometryInspectorValue) -> String {
+        switch value {
+        case .single(let value, let origin):
+            "\(GeometryInspectorNumberParser.format(value)); \(origin == .authored ? "authored" : "defaulted")"
+        case .mixed: "Mixed values"
+        case .unavailable(let reason): reason
+        }
+    }
+
+    private func commit(_ field: GeometryInspectorField, provenance: GeometryInspectorProvenance) {
+        let text = drafts[field] ?? displayValue(for: state.geometryInspectorValue(for: field))
+        switch GeometryInspectorNumberParser.parse(text) {
+        case .success(let value):
+            guard GeometryInspectorCommandRegistry.isValid(value, for: field) else {
+                validationMessage = "\(field.title) must be finite and within the supported range\(field.requiresPositiveValue ? ", with a minimum of 1" : "")."
+                return
+            }
+            guard state.commitGeometryInspectorValue(value, field: field, provenance: provenance) else {
+                validationMessage = state.geometryInspectorFailure?.localizedDescription
+                return
+            }
+            drafts.removeValue(forKey: field)
+            validationMessage = nil
+        case .failure(let error):
+            validationMessage = error.localizedDescription
+        }
+    }
+
+    private func restoreDrafts() {
+        drafts.removeAll()
+        validationMessage = nil
     }
 }
 

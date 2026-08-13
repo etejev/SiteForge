@@ -15,6 +15,12 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Native Layout Inspector X, Y, Width, and Height fields for applicable Frame,
+  Text, Section, Stack, and Grid selections. Locale-aware drafts remain
+  noncanonical until Return or focus loss commits one atomic geometry
+  transaction; Escape restores the committed display. Mixed and inapplicable
+  selections are explicit, and the same stable geometry continues through
+  undo/redo, canvas rendering, selection, Layers, accessibility, and packages.
 - Section, Stack, and Grid are now real structural Elements and Insert-menu actions. They create stable canonical nodes through the existing atomic insertion/history path, render with calm structural surfaces, and synchronize their resolved geometry across Layers, selection, Inspector, hit testing, accessibility, undo/redo, and save/reopen.
 - Canonical schema v4 records explicit v1 structural defaults: Section is 960×320 with 48-point padding; Stack is vertical/start with 24-point padding and gap; Grid uses two equal row-major columns with 24-point padding and gap. Schema-v3 packages remain readable and re-save deterministically as v4.
 

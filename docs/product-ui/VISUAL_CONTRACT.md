@@ -56,8 +56,15 @@ separate storage/definition work exists.
 
 The inspector order is Design, Layout, Content, Interactions, and
 Accessibility. Design is a read-only appearance summary; Layout retains the
-bounded geometry, transform, guide, and snapping controls; Accessibility is a
-read-only selection summary. Content and Interactions are intentionally
+bounded geometry, transform, guide, and snapping controls. For applicable
+Frame, Text, Section, Stack, and Grid selection, Layout exposes native
+locale-aware X, Y, Width, and Height fields. Draft strings are editor-only;
+Return and focus loss submit one canonical fixed-geometry transaction, while
+Escape restores the displayed committed value. Mixed values and inapplicable
+selected kinds are named explicitly. Sizing modes, constraints, aspect ratio,
+automatic sizing, responsive overrides, and broad property editing remain
+unavailable. Accessibility is a read-only selection summary. Content and
+Interactions are intentionally
 selectable native unavailable surfaces: each states why it cannot operate and
 what later canonical milestone is required. They expose no simulated editable
 fields, interaction controls, command, history, package, or canonical mutation.
