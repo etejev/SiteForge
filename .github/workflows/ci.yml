@@ -42,5 +42,6 @@ jobs:
             ${{ runner.temp }}/siteforge-ci/verify.log
             ${{ runner.temp }}/SiteForge/DerivedData/Logs/Test/*.xcresult
             ${{ runner.temp }}/SiteForge/TestResults/*.xcresult
+            ${{ runner.temp }}/SiteForge/TestResults/*.log
           if-no-files-found: warn
           retention-days: 7

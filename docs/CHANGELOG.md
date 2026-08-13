@@ -4,6 +4,10 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
+### Fixed
+
+- Restored the 1100-point constrained Debug/UI-test window width used by real trailing-edge pointer journeys. Explicit placements now fit titled height only, with independent left/right/top/bottom safe edges; the text status pointer journey uses right/bottom placement. XCTest result bundles and logs now use a deterministic project/Actions/local root and are retained together on CI failure.
+
 ### Added
 
 - Section, Stack, and Grid are now real structural Elements and Insert-menu actions. They create stable canonical nodes through the existing atomic insertion/history path, render with calm structural surfaces, and synchronize their resolved geometry across Layers, selection, Inspector, hit testing, accessibility, undo/redo, and save/reopen.

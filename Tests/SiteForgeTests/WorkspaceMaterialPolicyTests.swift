@@ -206,10 +206,10 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             placement: WorkspaceUITestWindowPlacement(horizontal: .right, vertical: .bottom)
         )
 
-        XCTAssertEqual(leftTop, CGRect(x: 16, y: 52, width: 992, height: 700))
-        XCTAssertEqual(rightTop, CGRect(x: 16, y: 52, width: 992, height: 700))
-        XCTAssertEqual(leftBottom, CGRect(x: 16, y: 16, width: 992, height: 700))
-        XCTAssertEqual(rightBottom, CGRect(x: 16, y: 16, width: 992, height: 700))
+        XCTAssertEqual(leftTop, CGRect(x: 16, y: 52, width: 1_100, height: 700))
+        XCTAssertEqual(rightTop, CGRect(x: -92, y: 52, width: 1_100, height: 700))
+        XCTAssertEqual(leftBottom, CGRect(x: 16, y: 16, width: 1_100, height: 700))
+        XCTAssertEqual(rightBottom, CGRect(x: -92, y: 16, width: 1_100, height: 700))
         XCTAssertEqual(leftTop.minX, visibleFrame.minX + WorkspaceMetrics.uiTestScreenEdgeInset)
         XCTAssertEqual(
             rightTop.maxX,
@@ -242,11 +242,11 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             WorkspaceMetrics.effectiveMinimumWindowSize(composition: topComposition),
-            CGSize(width: 1, height: 1)
+            CGSize(width: 1_100, height: 1)
         )
         XCTAssertEqual(
             WorkspaceMetrics.effectiveMinimumWindowSize(composition: bottomComposition),
-            CGSize(width: 1, height: 1)
+            CGSize(width: 1_100, height: 1)
         )
         XCTAssertEqual(
             WorkspaceMetrics.requestedWindowFrameSize(
@@ -269,8 +269,8 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             visibleFrame: hostedVisibleFrame,
             placement: WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .top)
         )
-        XCTAssertEqual(hostedBottom, CGRect(x: 16, y: 16, width: 992, height: 721))
-        XCTAssertEqual(hostedTop, CGRect(x: 16, y: 0, width: 992, height: 721))
+        XCTAssertEqual(hostedBottom, CGRect(x: 16, y: 16, width: 1_100, height: 721))
+        XCTAssertEqual(hostedTop, CGRect(x: 16, y: 0, width: 1_100, height: 721))
         XCTAssertEqual(
             hostedBottom.maxY,
             hostedVisibleFrame.maxY,
@@ -281,6 +281,15 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             hostedBottom.height,
             "Top and bottom placement must share the same deterministic hosted height."
         )
+        let hostedRightBottom = WorkspaceMetrics.uiTestWindowFrame(
+            windowFrame: productionMinimumWindowFrame,
+            visibleFrame: hostedVisibleFrame,
+            placement: WorkspaceUITestWindowPlacement(horizontal: .right, vertical: .bottom)
+        )
+        XCTAssertEqual(hostedRightBottom.width, WorkspaceMetrics.minimumWindowSize.width)
+        XCTAssertEqual(hostedRightBottom.maxX, hostedVisibleFrame.maxX - WorkspaceMetrics.uiTestScreenEdgeInset)
+        XCTAssertEqual(hostedRightBottom.minY, hostedVisibleFrame.minY + WorkspaceMetrics.uiTestScreenEdgeInset)
+        XCTAssertLessThanOrEqual(hostedRightBottom.maxY, hostedVisibleFrame.maxY)
     }
 
     // SF-0201-008, SF-1902-008

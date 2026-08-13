@@ -401,16 +401,12 @@ enum WorkspaceMetrics {
             return minimumWindowSize
         }
         // A titled AppKit window cannot move its title bar above the hosted
-        // display's menu-bar-safe edge. Explicit Debug/UI-test placement
-        // therefore permits test content to compress to the fitted frame on
-        // both axes;
-        // production and Release composition retain the full minimum.
-        // A named constrained-display UI test is the sole composition allowed
-        // to fit below the product minimum. Fit both axes: retaining the
-        // production width on a narrower hosted display leaves trailing
-        // status controls in the accessibility tree but outside the visible
-        // window, so they cannot be pointer-tested honestly.
-        return CGSize(width: 1, height: 1)
+        // display's menu-bar-safe edge. An explicit Debug/UI-test placement
+        // may therefore fit vertically, while retaining the 1100-point
+        // product width. Right alignment intentionally lets the window extend
+        // beyond the leading display edge so trailing toolbar/status controls
+        // remain genuinely pointer-accessible.
+        return CGSize(width: minimumWindowSize.width, height: 1)
     }
 
     static func usesDeterministicUITestPlacement(
@@ -457,13 +453,14 @@ enum WorkspaceMetrics {
         inset: CGFloat = uiTestScreenEdgeInset
     ) -> CGRect {
         // AppKit keeps a titled window's title bar on screen. Fit explicit
-        // Debug/UI-test windows to the available safe edges before AppKit can
-        // apply an origin-dependent constraint of its own.
-        let width = min(windowFrame.width, max(1, visibleFrame.width - (inset * 2)))
+        // Debug/UI-test windows vertically before AppKit can apply a smaller,
+        // origin-dependent constraint of its own. Width is deliberately not
+        // fitted: the named trailing-edge tests need the real product width
+        // with its leading edge outside a narrower hosted display.
         let height = min(windowFrame.height, max(1, visibleFrame.height - inset))
         let x = switch placement.horizontal {
         case .left: visibleFrame.minX + inset
-        case .right: visibleFrame.maxX - width - inset
+        case .right: visibleFrame.maxX - windowFrame.width - inset
         }
         let y = switch placement.vertical {
         case .top: visibleFrame.maxY - height - inset
@@ -472,7 +469,7 @@ enum WorkspaceMetrics {
         return CGRect(
             x: x,
             y: y,
-            width: width,
+            width: windowFrame.width,
             height: height
         )
     }

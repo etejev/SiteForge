@@ -1187,7 +1187,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     // SF-0201-006, SF-0201-008, SF-0406-006, SF-1902-008
     @MainActor
     func testInlineTextStatusCommitAndCancelUseBottomAlignedPointerWindow() throws {
-        let application = launchWorkspace(verticalAlignment: .bottom)
+        let application = launchWorkspace(windowAlignment: .right, verticalAlignment: .bottom)
         let canvas = application.descendants(matching: .any)["canvas.interaction"]
         let textTool = application.buttons["toolbar.tool.text"]
         XCTAssertTrue(waitForHittable(textTool, in: application))

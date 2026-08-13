@@ -8,6 +8,13 @@ DESTINATION=${SITEFORGE_DESTINATION:-platform=macOS}
 CODEX_BIN=${SITEFORGE_CODEX_BIN:-}
 TEST_FIXTURE_ROOT="$ROOT/.siteforge-test-fixtures"
 TEST_SCOPE_SELECTOR="$ROOT/scripts/select-test-scope.py"
+if [[ -n ${SITEFORGE_TEST_RESULTS_ROOT:-} ]]; then
+  TEST_RESULTS_ROOT=$SITEFORGE_TEST_RESULTS_ROOT
+elif [[ -n ${RUNNER_TEMP:-} ]]; then
+  TEST_RESULTS_ROOT="$RUNNER_TEMP/SiteForge/TestResults"
+else
+  TEST_RESULTS_ROOT="${TMPDIR%/}/SiteForge/TestResults"
+fi
 
 if [[ -z "$CODEX_BIN" ]]; then
   if command -v codex >/dev/null 2>&1; then
@@ -110,7 +117,7 @@ test_app() {
   local test_run_id
   test_run_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
   export SITEFORGE_TEST_RUN_ID="$test_run_id"
-  local result_bundle="${TMPDIR%/}/SiteForge/TestResults/${level// /-}-${test_run_id}.xcresult"
+  local result_bundle="$TEST_RESULTS_ROOT/${level// /-}-${test_run_id}.xcresult"
   mkdir -p "${result_bundle:h}"
   local test_status log_path
   log_path="${result_bundle:r}.log"
