@@ -86,6 +86,18 @@ fields, interaction controls, command, history, package, or canonical mutation.
   tile drawing boundary performs the one required Core Graphics Y-up → canvas
   Y-down conversion before AppKit draws text; individual labels never rotate
   or compensate for a coordinate mismatch.
+- **Initial pasteboard policy:** a fresh or newly adopted document centers its
+  noncanonical pasteboard at the existing 100% initial zoom only after the
+  AppKit viewport has a usable size. Resize and pane changes retain that
+  centered origin until an explicit pan or viewport
+  command. This never changes authored world coordinates. The empty-state
+  message is centered over that viewport with a bounded, non-hit-testable
+  footprint, so blank canvas input remains available outside its visible card.
+- **Plain-text geometry:** `CanvasTextLayout` is the shared native contract for
+  committed tile text and the inline editor. It derives the exact viewport
+  object rectangle, scaled font, insets, line fragment, and vertical glyph
+  placement once; the editor frame and selection bounds therefore remain the
+  same authored viewport rectangle within normal device-pixel rounding.
 - A newly inserted blank Frame has a deterministic restrained authored surface:
   a neutral fill, thin separator border, and its canonical `Frame` name. When
   selected, an editor-only accent outline and context chip identify the Frame,

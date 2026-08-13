@@ -321,6 +321,21 @@ struct CanvasViewportState: Codable, Equatable, Sendable {
         try commit(origin: WorldPoint(x: -128, y: -96), zoom: .actualSize, fitPolicy: .none)
     }
 
+    /// Centers the canonical pasteboard at the current zoom without changing
+    /// authored coordinates or selecting a user-visible fit command.
+    mutating func centerContent() throws {
+        let visibleWidth = viewportSize.width / zoom.value
+        let visibleHeight = viewportSize.height / zoom.value
+        try commit(
+            origin: WorldPoint(
+                x: contentBounds.origin.x - (visibleWidth - contentBounds.size.width) / 2,
+                y: contentBounds.origin.y - (visibleHeight - contentBounds.size.height) / 2
+            ),
+            zoom: zoom,
+            fitPolicy: .none
+        )
+    }
+
     mutating func fit(_ policy: CanvasFitPolicy) throws {
         guard policy != .none else {
             fitPolicy = .none

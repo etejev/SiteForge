@@ -457,7 +457,11 @@ enum WorkspaceMetrics {
         // origin-dependent constraint of its own. Width is deliberately not
         // fitted: the named trailing-edge tests need the real product width
         // with its leading edge outside a narrower hosted display.
-        let height = min(windowFrame.height, max(1, visibleFrame.height - inset))
+        // Preserve a safe boundary at *both* vertical display edges.  The
+        // bottom-aligned text-edit journey operates real status-bar controls,
+        // so placing the window's lower edge at the visible-frame edge would
+        // still leave those controls beneath the automation-safe area.
+        let height = min(windowFrame.height, max(1, visibleFrame.height - (2 * inset)))
         let x = switch placement.horizontal {
         case .left: visibleFrame.minX + inset
         case .right: visibleFrame.maxX - windowFrame.width - inset
@@ -698,6 +702,10 @@ final class WorkspaceShellState: ObservableObject {
     private var selectionScene: SelectionSceneSnapshot?
     private var pendingSelectionAfterInsertion: NodeID?
     private var retainedTextEditingFrame: WorldRect?
+    // A viewport is editor convenience state. Fit a fresh/adopted document
+    // once after the AppKit canvas has a real usable size, then retain that
+    // fit on resizes until user navigation changes the policy.
+    private var shouldInitialFitViewport = true
     private var activePointerDragTransfer: LocalLayerDragTransfer?
     private var activePointerDropCallback: LocalLayerDragCallbackToken?
     private var pointerDragCallbackGeneration: UInt64 = 0
@@ -862,6 +870,10 @@ final class WorkspaceShellState: ObservableObject {
         let committed = viewportState
         do {
             try viewportState.resize(to: size, pixelRatio: pixelRatio)
+            if shouldInitialFitViewport {
+                try viewportState.centerContent()
+                shouldInitialFitViewport = false
+            }
             viewportFailure = nil
             cancelDragDrop()
             scheduleScenePreparation()
@@ -2724,6 +2736,7 @@ final class WorkspaceShellState: ObservableObject {
             ),
             pixelRatio: viewportState.pixelRatio
         )
+        shouldInitialFitViewport = true
         preparedViewportScene = nil
         canvasRenderPlan = nil
         previousRenderScene = nil

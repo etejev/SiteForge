@@ -11,7 +11,7 @@ GitHub Actions `31668705143` passed the repository checks and all 301 unit/integ
 ## Corrected policy
 
 - `WorkspaceMetrics.effectiveMinimumWindowSize` returns 1100 by 1 only for an explicitly named constrained UI-test placement. The product's 1100 by 700 minimum remains unchanged.
-- `uiTestWindowFrame` retains the requested width and fits height only. Right alignment is `visibleFrame.maxX - windowFrame.width - inset`; bottom alignment is `visibleFrame.minY + inset`.
+- `uiTestWindowFrame` retains the requested width and fits height only within both vertical safe edges. Right alignment is `visibleFrame.maxX - windowFrame.width - inset`; bottom alignment is `visibleFrame.minY + inset`.
 - The text-status pointer journey requests both right and bottom placement, exposing the real Commit and Cancel controls at the safe trailing/bottom edge.
 - `sf` writes XCTest result bundles and their matching logs to an explicit `SITEFORGE_TEST_RESULTS_ROOT` when supplied, otherwise `$RUNNER_TEMP/SiteForge/TestResults` in Actions, otherwise the existing local TMPDIR root. CI uploads both artifact types on failure.
 
@@ -23,6 +23,7 @@ Environment: local macOS arm64 Xcode-beta test destination.
 - `./sf test half` passed 301 unit/integration tests.
 - A project-root override test wrote both a matching `.xcresult` and `.log` to a temporary override root.
 - Each of the four affected journeys passed in a fresh local application process: status Commit/Cancel, Inspector destinations, Preview pointer presentation, and toolbar Undo/Redo pointer interaction.
-- Complete `./sf verify` passed on 2026-08-13: repository/security/traceability/architecture/migration/evidence checks, 301 unit/integration tests, and 33 UI tests.
+- Hosted run `31671468329` then proved the lower window edge alone was insufficient: its real Commit button extended below the test-safe inset. The four-placement policy now reserves both vertical insets.
+- Complete `./sf verify` passed on 2026-08-13: repository/security/traceability/architecture/migration/evidence checks, 303 unit/integration tests, and 33 UI tests.
 
 No production window behavior, Release composition, or command availability was changed by this correction. Hosted workflow evidence remains pending the corrective commit.

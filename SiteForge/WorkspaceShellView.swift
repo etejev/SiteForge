@@ -687,7 +687,7 @@ private struct CanvasPlaceholderView: View {
             Divider()
 
             GeometryReader { geometry in
-                ZStack(alignment: .topLeading) {
+                ZStack(alignment: .center) {
                     NativeCanvasViewport(
                         state: state,
                         isKeyboardFocused: focus.wrappedValue == .viewportCanvas,
@@ -842,7 +842,9 @@ private struct CanvasPlaceholderView: View {
                         // actions intentionally live above that interaction
                         // area rather than becoming an invisible click shield.
                         .frame(maxWidth: 360)
-                        .padding(.top, 24)
+                        .padding(20)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .allowsHitTesting(false)
                         .accessibilityIdentifier("canvas.empty.state")
                     }
                 }
@@ -2922,12 +2924,21 @@ private final class NativeCanvasViewportView: NSView {
         guard let origin = try? viewportState.transform.worldToViewport(
             presentation.frame.origin
         ) else { return }
-        editor.frame = CGRect(
-            x: origin.x,
-            y: origin.y,
-            width: max(44, presentation.frame.size.width * viewportState.zoom.value),
-            height: max(24, presentation.frame.size.height * viewportState.zoom.value)
+        let layout = CanvasTextLayout(
+            viewportObjectRect: CGRect(
+                x: origin.x,
+                y: origin.y,
+                width: presentation.frame.size.width * viewportState.zoom.value,
+                height: presentation.frame.size.height * viewportState.zoom.value
+            ),
+            zoom: viewportState.zoom.value,
+            text: presentation.text
         )
+        // The editor and editor-only selection outline consume the exact same
+        // object rectangle. Text insets and baseline are supplied by the
+        // shared layout below, not by an editor-only offset or minimum size.
+        editor.frame = layout.viewportObjectRect
+        editor.applyCanvasTextLayout(layout)
         let preservesNativeDraft = editor.representedSessionIdentity == presentation.identity
             && window?.firstResponder === editor
         editor.representedSessionIdentity = presentation.identity
@@ -3011,12 +3022,13 @@ final class InlineCanvasTextView: NSTextView {
         isRichText = false
         importsGraphics = false
         allowsUndo = false
-        drawsBackground = true
-        backgroundColor = .textBackgroundColor
+        drawsBackground = false
+        backgroundColor = .clear
         textColor = .labelColor
         insertionPointColor = .controlAccentColor
-        font = .systemFont(ofSize: 14)
-        textContainerInset = NSSize(width: 4, height: 3)
+        font = .systemFont(ofSize: CanvasTextLayout.baseFontSize)
+        textContainerInset = NSSize(width: CanvasTextLayout.baseHorizontalInset, height: 0)
+        textContainer?.lineFragmentPadding = 0
         setAccessibilityRole(.textArea)
     }
 
@@ -3057,6 +3069,13 @@ final class InlineCanvasTextView: NSTextView {
 
     override func isAccessibilityFocused() -> Bool {
         window?.firstResponder === self
+    }
+
+    func applyCanvasTextLayout(_ layout: CanvasTextLayout) {
+        let nextFont = NSFont.systemFont(ofSize: layout.fontSize)
+        if font?.pointSize != nextFont.pointSize { font = nextFont }
+        textContainerInset = layout.textContainerInset
+        textContainer?.lineFragmentPadding = 0
     }
 
     override func setAccessibilityFocused(_ focused: Bool) {
@@ -3214,21 +3233,19 @@ final class CanvasContentTileLayer: CALayer {
         zoom: Double,
         context: CGContext
     ) {
-        let inset = max(3, 4 * zoom)
-        let textRect = rect.insetBy(dx: inset, dy: inset)
-        guard textRect.width > 0, textRect.height > 0 else { return }
-        let fontSize = min(max(11 * zoom, 9), max(9, textRect.height - inset))
+        let layout = CanvasTextLayout(viewportObjectRect: rect, zoom: zoom, text: text)
+        guard !layout.lineFragmentRect.isEmpty else { return }
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         let attributed = NSAttributedString(
             string: text,
             attributes: [
-                .font: NSFont.systemFont(ofSize: fontSize),
+                .font: NSFont.systemFont(ofSize: layout.fontSize),
                 .foregroundColor: NSColor.labelColor,
                 .paragraphStyle: paragraph,
             ]
         )
-        drawAppKitText(attributed, in: textRect, context: context)
+        drawAppKitText(attributed, in: layout.lineFragmentRect, context: context)
     }
 
     private func drawFrameName(
@@ -3273,6 +3290,61 @@ final class CanvasContentTileLayer: CALayer {
             with: drawingRect,
             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]
         )
+    }
+}
+
+/// The one native text geometry contract shared by tile rasterization and the
+/// live `NSTextView`. World, viewport, Core Animation, overlays, hit testing,
+/// accessibility, and editor frames are top-left/Y-down. Only the tile's
+/// Core Graphics draw boundary flips to AppKit's drawing coordinates.
+struct CanvasTextLayout: Equatable {
+    static let baseFontSize: CGFloat = 14
+    static let baseHorizontalInset: CGFloat = 4
+
+    let viewportObjectRect: CGRect
+    let textContainerInset: NSSize
+    let lineFragmentRect: CGRect
+    let glyphBounds: CGRect
+    let fontSize: CGFloat
+
+    init(viewportObjectRect: CGRect, zoom: Double, text: String) {
+        self.viewportObjectRect = viewportObjectRect
+        let scale = max(0.000_001, CGFloat(zoom))
+        let insetX = Self.baseHorizontalInset * scale
+        let usableWidth = max(0, viewportObjectRect.width - insetX * 2)
+        let usableHeight = max(0, viewportObjectRect.height)
+        let scaledFont = max(9, Self.baseFontSize * scale)
+        fontSize = min(scaledFont, max(1, usableHeight))
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let measured = NSAttributedString(
+            string: text.isEmpty ? " " : text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: fontSize),
+                .paragraphStyle: paragraph,
+            ]
+        ).boundingRect(
+            with: CGSize(width: usableWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        ).integral
+        let glyphHeight = min(usableHeight, max(0, measured.height))
+        let glyphY = viewportObjectRect.midY - glyphHeight / 2
+        glyphBounds = CGRect(
+            x: viewportObjectRect.minX + insetX,
+            y: glyphY,
+            width: usableWidth,
+            height: glyphHeight
+        )
+        textContainerInset = NSSize(
+            width: insetX,
+            height: max(0, glyphY - viewportObjectRect.minY)
+        )
+        lineFragmentRect = glyphBounds
+    }
+
+    var isInsideObjectRect: Bool {
+        viewportObjectRect.contains(glyphBounds) || glyphBounds.isEmpty
     }
 }
 

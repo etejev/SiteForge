@@ -2,6 +2,25 @@ import XCTest
 @testable import SiteForge
 
 final class CanvasViewportTests: XCTestCase {
+    // SF-0401-001, SF-0401-003, SF-0401-005 — a new/adopted workspace fits
+    // the noncanonical pasteboard after the real canvas has a usable size.
+    @MainActor
+    func testFreshWorkspaceFitsPasteboardWithoutMutatingAuthoredCoordinates() throws {
+        let state = WorkspaceShellState()
+        let document = state.documentSession.document
+        state.resizeViewport(to: .init(width: 1_000, height: 700), pixelRatio: 2)
+
+        XCTAssertEqual(state.viewportState.fitPolicy, .none)
+        let origin = try state.viewportState.transform.worldToViewport(
+            state.viewportState.contentBounds.origin
+        )
+        let width = state.viewportState.contentBounds.size.width * state.viewportState.zoom.value
+        let height = state.viewportState.contentBounds.size.height * state.viewportState.zoom.value
+        XCTAssertEqual(origin.x + width / 2, state.viewportState.viewportSize.width / 2, accuracy: 0.000_001)
+        XCTAssertEqual(origin.y + height / 2, state.viewportState.viewportSize.height / 2, accuracy: 0.000_001)
+        XCTAssertEqual(state.documentSession.document, document)
+    }
+
     // SF-0401-001, SF-0401-004, SF-0401-008
     func testWorldViewportDeviceRoundTripsAcrossRepresentativeScales() throws {
         for scale in [1.0, 1.5, 2.0, 3.0, 4.0] {

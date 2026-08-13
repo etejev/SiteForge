@@ -21,7 +21,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             guard let visibleHeight = NSScreen.main?.visibleFrame.height else {
                 return 700
             }
-            return min(700, max(1, visibleHeight - safeScreenInset))
+            return min(700, max(1, visibleHeight - (2 * safeScreenInset)))
         }
     }
 

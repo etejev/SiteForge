@@ -6,6 +6,11 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Fixed
 
+- Centered the fresh-document pasteboard and empty-canvas state in the usable
+  canvas viewport without changing authored coordinates or blocking empty
+  canvas input. Committed plain text and the native inline editor now share
+  one viewport rect, font/inset, and baseline calculation, keeping glyphs
+  inside their selected bounds across zoom and backing-scale changes.
 - Restored the 1100-point constrained Debug/UI-test window width used by real trailing-edge pointer journeys. Explicit placements now fit titled height only, with independent left/right/top/bottom safe edges; the text status pointer journey uses right/bottom placement. XCTest result bundles and logs now use a deterministic project/Actions/local root and are retained together on CI failure.
 
 ### Added

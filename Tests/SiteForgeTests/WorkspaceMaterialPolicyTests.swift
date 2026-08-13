@@ -269,12 +269,12 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             visibleFrame: hostedVisibleFrame,
             placement: WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .top)
         )
-        XCTAssertEqual(hostedBottom, CGRect(x: 16, y: 16, width: 1_100, height: 721))
-        XCTAssertEqual(hostedTop, CGRect(x: 16, y: 0, width: 1_100, height: 721))
+        XCTAssertEqual(hostedBottom, CGRect(x: 16, y: 16, width: 1_100, height: 705))
+        XCTAssertEqual(hostedTop, CGRect(x: 16, y: 16, width: 1_100, height: 705))
         XCTAssertEqual(
             hostedBottom.maxY,
-            hostedVisibleFrame.maxY,
-            "Only explicit Debug/UI-test frames fit vertically; production minimum metrics stay unchanged."
+            hostedVisibleFrame.maxY - WorkspaceMetrics.uiTestScreenEdgeInset,
+            "Only explicit Debug/UI-test frames fit vertically while keeping both safe display edges available."
         )
         XCTAssertEqual(
             hostedTop.height,
@@ -289,7 +289,10 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertEqual(hostedRightBottom.width, WorkspaceMetrics.minimumWindowSize.width)
         XCTAssertEqual(hostedRightBottom.maxX, hostedVisibleFrame.maxX - WorkspaceMetrics.uiTestScreenEdgeInset)
         XCTAssertEqual(hostedRightBottom.minY, hostedVisibleFrame.minY + WorkspaceMetrics.uiTestScreenEdgeInset)
-        XCTAssertLessThanOrEqual(hostedRightBottom.maxY, hostedVisibleFrame.maxY)
+        XCTAssertEqual(
+            hostedRightBottom.maxY,
+            hostedVisibleFrame.maxY - WorkspaceMetrics.uiTestScreenEdgeInset
+        )
     }
 
     // SF-0201-008, SF-1902-008

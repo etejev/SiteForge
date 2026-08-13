@@ -126,6 +126,56 @@ final class CanvasTextRenderingTests: XCTestCase {
         }
     }
 
+    // SF-0401-001, SF-0405-006, SF-0406-001, SF-0406-002 — the committed
+    // tile and native inline editor share one rect/inset/baseline contract.
+    func testSharedTextLayoutKeepsGlyphsInsideOneViewportRectAcrossMatrix() throws {
+        let text = "Canvas text"
+        for zoom in [CanvasZoom.minimum.value, 1.0, CanvasZoom.maximum.value] {
+            for pixelRatio in [try CanvasPixelRatio(1), try CanvasPixelRatio(2)] {
+                for origin in [WorldPoint(x: -512, y: -256), WorldPoint(x: 384, y: 192)] {
+                    let transform = try CanvasCoordinateTransform(
+                        worldOrigin: origin,
+                        zoom: try CanvasZoom(zoom),
+                        pixelRatio: pixelRatio
+                    )
+                    let worldFrame = WorldRect(
+                        origin: .init(x: origin.x + 128, y: origin.y + 96),
+                        size: .init(width: 240, height: 48)
+                    )
+                    let viewportOrigin = try transform.worldToViewport(worldFrame.origin)
+                    let objectRect = CGRect(
+                        x: viewportOrigin.x,
+                        y: viewportOrigin.y,
+                        width: worldFrame.size.width * zoom,
+                        height: worldFrame.size.height * zoom
+                    )
+                    let layout = CanvasTextLayout(
+                        viewportObjectRect: objectRect,
+                        zoom: zoom,
+                        text: text
+                    )
+                    let tolerance = 1 / pixelRatio.value
+                    XCTAssertEqual(layout.viewportObjectRect, objectRect)
+                    XCTAssertGreaterThanOrEqual(layout.glyphBounds.minX + tolerance, objectRect.minX)
+                    XCTAssertLessThanOrEqual(layout.glyphBounds.maxX - tolerance, objectRect.maxX)
+                    XCTAssertGreaterThanOrEqual(layout.glyphBounds.minY + tolerance, objectRect.minY)
+                    XCTAssertLessThanOrEqual(layout.glyphBounds.maxY - tolerance, objectRect.maxY)
+                    XCTAssertEqual(
+                        layout.glyphBounds.midY,
+                        objectRect.midY,
+                        accuracy: tolerance,
+                        "glyph baseline drifted at zoom \(zoom), scale \(pixelRatio.value)"
+                    )
+                    let tileRect = CanvasTileTextCoordinateSpace.drawingRect(
+                        for: layout.lineFragmentRect,
+                        in: CGRect(x: 0, y: 0, width: 512, height: 512)
+                    )
+                    XCTAssertEqual(tileRect.height, layout.lineFragmentRect.height, accuracy: 0.000_001)
+                }
+            }
+        }
+    }
+
     private func rasterizedBytes(object: CanvasRenderObject, viewport: CanvasViewportState) -> Data {
         let width = 300
         let height = 120
