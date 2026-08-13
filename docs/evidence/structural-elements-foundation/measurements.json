@@ -1,0 +1,23 @@
+{
+  "capturedAt": "2026-08-12",
+  "environment": {
+    "model": "Mac16,13",
+    "macOS": "27.0 (26A5388g)",
+    "memoryBytes": 17179869184,
+    "command": "./sf test half"
+  },
+  "samplesMilliseconds": {
+    "100": {
+      "command": [0.441541, 0.360833, 0.398458, 0.429958, 0.358125],
+      "layout": [0.756917, 0.656458, 0.7465, 0.709541, 0.653583],
+      "render": [1.049167, 1.0525, 1.114917, 0.926458, 0.91175]
+    },
+    "10000": {
+      "command": [33.442417, 33.415709, 32.911959, 32.497042, 32.223584],
+      "layout": [66.953208, 64.713708, 65.599459, 65.697, 65.98575],
+      "render": [90.11825, 87.86325, 86.708625, 86.792416, 89.089166]
+    }
+  },
+  "maximumResidentBytes": 244793344,
+  "limitations": "Capacity samples cover typed insertion preparation plus bounded full layout/render planning. They do not prove incremental layout, native raster frame pacing, cross-hardware budgets, or release acceptance."
+}

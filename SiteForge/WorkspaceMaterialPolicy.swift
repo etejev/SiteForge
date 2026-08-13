@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import SwiftUI
 
 enum WorkspaceChromeRegion: String, CaseIterable, Sendable {
@@ -212,6 +212,141 @@ struct WorkspaceWindowConfigurator: NSViewRepresentable {
 }
 
 @MainActor
+final class WorkspaceWindowLifecycleOwner: NSObject {
+    private var installed = false
+    private var configured = Set<ObjectIdentifier>()
+    private let diagnostics = UITestWindowLifecycleDiagnostics.current()
+
+    override init() {
+        super.init()
+        diagnostics.record(phase: "owner-created", windows: [])
+    }
+
+    func install() {
+        precondition(Thread.isMainThread)
+        guard !installed else { return }
+        installed = true
+        diagnostics.record(phase: "observers-installed", windows: [])
+        let center = NotificationCenter.default
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification] {
+            center.addObserver(self, selector: #selector(windowDidBecomeUsable(_:)), name: name, object: nil)
+        }
+        center.addObserver(
+            self,
+            selector: #selector(applicationDidFinishLaunching(_:)),
+            name: NSApplication.didFinishLaunchingNotification,
+            object: nil
+        )
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func windowDidBecomeUsable(_ notification: Notification) {
+        precondition(Thread.isMainThread)
+        guard let window = notification.object as? NSWindow else { return }
+        diagnostics.record(phase: "window-became-usable", windows: [window])
+        configure(window)
+    }
+
+    @objc private func applicationDidFinishLaunching(_ notification: Notification) {
+        precondition(Thread.isMainThread)
+        diagnostics.record(phase: "application-did-finish-launching", windows: NSApplication.shared.windows)
+        configureExistingWindows()
+    }
+
+    private func configureExistingWindows() {
+        precondition(Thread.isMainThread)
+        NSApplication.shared.windows.forEach(configure)
+    }
+
+    private func configure(_ window: NSWindow) {
+        precondition(Thread.isMainThread)
+        guard window.isVisible, !configured.contains(ObjectIdentifier(window)) else {
+            diagnostics.record(phase: "configuration-deferred", windows: [window])
+            return
+        }
+        window.titlebarAppearsTransparent = false
+        window.toolbarStyle = .unified
+        window.titlebarSeparatorStyle = .automatic
+        window.backgroundColor = .windowBackgroundColor
+        window.isOpaque = true
+        let composition = DebugTestComposition.current()
+        guard let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame else {
+            diagnostics.record(phase: "configuration-no-visible-frame", windows: [window])
+            return
+        }
+        let frameSize = WorkspaceMetrics.requestedWindowFrameSize(contentSize: WorkspaceMetrics.minimumWindowSize, currentFrameSize: window.frame.size, currentContentLayoutSize: window.contentLayoutRect.size)
+        if let placement = WorkspaceMetrics.requestedUITestWindowPlacement(composition: composition) {
+            window.minSize = WorkspaceMetrics.effectiveMinimumWindowSize(composition: composition)
+            window.setFrame(WorkspaceMetrics.uiTestWindowFrame(windowFrame: .init(origin: window.frame.origin, size: frameSize), visibleFrame: visibleFrame, placement: placement), display: true, animate: false)
+            configured.insert(ObjectIdentifier(window))
+            diagnostics.record(phase: "configuration-succeeded-constrained", windows: [window])
+            return
+        }
+        window.minSize = WorkspaceMetrics.minimumWindowSize
+        let genericTest = composition.boolValue(after: "-SiteForgeUITestMode") == true
+        let restored: CGRect?
+        if genericTest {
+            window.setFrameAutosaveName("")
+            restored = nil
+        } else {
+            window.setFrameAutosaveName(WorkspaceWindowPresentation.frameAutosaveName)
+            restored = window.setFrameUsingName(WorkspaceWindowPresentation.frameAutosaveName) ? window.frame : nil
+        }
+        let desired = WorkspaceWindowPresentation.initialFrame(visibleFrame: visibleFrame, restoredFrame: restored, minimumFrameSize: frameSize)
+        if !window.frame.isApproximatelyEqual(to: desired) { window.setFrame(desired, display: true, animate: false) }
+        configured.insert(ObjectIdentifier(window))
+        diagnostics.record(phase: "window-ready", windows: [window])
+    }
+}
+
+/// Test-only launch evidence. It is deliberately file-backed because the
+/// failure being diagnosed can occur before SwiftUI exposes an AX window.
+/// Release builds ignore every argument and never create this file.
+@MainActor
+private final class UITestWindowLifecycleDiagnostics {
+    private let path: URL?
+    private let runIdentifier: String
+
+    private init(path: URL?, runIdentifier: String) {
+        self.path = path
+        self.runIdentifier = runIdentifier
+    }
+
+    static func current() -> UITestWindowLifecycleDiagnostics {
+#if DEBUG
+        let composition = DebugTestComposition.current()
+        guard composition.boolValue(after: "-SiteForgeUITestMode") == true,
+              let rawPath = composition.value(after: "-SiteForgeUITestDiagnosticPath"),
+              let runIdentifier = composition.value(after: "-SiteForgeUITestRunID") else {
+            return UITestWindowLifecycleDiagnostics(path: nil, runIdentifier: "disabled")
+        }
+        return UITestWindowLifecycleDiagnostics(
+            path: URL(fileURLWithPath: rawPath),
+            runIdentifier: runIdentifier
+        )
+#else
+        UITestWindowLifecycleDiagnostics(path: nil, runIdentifier: "disabled")
+#endif
+    }
+
+    func record(phase: String, windows: [NSWindow]) {
+        guard let path else { return }
+        let frameSummary = windows.map { window in
+            let frame = window.frame
+            return "visible=\(window.isVisible);key=\(window.isKeyWindow);main=\(window.isMainWindow);frame={x=\(Int(frame.minX));y=\(Int(frame.minY));w=\(Int(frame.width));h=\(Int(frame.height))}"
+        }.joined(separator: "|")
+        let bundle = Bundle.main.bundleIdentifier ?? "unavailable"
+        let executable = Bundle.main.executableURL?.path
+            .components(separatedBy: "/SiteForge.app/").last
+            .map { "SiteForge.app/\($0)" } ?? "unavailable"
+        let line = "run=\(runIdentifier);phase=\(phase);pid=\(ProcessInfo.processInfo.processIdentifier);bundle=\(bundle);executable=\(executable);windowCount=\(windows.count);windows=\(frameSummary)\n"
+        let existing = (try? String(contentsOf: path, encoding: .utf8)) ?? ""
+        try? (existing + line).data(using: .utf8)?.write(to: path, options: .atomic)
+    }
+}
+
+@MainActor
 final class WorkspaceWindowConfigurationView: NSView {
     private weak var configuredWindow: NSWindow?
     private var observationTokens: [NSObjectProtocol] = []
@@ -233,6 +368,25 @@ final class WorkspaceWindowConfigurationView: NSView {
 
     func configureWindow() {
         guard let window else { return }
+        // Scene-root configuration can attach before AppKit has ordered the
+        // initial launch window. Deferring until it is visible avoids a
+        // launch-time frame mutation that temporarily removes the AX window.
+        guard window.isVisible else {
+            let token = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    if let token = self?.observationTokens.first {
+                        NotificationCenter.default.removeObserver(token)
+                    }
+                    self?.scheduleConfiguration()
+                }
+            }
+            observationTokens.append(token)
+            return
+        }
         window.titlebarAppearsTransparent = false
         window.toolbarStyle = .unified
         window.titlebarSeparatorStyle = .automatic
@@ -264,7 +418,11 @@ final class WorkspaceWindowConfigurationView: NSView {
                 // a hosted test display.
                 window.setFrame(frame, display: true, animate: false)
             }
-        } else if DebugTestComposition.current().boolValue(after: "-SiteForgeUITestMode") != true {
+        } else {
+            // General UI-test composition deliberately shares the production
+            // visible-frame policy. Only an explicit named safe-edge request
+            // receives constrained geometry; test mode alone must not leave
+            // a fresh workspace at arbitrary AppKit default dimensions.
             applyNormalPresentationIfNeeded(to: window)
         }
     }
@@ -331,9 +489,20 @@ final class WorkspaceWindowConfigurationView: NSView {
         didApplyNormalPresentation = true
 
         window.minSize = WorkspaceMetrics.minimumWindowSize
-        window.setFrameAutosaveName(WorkspaceWindowPresentation.frameAutosaveName)
-        let restored = window.setFrameUsingName(WorkspaceWindowPresentation.frameAutosaveName)
-            ? window.frame : nil
+        let isGenericUITest = DebugTestComposition.current().boolValue(after: "-SiteForgeUITestMode") == true
+            && !WorkspaceMetrics.usesDeterministicUITestPlacement()
+        // Automation must neither consume nor mutate user restoration state.
+        // It always starts from the usable screen frame; production retains
+        // AppKit restoration when that frame is valid.
+        let restored: CGRect?
+        if isGenericUITest {
+            window.setFrameAutosaveName("")
+            restored = nil
+        } else {
+            window.setFrameAutosaveName(WorkspaceWindowPresentation.frameAutosaveName)
+            restored = window.setFrameUsingName(WorkspaceWindowPresentation.frameAutosaveName)
+                ? window.frame : nil
+        }
         let minimumFrameSize = WorkspaceMetrics.requestedWindowFrameSize(
             contentSize: WorkspaceMetrics.minimumWindowSize,
             currentFrameSize: window.frame.size,

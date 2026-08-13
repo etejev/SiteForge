@@ -105,6 +105,9 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
                 enabled: true
             ))
         )
+        XCTAssertTrue(WorkspaceMetrics.usesNormalVisibleFramePresentation(
+            composition: DebugTestComposition(arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"], enabled: true)
+        ))
         XCTAssertEqual(
             WorkspaceMetrics.effectiveMinimumWindowSize(composition: DebugTestComposition(
                 arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"],
@@ -113,6 +116,19 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             WorkspaceMetrics.minimumWindowSize
         )
         XCTAssertNil(WorkspaceMetrics.requestedWindowSize(arguments: ["SiteForge"]))
+    }
+
+    // SF-0201-002, SF-0201-003, SF-0201-008 — generic UI composition is a
+    // normal visible-frame window; only a fresh explicit edge request differs.
+    func testGenericAndConstrainedUITestPresentationPoliciesAreIsolated() {
+        let generic = DebugTestComposition(arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"], enabled: true)
+        let constrained = DebugTestComposition(arguments: ["SiteForge", "-SiteForgeUITestMode", "YES", "-SiteForgeUITestWindowAlignment", "right"], enabled: true)
+        XCTAssertTrue(WorkspaceMetrics.usesNormalVisibleFramePresentation(composition: generic))
+        XCTAssertFalse(WorkspaceMetrics.usesDeterministicUITestPlacement(composition: generic))
+        XCTAssertFalse(WorkspaceMetrics.usesNormalVisibleFramePresentation(composition: constrained))
+        XCTAssertTrue(WorkspaceMetrics.usesDeterministicUITestPlacement(composition: constrained))
+        // A fresh generic composition owns no state from the prior request.
+        XCTAssertTrue(WorkspaceMetrics.usesNormalVisibleFramePresentation(composition: generic))
     }
 
     // SF-0201-002, SF-0201-003, SF-0201-008

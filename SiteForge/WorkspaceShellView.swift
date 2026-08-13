@@ -46,13 +46,6 @@ struct WorkspaceShellView: View {
             ZStack {
                 Color(nsColor: .underPageBackgroundColor)
                 WindowCloseGuard(state: state).frame(width: 0, height: 0)
-                // Production presentation is installed at the scene root so
-                // welcome/loading/recovery share the same maximized window.
-                // The shell owns only the deterministic UI-test placement
-                // bridge, after its accessibility hierarchy is available.
-                if DebugTestComposition.current().boolValue(after: "-SiteForgeUITestMode") == true {
-                    WorkspaceWindowConfigurator().frame(width: 0, height: 0)
-                }
                 WorkspaceWindowTabRouterInstaller(
                     router: tabRouter,
                     focus: $focusedControl,
@@ -373,7 +366,15 @@ private struct ElementCatalogRow: View {
     var body: some View {
         let availability = item.availability
         Button {
-            if case .available(let tool) = availability { state.selectTool(tool) }
+            guard case .available(let tool) = availability else { return }
+            // Structural catalogue rows have a useful non-pointer equivalent:
+            // they commit one validated default insertion. Frame/Text retain
+            // their established tool-arming workflow for canvas placement.
+            if let kind = item.insertionKind, [.section, .stack, .grid].contains(kind) {
+                state.performDefaultInsertion(kind, provenance: .accessibility)
+            } else {
+                state.selectTool(tool)
+            }
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: item.systemImage).frame(width: 16)
@@ -1919,6 +1920,22 @@ struct SiteForgeCommands: Commands {
             }
             .keyboardShortcut("t", modifiers: [.command, .shift])
             .disabled(state?.insertionAvailability(.text).isEnabled != true)
+            Divider()
+            Button("Insert Section at Center") {
+                state?.performDefaultInsertion(.section, provenance: .menu)
+            }
+            .keyboardShortcut("1", modifiers: [.command, .option])
+            .disabled(state?.insertionAvailability(.section).isEnabled != true)
+            Button("Insert Stack at Center") {
+                state?.performDefaultInsertion(.stack, provenance: .menu)
+            }
+            .keyboardShortcut("2", modifiers: [.command, .option])
+            .disabled(state?.insertionAvailability(.stack).isEnabled != true)
+            Button("Insert Grid at Center") {
+                state?.performDefaultInsertion(.grid, provenance: .menu)
+            }
+            .keyboardShortcut("3", modifiers: [.command, .option])
+            .disabled(state?.insertionAvailability(.grid).isEnabled != true)
         }
 
         CommandMenu("Selection") {
@@ -3161,6 +3178,9 @@ final class CanvasContentTileLayer: CALayer {
             case .page: .controlAccentColor.withAlphaComponent(0.16)
             case .container: .controlAccentColor.withAlphaComponent(0.28)
             case .frameSurface: .controlBackgroundColor.withAlphaComponent(0.92)
+            case .sectionSurface: .systemIndigo.withAlphaComponent(0.12)
+            case .stackSurface: .systemTeal.withAlphaComponent(0.12)
+            case .gridSurface: .systemOrange.withAlphaComponent(0.12)
             case .imagePlaceholder: .systemPurple.withAlphaComponent(0.22)
             case .textPlaceholder: .labelColor.withAlphaComponent(0.12)
             }
@@ -3173,7 +3193,7 @@ final class CanvasContentTileLayer: CALayer {
             )
             context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
             context.stroke(rect)
-            if object.style == .frameSurface, let name = object.displayName {
+            if [.frameSurface, .sectionSurface, .stackSurface, .gridSurface].contains(object.style), let name = object.displayName {
                 drawFrameName(name, in: rect, zoom: viewportState.zoom.value, context: context)
             }
             if object.style == .textPlaceholder, let text = object.plainText, !text.isEmpty {

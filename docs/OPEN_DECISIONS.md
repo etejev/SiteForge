@@ -1,5 +1,41 @@
 # Open Decisions
 
+## OD-015 — Initial structural-element defaults
+
+Status: Approved — 2026-08-12
+
+- Needed by: the first persisted Section, Stack, and Grid authoring slice.
+- Context: `SF-0502-001` and `SF-0503-001` require explicit, versioned
+  defaults that distinguish defaulted from authored values. The specification
+  defines the required semantics but does not select numerical starting values
+  for a Section's padding/size, a Stack's gap/padding/alignment, or a Grid's
+  columns/gap/padding. These values would become canonical package data,
+  migration behavior, layout results, undo/redo results, and exported-layout
+  semantics, so they must not be silently invented in implementation.
+- Recommended default: Section — 960 × 320 points, 48-point padding, vertical
+  structural container; Stack — vertical axis, 24-point gap, 24-point padding,
+  start alignment; Grid — two equal columns, 24-point gap, 24-point padding,
+  row-major placement. All values would be stored as `.defaulted`, with no
+  property editor in this bounded slice.
+- Alternatives: compact defaults (24-point Section padding and 16-point
+  Stack/Grid spacing) for denser composition; or defer concrete geometry until
+  an inspector-property milestone, leaving these catalogue entries unavailable.
+- Tradeoffs: the recommended values create calm, legible first results and are
+  easy to explain, but they establish persistent product behavior before a
+  broader layout-property editor exists. Compact values reduce whitespace but
+  offer less visual separation. Deferral avoids a decision but prevents the
+  requested real insertion capability.
+- Approved decision: adopt the recommended defaults as the canonical v1
+  structural-element baseline. Schema v4 persists them with `.defaulted`
+  provenance; supported schema-v3 documents decode unchanged and re-save as
+  v4 because they contain no Section, Stack, or Grid nodes. Any later schema
+  reader must retain these exact values when such a node is present. ADR-0015
+  records the resulting persistent boundary.
+- Affected requirements: bounded evidence for `SF-0405-001`–`008`,
+  `SF-0501-001`–`008`, `SF-0502-001`–`008`, and `SF-0503-001`–`008`.
+- Decision deadline: before canonical schema or package migration work begins
+  for `SF-AUTHORING-010`.
+
 ## OD-001 — Minimum supported macOS release and reference hardware tiers
 
 Status: Open

@@ -12,6 +12,9 @@ private enum InsertionSignposts {
 
 enum CanvasTool: String, CaseIterable, Identifiable {
     case select
+    case section
+    case stack
+    case grid
     case frame
     case text
     case image
@@ -26,6 +29,9 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .select: "pointer.arrow"
+        case .section: "rectangle.split.3x1"
+        case .stack: "square.3.layers.3d"
+        case .grid: "square.grid.2x2"
         case .frame: "square.dashed"
         case .text: "textformat"
         case .image: "photo"
@@ -36,6 +42,9 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     var shortcut: KeyEquivalent {
         switch self {
         case .select: "v"
+        case .section: "1"
+        case .stack: "2"
+        case .grid: "3"
         case .frame: "f"
         case .text: "t"
         case .image: "i"
@@ -95,20 +104,35 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
     }
     var availability: ElementCatalogAvailability {
         switch self {
+        case .section: .available(.section)
+        case .stack: .available(.stack)
+        case .grid: .available(.grid)
         case .frame: .available(.frame)
         case .text: .available(.text)
-        case .section, .stack, .grid:
-            .unavailable("Layout containers require the next container-authoring milestone.")
         case .button, .link, .divider:
             .unavailable("This basic element is not available until its canonical content command is implemented.")
         case .navbar, .footer:
             .unavailable("Site sections are not available until responsive site structure is implemented.")
         }
     }
+
+    var insertionKind: InsertionKind? {
+        switch self {
+        case .section: .section
+        case .stack: .stack
+        case .grid: .grid
+        case .frame: .frame
+        case .text: .text
+        case .button, .link, .divider, .navbar, .footer: nil
+        }
+    }
     /// The precise bounded behavior this row is allowed to expose.  This is
     /// editor-catalogue metadata, never an authored node or package member.
     var capabilityContract: String {
         switch availability {
+        case .available(.section): "Arms the transactional Section insertion path."
+        case .available(.stack): "Arms the transactional Stack insertion path."
+        case .available(.grid): "Arms the transactional Grid insertion path."
         case .available(.frame): "Arms the existing transactional Frame insertion path."
         case .available(.text): "Arms the existing transactional plain-Text insertion path."
         case .available: "No other insertion capability is currently available."
@@ -387,6 +411,15 @@ enum WorkspaceMetrics {
         composition: DebugTestComposition = .current()
     ) -> Bool {
         requestedUITestWindowPlacement(composition: composition) != nil
+    }
+
+    /// Normal production presentation is the default for both release and
+    /// generic automation composition. A named placement is the sole opt-in
+    /// escape hatch for constrained-display pointer tests.
+    static func usesNormalVisibleFramePresentation(
+        composition: DebugTestComposition = .current()
+    ) -> Bool {
+        requestedUITestWindowPlacement(composition: composition) == nil
     }
 
     static func requestedUITestWindowPlacement(
@@ -705,6 +738,9 @@ final class WorkspaceShellState: ObservableObject {
         }
         selectedTool = tool
         switch tool {
+        case .section: armInsertion(.section)
+        case .stack: armInsertion(.stack)
+        case .grid: armInsertion(.grid)
         case .frame: armInsertion(.frame)
         case .text: armInsertion(.text)
         default: insertionSession.deactivate()
@@ -1950,15 +1986,16 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func previewInsertion(at point: WorldPoint) {
-        guard selectedTool == .frame || selectedTool == .text,
+        guard selectedTool != .select && selectedTool != .image && selectedTool != .component,
               insertionValidationContext.isLifecycleAvailable else { return }
         insertionSession.preview(at: point)
         objectWillChange.send()
     }
 
     func performDefaultInsertion(_ kind: InsertionKind, provenance: InsertionProvenance) {
-        if selectedTool != (kind == .frame ? .frame : .text) {
-            selectedTool = kind == .frame ? .frame : .text
+        let tool = CanvasTool(rawValue: kind.rawValue) ?? .select
+        if selectedTool != tool {
+            selectedTool = tool
             armInsertion(kind)
         }
         commitInsertion(kind, at: defaultInsertionPoint, provenance: provenance)
@@ -2364,9 +2401,12 @@ final class WorkspaceShellState: ObservableObject {
 
     private var defaultInsertionPoint: WorldPoint {
         let visible = viewportState.visibleWorldRect
-        let size = selectedTool == .text
-            ? WorldSize(width: 120, height: 24)
-            : WorldSize(width: 240, height: 160)
+        // Default insertion is a canonical command input, so its placement
+        // must use the same v1 dimensions as the eventual node. In
+        // particular, a Section is 960×320 rather than the legacy Frame
+        // fallback; otherwise the apparent "centre" is its top-left corner.
+        let kind = InsertionKind(rawValue: selectedTool.rawValue) ?? .frame
+        let size = InsertionGeometry.defaultValue(for: kind, at: .init(x: 0, y: 0)).size
         return WorldPoint(
             x: visible.origin.x + max(0, (visible.size.width - size.width) / 2),
             y: visible.origin.y + max(0, (visible.size.height - size.height) / 2)
@@ -2427,7 +2467,7 @@ final class WorkspaceShellState: ObservableObject {
     private var insertionParentID: NodeID? {
         guard let page = pages.first(where: { $0.id == effectiveSelectedPageID }) else { return nil }
         if let primaryID = selectionState.primaryID,
-           page.nodes.first(where: { $0.id == primaryID })?.kind == .frame {
+           page.nodes.first(where: { $0.id == primaryID })?.kind.acceptsAuthoredChildren == true {
             return primaryID
         }
         return page.rootNodeIDs.first
@@ -2465,14 +2505,20 @@ final class WorkspaceShellState: ObservableObject {
                 provenance: provenance
             ))
         }
-        return .text(TextInsertionCommand(
-            identity: identity,
-            nodeID: nodeID,
-            parentID: parentID,
-            index: parent.childIDs.count,
-            geometry: geometry,
-            text: InsertionPolicy.defaultText,
-            provenance: provenance
+        if kind == .text {
+            return .text(TextInsertionCommand(
+                identity: identity,
+                nodeID: nodeID,
+                parentID: parentID,
+                index: parent.childIDs.count,
+                geometry: geometry,
+                text: InsertionPolicy.defaultText,
+                provenance: provenance
+            ))
+        }
+        return .container(ContainerInsertionCommand(
+            kind: kind, identity: identity, nodeID: nodeID, parentID: parentID,
+            index: parent.childIDs.count, geometry: geometry, provenance: provenance
         ))
     }
 
@@ -2506,6 +2552,11 @@ final class WorkspaceShellState: ObservableObject {
             command = .text(TextInsertionCommand(
                 identity: value.identity, nodeID: value.nodeID, parentID: value.parentID,
                 index: value.index, geometry: geometry, text: value.text, provenance: value.provenance
+            ))
+        } else if case .container(let value) = command {
+            command = .container(ContainerInsertionCommand(
+                kind: value.kind, identity: value.identity, nodeID: value.nodeID, parentID: value.parentID,
+                index: value.index, geometry: geometry, provenance: value.provenance
             ))
         }
         let parentRevision = documentSession.document.revision
@@ -2727,11 +2778,12 @@ final class WorkspaceShellState: ObservableObject {
             scale: viewportState.pixelRatio
         )
         let activeNodes = renderableNodesForActivePage()
+        let resolvedGeometry = pages.first(where: { $0.id == effectiveSelectedPageID })?.resolvedStructuralGeometry() ?? [:]
         let objects = activeNodes.enumerated().map { index, node in
             // `renderableNodesForActivePage` excludes structural roots, whose
             // absent geometry is intentional and must never be replaced with a
             // visual/debug fallback rectangle.
-            let frame = node.insertionGeometry!.frame
+            let frame = (resolvedGeometry[node.id] ?? node.insertionGeometry!).frame
             let style: CanvasPaintStyle = switch node.kind {
             case .frame:
                 if node.parent == .page(effectiveSelectedPageID ?? PageID()) {
@@ -2741,6 +2793,9 @@ final class WorkspaceShellState: ObservableObject {
                 } else {
                     .container
                 }
+            case .section: .sectionSurface
+            case .stack: .stackSurface
+            case .grid: .gridSurface
             case .text: .textPlaceholder
             case .image: .imagePlaceholder
             case .component: .container
@@ -2754,7 +2809,7 @@ final class WorkspaceShellState: ObservableObject {
                 isVisible: !node.selectionBooleanProperty("hidden"),
                 accessibilityLabel: node.kind == .text ? "Text object" : node.name,
                 plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
-                displayName: node.kind == .frame ? node.name : nil
+                displayName: node.kind == .text ? nil : node.name
             )
         }
         let scene = CanvasRenderSceneSnapshot(identity: identity, surfaceID: renderSurfaceID, objects: objects)

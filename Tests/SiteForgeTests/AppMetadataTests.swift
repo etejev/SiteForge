@@ -42,7 +42,7 @@ final class AppMetadataTests: XCTestCase {
         let state = WorkspaceShellState()
         let canonicalDocument = state.documentSession.document
 
-        XCTAssertEqual(CanvasTool.allCases.map(\.title), ["Select", "Frame", "Text", "Image", "Component"])
+        XCTAssertEqual(CanvasTool.allCases.map(\.title), ["Select", "Section", "Stack", "Grid", "Frame", "Text", "Image", "Component"])
         XCTAssertEqual(state.selectedTool, .select)
         XCTAssertFalse(state.canUndo)
         XCTAssertFalse(state.canRedo)
@@ -118,11 +118,14 @@ final class AppMetadataTests: XCTestCase {
         XCTAssertEqual(ElementCatalogItem.allCases.map(\.rawValue), [
             "section", "stack", "grid", "frame", "text", "button", "link", "divider", "navbar", "footer"
         ])
+        XCTAssertEqual(ElementCatalogItem.section.availability, .available(.section))
+        XCTAssertEqual(ElementCatalogItem.stack.availability, .available(.stack))
+        XCTAssertEqual(ElementCatalogItem.grid.availability, .available(.grid))
         XCTAssertEqual(ElementCatalogItem.frame.availability, .available(.frame))
         XCTAssertEqual(ElementCatalogItem.text.availability, .available(.text))
         XCTAssertTrue(ElementCatalogItem.frame.capabilityContract.contains("transactional Frame"))
         XCTAssertTrue(ElementCatalogItem.text.capabilityContract.contains("plain-Text"))
-        for item in ElementCatalogItem.allCases where item != .frame && item != .text {
+        for item in ElementCatalogItem.allCases where ![.section, .stack, .grid, .frame, .text].contains(item) {
             guard case .unavailable(let reason) = item.availability else {
                 return XCTFail("\(item) must not expose an unimplemented authoring command")
             }

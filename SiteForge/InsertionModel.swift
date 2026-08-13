@@ -6,6 +6,28 @@ import Foundation
 enum InsertionKind: String, Codable, CaseIterable, Sendable {
     case frame
     case text
+    case section
+    case stack
+    case grid
+
+    var nodeKind: NodeKind {
+        switch self {
+        case .frame: .frame
+        case .text: .text
+        case .section: .section
+        case .stack: .stack
+        case .grid: .grid
+        }
+    }
+
+    var requirementID: String {
+        switch self {
+        case .frame, .text: "SF-0405-008"
+        case .section: "SF-0405-001"
+        case .stack: "SF-0502-001"
+        case .grid: "SF-0503-001"
+        }
+    }
 }
 
 enum InsertionProvenance: String, CaseIterable, Sendable {
@@ -28,6 +50,8 @@ struct InsertionGeometry: Codable, Equatable, Sendable {
         let size = switch kind {
         case .frame: WorldSize(width: 240, height: 160)
         case .text: WorldSize(width: 120, height: 24)
+        case .section: WorldSize(width: 960, height: 320)
+        case .stack, .grid: WorldSize(width: 240, height: 160)
         }
         return Self(origin: point, size: size)
     }
@@ -59,14 +83,26 @@ struct TextInsertionCommand: Equatable, Sendable {
     let provenance: InsertionProvenance
 }
 
+struct ContainerInsertionCommand: Equatable, Sendable {
+    let kind: InsertionKind
+    let identity: InsertionOperationIdentity
+    let nodeID: NodeID
+    let parentID: NodeID
+    let index: Int
+    let geometry: InsertionGeometry
+    let provenance: InsertionProvenance
+}
+
 enum AuthoringInsertionCommand: Equatable, Sendable {
     case frame(FrameInsertionCommand)
     case text(TextInsertionCommand)
+    case container(ContainerInsertionCommand)
 
     var kind: InsertionKind {
         switch self {
         case .frame: .frame
         case .text: .text
+        case .container(let value): value.kind
         }
     }
 
@@ -74,6 +110,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         switch self {
         case .frame(let value): value.identity
         case .text(let value): value.identity
+        case .container(let value): value.identity
         }
     }
 
@@ -81,6 +118,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         switch self {
         case .frame(let value): value.nodeID
         case .text(let value): value.nodeID
+        case .container(let value): value.nodeID
         }
     }
 
@@ -88,6 +126,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         switch self {
         case .frame(let value): value.parentID
         case .text(let value): value.parentID
+        case .container(let value): value.parentID
         }
     }
 
@@ -95,6 +134,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         switch self {
         case .frame(let value): value.index
         case .text(let value): value.index
+        case .container(let value): value.index
         }
     }
 
@@ -102,6 +142,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         switch self {
         case .frame(let value): value.geometry
         case .text(let value): value.geometry
+        case .container(let value): value.geometry
         }
     }
 
@@ -109,6 +150,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         switch self {
         case .frame(let value): value.provenance
         case .text(let value): value.provenance
+        case .container(let value): value.provenance
         }
     }
 
@@ -269,7 +311,7 @@ struct InsertionCommandRegistry: Sendable {
             }
             throw InsertionError.missingParent
         }
-        guard parent.kind == .frame else { throw InsertionError.incompatibleParent }
+        guard parent.kind.acceptsAuthoredChildren else { throw InsertionError.incompatibleParent }
         guard !parent.insertionBooleanProperty("locked") else { throw InsertionError.lockedParent }
         guard !parent.insertionBooleanProperty("hidden") else { throw InsertionError.hiddenParent }
         if let availableNodeIDs = context.availableNodeIDs,
@@ -350,16 +392,41 @@ struct InsertionCommandRegistry: Sendable {
             // These deterministic canonical defaults are authored appearance;
             // the selection outline and contextual measurement label remain
             // editor-only overlays.
-            property(command.nodeID, "style.fill", .string(command.kind == .frame ? "surface" : "text-placeholder"), .defaulted),
-            property(command.nodeID, "style.border", .string(command.kind == .frame ? "subtle" : "none"), .defaulted),
+            property(command.nodeID, "style.fill", .string(command.kind == .text ? "text-placeholder" : "surface"), .defaulted),
+            property(command.nodeID, "style.border", .string(command.kind == .text ? "none" : "subtle"), .defaulted),
         ]
+        switch command.kind {
+        case .section:
+            properties += [
+                property(command.nodeID, "layout.container.kind", .string("section"), .defaulted),
+                property(command.nodeID, "layout.padding", .number(48), .defaulted),
+                property(command.nodeID, "layout.axis", .string("vertical"), .defaulted),
+            ]
+        case .stack:
+            properties += [
+                property(command.nodeID, "layout.container.kind", .string("stack"), .defaulted),
+                property(command.nodeID, "layout.axis", .string("vertical"), .defaulted),
+                property(command.nodeID, "layout.padding", .number(24), .defaulted),
+                property(command.nodeID, "layout.gap", .number(24), .defaulted),
+                property(command.nodeID, "layout.align", .string("start"), .defaulted),
+            ]
+        case .grid:
+            properties += [
+                property(command.nodeID, "layout.container.kind", .string("grid"), .defaulted),
+                property(command.nodeID, "layout.padding", .number(24), .defaulted),
+                property(command.nodeID, "layout.gap", .number(24), .defaulted),
+                property(command.nodeID, "layout.grid.columns", .number(2), .defaulted),
+                property(command.nodeID, "layout.grid.placement", .string("row-major"), .defaulted),
+            ]
+        case .frame, .text: break
+        }
         if let text = command.text {
             properties.append(property(command.nodeID, "content.text", .string(text), .defaulted))
         }
         return DocumentNode(
             id: command.nodeID,
-            kind: command.kind == .frame ? .frame : .text,
-            name: command.kind == .frame ? "Frame" : "Text",
+            kind: command.kind.nodeKind,
+            name: command.kind.rawValue.capitalized,
             parent: .node(command.parentID),
             properties: properties
         )
@@ -427,6 +494,54 @@ extension DocumentNode {
             origin: WorldPoint(x: x, y: y),
             size: WorldSize(width: width, height: height)
         )
+    }
+}
+
+/// Resolves the bounded authored container semantics from canonical node
+/// ownership and defaulted properties. World space remains top-left/Y-down;
+/// this shared resolver feeds the renderer and selection scene rather than
+/// storing an editor-only second geometry source.
+extension DocumentPage {
+    func resolvedStructuralGeometry() -> [NodeID: InsertionGeometry] {
+        let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        var result = Dictionary(uniqueKeysWithValues: nodes.compactMap { node in
+            node.insertionGeometry.map { (node.id, $0) }
+        })
+        for parent in canonicalDepthFirstNodes() {
+            guard let parentGeometry = result[parent.id] else { continue }
+            let children = parent.childIDs.compactMap { nodesByID[$0] }
+            switch parent.kind {
+            case .stack:
+                let padding = parent.insertionNumberProperty("layout.padding") ?? 24
+                let gap = parent.insertionNumberProperty("layout.gap") ?? 24
+                var cursor = parentGeometry.origin.y + padding
+                for child in children {
+                    guard var geometry = result[child.id] else { continue }
+                    geometry = .init(origin: .init(x: parentGeometry.origin.x + padding, y: cursor), size: geometry.size)
+                    result[child.id] = geometry
+                    cursor += geometry.size.height + gap
+                }
+            case .grid:
+                let padding = parent.insertionNumberProperty("layout.padding") ?? 24
+                let gap = parent.insertionNumberProperty("layout.gap") ?? 24
+                let columns = max(1, Int(parent.insertionNumberProperty("layout.grid.columns") ?? 2))
+                let usableWidth = max(1, parentGeometry.size.width - (2 * padding) - (Double(columns - 1) * gap))
+                let cellWidth = usableWidth / Double(columns)
+                var rowHeights: [Double] = []
+                for (index, child) in children.enumerated() {
+                    guard var geometry = result[child.id] else { continue }
+                    let row = index / columns
+                    let column = index % columns
+                    while rowHeights.count <= row { rowHeights.append(0) }
+                    let y = parentGeometry.origin.y + padding + rowHeights.prefix(row).reduce(0, +) + (Double(row) * gap)
+                    geometry = .init(origin: .init(x: parentGeometry.origin.x + padding + Double(column) * (cellWidth + gap), y: y), size: .init(width: cellWidth, height: geometry.size.height))
+                    result[child.id] = geometry
+                    rowHeights[row] = max(rowHeights[row], geometry.size.height)
+                }
+            case .frame, .section, .text, .image, .component: break
+            }
+        }
+        return result
     }
 }
 

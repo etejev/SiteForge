@@ -52,7 +52,7 @@ SOURCE_TESTS = {
         "SelectionModelTests",
         "CanvasRendererTests",
         "LayoutEngineTests",
-        "SiteForgeLaunchTests",
+        "SiteForgeLaunchTests/testProductNavigatorProvidesTruthfulElementsAssetsAndComponentsDestinations",
     ),
     "LaunchExperience.swift": ("LaunchExperienceTests", "SiteForgeLaunchTests"),
     "LayoutEngine.swift": ("LayoutEngineTests", "CanvasRendererTests"),
@@ -75,8 +75,8 @@ SOURCE_TESTS = {
     ),
     "SiteForgeApp.swift": ("ArchitectureBoundaryTests", "SiteForgeLaunchTests"),
     "WorkspaceMaterialPolicy.swift": (
-        "WorkspaceMaterialPolicyTests",
-        "SiteForgeLaunchTests",
+        "WorkspaceMaterialPolicyTests/testGenericAndConstrainedUITestPresentationPoliciesAreIsolated",
+        "SiteForgeLaunchTests/testApplicationLaunchesCompleteNativeShellAtPracticalMinimumSize",
     ),
     "WorkspaceSceneComposition.swift": (
         "ArchitectureBoundaryTests",
@@ -86,14 +86,14 @@ SOURCE_TESTS = {
         "CommandKernelTests",
         "SelectionModelTests",
         "InsertionModelTests",
-        "SiteForgeLaunchTests",
+        "SiteForgeLaunchTests/testProductNavigatorProvidesTruthfulElementsAssetsAndComponentsDestinations",
     ),
     "WorkspaceShellView.swift": (
         "WorkspaceMaterialPolicyTests",
         "SelectionModelTests",
         "InsertionModelTests",
         "CanvasTextRenderingTests",
-        "SiteForgeLaunchTests",
+        "SiteForgeLaunchTests/testProductNavigatorProvidesTruthfulElementsAssetsAndComponentsDestinations",
     ),
 }
 
@@ -152,7 +152,7 @@ def select_for_paths(paths: list[str]) -> tuple[str, ...] | None:
             for test_name in test_names:
                 target = (
                     "SiteForgeUITests"
-                    if test_name == "SiteForgeLaunchTests"
+                    if test_name.startswith("SiteForgeLaunchTests")
                     else "SiteForgeTests"
                 )
                 selectors.add(f"{target}/{test_name}")

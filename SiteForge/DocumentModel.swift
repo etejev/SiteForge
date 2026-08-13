@@ -217,8 +217,21 @@ struct NodeProperty: Codable, Equatable, Identifiable, Sendable {
 enum NodeKind: String, Codable, CaseIterable, Sendable {
     case frame
     case text
+    /// Semantic containers introduced by SF-AUTHORING-010. Their layout
+    /// semantics are represented by explicit, versioned default properties;
+    /// editor state never participates in this representation.
+    case section
+    case stack
+    case grid
     case image
     case component
+
+    var acceptsAuthoredChildren: Bool {
+        switch self {
+        case .frame, .section, .stack, .grid: true
+        case .text, .image, .component: false
+        }
+    }
 }
 
 struct PageRoute: Codable, Equatable, Hashable, RawRepresentable, Sendable {
@@ -613,6 +626,8 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case inconsistentChildren
     case duplicateChild
     case cyclicOrUnreachableTree
+    case incompatibleChildOwnership
+    case invalidStructuralDefaults
 
     var errorDescription: String? {
         switch self {
@@ -639,6 +654,8 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .inconsistentChildren: "Parent and child ownership references must agree."
         case .duplicateChild: "A parent cannot contain the same child more than once."
         case .cyclicOrUnreachableTree: "The node tree must be acyclic and reachable from the page roots."
+        case .incompatibleChildOwnership: "This node kind cannot own authored children."
+        case .invalidStructuralDefaults: "Structural containers require their complete bounded default layout contract."
         }
     }
 }
@@ -751,6 +768,9 @@ private extension DocumentPage {
             guard Set(node.childIDs).count == node.childIDs.count else {
                 throw ModelValidationError.duplicateChild
             }
+            guard node.childIDs.isEmpty || node.kind.acceptsAuthoredChildren else {
+                throw ModelValidationError.incompatibleChildOwnership
+            }
 
             switch node.parent {
             case .page(let pageID):
@@ -786,6 +806,7 @@ private extension DocumentPage {
             guard Set(keys).count == keys.count else {
                 throw ModelValidationError.duplicatePropertyKey
             }
+            try node.validateStructuralDefaults()
         }
 
         var visited = Set<NodeID>()
@@ -799,6 +820,29 @@ private extension DocumentPage {
             pending.append(contentsOf: node.childIDs.reversed())
         }
         guard visited == nodeIDs else { throw ModelValidationError.cyclicOrUnreachableTree }
+    }
+}
+
+private extension DocumentNode {
+    func validateStructuralDefaults() throws {
+        let values = Dictionary(uniqueKeysWithValues: properties.map { ($0.key.rawValue, $0.value) })
+        func number(_ key: String, equals expected: Double) -> Bool {
+            guard case .number(let value)? = values[key] else { return false }
+            return value == expected
+        }
+        func string(_ key: String, equals expected: String) -> Bool {
+            guard case .string(let value)? = values[key] else { return false }
+            return value == expected
+        }
+        switch kind {
+        case .section:
+            guard string("layout.container.kind", equals: "section"), number("layout.padding", equals: 48), string("layout.axis", equals: "vertical") else { throw ModelValidationError.invalidStructuralDefaults }
+        case .stack:
+            guard string("layout.container.kind", equals: "stack"), string("layout.axis", equals: "vertical"), number("layout.padding", equals: 24), number("layout.gap", equals: 24), string("layout.align", equals: "start") else { throw ModelValidationError.invalidStructuralDefaults }
+        case .grid:
+            guard string("layout.container.kind", equals: "grid"), number("layout.padding", equals: 24), number("layout.gap", equals: 24), number("layout.grid.columns", equals: 2), string("layout.grid.placement", equals: "row-major") else { throw ModelValidationError.invalidStructuralDefaults }
+        case .frame, .text, .image, .component: break
+        }
     }
 }
 
@@ -817,7 +861,10 @@ enum DocumentSerializationError: Error, Equatable, LocalizedError {
 }
 
 enum DocumentSerializer {
-    static let currentSchemaVersion = 3
+    // Schema 4 introduces the validated Section, Stack, and Grid canonical
+    // node semantics. Schema 3 remains decodable as an immutable historical
+    // shape; it is re-emitted as v4 on the next deterministic save.
+    static let currentSchemaVersion = 4
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -868,6 +915,20 @@ enum DocumentSerializer {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
             document = try container.decode(SchemaTwoDocument.self, forKey: .document)
+        }
+    }
+
+    private struct SchemaThreeEnvelope: Decodable {
+        let schemaVersion: Int
+        let document: CanonicalDocument
+
+        private enum CodingKeys: String, CodingKey, CaseIterable { case schemaVersion, document }
+
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+            document = try container.decode(CanonicalDocument.self, forKey: .document)
         }
     }
 
@@ -1038,6 +1099,14 @@ enum DocumentSerializer {
                 let historicalDecoder = JSONDecoder()
                 historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
                 document = try historicalDecoder.decode(SchemaTwoEnvelope.self, from: data).document.migrated()
+            } catch {
+                throw DocumentSerializationError.malformedInput
+            }
+        case 3:
+            do {
+                let historicalDecoder = JSONDecoder()
+                historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                document = try historicalDecoder.decode(SchemaThreeEnvelope.self, from: data).document
             } catch {
                 throw DocumentSerializationError.malformedInput
             }

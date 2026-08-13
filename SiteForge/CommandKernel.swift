@@ -323,7 +323,7 @@ struct CommandRegistry {
                 guard let parent = page.nodes.first(where: { $0.id == parentID }) else {
                     return .disabled(reason: "The destination container no longer exists on this page.")
                 }
-                guard parent.kind == .frame else { return .disabled(reason: "Only frame containers accept nested nodes.") }
+                guard parent.kind.acceptsAuthoredChildren else { return .disabled(reason: "Only authored containers accept nested nodes.") }
                 guard parentID != source.id, !isDescendant(parentID, of: source.id, in: page) else {
                     return .disabled(reason: "A node cannot be moved into itself or its descendant.")
                 }

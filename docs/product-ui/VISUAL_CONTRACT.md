@@ -45,10 +45,13 @@ The left-side navigation architecture is Pages, Layers, Elements, Assets, and
 Components. Pages and Layers remain functional. Elements is a real accessible
 catalogue: Section, Stack, Grid, Frame; Text, Button, Link, Divider; Navbar,
 and Footer have stable identities, icons, shortcuts/capability contracts, and
-availability state. Only Frame and plain Text route to the verified insertion
-registry today. Every other entry is disabled and says why it is not available;
-it must not create canonical content, history, or package state. Assets and
-Components are explicit accessible unavailable destinations until their
+availability state. Section, Stack, Grid, Frame, and plain Text route to the
+verified canonical insertion registry today. Section is a 960×320 structural
+container with 48-point default padding; Stack is vertical/start with 24-point
+padding and gap; Grid is two equal row-major columns with 24-point padding and
+gap. Button, Link, Divider, Navbar, and Footer remain disabled with a specific
+reason and cannot create canonical content, history, or package state. Assets
+and Components are explicit accessible unavailable destinations until their
 separate storage/definition work exists.
 
 The inspector order is Design, Layout, Content, Interactions, and

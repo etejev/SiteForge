@@ -85,6 +85,16 @@ test_app() {
         level="changed → full"
       fi
       ;;
+    focused|exact)
+      [[ -n "$base" ]] || { print -u2 "Provide one or more exact XCTest selectors after 'focused'."; return 2; }
+      level=focused
+      local selector
+      test_arguments+=("-only-testing:$base")
+      shift 2
+      for selector in "$@"; do
+        test_arguments+=("-only-testing:$selector")
+      done
+      ;;
     *)
       print -u2 "Unknown test level: $level"
       print -u2 "Choose quick, changed, half, or full."
@@ -94,11 +104,70 @@ test_app() {
 
   print "Running SiteForge test level: $level"
   resolve_container
+  terminate_stale_siteforge_ui_processes
   cleanup_test_fixtures
   trap cleanup_test_fixtures EXIT
-  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" test "${test_arguments[@]}"
+  local test_run_id
+  test_run_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+  export SITEFORGE_TEST_RUN_ID="$test_run_id"
+  local result_bundle="${TMPDIR%/}/SiteForge/TestResults/${level// /-}-${test_run_id}.xcresult"
+  mkdir -p "${result_bundle:h}"
+  local test_status log_path
+  log_path="${result_bundle:r}.log"
+  set +e
+  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" -resultBundlePath "$result_bundle" test "${test_arguments[@]}" 2>&1 | tee "$log_path"
+  test_status=${pipestatus[1]}
+  set -e
   cleanup_test_fixtures
+  assert_no_orphaned_siteforge_ui_processes
   trap - EXIT
+  return "$test_status"
+}
+
+# Test-run cleanup is deliberately narrower than a bundle-ID-wide kill: it
+# only touches abandoned processes from this repository's derived-data tree
+# whose command line carries SiteForge UI-test ownership. A user's normal
+# SiteForge installation or unrelated Xcode job is never a candidate.
+siteforge_ui_process_ids() {
+  ps -axo pid=,command= | while read -r pid command; do
+    [[ -n "$pid" && -n "$command" ]] || continue
+    if [[ "$command" == *"$DERIVED_DATA"* ]] && {
+      [[ "$command" == *"SiteForgeUITests-Runner"* ]] ||
+      [[ "$command" == *"SiteForge.app/Contents/MacOS/SiteForge"*"-SiteForgeUITestMode"* ]] ||
+      [[ "$command" == *"xcodebuild"*"$ROOT"*"$DESTINATION"* ]]
+    }; then
+      print -- "$pid"
+    fi
+  done
+}
+
+terminate_stale_siteforge_ui_processes() {
+  local -a stale_pids
+  stale_pids=( ${(f)$(siteforge_ui_process_ids)} )
+  (( ${#stale_pids} == 0 )) && return
+  print "Terminating stale SiteForge UI-test processes: ${stale_pids[*]}"
+  kill -TERM -- "${stale_pids[@]}" 2>/dev/null || true
+  local attempt pid
+  for attempt in {1..20}; do
+    local -a live
+    live=()
+    for pid in "${stale_pids[@]}"; do
+      kill -0 "$pid" 2>/dev/null && live+=("$pid")
+    done
+    (( ${#live} == 0 )) && return
+    sleep 0.1
+  done
+  print -u2 "Stale SiteForge UI-test processes did not terminate: ${stale_pids[*]}"
+  return 1
+}
+
+assert_no_orphaned_siteforge_ui_processes() {
+  local -a orphaned
+  orphaned=( ${(f)$(siteforge_ui_process_ids)} )
+  if (( ${#orphaned} > 0 )); then
+    print -u2 "SiteForge UI-test processes remain after test completion: ${orphaned[*]}"
+    return 1
+  fi
 }
 
 cleanup_test_fixtures() {
@@ -123,7 +192,8 @@ SiteForge local commands
 
   ./sf dev             Build and launch SiteForge locally
   ./sf build           Build the macOS app
-  ./sf test [level]    Run quick, changed, half, or full tests (default full)
+  ./sf test [level]    Run quick, changed, half, focused, or full tests
+  ./sf test focused <XCTest selector> [selector...]
   ./sf verify          Run repository checks, build, and tests
   ./sf watch           Re-run verification when source files change
   ./sf next            Ask Codex to complete the next ready queue item
@@ -147,7 +217,7 @@ case ${1:-help} in
     build_app
     ;;
   test)
-    test_app "${2:-full}" "${3:-${SITEFORGE_TEST_BASE:-origin/main}}"
+    test_app "${@:2}"
     ;;
   verify)
     "$ROOT/scripts/check-repository.sh"

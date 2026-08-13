@@ -33,6 +33,64 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertNoThrow(try session.document.validate())
     }
 
+    // SF-0405-001, SF-0502-001, SF-0503-001 — v1 structural defaults are
+    // canonical, deterministic, and accepted by the same atomic registry.
+    func testStructuralContainerDefaultsAreCanonicalAndDeterministic() throws {
+        let fixture = makeFixture()
+        let section = try prepare(.section, fixture: fixture, nodeID: fixture.frameID)
+        let stack = try prepare(.stack, fixture: fixture, nodeID: fixture.textID)
+        let grid = try prepare(.grid, fixture: fixture, nodeID: NodeID())
+
+        XCTAssertEqual(section.node.kind, .section)
+        XCTAssertEqual(section.geometry.size, .init(width: 960, height: 320))
+        XCTAssertEqual(section.node.insertionNumberProperty("layout.padding"), 48)
+        XCTAssertEqual(stack.node.kind, .stack)
+        XCTAssertEqual(stack.node.insertionStringProperty("layout.axis"), "vertical")
+        XCTAssertEqual(stack.node.insertionNumberProperty("layout.padding"), 24)
+        XCTAssertEqual(stack.node.insertionNumberProperty("layout.gap"), 24)
+        XCTAssertEqual(stack.node.insertionStringProperty("layout.align"), "start")
+        XCTAssertEqual(grid.node.kind, .grid)
+        XCTAssertEqual(grid.node.insertionNumberProperty("layout.grid.columns"), 2)
+        XCTAssertEqual(grid.node.insertionStringProperty("layout.grid.placement"), "row-major")
+        XCTAssertTrue(section.node.properties.allSatisfy { $0.origin == .defaulted || $0.key.rawValue == "layout.x" || $0.key.rawValue == "layout.y" })
+    }
+
+    // SF-0502-001, SF-0503-001 — render/selection geometry derives from the
+    // one canonical hierarchy, not an editor preview or stored duplicate.
+    func testStackAndGridResolveChildrenFromCanonicalDefaults() throws {
+        let fixture = makeFixture()
+        let stackID = NodeID()
+        let firstID = NodeID()
+        let secondID = NodeID()
+        let stack = try prepare(.stack, fixture: fixture, nodeID: stackID)
+        var document = fixture.document
+        document.pages[0].nodes.append(stack.node)
+        document.pages[0].nodes[0].childIDs.insert(stackID, at: 0)
+        let first = DocumentNode(id: firstID, kind: .frame, name: "First", parent: .node(stackID), properties: geometryProperties(firstID, x: 999, y: 999, width: 100, height: 40))
+        let second = DocumentNode(id: secondID, kind: .frame, name: "Second", parent: .node(stackID), properties: geometryProperties(secondID, x: 999, y: 999, width: 100, height: 40))
+        document.pages[0].nodes[document.pages[0].nodes.firstIndex(where: { $0.id == stackID })!].childIDs = [firstID, secondID]
+        document.pages[0].nodes += [first, second]
+        let resolved = document.pages[0].resolvedStructuralGeometry()
+        XCTAssertEqual(resolved[firstID]?.origin, .init(x: 44, y: 54))
+        XCTAssertEqual(resolved[secondID]?.origin, .init(x: 44, y: 118))
+
+        let gridID = NodeID()
+        let grid = try prepare(.grid, fixture: fixture, nodeID: gridID)
+        var gridDocument = fixture.document
+        gridDocument.pages[0].nodes.append(grid.node)
+        gridDocument.pages[0].nodes[0].childIDs.insert(gridID, at: 0)
+        let gridChildren = (0..<3).map { index in
+            DocumentNode(id: NodeID(), kind: .frame, name: "Grid child \(index)", parent: .node(gridID), properties: geometryProperties(NodeID(), x: 900, y: 900, width: 40, height: 30))
+        }
+        gridDocument.pages[0].nodes[gridDocument.pages[0].nodes.firstIndex(where: { $0.id == gridID })!].childIDs = gridChildren.map(\.id)
+        gridDocument.pages[0].nodes += gridChildren
+        let gridResolved = gridDocument.pages[0].resolvedStructuralGeometry()
+        XCTAssertEqual(gridResolved[gridChildren[0].id]?.origin, .init(x: 44, y: 54))
+        XCTAssertEqual(gridResolved[gridChildren[1].id]?.origin, .init(x: 152, y: 54))
+        XCTAssertEqual(gridResolved[gridChildren[2].id]?.origin, .init(x: 44, y: 108))
+        XCTAssertEqual(gridResolved[gridChildren[0].id]?.size.width, 84)
+    }
+
     // SF-0405-002, SF-0405-003, SF-0405-008
     func testEveryInputPathUsesTheSameTypedPreparationAndDisabledReasons() throws {
         let fixture = makeFixture()
@@ -160,6 +218,35 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertNil(reopenedSession.document.pages[0].nodes.first { $0.id == fixture.textID })
         try reopenedSession.redo()
         XCTAssertEqual(reopenedSession.document.pages[0].nodes.first { $0.id == fixture.textID }?.id, fixture.textID)
+    }
+
+    // SF-0501-001 through SF-0503-008 — structural nodes are schema-4
+    // canonical content, not editor catalog state. Their identities and v1
+    // defaults survive a deterministic package/history round trip.
+    func testStructuralElementsPersistInSchemaFourAndSchemaThreeRemainsReadable() async throws {
+        let fixture = makeFixture()
+        let session = DocumentSession(document: fixture.document)
+        let sectionID = NodeID()
+        let stackID = NodeID()
+        let gridID = NodeID()
+
+        for (kind, id) in [(InsertionKind.section, sectionID), (.stack, stackID), (.grid, gridID)] {
+            let current = fixture.with(document: session.document)
+            try session.execute(try prepare(kind, fixture: current, nodeID: id).documentCommand)
+        }
+        let bytes = try DocumentSerializer.encode(session.document)
+        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":4"))
+        let reopened = try DocumentSerializer.decode(bytes)
+        XCTAssertEqual(reopened, session.document)
+        XCTAssertEqual(reopened.pages[0].nodes.first { $0.id == sectionID }?.kind, .section)
+        XCTAssertEqual(reopened.pages[0].nodes.first { $0.id == stackID }?.insertionNumberProperty("layout.gap"), 24)
+        XCTAssertEqual(reopened.pages[0].nodes.first { $0.id == gridID }?.insertionNumberProperty("layout.grid.columns"), 2)
+
+        // Schema 3 was the prior canonical envelope. It intentionally has no
+        // structural instances, but must migrate without data loss.
+        let legacy = Data(String(decoding: try DocumentSerializer.encode(fixture.document), as: UTF8.self)
+            .replacingOccurrences(of: "\"schemaVersion\":4", with: "\"schemaVersion\":3").utf8)
+        XCTAssertEqual(try DocumentSerializer.decode(legacy), fixture.document)
     }
 
     // SF-0405-003, SF-0405-004, SF-0405-007
@@ -383,6 +470,8 @@ final class InsertionModelTests: XCTestCase {
         switch kind {
         case .frame: return .frame(.init(identity: identity, nodeID: nodeID, parentID: parentID ?? fixture.rootID, index: index, geometry: geometry, provenance: provenance))
         case .text: return .text(.init(identity: identity, nodeID: nodeID, parentID: parentID ?? fixture.rootID, index: index, geometry: geometry, text: text, provenance: provenance))
+        case .section, .stack, .grid:
+            return .container(.init(kind: kind, identity: identity, nodeID: nodeID, parentID: parentID ?? fixture.rootID, index: index, geometry: geometry, provenance: provenance))
         }
     }
 
@@ -392,6 +481,15 @@ final class InsertionModelTests: XCTestCase {
 
     private func booleanProperty(_ key: String, _ value: Bool) -> NodeProperty {
         .init(key: .init(rawValue: key), value: .boolean(value))
+    }
+
+    private func geometryProperties(_ id: NodeID, x: Double, y: Double, width: Double, height: Double) -> [NodeProperty] {
+        [
+            .init(key: .init(rawValue: "layout.x"), value: .number(x)),
+            .init(key: .init(rawValue: "layout.y"), value: .number(y)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(width)),
+            .init(key: .init(rawValue: "layout.height"), value: .number(height)),
+        ]
     }
 
     private struct CapacityFixture {

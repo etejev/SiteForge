@@ -3,6 +3,7 @@ import XCTest
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
+    private static let applicationBundleIdentifier = "app.siteforge.SiteForge"
     private enum TestWindowAlignment: String {
         case left
         case right
@@ -30,12 +31,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
 
-        application.buttons["toolbar.tool.text"].click()
-        let textPoint = canvas.coordinate(withNormalizedOffset: .init(dx: 0.55, dy: 0.50))
-        textPoint.click()
+        // A blank document exposes a visible, named starting action. It
+        // creates the same canonical plain-text node as the Insert menu and
+        // avoids treating an arbitrary empty-canvas coordinate as content.
+        application.buttons["canvas.empty.insert.text"].click()
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
-        application.typeKey(.escape, modifierFlags: [])
-        XCTAssertEqual(application.buttons["toolbar.tool.select"].value as? String, "Selected")
 
         func textObject() -> XCUIElement {
             application.descendants(matching: .any)
@@ -47,10 +47,21 @@ final class SiteForgeLaunchTests: XCTestCase {
                 .firstMatch
         }
         XCTAssertTrue(textObject().waitForExistence(timeout: 5))
-        func editPoint() -> XCUICoordinate {
-            canvas.coordinate(withNormalizedOffset: .init(dx: 0.67, dy: 0.52))
+        XCTAssertTrue(
+            application.descendants(matching: .any)["inspector.selection.summary"].waitForExistence(timeout: 3)
+        )
+        func beginSelectedTextEdit() {
+            application.menuBars.menuBarItems["Selection"].click()
+            let command = application.menuItems["Edit Selected Text"]
+            XCTAssertTrue(command.waitForExistence(timeout: 2))
+            XCTAssertTrue(command.isEnabled)
+            command.click()
         }
-        editPoint().doubleClick()
+        // Use the real Selection-menu command for the first edit. It shares
+        // the typed text-edit registry with Return, VoiceOver, and canvas
+        // pointer activation while keeping this journey independent of the
+        // virtual child accessibility element's non-view mouse target.
+        beginSelectedTextEdit()
         var editor = application.textViews["canvas.text.editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.label, "Inline plain-text editor")
@@ -99,7 +110,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("z", modifierFlags: [.command, .shift])
         let redoneTextObject = textObject()
         XCTAssertTrue(redoneTextObject.waitForExistence(timeout: 5))
-        editPoint().doubleClick()
+        beginSelectedTextEdit()
         editor = application.textViews["canvas.text.editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.value as? String, "Edited\nLine")
@@ -112,7 +123,7 @@ final class SiteForgeLaunchTests: XCTestCase {
                 .waitForExistence(timeout: 2)
         )
 
-        editPoint().doubleClick()
+        beginSelectedTextEdit()
         editor = application.textViews["canvas.text.editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.value as? String, "Edited\nLine")
@@ -401,6 +412,11 @@ final class SiteForgeLaunchTests: XCTestCase {
     private var recoveryDirectory: URL {
         fixtureRoot.appendingPathComponent("recovery", isDirectory: true)
     }
+    private var uiTestRunID = ""
+    private var launchStateRecords: [String] = []
+    private var lifecycleDiagnosticURL: URL {
+        fixtureRoot.appendingPathComponent("launch-lifecycle.txt")
+    }
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -409,6 +425,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         // container policy used by the package tests—not in a checkout whose
         // ancestor can be mediated by a File Provider.
         fixtureLease = try ApplicationOwnedTestFixture.create("ui")
+        uiTestRunID = ProcessInfo.processInfo.environment["SITEFORGE_TEST_RUN_ID"]
+            ?? UUID().uuidString.lowercased()
+        launchStateRecords.removeAll(keepingCapacity: true)
     }
 
     override func tearDownWithError() throws {
@@ -427,22 +446,20 @@ final class SiteForgeLaunchTests: XCTestCase {
     ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
-        application.launchArguments += [
-            "-NSTreatUnknownArgumentsAsOpen", "NO",
-            "-AppleKeyboardUIMode", "3",
-            "-SiteForgeUITestMode", "YES",
-            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
-        ]
+        application.launchArguments += baseLaunchArguments()
         if let windowAlignment {
             application.launchArguments += ["-SiteForgeUITestWindowAlignment", windowAlignment.rawValue]
         }
         if let verticalAlignment {
             application.launchArguments += ["-SiteForgeUITestWindowVerticalAlignment", verticalAlignment.rawValue]
         }
+        recordLaunchState("before-launch", application)
         application.launch()
+        recordLaunchState("after-launch", application)
         application.activate()
+        recordLaunchState("after-activate", application)
 
-        XCTAssertTrue(application.windows.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForLaunchWindow(application))
         let newProject = application.buttons["launch.newBlankProject"]
         guard newProject.waitForExistence(timeout: 2) else {
             attachReadinessDiagnostics(for: application)
@@ -462,19 +479,18 @@ final class SiteForgeLaunchTests: XCTestCase {
     ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
-        application.launchArguments += [
-            "-NSTreatUnknownArgumentsAsOpen", "NO",
-            "-AppleKeyboardUIMode", "3",
-            "-SiteForgeUITestMode", "YES",
+        application.launchArguments += baseLaunchArguments() + [
             "-SiteForgeLaunchScenario", scenario,
-            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
         ]
         if reduceMotion {
             application.launchArguments += ["-SiteForgeReduceMotion", "YES"]
         }
         application.launchArguments += extraArguments
+        recordLaunchState("before-launch", application)
         application.launch()
+        recordLaunchState("after-launch", application)
         application.activate()
+        recordLaunchState("after-activate", application)
         XCTAssertTrue(application.windows.firstMatch.waitForExistence(timeout: 5))
         let state = application.descendants(matching: .any)["launch.experience"]
         if scenario == "workspace" {
@@ -520,6 +536,22 @@ final class SiteForgeLaunchTests: XCTestCase {
             timeout: timeout
         ) == .completed
         XCTAssertTrue(stopped, "The prior SiteForge UI-test process did not terminate cleanly.")
+    }
+
+    /// Every UI launch is a new test-owned application session. In
+    /// particular, SwiftUI must not restore a previous zero-window scene,
+    /// because that makes the real AppKit window absent rather than merely
+    /// late in the accessibility hierarchy.
+    private func baseLaunchArguments() -> [String] {
+        [
+            "-NSTreatUnknownArgumentsAsOpen", "NO",
+            "-ApplePersistenceIgnoreState", "YES",
+            "-AppleKeyboardUIMode", "3",
+            "-SiteForgeUITestMode", "YES",
+            "-SiteForgeUITestRunID", uiTestRunID,
+            "-SiteForgeUITestDiagnosticPath", lifecycleDiagnosticURL.path,
+            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
+        ]
     }
 
     private func hasKeyboardFocus(_ element: XCUIElement) -> Bool {
@@ -629,6 +661,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         hierarchy.name = "workspace-readiness-accessibility-hierarchy"
         hierarchy.lifetime = .keepAlways
         add(hierarchy)
+        let lifecycle = XCTAttachment(string: launchLifecycleDiagnostics(for: application))
+        lifecycle.name = "workspace-launch-lifecycle-diagnostics"
+        lifecycle.lifetime = .keepAlways
+        add(lifecycle)
     }
 
     private func attachFocusDiagnostics(
@@ -725,9 +761,59 @@ final class SiteForgeLaunchTests: XCTestCase {
     }
 
     private func trackedApplication() -> XCUIApplication {
-        let application = XCUIApplication()
+        let application = XCUIApplication(bundleIdentifier: Self.applicationBundleIdentifier)
         launchedApplications.append(application)
         return application
+    }
+
+    private func waitForLaunchWindow(_ application: XCUIApplication) -> Bool {
+        let window = application.windows.firstMatch
+        let visible = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { [weak self] object, _ in
+                    guard let self, let element = object as? XCUIElement, element.exists else {
+                        return false
+                    }
+                    return self.hasNoAppLifecycleHandshake || self.appReportedVisibleWindow()
+                },
+                object: window
+            )],
+            timeout: 5
+        ) == .completed
+        if !visible { attachReadinessDiagnostics(for: application) }
+        return visible
+    }
+
+    /// New app compositions provide this test-only acknowledgement only after
+    /// a real AppKit window has become visible. Clean historical baselines do
+    /// not contain the diagnostic owner, so their genuine AX window remains
+    /// the compatibility handshake.
+    private var hasNoAppLifecycleHandshake: Bool {
+        !FileManager.default.fileExists(atPath: lifecycleDiagnosticURL.path)
+    }
+
+    private func appReportedVisibleWindow() -> Bool {
+        guard let records = try? String(contentsOf: lifecycleDiagnosticURL, encoding: .utf8) else {
+            return false
+        }
+        return records.contains("phase=window-ready")
+            || records.contains("phase=configuration-succeeded-constrained")
+    }
+
+    private func launchLifecycleDiagnostics(for application: XCUIApplication) -> String {
+        let records = (try? String(contentsOf: lifecycleDiagnosticURL, encoding: .utf8)) ?? "<no app lifecycle record>"
+        return """
+        expectedBundle=\(Self.applicationBundleIdentifier)
+        observedState=\(application.state.rawValue)
+        xcuiApplicationStates:
+        \(launchStateRecords.joined(separator: "\n"))
+        lifecycleRecords:
+        \(records)
+        """
+    }
+
+    private func recordLaunchState(_ phase: String, _ application: XCUIApplication) {
+        launchStateRecords.append("phase=\(phase);state=\(application.state.rawValue);bundle=\(Self.applicationBundleIdentifier)")
     }
 
     private func pageRows(in application: XCUIApplication) -> [XCUIElement] {
@@ -765,11 +851,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
-        application.launchArguments += [
-            "-NSTreatUnknownArgumentsAsOpen", "NO",
-            "-AppleKeyboardUIMode", "3",
-            "-SiteForgeUITestMode", "YES",
-            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
+        application.launchArguments += baseLaunchArguments() + [
             "-SiteForgeIntegrationOpenProject", url.path,
             "-SiteForgeIntegrationPackageBase64", base64Fixture.path,
         ]
@@ -777,8 +859,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         if let retryBase64Fixture {
             application.launchArguments += ["-SiteForgeIntegrationRetryBase64", retryBase64Fixture.path]
         }
+        recordLaunchState("before-launch", application)
         application.launch()
+        recordLaunchState("after-launch", application)
         application.activate()
+        recordLaunchState("after-activate", application)
         XCTAssertTrue(application.windows.firstMatch.waitForExistence(timeout: 5))
         return application
     }
@@ -836,10 +921,28 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(text.isEnabled)
         XCTAssertEqual(frame.label, "Frame")
         XCTAssertEqual(text.label, "Text")
-        for identifier in ["section", "stack", "grid", "button", "link", "divider", "navbar", "footer"] {
+        for identifier in ["section", "stack", "grid"] {
+            let item = application.buttons["navigator.elements.\(identifier)"]
+            XCTAssertTrue(item.exists, identifier)
+            XCTAssertTrue(item.isEnabled, identifier)
+            XCTAssertTrue(item.label == identifier.capitalized)
+        }
+        for identifier in ["button", "link", "divider", "navbar", "footer"] {
             let item = application.buttons["navigator.elements.\(identifier)"]
             XCTAssertTrue(item.exists, identifier)
             XCTAssertFalse(item.isEnabled, identifier)
+        }
+
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        for (offset, name) in ["Section", "Stack", "Grid"].enumerated() {
+            let item = application.buttons["navigator.elements.\(name.lowercased())"]
+            item.click()
+            XCTAssertTrue(waitForValue(canvas, containing: "rendered objects \(offset + 1)"), name)
+            XCTAssertTrue(application.descendants(matching: .any).matching(NSPredicate(format: "label == %@", name)).firstMatch.waitForExistence(timeout: 3), name)
+            XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
+            application.typeKey("z", modifierFlags: .command)
+            XCTAssertTrue(application.buttons["toolbar.redo"].waitForExistence(timeout: 3))
+            application.typeKey("z", modifierFlags: [.command, .shift])
         }
 
         frame.click()
@@ -855,6 +958,72 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForHittable(components, in: application))
         components.click()
         XCTAssertTrue(application.descendants(matching: .any)["navigator.components.unavailable"].exists)
+    }
+
+    // SF-0501-001 through SF-0503-008 — visible catalog/menu operations
+    // create canonical hierarchy, and the adopted renderer/selection surface
+    // uses the same resolved parent-child geometry.
+    @MainActor
+    func testStructuralElementsNestThroughCatalogAndInsertMenuJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0"))
+
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.section"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        let section = canvasObject(named: "Section", in: application)
+        XCTAssertTrue(section.waitForExistence(timeout: 3))
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.selection.summary"].waitForExistence(timeout: 3))
+
+        // The selected Section is the validated parent for the Stack.
+        application.buttons["navigator.elements.stack"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        let stack = canvasObject(named: "Stack", in: application)
+        XCTAssertTrue(stack.waitForExistence(timeout: 3))
+
+        application.menuBars.menuBarItems["Insert"].click()
+        let frameCommand = application.menuItems["Insert Frame at Center"]
+        XCTAssertTrue(frameCommand.waitForExistence(timeout: 2))
+        XCTAssertTrue(frameCommand.isEnabled)
+        frameCommand.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 3"))
+        let stackChild = canvasObject(named: "Frame", in: application)
+        XCTAssertTrue(stackChild.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(stackChild.frame.minX, stack.frame.minX)
+        XCTAssertGreaterThan(stackChild.frame.minY, stack.frame.minY)
+
+        // Select the Section from the real Layers navigator, then create a
+        // Grid below its Stack. The Grid is selected after commit, making the
+        // two menu-inserted Frames its row-major children.
+        application.buttons["navigator.tab.layers"].click()
+        let sectionLayer = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Section"))
+            .firstMatch
+        XCTAssertTrue(sectionLayer.waitForExistence(timeout: 3))
+        sectionLayer.click()
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.grid"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 4"))
+        let grid = canvasObject(named: "Grid", in: application)
+        XCTAssertTrue(grid.waitForExistence(timeout: 3))
+
+        for expectedCount in [5, 6] {
+            application.menuBars.menuBarItems["Insert"].click()
+            application.menuItems["Insert Frame at Center"].click()
+            XCTAssertTrue(waitForValue(canvas, containing: "rendered objects \(expectedCount)"))
+        }
+        // Canvas count is the live adopted render plan (not a catalogue
+        // fixture); exact Stack/Grid child geometry is asserted at the shared
+        // headless resolver boundary, where AX viewport clipping cannot hide
+        // valid offscreen children.
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 6"))
+
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 5"))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 6"))
+        attachScreenshot(named: "SF-AUTHORING-010 nested section stack grid")
     }
 
     // SF-0201-002, SF-0201-006, SF-0201-008, SF-1505-006 through SF-1505-008
@@ -1374,16 +1543,15 @@ final class SiteForgeLaunchTests: XCTestCase {
             "11000000-0000-0000-0000-000000000002.siteforge-recovery"
         )
         var application = trackedApplication()
-        application.launchArguments += [
-            "-NSTreatUnknownArgumentsAsOpen", "NO",
-            "-AppleKeyboardUIMode", "3",
-            "-SiteForgeUITestMode", "YES",
-            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
+        application.launchArguments += baseLaunchArguments() + [
             "-SiteForgeIntegrationRecoveryBase64", recoveryBytes.path,
             "-SiteForgeIntegrationRecoveryDestination", recovery.path,
         ]
+        recordLaunchState("before-launch", application)
         application.launch()
+        recordLaunchState("after-launch", application)
         application.activate()
+        recordLaunchState("after-activate", application)
         let restore = application.buttons["launch.recovery.restore"]
         XCTAssertTrue(restore.waitForExistence(timeout: 5))
         application.typeKey(.return, modifierFlags: [])
@@ -1391,16 +1559,15 @@ final class SiteForgeLaunchTests: XCTestCase {
         terminateAndWait(application)
 
         application = trackedApplication()
-        application.launchArguments += [
-            "-NSTreatUnknownArgumentsAsOpen", "NO",
-            "-AppleKeyboardUIMode", "3",
-            "-SiteForgeUITestMode", "YES",
-            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
+        application.launchArguments += baseLaunchArguments() + [
             "-SiteForgeIntegrationRecoveryBase64", recoveryBytes.path,
             "-SiteForgeIntegrationRecoveryDestination", recovery.path,
         ]
+        recordLaunchState("before-launch", application)
         application.launch()
+        recordLaunchState("after-launch", application)
         application.activate()
+        recordLaunchState("after-activate", application)
         let discard = application.buttons["launch.recovery.discard"]
         XCTAssertTrue(discard.waitForExistence(timeout: 5))
         discard.click()
@@ -1472,6 +1639,16 @@ final class SiteForgeLaunchTests: XCTestCase {
         ) == .completed
     }
 
+    private func canvasObject(named name: String, in application: XCUIApplication) -> XCUIElement {
+        application.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label == %@ AND identifier BEGINSWITH %@",
+                name,
+                "canvas.object."
+            ))
+            .firstMatch
+    }
+
     private func waitForValueToChange(_ element: XCUIElement, from value: String) -> Bool {
         let predicate = NSPredicate { object, _ in
             ((object as? XCUIElement)?.value as? String) != value
@@ -1481,6 +1658,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             timeout: 2
         ) == .completed
     }
+
 
     private func waitForLabelToChange(_ element: XCUIElement, from value: String) -> Bool {
         let predicate = NSPredicate { object, _ in

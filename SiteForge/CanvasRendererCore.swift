@@ -26,7 +26,7 @@ struct CanvasRenderRequestIdentity: Codable, Hashable, Sendable {
 }
 
 enum CanvasPaintStyle: String, Codable, Hashable, Sendable {
-    case canvas, page, container, frameSurface, imagePlaceholder, textPlaceholder
+    case canvas, page, container, frameSurface, sectionSurface, stackSurface, gridSurface, imagePlaceholder, textPlaceholder
 }
 
 struct CanvasRenderObject: Codable, Hashable, Sendable {

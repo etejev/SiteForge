@@ -93,18 +93,18 @@ final class SnappingGuideModelTests: XCTestCase {
     }
 
     // SF-0404-001, SF-0404-005
-    func testSchemaThreePackageHistoryRoundTripMigrationAndPreviewCommitParity() async throws {
+    func testSchemaFourPackageHistoryRoundTripMigrationAndPreviewCommitParity() async throws {
         var fixture = SnapTestFixture()
         fixture.document.guides = [
             .init(id: fixture.guideID, pageID: fixture.pageID, axis: .horizontal, position: 77),
         ]
         let bytes = try DocumentSerializer.encode(fixture.document)
         XCTAssertEqual(bytes, try DocumentSerializer.encode(fixture.document))
-        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":3"))
+        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":4"))
         XCTAssertEqual(try DocumentSerializer.decode(bytes), fixture.document)
         // Immutable schema-2 migration evidence lives in
         // `ProjectPackageTests`; this guide-specific test only proves the
-        // current schema-3 round-trip. Generating a fake old payload here
+        // current schema-4 round-trip. Generating a fake old payload here
         // would not independently establish historical wire compatibility.
         var missingGuideObject = try XCTUnwrap(
             JSONSerialization.jsonObject(with: bytes) as? [String: Any]
