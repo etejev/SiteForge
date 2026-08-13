@@ -26,7 +26,7 @@ Requirements: bounded evidence for `SF-0401-001`, `SF-0401-003`,
 - `CanvasViewportTests.testFreshWorkspaceFitsPasteboardWithoutMutatingAuthoredCoordinates` passed, proving the first usable canvas size centers the pasteboard at the existing 100% zoom without canonical mutation.
 - Actual-app `testNativeCanvasRendererAdoptsAuthoredObjectsAndPreservesInput` and `testInlinePlainTextEditingCommitCancelUndoRedoAndAccessibilityJourney` passed. Their retained XCTest attachments cover truthful blank state, inserted object adoption, native text draft/commit/cancel, selection, undo/redo, and accessibility.
 - Owner-supplied visual reports were inspected before this correction. They showed a top-pinned empty state and glyphs rendered below the selected text rect; neither is treated as acceptable evidence after this change.
-- `./sf test half` passed 303 unit/integration tests and final local `./sf verify` passed all repository checks, 303 unit/integration tests, and 33 UI tests on 2026-08-13. The final XCTest result bundle retains app-window screenshots for the native draft, committed, and cancelled text states; the external automation overlay is not treated as application evidence.
+- `./sf test half` passed 303 unit/integration tests and final local `./sf verify` passed all repository checks, 303 unit/integration tests, and 33 UI tests on 2026-08-13. Hosted Actions `31675543875` passed the same Verify workflow at `f449813`. The final XCTest result bundle retains app-window screenshots for the native draft, committed, and cancelled text states; the external automation overlay is not treated as application evidence.
 
 ## Limits
 
