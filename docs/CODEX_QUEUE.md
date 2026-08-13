@@ -8,7 +8,10 @@ None.
 
 ## IN PROGRESS
 
-None.
+- [ ] `SF-CI-007` Fit explicitly constrained pointer-test windows on both axes.
+  - Requirements: bounded regression coverage for `SF-0201-006`, `SF-0201-008`, `SF-0203-006`, `SF-0406-006`, and `SF-1902-008`.
+  - Plan: preserve the production 1100×700 minimum and all generic/Release window behavior; make only a named Debug/UI-test constrained placement fit its width and height inside the host visible frame with safe insets; retain left/right/top/bottom semantics; prove the fitted geometry policy in unit tests and the real bottom status Commit/Cancel pointer journey; retain the UI result bundle in CI failure artifacts.
+  - Hosted finding: Actions `31666840622` passed repository checks and all 301 unit/integration tests but failed exactly one of 33 UI tests: the bottom-aligned text Commit control existed but was not hittable. The application/editor command path completed; the oversized 1100-point constrained window left the trailing status control outside the hosted display. Verification is pending the corrected local/UI and hosted gates.
 
 ## DONE
 
