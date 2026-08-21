@@ -267,7 +267,7 @@ final class CanvasRendererTests: XCTestCase {
     func testProductionWorkerKeepsMainActorResponsiveAtTenThousandObjects() async throws {
         let fixture = try makeFixture(count: 10_000)
         let worker = CanvasRenderWorker()
-        let task = Task {
+        let task = Task(priority: .userInitiated) {
             try await worker.prepare(scene: fixture.scene, overlays: fixture.overlays, viewport: fixture.viewport)
         }
         var turns = 0

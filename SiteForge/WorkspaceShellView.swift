@@ -232,6 +232,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     let focusValue: (Tab) -> ShellFocus
 
     var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 2) {
             ForEach(tabs) { tab in
                 Button {
@@ -239,7 +240,9 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
                 } label: {
                     Text(title(tab))
                         .font(.caption.weight(.semibold))
-                        .frame(maxWidth: .infinity)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 6)
                         .contentShape(Rectangle())
                 }
@@ -258,6 +261,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
                 .accessibilityHint(accessibilityDescription(tab) ?? "")
                 .accessibilityAddTraits(selection == tab ? .isSelected : [])
             }
+        }
         }
         .padding(3)
         .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 7))
@@ -488,7 +492,11 @@ private struct NavigatorLayerRow: View {
                     .accessibilityIdentifier("drag.insertion.indicator.\(target.id.description)")
             }
             Button {
-                let flags = NSEvent.modifierFlags
+                // A Layers selection is a real pointer event. Prefer the
+                // event being delivered to this control over the process-wide
+                // snapshot so an additive click cannot accidentally become a
+                // replacement selection while SwiftUI is reconciling views.
+                let flags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
                 let modifier: SelectionPointerModifier = flags.contains(.command)
                     ? .toggle : flags.contains(.shift) ? .add : .replace
                 state.selectLayer(target.id, modifier: modifier)
@@ -684,6 +692,13 @@ private struct CanvasPlaceholderView: View {
     var body: some View {
         VStack(spacing: 0) {
             ViewportControlsView(state: state, focus: focus, tabRouter: tabRouter)
+                // Native canvas views can otherwise receive the header's
+                // proposed height during AppKit composition and paint over
+                // its controls. Reserve an explicit compact header band so
+                // visual controls and the interactive viewport never occupy
+                // the same coordinates.
+                .frame(height: 40)
+                .zIndex(1)
             Divider()
 
             GeometryReader { geometry in
@@ -851,18 +866,6 @@ private struct CanvasPlaceholderView: View {
                 .background(Color(nsColor: .underPageBackgroundColor))
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("canvas.viewport.surface")
-                .onAppear {
-                    // GeometryReader is still composing its SwiftUI update at
-                    // this point. Publish viewport state on the next main-run
-                    // loop turn so a launch never mutates ObservableObject
-                    // state from within the view update transaction.
-                    DispatchQueue.main.async {
-                        state.resizeViewport(
-                            to: ViewportSize(width: geometry.size.width, height: geometry.size.height),
-                            pixelRatio: Double(NSScreen.main?.backingScaleFactor ?? 2)
-                        )
-                    }
-                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -907,10 +910,11 @@ private struct ViewportControlsView: View {
 
             Spacer(minLength: 8)
 
-            Button("Zoom out", systemImage: "minus") {
+            Button("−", systemImage: "minus") {
                 state.performViewportCommand(CanvasViewportCommand(.zoomOut))
             }
-            .labelStyle(.iconOnly)
+            .labelStyle(.titleAndIcon)
+            .buttonStyle(.bordered)
             .disabled(state.zoomPercent == 25)
             .focusable()
             .focused(focus, equals: .viewportZoomOut)
@@ -921,44 +925,64 @@ private struct ViewportControlsView: View {
                 .frame(minWidth: 42)
                 .accessibilityIdentifier("canvas.zoom.value")
 
-            Button("Zoom in", systemImage: "plus") {
+            Button("+", systemImage: "plus") {
                 state.performViewportCommand(CanvasViewportCommand(.zoomIn))
             }
-            .labelStyle(.iconOnly)
+            .labelStyle(.titleAndIcon)
+            .buttonStyle(.bordered)
             .disabled(state.viewportState.zoom == .maximum)
             .focusable()
             .focused(focus, equals: .viewportZoomIn)
             .accessibilityIdentifier("canvas.zoom.in")
 
-            Button("Actual Size", systemImage: "1.magnifyingglass") {
+            Button("1:1", systemImage: "1.magnifyingglass") {
                 state.performViewportCommand(CanvasViewportCommand(.actualSize))
             }
-            .labelStyle(.iconOnly)
+            .labelStyle(.titleAndIcon)
+            .buttonStyle(.bordered)
             .help("Actual Size")
             .accessibilityLabel("Actual Size")
             .focusable()
             .focused(focus, equals: .viewportReset)
             .accessibilityIdentifier("canvas.zoom.reset")
 
-            Button("Fit to Canvas", systemImage: "arrow.left.and.right") {
+            Button("Fit Canvas", systemImage: "arrow.left.and.right") {
                 state.performViewportCommand(CanvasViewportCommand(.fitWidth))
             }
-            .labelStyle(.iconOnly)
+            .labelStyle(.titleAndIcon)
+            .buttonStyle(.bordered)
             .help("Fit to Canvas")
             .accessibilityLabel("Fit to Canvas")
             .focusable()
             .focused(focus, equals: .viewportFitCanvas)
             .accessibilityIdentifier("canvas.zoom.fitCanvas")
 
-            Button("Fit to Document", systemImage: "arrow.up.left.and.arrow.down.right") {
+            Button("Fit Document", systemImage: "arrow.up.left.and.arrow.down.right") {
                 state.performViewportCommand(CanvasViewportCommand(.fitDocument))
             }
-            .labelStyle(.iconOnly)
+            .labelStyle(.titleAndIcon)
+            .buttonStyle(.bordered)
             .help("Fit to Document")
             .accessibilityLabel("Fit to Document")
             .focusable()
             .focused(focus, equals: .viewportFit)
             .accessibilityIdentifier("canvas.zoom.fit")
+
+            if state.selectionOutsideActiveArtboard {
+                Button("Reveal Selection", systemImage: "viewfinder") {
+                    state.revealSelection()
+                }
+                .labelStyle(.titleAndIcon)
+                .buttonStyle(.bordered)
+                .help("Reveal the selected Desktop geometry without moving it")
+                .accessibilityLabel("Reveal Selection")
+                .accessibilityIdentifier("canvas.selection.reveal")
+            }
+
+            Toggle("Grid", isOn: $state.isWorldGridVisible)
+                .toggleStyle(.button)
+                .accessibilityIdentifier("canvas.grid.toggle")
+                .accessibilityLabel("World grid")
         }
         if state.canvasRenderPlan?.authoredObjects.isEmpty == true {
             HStack(spacing: 8) {
@@ -980,7 +1004,7 @@ private struct ViewportControlsView: View {
         }
         .controlSize(.small)
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .padding(.vertical, 4)
         .workspaceChrome(.viewportControls)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("canvas.viewport.controls")
@@ -1140,6 +1164,7 @@ final class WorkspaceWindowTabRouter: ObservableObject {
     private var hasMarkedText: () -> Bool = { false }
     private var commitInlineTextEditing: () -> Void = {}
     private var cancelInlineTextEditing: () -> Void = {}
+    private var diagnosticPublicationGeneration: UInt64 = 0
 
     func configure(
         focus: FocusState<ShellFocus?>.Binding,
@@ -1169,7 +1194,7 @@ final class WorkspaceWindowTabRouter: ObservableObject {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.route(event) ?? event
         }
-        updateDiagnostics(outcome: "attached")
+        scheduleLifecycleDiagnostics(outcome: "attached")
     }
 
     func unbind(from candidate: NSWindow?) {
@@ -1178,18 +1203,18 @@ final class WorkspaceWindowTabRouter: ObservableObject {
         detachMonitor()
         window = nil
         presetControl = nil
-        diagnosticSnapshot = "logical=none; responder=none; window=detached; route=none"
+        scheduleLifecycleDiagnostics(outcome: "detached")
     }
 
     fileprivate func registerPresetControl(_ control: FocusableViewportPresetPopUpButton) {
         presetControl = control
-        updateDiagnostics(outcome: "preset-attached")
+        scheduleLifecycleDiagnostics(outcome: "preset-attached")
     }
 
     fileprivate func unregisterPresetControl(_ control: FocusableViewportPresetPopUpButton) {
         guard presetControl === control else { return }
         presetControl = nil
-        updateDiagnostics(outcome: "preset-detached")
+        scheduleLifecycleDiagnostics(outcome: "preset-detached")
     }
 
     private func route(_ event: NSEvent) -> NSEvent? {
@@ -1296,6 +1321,21 @@ final class WorkspaceWindowTabRouter: ObservableObject {
             "logical=\(logical); responder=\(responder); window=\(windowState); route=\(outcome)"
     }
 
+    /// Window/preset attachment occurs from NSViewRepresentable creation and
+    /// reconciliation. Publishing its diagnostic synchronously there mutates
+    /// the observed diagnostics probe during a SwiftUI update. Publish only
+    /// the resulting lifecycle snapshot on the next event turn; key-routing
+    /// diagnostics remain synchronous because they originate from a native
+    /// keyboard event, not view construction.
+    private func scheduleLifecycleDiagnostics(outcome: String) {
+        diagnosticPublicationGeneration &+= 1
+        let generation = diagnosticPublicationGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.diagnosticPublicationGeneration == generation else { return }
+            self.updateDiagnostics(outcome: outcome)
+        }
+    }
+
     private static func isTextEditing(_ responder: NSResponder?) -> Bool {
         responder is NSTextView || responder is NSTextField
     }
@@ -1324,12 +1364,14 @@ private struct WorkspaceWindowTabRouterInstaller: NSViewRepresentable {
     func makeNSView(context: Context) -> WorkspaceWindowTabRouterHostView {
         let view = WorkspaceWindowTabRouterHostView()
         view.router = router
+        view.commandState = state
         configureRouter()
         return view
     }
 
     func updateNSView(_ view: WorkspaceWindowTabRouterHostView, context: Context) {
         view.router = router
+        view.commandState = state
         configureRouter()
         router.bind(to: view.window)
     }
@@ -1357,23 +1399,30 @@ private struct WorkspaceWindowTabRouterInstaller: NSViewRepresentable {
 @MainActor
 private final class WorkspaceWindowTabRouterHostView: NSView {
     weak var router: WorkspaceWindowTabRouter?
+    weak var commandState: WorkspaceShellState?
     private weak var boundWindow: NSWindow?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let boundWindow, boundWindow !== window {
             router?.unbind(from: boundWindow)
+            WorkspaceCommandTargetRegistry.shared.unbind(commandState, from: boundWindow)
         }
         boundWindow = window
         router?.bind(to: window)
+        if let window, let commandState {
+            WorkspaceCommandTargetRegistry.shared.bind(commandState, to: window)
+        }
     }
 
     func detach() {
         if let boundWindow {
             router?.unbind(from: boundWindow)
+            WorkspaceCommandTargetRegistry.shared.unbind(commandState, from: boundWindow)
         }
         boundWindow = nil
         router = nil
+        commandState = nil
     }
 }
 
@@ -1659,12 +1708,8 @@ private struct InspectorView: View {
     private var inspectorDetails: some View {
         switch state.inspectorTab {
         case .design:
-            Text("Design summary")
-                .font(.headline)
-            Text("Current appearance is read-only in this bounded inspector foundation.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("inspector.design.summary")
+            DesignInspectorFieldsView(state: state)
+                .id(state.geometryInspectorSelectionKey)
         case .layout:
             Text(state.transformGeometrySummary)
                 .monospacedDigit()
@@ -1731,6 +1776,380 @@ private struct InspectorView: View {
             .toggleStyle(.checkbox)
             .accessibilityIdentifier("inspector.snapping.suppress")
         }
+    }
+}
+
+/// Scene-local presentation drafts only. Canonical RGBA/opacity changes are
+/// submitted as separate typed transactions so a cancelled picker/text draft
+/// can never alter package, history, or editor overlays.
+private struct DesignInspectorFieldsView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @FocusState private var hexFocused: Bool
+    @FocusState private var opacityFocused: Bool
+    @State private var hexDraft = ""
+    @State private var opacityDraft = ""
+    @State private var message: String?
+
+    /// Includes the current revision and is used to reject a command queued
+    /// from a control update after another transaction or selection has won.
+    private var selectionContextKey: String { state.geometryInspectorSelectionKey }
+
+    /// Intentionally excludes revision so the successful transaction can
+    /// refresh its local draft strings after it advances the document.
+    private var selectionIdentityKey: String {
+        state.selectionState.orderedIDs.map(\.description).joined(separator: ",")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("Appearance").font(.headline)
+            let fill = state.designInspectorFillValue()
+            let fillIsApplicable = !isUnavailable(fill)
+            HStack(spacing: 8) {
+                NativeDesignColorWell(
+                    color: resolvedColor(fill),
+                    isEnabled: fillIsApplicable,
+                    accessibilityValue: fillAccessibility(fill),
+                    accessibilityHint: fillIsApplicable
+                        ? "Open the native color panel to commit a solid fill."
+                        : unavailableHint(fill),
+                    onCommit: { color in scheduleFillCommit(color, provenance: .picker) }
+                )
+                .frame(width: 48, height: 26)
+                TextField("Hexadecimal fill", text: $hexDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!fillIsApplicable)
+                    .focused($hexFocused)
+                    .onSubmit { commitHex() }
+                    .onChange(of: hexFocused) { old, current in
+                        if old && !current { DispatchQueue.main.async { guard !hexFocused else { return }; commitHex() } }
+                    }
+                    .accessibilityLabel("Solid fill hexadecimal RGBA")
+                    .accessibilityValue(fillAccessibility(fill))
+                    .accessibilityHint(fillIsApplicable ? "Enter #RRGGBB or #RRGGBBAA and press Return to commit." : unavailableHint(fill))
+                    .accessibilityIdentifier("inspector.design.fillHex")
+                Button("Remove") {
+                    scheduleFillCommit(nil, provenance: .picker)
+                }
+                    .disabled(!fillIsApplicable)
+                    .accessibilityLabel("Remove solid fill")
+                    .accessibilityHint(fillIsApplicable ? "Remove the authored fill without restoring a legacy default." : unavailableHint(fill))
+                    .accessibilityIdentifier("inspector.design.fillRemove")
+            }
+            Text(provenanceText(fill))
+                .font(.caption2).foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.design.fillProvenance")
+            let opacity = state.designInspectorOpacityValue()
+            let opacityIsApplicable = !isUnavailable(opacity)
+            HStack(spacing: 8) {
+                Text("Opacity").frame(width: 56, alignment: .leading)
+                TextField("Opacity", text: $opacityDraft)
+                    .textFieldStyle(.roundedBorder).monospacedDigit()
+                    .disabled(!opacityIsApplicable)
+                    .focused($opacityFocused)
+                    .onSubmit { commitOpacity() }
+                    .onChange(of: opacityFocused) { old, current in
+                        if old && !current { DispatchQueue.main.async { guard !opacityFocused else { return }; commitOpacity() } }
+                    }
+                    .accessibilityLabel("Opacity percent")
+                    .accessibilityValue(opacityAccessibility(opacity))
+                    .accessibilityHint(opacityIsApplicable ? "Enter a value from 0 through 100 percent and press Return to commit." : unavailableHint(opacity))
+                    .accessibilityIdentifier("inspector.design.opacity")
+                NativeDesignOpacityStepper(
+                    value: resolvedOpacityPercent(opacity),
+                    isEnabled: opacityIsApplicable,
+                    accessibilityValue: opacityAccessibility(opacity),
+                    accessibilityHint: opacityIsApplicable
+                        ? "Use the visible increment and decrement arrows to change opacity by one percent."
+                        : unavailableHint(opacity),
+                    onCommit: { percent in scheduleOpacityCommit(percent, provenance: .stepper) }
+                )
+                .frame(width: 22, height: 26)
+            }
+            if let message { Text(message).font(.caption).foregroundStyle(.red).accessibilityIdentifier("inspector.design.validation") }
+            Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("inspector.design.announcement")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Design appearance")
+        .accessibilityIdentifier("inspector.design.fields")
+        .onAppear { resetDrafts() }
+        .onChange(of: selectionContextKey) { _, _ in
+            // A selection command may run while the inspector is being
+            // reconciled. Refresh local draft strings on the next event turn
+            // and only for the current selection/revision, rather than
+            // publishing view state during that reconciliation.
+            scheduleDraftRefresh(for: selectionIdentityKey)
+        }
+        .onExitCommand { resetDrafts(); state.cancelDesignInspectorDraft() }
+    }
+
+    private func resolvedColor(_ value: DesignInspectorValue) -> CanonicalSolidColor {
+        if case .single(let color, _) = value { return color }
+        return .legacySurface
+    }
+
+    private func resolvedOpacityPercent(_ value: DesignInspectorOpacityValue) -> Double {
+        if case .single(let opacity, _) = value { return opacity * 100 }
+        return 100
+    }
+    private func resetDrafts() {
+        switch state.designInspectorFillValue() {
+        case .single(let color, _): hexDraft = color.hexadecimalRGBA
+        case .mixed: hexDraft = ""
+        case .unavailable: hexDraft = ""
+        }
+        switch state.designInspectorOpacityValue() {
+        case .single(let value, _): opacityDraft = String(format: "%.0f", value * 100)
+        case .mixed, .unavailable: opacityDraft = ""
+        }
+        message = nil
+    }
+
+    /// The command registry commits synchronously so undo/redo and renderer
+    /// adoption remain immediate. Only the view-owned draft mirror waits for
+    /// the next event turn; the identity key prevents an old edit from
+    /// overwriting a newer selection's draft.
+    private func scheduleDraftRefresh(for expectedSelectionKey: String) {
+        DispatchQueue.main.async {
+            guard selectionIdentityKey == expectedSelectionKey else { return }
+            resetDrafts()
+        }
+    }
+
+    /// Native ColorPicker and TextField bindings are evaluated while SwiftUI
+    /// is reconciling their controls. Commit at the following main-event
+    /// boundary, not from the binding setter itself. The exact document /
+    /// selection context is checked before mutation, so a stale UI callback
+    /// is neutral instead of applying to a later selection.
+    private func scheduleFillCommit(
+        _ color: CanonicalSolidColor?,
+        provenance: DesignInspectorProvenance
+    ) {
+        let expectedContext = selectionContextKey
+        let expectedSelection = selectionIdentityKey
+        DispatchQueue.main.async {
+            guard selectionContextKey == expectedContext else { return }
+            guard state.commitDesignFill(color, provenance: provenance) else {
+                message = state.designInspectorFailure?.localizedDescription
+                return
+            }
+            scheduleDraftRefresh(for: expectedSelection)
+        }
+    }
+
+    private func scheduleOpacityCommit(
+        _ percent: Double,
+        provenance: DesignInspectorProvenance
+    ) {
+        let expectedContext = selectionContextKey
+        let expectedSelection = selectionIdentityKey
+        DispatchQueue.main.async {
+            guard selectionContextKey == expectedContext else { return }
+            guard state.commitDesignOpacity(percent: percent, provenance: provenance) else {
+                message = state.designInspectorFailure?.localizedDescription
+                return
+            }
+            scheduleDraftRefresh(for: expectedSelection)
+        }
+    }
+    private func commitHex() {
+        guard !hexDraft.isEmpty else { message = DesignInspectorError.invalidColor.localizedDescription; return }
+        guard let color = CanonicalSolidColor.parse(hexadecimal: hexDraft) else { message = DesignInspectorError.invalidColor.localizedDescription; return }
+        scheduleFillCommit(color, provenance: .hexadecimal)
+    }
+    private func commitOpacity() {
+        guard let value = Double(opacityDraft) else {
+            message = DesignInspectorError.invalidOpacity.localizedDescription
+            return
+        }
+        scheduleOpacityCommit(value, provenance: opacityFocused ? .keyboard : .focusLoss)
+    }
+    private func fillAccessibility(_ value: DesignInspectorValue) -> String { switch value { case .single(let color, let origin): "\(color.hexadecimalRGBA), \(origin == .authored ? "authored" : "defaulted")"; case .mixed: "Mixed values"; case .unavailable(let reason): reason } }
+    private func opacityAccessibility(_ value: DesignInspectorOpacityValue) -> String { switch value { case .single(let opacity, let origin): "\(Int((opacity * 100).rounded())) percent, \(origin == .authored ? "authored" : "defaulted")"; case .mixed: "Mixed values"; case .unavailable(let reason): reason } }
+    private func provenanceText(_ value: DesignInspectorValue) -> String { switch value { case .single(_, let origin): origin == .authored ? "Authored solid fill" : "Defaulted solid fill"; case .mixed: "Mixed fill values"; case .unavailable(let reason): reason } }
+    private func isUnavailable(_ value: DesignInspectorValue) -> Bool {
+        if case .unavailable = value { return true }
+        return false
+    }
+    private func isUnavailable(_ value: DesignInspectorOpacityValue) -> Bool {
+        if case .unavailable = value { return true }
+        return false
+    }
+    private func unavailableHint(_ value: DesignInspectorValue) -> String {
+        if case .unavailable(let reason) = value { return reason }
+        return ""
+    }
+    private func unavailableHint(_ value: DesignInspectorOpacityValue) -> String {
+        if case .unavailable(let reason) = value { return reason }
+        return ""
+    }
+}
+
+/// Production AppKit bridge for the system colour experience.  It remains a
+/// real `NSColorWell`/standard `NSColorPanel`, but makes its role, value, and
+/// press semantics stable for VoiceOver, Full Keyboard Access, and UI tests.
+/// The bridge has no knowledge of automation and owns no canonical style.
+private struct NativeDesignColorWell: NSViewRepresentable {
+    let color: CanonicalSolidColor
+    let isEnabled: Bool
+    let accessibilityValue: String
+    let accessibilityHint: String
+    let onCommit: (CanonicalSolidColor) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onCommit: onCommit) }
+
+    func makeNSView(context: Context) -> AccessibleDesignColorWell {
+        let well = AccessibleDesignColorWell(frame: .zero)
+        well.target = context.coordinator
+        well.action = #selector(Coordinator.colorChanged(_:))
+        well.focusRingType = .default
+        well.setAccessibilityIdentifier("inspector.design.fillPicker")
+        well.setAccessibilityLabel("Solid fill color")
+        context.coordinator.attach(well)
+        return well
+    }
+
+    func updateNSView(_ well: AccessibleDesignColorWell, context: Context) {
+        context.coordinator.onCommit = onCommit
+        well.isEnabled = isEnabled
+        well.setAccessibilityValue(accessibilityValue)
+        well.setAccessibilityHelp(accessibilityHint)
+        let next = NSColor(
+            red: color.red,
+            green: color.green,
+            blue: color.blue,
+            alpha: color.alpha
+        )
+        if !well.color.isEqual(next) {
+            context.coordinator.isSynchronizing = true
+            well.color = next
+            context.coordinator.isSynchronizing = false
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var onCommit: (CanonicalSolidColor) -> Void
+        var isSynchronizing = false
+
+        init(onCommit: @escaping (CanonicalSolidColor) -> Void) {
+            self.onCommit = onCommit
+        }
+
+        func attach(_ well: AccessibleDesignColorWell) {
+            well.onPanelDeactivated = { [weak well] in
+                // The standard Colors panel can leave its well as first
+                // responder after it closes. Relinquish only that responder;
+                // a subsequent genuine click/Tab chooses the next control.
+                guard let well, well.window?.firstResponder === well else { return }
+                well.window?.makeFirstResponder(nil)
+            }
+        }
+
+        @objc func colorChanged(_ sender: NSColorWell) {
+            guard !isSynchronizing,
+                  let rgb = sender.color.usingColorSpace(.deviceRGB) else { return }
+            let color = CanonicalSolidColor(
+                red: rgb.redComponent,
+                green: rgb.greenComponent,
+                blue: rgb.blueComponent,
+                alpha: rgb.alphaComponent
+            )
+            guard color.isValid else { return }
+            onCommit(color)
+        }
+    }
+}
+
+private final class AccessibleDesignColorWell: NSColorWell {
+    var onPanelDeactivated: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { isEnabled }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        activate(true)
+        return true
+    }
+
+    override func deactivate() {
+        super.deactivate()
+        onPanelDeactivated?()
+    }
+}
+
+/// Production `NSStepper` bridge.  Both visible arrow clicks and standard
+/// accessibility increment/decrement actions execute its target-action, so
+/// every mutation continues through the Design Inspector command registry.
+private struct NativeDesignOpacityStepper: NSViewRepresentable {
+    let value: Double
+    let isEnabled: Bool
+    let accessibilityValue: String
+    let accessibilityHint: String
+    let onCommit: (Double) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onCommit: onCommit) }
+
+    func makeNSView(context: Context) -> AccessibleDesignOpacityStepper {
+        let stepper = AccessibleDesignOpacityStepper(frame: .zero)
+        stepper.minValue = 0
+        stepper.maxValue = 100
+        stepper.increment = 1
+        stepper.valueWraps = false
+        stepper.autorepeat = true
+        stepper.target = context.coordinator
+        stepper.action = #selector(Coordinator.valueChanged(_:))
+        stepper.focusRingType = .default
+        stepper.setAccessibilityIdentifier("inspector.design.opacityStepper")
+        stepper.setAccessibilityLabel("Adjust opacity percent")
+        return stepper
+    }
+
+    func updateNSView(_ stepper: AccessibleDesignOpacityStepper, context: Context) {
+        context.coordinator.onCommit = onCommit
+        stepper.isEnabled = isEnabled
+        stepper.setAccessibilityValue(accessibilityValue)
+        stepper.setAccessibilityHelp(accessibilityHint)
+        if abs(stepper.doubleValue - value) > 0.000_001 {
+            context.coordinator.isSynchronizing = true
+            stepper.doubleValue = value
+            context.coordinator.isSynchronizing = false
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var onCommit: (Double) -> Void
+        var isSynchronizing = false
+
+        init(onCommit: @escaping (Double) -> Void) { self.onCommit = onCommit }
+
+        @objc func valueChanged(_ sender: NSStepper) {
+            guard !isSynchronizing else { return }
+            onCommit(sender.doubleValue)
+        }
+    }
+}
+
+private final class AccessibleDesignOpacityStepper: NSStepper {
+    override var acceptsFirstResponder: Bool { isEnabled }
+
+    override func accessibilityPerformIncrement() -> Bool {
+        adjustAccessibilityValue(by: increment)
+    }
+
+    override func accessibilityPerformDecrement() -> Bool {
+        adjustAccessibilityValue(by: -increment)
+    }
+
+    private func adjustAccessibilityValue(by delta: Double) -> Bool {
+        guard isEnabled else { return false }
+        let next = min(maxValue, max(minValue, doubleValue + delta))
+        guard abs(next - doubleValue) > 0.000_001 else { return false }
+        doubleValue = next
+        _ = sendAction(action, to: target)
+        NSAccessibility.post(element: self, notification: .valueChanged)
+        return true
     }
 }
 
@@ -1898,7 +2317,14 @@ private struct StatusBarView: View {
             Divider().frame(height: 14)
             Label(state.selectionState.isEmpty ? "No selection" : state.selectionState.count == 1 ? state.selectionSummary : "\(state.selectionState.count) selected", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                 .accessibilityLabel("Selection path: \(state.selectionPath)")
+                .accessibilityValue(state.selectionAccessibilityValue)
                 .accessibilityIdentifier("status.selectionPath")
+            if let artboardStatus = state.selectionArtboardStatus {
+                Divider().frame(height: 14)
+                Label(artboardStatus, systemImage: "rectangle.slash")
+                    .accessibilityLabel(artboardStatus)
+                    .accessibilityIdentifier("status.selection.artboard")
+            }
             if state.selectedTool == .frame || state.selectedTool == .text {
                 Divider().frame(height: 14)
                 Label(state.insertionStatus, systemImage: "plus.square.dashed")
@@ -1995,9 +2421,55 @@ private struct PreviewPlaceholderView: View {
     }
 }
 
+/// Binds a command target to the AppKit window that hosts the SwiftUI scene.
+/// FocusedObject remains the preferred route; this keyed fallback keeps native
+/// File commands available when an NSColorWell or NSStepper owns focus.
+@MainActor
+private final class WorkspaceCommandTargetRegistry {
+    static let shared = WorkspaceCommandTargetRegistry()
+
+    private final class Entry {
+        weak var state: WorkspaceShellState?
+        init(_ state: WorkspaceShellState) { self.state = state }
+    }
+
+    private var entries: [ObjectIdentifier: Entry] = [:]
+
+    func bind(_ state: WorkspaceShellState, to window: NSWindow) {
+        entries[ObjectIdentifier(window)] = Entry(state)
+    }
+
+    func unbind(_ state: WorkspaceShellState?, from window: NSWindow) {
+        let key = ObjectIdentifier(window)
+        guard let entry = entries[key] else { return }
+        guard state == nil || entry.state === state else { return }
+        entries.removeValue(forKey: key)
+    }
+
+    func activeState() -> WorkspaceShellState? {
+        entries = entries.filter { $0.value.state != nil }
+        // AppKit temporarily clears key/main window while a menu tracks. In a
+        // single-scene application there is still exactly one safe command
+        // target; returning it prevents a native inspector control from
+        // turning File commands into no-ops. Multi-window scenes remain
+        // strictly window-keyed and never guess across ambiguous targets.
+        for window in [NSApp.keyWindow, NSApp.mainWindow] {
+            if let window, let state = entries[ObjectIdentifier(window)]?.state {
+                return state
+            }
+        }
+        guard entries.count == 1 else { return nil }
+        return entries.values.first?.state
+    }
+}
+
 struct SiteForgeCommands: Commands {
     @FocusedObject private var state: WorkspaceShellState?
     @FocusedObject private var launchExperience: LaunchExperienceController?
+
+    private var commandState: WorkspaceShellState? {
+        state ?? WorkspaceCommandTargetRegistry.shared.activeState()
+    }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -2011,20 +2483,20 @@ struct SiteForgeCommands: Commands {
 
         CommandGroup(replacing: .saveItem) {
             Button("Save") {
-                guard let state else { return }
+                guard let state = commandState else { return }
                 if state.lifecycle.fileURL == nil { state.lifecycle.presentSavePanel() }
                 else { Task { _ = await state.lifecycle.save() } }
             }
             .keyboardShortcut("s", modifiers: .command)
-            .disabled(launchExperience?.isWorkspaceVisible != true || state?.lifecycle.canSave != true)
-            Button("Save As…") { state?.lifecycle.presentSavePanel() }
+            .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.lifecycle.canSave != true)
+            Button("Save As…") { commandState?.lifecycle.presentSavePanel() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
-                .disabled(launchExperience?.isWorkspaceVisible != true || state == nil)
+            .disabled(launchExperience?.isWorkspaceVisible != true || commandState == nil)
             Button("Revert to Saved") {
-                guard let state else { return }
+                guard let state = commandState else { return }
                 Task { _ = await state.lifecycle.requestRevert() }
             }
-                .disabled(launchExperience?.isWorkspaceVisible != true || state?.lifecycle.canRevert != true)
+                .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.lifecycle.canRevert != true)
         }
         CommandGroup(replacing: .undoRedo) {
             Button("Undo") {
@@ -2134,6 +2606,10 @@ struct SiteForgeCommands: Commands {
             Button("Fit Document") { state?.performViewportCommand(CanvasViewportCommand(.fitDocument)) }
                 .keyboardShortcut("1", modifiers: .command)
             Button("Fit to Canvas") { state?.performViewportCommand(CanvasViewportCommand(.fitWidth)) }
+            Toggle("Grid", isOn: Binding(
+                get: { state?.isWorldGridVisible ?? true },
+                set: { state?.isWorldGridVisible = $0 }
+            ))
             Divider()
             Button("Pan Left") { state?.performViewportCommand(CanvasViewportCommand(.panLeft)) }
                 .keyboardShortcut(.leftArrow, modifiers: .option)
@@ -2230,12 +2706,10 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.guidePreview = state.guidePreview
         view.snapResolution = state.snapResolution
         view.selectedGuideID = state.selectedGuideID
+        view.isWorldGridVisible = state.isWorldGridVisible
         view.textEditingPresentation = state.textEditingPresentation
         view.accessibilityViewportValue = state.viewportAccessibilityValue
         view.needsDisplay = true
-        let width = Double(view.bounds.width)
-        let height = Double(view.bounds.height)
-        let scale = Double(view.window?.backingScaleFactor ?? 2)
         if isKeyboardFocused,
            state.textEditingPresentation == nil,
            view.window?.firstResponder !== view {
@@ -2245,10 +2719,6 @@ private struct NativeCanvasViewport: NSViewRepresentable {
                       view.window != nil else { return }
                 view.window?.makeFirstResponder(view)
             }
-        }
-        guard width > 0, height > 0 else { return }
-        DispatchQueue.main.async {
-            state.resizeViewport(to: ViewportSize(width: width, height: height), pixelRatio: scale)
         }
     }
 
@@ -2263,6 +2733,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.guidePreview = state.guidePreview
         view.snapResolution = state.snapResolution
         view.selectedGuideID = state.selectedGuideID
+        view.isWorldGridVisible = state.isWorldGridVisible
         view.textEditingPresentation = state.textEditingPresentation
         view.onInteraction = { state.noteCanvasInteraction() }
         view.onPointerSelection = { point, modifier in state.selectCanvasPoint(point, modifier: modifier) }
@@ -2326,7 +2797,14 @@ private struct NativeCanvasViewport: NSViewRepresentable {
 private final class NativeCanvasViewportView: NSView {
     var viewportState = try! CanvasViewportState() {
         didSet {
-            applyCompositorTransformIfPossible()
+            // A raster plan is defined in one immutable viewport generation.
+            // Never visually bridge it into a different generation: doing so
+            // can place the tile surface at a different rect than the live
+            // selection/hit-test/accessibility geometry.  The model prepares
+            // the matching plan asynchronously; until it arrives, keep the
+            // editor honest by showing no authored raster for that generation.
+            discardRasterIfViewportGenerationChanged()
+            applyArtboardClipMask()
             rebuildOverlay()
             updateTextEditor()
             if let renderPlan { rebuildAccessibility(renderPlan) }
@@ -2350,6 +2828,7 @@ private final class NativeCanvasViewportView: NSView {
     var authoredGuides: [AuthoredGuide] = [] { didSet { rebuildOverlay() } }
     var guidePreview: GuidePreview? { didSet { rebuildOverlay() } }
     var snapResolution: SnapResolution? { didSet { rebuildOverlay() } }
+    var isWorldGridVisible = true
     var selectedGuideID: GuideID? { didSet { rebuildOverlay() } }
     var textEditingPresentation: InlineTextEditorPresentation? {
         didSet { updateTextEditor() }
@@ -2385,9 +2864,24 @@ private final class NativeCanvasViewportView: NSView {
     var onReset: (() -> Void)?
     var onTabTraversal: ((ShellFocusDirection) -> Void)?
     private let contentContainer = CALayer()
+    // Text is composed from the same resolved viewport rect as tiles, but it
+    // is kept in one non-tiled authored subtree. This avoids drawing the same
+    // line fragment through two independently flipped tile contexts when a
+    // 24-point text frame crosses a tile edge.
+    private let textContainer = CALayer()
     private let overlayContainer = CALayer()
     private var rasterViewportState: CanvasViewportState?
     private var virtualAccessibilityElements: [NSAccessibilityElement] = []
+    /// Editor-only selection context mirrors the visible badge.  It is a
+    /// real accessibility surface (rather than a UI-test hook), retaining
+    /// the complete context when a narrow artboard uses the compact badge.
+    private var selectionContextAccessibilityElements: [NSAccessibilityElement] = []
+    private struct SelectionContextBadge {
+        let objectID: NodeID
+        let fullText: String
+        let placement: CanvasSelectionBadgePlacement
+    }
+    private var selectionContextBadges: [SelectionContextBadge] = []
     private var transformHandleViews: [String: TransformHandleControlView] = [:]
     private var focusedAccessibilityObjectID: NodeID?
     private var pointerTrackingArea: NSTrackingArea?
@@ -2400,17 +2894,22 @@ private final class NativeCanvasViewportView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         contentContainer.name = "renderer.authored-content"
+        textContainer.name = "renderer.authored-text"
         overlayContainer.name = "renderer.editor-overlays"
         // The viewport's coordinate contract is top-left-origin. CALayer
         // subtrees do not inherit NSView.isFlipped, so declare it on each
         // owned container to keep tiles, overlays, clipping, and hit-test
         // geometry in the same coordinate system as CanvasViewportState.
         contentContainer.isGeometryFlipped = true
+        textContainer.isGeometryFlipped = true
         overlayContainer.isGeometryFlipped = true
         contentContainer.masksToBounds = true
+        textContainer.masksToBounds = true
         overlayContainer.masksToBounds = true
         layer?.addSublayer(contentContainer)
+        layer?.addSublayer(textContainer)
         layer?.addSublayer(overlayContainer)
+        applyArtboardClipMask()
     }
 
     required init?(coder: NSCoder) { nil }
@@ -2424,7 +2923,7 @@ private final class NativeCanvasViewportView: NSView {
         "\(accessibilityViewportValue); rendered objects \(renderPlan?.authoredObjects.count ?? 0)"
     }
     override func accessibilityChildren() -> [Any]? {
-        virtualAccessibilityElements + TransformHandle.allCases.compactMap {
+        virtualAccessibilityElements + selectionContextAccessibilityElements + TransformHandle.allCases.compactMap {
             transformHandleViews[$0.rawValue]
         } + [inlineTextView].compactMap { $0 }
     }
@@ -2507,8 +3006,10 @@ private final class NativeCanvasViewportView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         contentContainer.frame = bounds
+        textContainer.frame = bounds
         overlayContainer.frame = bounds
         CATransaction.commit()
+        applyArtboardClipMask()
         updateTextEditor()
         notifyResize()
     }
@@ -2686,6 +3187,7 @@ private final class NativeCanvasViewportView: NSView {
         defer { context.restoreGState() }
 
         let transform = viewportState.transform
+        if isWorldGridVisible { drawWorldGrid(in: context) }
         let artboardOrigin = (try? transform.worldToViewport(viewportState.contentBounds.origin))
             ?? ViewportPoint(x: 0, y: 0)
         let artboard = CGRect(
@@ -2694,18 +3196,64 @@ private final class NativeCanvasViewportView: NSView {
             width: viewportState.contentBounds.size.width * viewportState.zoom.value,
             height: viewportState.contentBounds.size.height * viewportState.zoom.value
         )
-        context.setShadow(offset: CGSize(width: 0, height: 2), blur: 8, color: NSColor.black.withAlphaComponent(0.12).cgColor)
-        context.setFillColor(NSColor.textBackgroundColor.cgColor)
-        context.fill(artboard)
-        context.setShadow(offset: .zero, blur: 0)
-        context.setStrokeColor(NSColor.separatorColor.cgColor)
-        context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
-        context.stroke(artboard)
+        // The page/artboard is an editor decoration backed by the preset's
+        // actual content bounds. Give it a native surface that is visibly
+        // distinct from the darker infinite pasteboard without pretending an
+        // authored Frame/Section is the page itself.
+        if artboard.origin.x.isFinite, artboard.origin.y.isFinite,
+           artboard.width.isFinite, artboard.height.isFinite,
+           artboard.width > 0, artboard.height > 0 {
+            context.setShadow(offset: CGSize(width: 0, height: 2), blur: 8, color: NSColor.black.withAlphaComponent(0.30).cgColor)
+            // The artboard deliberately has more contrast than the
+            // pasteboard. It remains an editor decoration backed by the
+            // preset's actual content bounds, not an authored rectangle.
+            let artboardSurface = NSColor.windowBackgroundColor
+                .blended(withFraction: 0.16, of: .labelColor) ?? .windowBackgroundColor
+            context.setFillColor(artboardSurface.cgColor)
+            context.fill(artboard)
+            context.setShadow(offset: .zero, blur: 0)
+            context.setStrokeColor(NSColor.separatorColor.withAlphaComponent(0.98).cgColor)
+            context.setLineWidth(2 / max(1, viewportState.pixelRatio.value))
+            context.stroke(artboard)
+        }
         drawRulersAndGuides(in: context)
-        if window?.firstResponder === self {
+        if window?.firstResponder === self,
+           let focusRect = CanvasViewportDrawGeometry.inset(bounds, dx: 2, dy: 2) {
             context.setStrokeColor(NSColor.keyboardFocusIndicatorColor.cgColor)
             context.setLineWidth(3)
-            context.stroke(bounds.insetBy(dx: 2, dy: 2))
+            context.stroke(focusRect)
+        }
+    }
+
+    /// Editor-only, world-anchored grid. It is deliberately drawn before the
+    /// page/artboard surface and has no canonical, hit-test, or export role.
+    private func drawWorldGrid(in context: CGContext) {
+        let zoom = viewportState.zoom.value
+        let minor = CanvasWorldGridPolicy.minorInterval(for: zoom)
+        let major = CanvasWorldGridPolicy.majorInterval(for: zoom)
+        let visible = viewportState.visibleWorldRect
+        let scale = viewportState.pixelRatio.value
+        func aligned(_ value: Double) -> CGFloat { CGFloat(CanvasWorldGridPolicy.deviceAligned(value, scale: scale)) }
+        context.saveGState(); defer { context.restoreGState() }
+        var x = floor(visible.minX / minor) * minor
+        while x <= visible.maxX {
+            if let point = try? viewportState.transform.worldToViewport(.init(x: x, y: 0)) {
+                let isMajor = abs((x / major).rounded() - x / major) < 0.000_001
+                context.setStrokeColor(NSColor.separatorColor.withAlphaComponent(isMajor ? 0.28 : 0.13).cgColor)
+                context.setLineWidth(1 / scale)
+                context.move(to: .init(x: aligned(point.x), y: 0)); context.addLine(to: .init(x: aligned(point.x), y: bounds.height)); context.strokePath()
+            }
+            x += minor
+        }
+        var y = floor(visible.minY / minor) * minor
+        while y <= visible.maxY {
+            if let point = try? viewportState.transform.worldToViewport(.init(x: 0, y: y)) {
+                let isMajor = abs((y / major).rounded() - y / major) < 0.000_001
+                context.setStrokeColor(NSColor.separatorColor.withAlphaComponent(isMajor ? 0.28 : 0.13).cgColor)
+                context.setLineWidth(1 / scale)
+                context.move(to: .init(x: 0, y: aligned(point.y))); context.addLine(to: .init(x: bounds.width, y: aligned(point.y))); context.strokePath()
+            }
+            y += minor
         }
     }
 
@@ -2840,17 +3388,42 @@ private final class NativeCanvasViewportView: NSView {
 
     private func adoptRenderPlan() {
         guard let plan = renderPlan else { return }
-        if plan.invalidation == .compositorOnly, rasterViewportState != nil {
+        // SwiftUI can deliver the state values in separate reconciliation
+        // passes.  A plan from an earlier pan/zoom/fit/preset generation must
+        // not be transformed to look current: the tile's local origin would
+        // no longer share the exact world-to-viewport rect used by overlays.
+        // Drop it and wait for the already-scheduled matching generation.
+        guard plan.viewport == viewportState else {
+            discardRaster()
+            overlayContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
+            rebuildAccessibility(plan)
+            return
+        }
+        // A compositor-only *scene* invalidation still carries a distinct
+        // viewport snapshot when pan, zoom, Fit, or a preset changed. Reusing
+        // the old tiles in that case made the content subtree bridge two
+        // viewport generations while overlays used the live generation. That
+        // could leave an old Frame raster visible after Fit. Only retain tiles
+        // when both the authored scene and their immutable viewport snapshot
+        // are exactly unchanged.
+        if plan.invalidation == .compositorOnly, rasterViewportState == plan.viewport {
             applyCompositorTransformIfPossible()
             rebuildAccessibility(plan)
             return
         }
         let objectMap = Dictionary(uniqueKeysWithValues: plan.authoredObjects.map { ($0.id, $0) })
+        // Tile membership, tile origins, and object raster positions are all
+        // defined in the plan's immutable viewport generation. The view may
+        // already have received a newer pan/zoom/resize when this asynchronous
+        // plan arrives; compose from this snapshot to the live viewport only
+        // after the authored layers have been built.
+        let rasterViewport = plan.viewport
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         contentContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        textContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
         for tile in plan.tiles {
-            let scale = viewportState.pixelRatio.value
+            let scale = rasterViewport.pixelRatio.value
             let tileLayer = CanvasContentTileLayer()
             tileLayer.name = "renderer.tile.\(tile.id.column).\(tile.id.row)"
             tileLayer.contentsScale = scale
@@ -2860,16 +3433,59 @@ private final class NativeCanvasViewportView: NSView {
                 width: tile.deviceFrame.size.width / scale,
                 height: tile.deviceFrame.size.height / scale
             )
-            tileLayer.viewportState = viewportState
+            tileLayer.viewportState = rasterViewport
             tileLayer.objects = tile.objectIDs.compactMap { objectMap[$0] }
             tileLayer.tileOrigin = tileLayer.frame.origin
             tileLayer.setNeedsDisplay()
             contentContainer.addSublayer(tileLayer)
         }
+        for object in plan.authoredObjects where object.style == .textPlaceholder && object.isVisible {
+            guard let text = object.plainText, !text.isEmpty,
+                  let origin = try? rasterViewport.transform.worldToViewport(object.frame.origin) else { continue }
+            let layout = CanvasTextLayout(
+                viewportObjectRect: CGRect(
+                    x: origin.x, y: origin.y,
+                    width: object.frame.size.width * rasterViewport.zoom.value,
+                    height: object.frame.size.height * rasterViewport.zoom.value
+                ),
+                zoom: rasterViewport.zoom.value,
+                text: text
+            )
+            let textLayer = CATextLayer()
+            textLayer.name = "renderer.authored-text.\(object.id.description)"
+            textLayer.isGeometryFlipped = true
+            textLayer.frame = layout.glyphBounds
+            textLayer.string = text
+            textLayer.font = NSFont.systemFont(ofSize: layout.fontSize)
+            textLayer.fontSize = layout.fontSize
+            textLayer.foregroundColor = NSColor.labelColor.cgColor
+            textLayer.alignmentMode = .left
+            textLayer.truncationMode = .end
+            textLayer.isWrapped = false
+            textLayer.contentsScale = Double(window?.backingScaleFactor ?? CGFloat(rasterViewport.pixelRatio.value))
+            textContainer.addSublayer(textLayer)
+        }
         contentContainer.setAffineTransform(.identity)
-        rasterViewportState = viewportState
+        textContainer.setAffineTransform(.identity)
+        rasterViewportState = rasterViewport
         rebuildOverlay()
         rebuildAccessibility(plan)
+        CATransaction.commit()
+    }
+
+    private func discardRasterIfViewportGenerationChanged() {
+        guard let rasterViewportState, rasterViewportState != viewportState else { return }
+        discardRaster()
+    }
+
+    private func discardRaster() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        contentContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        textContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        contentContainer.setAffineTransform(.identity)
+        textContainer.setAffineTransform(.identity)
+        rasterViewportState = nil
         CATransaction.commit()
     }
 
@@ -2886,13 +3502,77 @@ private final class NativeCanvasViewportView: NSView {
             tx: (raster.worldOrigin.x - viewportState.worldOrigin.x) * viewportState.zoom.value,
             ty: (raster.worldOrigin.y - viewportState.worldOrigin.y) * viewportState.zoom.value
         ))
+        textContainer.setAffineTransform(CGAffineTransform(
+            a: ratio, b: 0, c: 0, d: ratio,
+            tx: (raster.worldOrigin.x - viewportState.worldOrigin.x) * viewportState.zoom.value,
+            ty: (raster.worldOrigin.y - viewportState.worldOrigin.y) * viewportState.zoom.value
+        ))
+        CATransaction.commit()
+    }
+
+    /// Authored layers are always clipped by the live preset artboard. The
+    /// renderer plan may briefly be from an older viewport generation during
+    /// an asynchronous preset adoption; applying this single shared mask
+    /// prevents those stale tiles or text layers escaping into pasteboard
+    /// space. Editor overlays use their own resolved intersection contract.
+    private func applyArtboardClipMask() {
+        guard bounds.width > 0, bounds.height > 0,
+              let origin = try? viewportState.transform.worldToViewport(viewportState.contentBounds.origin) else {
+            contentContainer.mask = nil
+            textContainer.mask = nil
+            return
+        }
+        let rect = CGRect(
+            x: origin.x,
+            y: origin.y,
+            width: viewportState.contentBounds.size.width * viewportState.zoom.value,
+            height: viewportState.contentBounds.size.height * viewportState.zoom.value
+        )
+        guard rect.origin.x.isFinite, rect.origin.y.isFinite,
+              rect.width.isFinite, rect.height.isFinite,
+              rect.width > 0, rect.height > 0 else {
+            contentContainer.mask = nil
+            textContainer.mask = nil
+            return
+        }
+        func makeMask() -> CAShapeLayer {
+            let mask = CAShapeLayer()
+            mask.frame = bounds
+            mask.path = CGPath(rect: rect, transform: nil)
+            mask.fillColor = NSColor.white.cgColor
+            return mask
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        contentContainer.mask = makeMask()
+        textContainer.mask = makeMask()
         CATransaction.commit()
     }
 
     private func rebuildOverlay() {
         overlayContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        selectionContextBadges = []
         var retainedHandleNames: Set<String> = []
-        if let selectionOverlayPlan {
+        let artboardRect: CGRect? = {
+            guard let origin = try? viewportState.transform.worldToViewport(
+                viewportState.contentBounds.origin
+            ) else { return nil }
+            return CGRect(
+                x: origin.x,
+                y: origin.y,
+                width: viewportState.contentBounds.size.width * viewportState.zoom.value,
+                height: viewportState.contentBounds.size.height * viewportState.zoom.value
+            )
+        }()
+        // Selection is canonical and survives a breakpoint change, but its
+        // visual plan is tied to one render/viewport generation.  Do not
+        // reinterpret a Desktop overlay against Tablet/Mobile geometry while
+        // the matching renderer plan is still being adopted.
+        let hasCurrentSelectionGeometry = selectionOverlayPlan.map { overlay in
+            guard let renderPlan else { return false }
+            return overlay.identity == renderPlan.identity && renderPlan.viewport == viewportState
+        } ?? false
+        if let selectionOverlayPlan, hasCurrentSelectionGeometry {
             for overlay in selectionOverlayPlan.overlays {
                 guard let origin = try? viewportState.transform.worldToViewport(overlay.frame.origin) else { continue }
                 let layer = CAShapeLayer()
@@ -2903,31 +3583,54 @@ private final class NativeCanvasViewportView: NSView {
                     width: overlay.frame.size.width * viewportState.zoom.value,
                     height: overlay.frame.size.height * viewportState.zoom.value
                 )
-                layer.path = CGPath(rect: layer.bounds.insetBy(dx: 1, dy: 1), transform: nil)
+                // Rendered authored bounds and selection both consume the
+                // same resolved viewport rect. A centered stroke may extend
+                // half a device pixel, but selection must not shrink that
+                // contract with an independent inset.
+                layer.path = CGPath(rect: layer.bounds, transform: nil)
                 layer.fillColor = nil
                 layer.strokeColor = NSColor.controlAccentColor.cgColor
                 layer.lineWidth = overlay.kind.contains("primary") ? 3 : 1.5
                 if overlay.kind.contains("locked") { layer.lineDashPattern = [4, 3] }
                 overlayContainer.addSublayer(layer)
-                if let label = overlay.label {
+                if let label = overlay.label, let artboardRect {
                     let labelLayer = CATextLayer()
                     labelLayer.name = "renderer.overlay.selection-context.\(overlay.objectID.description)"
-                    labelLayer.string = label
-                    labelLayer.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+                    let badgeFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+                    labelLayer.font = badgeFont
                     labelLayer.fontSize = 11
                     labelLayer.foregroundColor = NSColor.white.cgColor
                     labelLayer.backgroundColor = NSColor.controlAccentColor.cgColor
                     labelLayer.cornerRadius = 4
                     labelLayer.alignmentMode = .center
+                    // The placement must reflect the real font advance, and
+                    // the layer must remain a final artboard-safe boundary if
+                    // a future font/rendering change differs by a fraction.
+                    labelLayer.truncationMode = .end
+                    labelLayer.masksToBounds = true
                     labelLayer.contentsScale = window?.backingScaleFactor ?? 2
-                    let width = min(max(120, CGFloat(label.count) * 6.4 + 12), max(120, bounds.width - layer.frame.minX - 4))
-                    labelLayer.frame = CGRect(
-                        x: layer.frame.minX,
-                        y: max(0, layer.frame.minY - 22),
-                        width: width,
-                        height: 18
+                    let compact = label.split(separator: "·").prefix(2)
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .joined(separator: " · ")
+                    let attributes: [NSAttributedString.Key: Any] = [.font: badgeFont]
+                    let placement = CanvasSelectionChromeLayout.badgePlacement(
+                        selectionRect: layer.frame,
+                        artboardRect: artboardRect,
+                        fullText: label,
+                        fullWidth: max(120, (label as NSString).size(withAttributes: attributes).width + 12),
+                        compactText: compact,
+                        compactWidth: max(64, (compact as NSString).size(withAttributes: attributes).width + 12)
                     )
-                    overlayContainer.addSublayer(labelLayer)
+                    if let placement {
+                        labelLayer.string = placement.text
+                        labelLayer.frame = placement.frame
+                        overlayContainer.addSublayer(labelLayer)
+                        selectionContextBadges.append(.init(
+                            objectID: overlay.objectID,
+                            fullText: label,
+                            placement: placement
+                        ))
+                    }
                 }
             }
         }
@@ -2941,7 +3644,7 @@ private final class NativeCanvasViewportView: NSView {
                 width: preview.frame.size.width * viewportState.zoom.value,
                 height: preview.frame.size.height * viewportState.zoom.value
             )
-            layer.path = CGPath(rect: layer.bounds.insetBy(dx: 1, dy: 1), transform: nil)
+            layer.path = CGPath(rect: CanvasViewportDrawGeometry.inset(layer.bounds, dx: 1, dy: 1) ?? .zero, transform: nil)
             layer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
             layer.strokeColor = NSColor.controlAccentColor.cgColor
             layer.lineWidth = 2
@@ -2960,7 +3663,7 @@ private final class NativeCanvasViewportView: NSView {
                 width: overlay.frame.size.width * viewportState.zoom.value,
                 height: overlay.frame.size.height * viewportState.zoom.value
             )
-            layer.path = CGPath(rect: layer.bounds.insetBy(dx: 0.5, dy: 0.5), transform: nil)
+            layer.path = CGPath(rect: CanvasViewportDrawGeometry.inset(layer.bounds, dx: 0.5, dy: 0.5) ?? .zero, transform: nil)
             layer.strokeColor = NSColor.controlAccentColor.cgColor
             if overlay.kind.hasPrefix("transform-handle") {
                 layer.fillColor = NSColor.controlBackgroundColor.cgColor
@@ -2987,7 +3690,7 @@ private final class NativeCanvasViewportView: NSView {
         let focus = CAShapeLayer()
         focus.name = "renderer.overlay.focus"
         focus.frame = bounds
-        focus.path = CGPath(rect: bounds.insetBy(dx: 2, dy: 2), transform: nil)
+        focus.path = CGPath(rect: CanvasViewportDrawGeometry.inset(bounds, dx: 2, dy: 2) ?? .zero, transform: nil)
         focus.fillColor = nil
         focus.strokeColor = NSColor.keyboardFocusIndicatorColor.cgColor
         focus.lineWidth = 3
@@ -2995,14 +3698,28 @@ private final class NativeCanvasViewportView: NSView {
         overlayContainer.addSublayer(focus)
     }
 
+
     private func rebuildAccessibility(_ plan: CanvasRenderPlan) {
+        // Off-artboard objects are deliberately virtualized.  Equally, an
+        // older render plan must not expose an accessibility frame in the
+        // live viewport generation while its raster is withheld.
+        guard plan.viewport == viewportState else {
+            virtualAccessibilityElements = []
+            selectionContextAccessibilityElements = []
+            focusedAccessibilityObjectID = nil
+            NSAccessibility.post(element: self, notification: .layoutChanged)
+            return
+        }
         let repairedFocus = CanvasAccessibilityFocusPolicy.repairedFocus(
             previousObjectID: focusedAccessibilityObjectID,
             elements: plan.accessibilityElements
         )
         let focusChanged = repairedFocus != focusedAccessibilityObjectID
         focusedAccessibilityObjectID = repairedFocus
-        let selectedIDs = Set(selectionOverlayPlan?.overlays.map(\.objectID) ?? [])
+        let selectedOverlays = Dictionary(
+            uniqueKeysWithValues: (selectionOverlayPlan?.overlays ?? []).map { ($0.objectID, $0) }
+        )
+        let selectedIDs = Set(selectedOverlays.keys)
         virtualAccessibilityElements = plan.accessibilityElements.map { item in
             let local = CGPoint(x: item.frame.origin.x, y: item.frame.origin.y)
             let screenOrigin = window?.convertPoint(toScreen: convert(local, to: nil)) ?? .zero
@@ -3015,9 +3732,35 @@ private final class NativeCanvasViewportView: NSView {
                 height: item.frame.size.height
             ))
             element.setAccessibilityLabel(item.label)
+            if let context = selectedOverlays[item.objectID]?.label {
+                element.setAccessibilityValue(context)
+                element.setAccessibilityHelp("Selection context: \(context)")
+            }
             element.setAccessibilityParent(self)
             element.setAccessibilityIdentifier("canvas.object.\(item.objectID.description)")
             element.setAccessibilitySelected(selectedIDs.contains(item.objectID))
+            return element
+        }
+        selectionContextAccessibilityElements = selectionContextBadges.map { badge in
+            let local = badge.placement.frame.origin
+            let screenOrigin = window?.convertPoint(toScreen: convert(local, to: nil)) ?? .zero
+            let element = NSAccessibilityElement()
+            element.setAccessibilityRole(.staticText)
+            element.setAccessibilityFrame(NSRect(
+                x: screenOrigin.x,
+                y: screenOrigin.y,
+                width: badge.placement.frame.width,
+                height: badge.placement.frame.height
+            ))
+            element.setAccessibilityLabel(badge.fullText)
+            element.setAccessibilityValue(badge.placement.text)
+            element.setAccessibilityHelp(
+                badge.placement.usesCompactText
+                    ? "Compact selection context badge. Full context: \(badge.fullText)"
+                    : "Selection context badge."
+            )
+            element.setAccessibilityParent(self)
+            element.setAccessibilityIdentifier("canvas.selection.context.\(badge.objectID.description)")
             return element
         }
         NSAccessibility.post(element: self, notification: .layoutChanged)
@@ -3301,6 +4044,16 @@ final class CanvasContentTileLayer: CALayer {
 
     override func draw(in context: CGContext) {
         guard let viewportState else { return }
+        // `CanvasViewportState`, tile frames, overlays, event conversion, and
+        // accessibility all use a top-left/Y-down viewport. Core Animation
+        // hands tile drawing a bottom-left Core Graphics context, so establish
+        // the one boundary conversion here before any authored rect is drawn.
+        // Every rect below is therefore the same local viewport rect used by
+        // selection and hit testing; tile origin is applied exactly once.
+        context.saveGState()
+        context.translateBy(x: 0, y: bounds.height)
+        context.scaleBy(x: 1, y: -1)
+        defer { context.restoreGState() }
         for object in objects where object.isVisible {
             guard let origin = try? viewportState.transform.worldToViewport(object.frame.origin) else { continue }
             let rect = CGRect(
@@ -3330,7 +4083,7 @@ final class CanvasContentTileLayer: CALayer {
                 continue
             }
             context.clip(to: effectiveClip)
-            let color: NSColor = switch object.style {
+            let fallback: NSColor = switch object.style {
             case .canvas: .underPageBackgroundColor
             case .page: .controlAccentColor.withAlphaComponent(0.16)
             case .container: .controlAccentColor.withAlphaComponent(0.28)
@@ -3341,26 +4094,33 @@ final class CanvasContentTileLayer: CALayer {
             case .imagePlaceholder: .systemPurple.withAlphaComponent(0.22)
             case .textPlaceholder: .labelColor.withAlphaComponent(0.12)
             }
+            let color: NSColor
+            if let rgba = object.fillRGBA, rgba.count == 4 {
+                color = NSColor(calibratedRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3] * object.opacity)
+            } else {
+                color = fallback.withAlphaComponent(fallback.alphaComponent * object.opacity)
+            }
             context.setFillColor(color.cgColor)
             context.fill(rect)
-            context.setStrokeColor(
-                (object.style == .frameSurface
-                    ? NSColor.separatorColor.withAlphaComponent(0.85)
-                    : NSColor.separatorColor).cgColor
-            )
+            let baseStroke = object.style == .frameSurface
+                ? NSColor.separatorColor.withAlphaComponent(0.85)
+                : NSColor.separatorColor
+            context.setStrokeColor(baseStroke.withAlphaComponent(baseStroke.alphaComponent * object.opacity).cgColor)
             context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
             context.stroke(rect)
             if [.frameSurface, .sectionSurface, .stackSurface, .gridSurface].contains(object.style), let name = object.displayName {
-                drawFrameName(name, in: rect, zoom: viewportState.zoom.value, context: context)
-            }
-            if object.style == .textPlaceholder, let text = object.plainText, !text.isEmpty {
-                drawCommittedPlainText(
-                    text,
+                drawFrameName(
+                    name,
                     in: rect,
                     zoom: viewportState.zoom.value,
+                    backgroundColor: color,
                     context: context
                 )
             }
+            // Plain text is composed once by `textContainer` from the same
+            // resolved viewport rect. Tile layers deliberately raster only
+            // surfaces so a line crossing a tile boundary cannot duplicate,
+            // flip, or drift relative to its selection frame.
             context.restoreGState()
         }
     }
@@ -3390,42 +4150,48 @@ final class CanvasContentTileLayer: CALayer {
         _ name: String,
         in rect: CGRect,
         zoom: Double,
+        backgroundColor: NSColor,
         context: CGContext
     ) {
         let labelRect = rect.insetBy(dx: max(6, 8 * zoom), dy: max(5, 7 * zoom))
         guard labelRect.width > 20, labelRect.height > 12 else { return }
+        let deviceColor = backgroundColor.usingColorSpace(.deviceRGB) ?? backgroundColor
+        let luminance = 0.2126 * deviceColor.redComponent
+            + 0.7152 * deviceColor.greenComponent
+            + 0.0722 * deviceColor.blueComponent
+        // This label is native-editor chrome rather than a document property.
+        // Choose its contrast from the resolved surface so it remains useful
+        // with both the default pale Frame and authored dark fills.
+        let foreground = luminance > 0.52
+            ? NSColor.black.withAlphaComponent(0.74)
+            : NSColor.white.withAlphaComponent(0.88)
         let attributed = NSAttributedString(
             string: name,
             attributes: [
                 .font: NSFont.systemFont(ofSize: max(10, 12 * zoom), weight: .medium),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: foreground,
             ]
         )
         drawAppKitText(attributed, in: labelRect, context: context)
     }
 
-    /// Converts AppKit text drawing once at the tile boundary. The canonical
-    /// world, viewport, device, Core Animation, overlay, event, hit-test, and
-    /// snapshot convention is top-left origin with Y increasing down. A tile
-    /// CGContext is Y-up, so this helper supplies the exact inverse transform
-    /// and translated draw rectangle required for upright glyphs at their
-    /// authored top-left coordinates. Individual authored labels never apply
-    /// bespoke rotations or compensating transforms.
+    /// Converts AppKit text drawing at the tile boundary. The canonical world,
+    /// viewport, device, Core Animation, overlay, event, hit-test, and
+    /// snapshot convention is top-left origin with Y increasing down.
     private func drawAppKitText(_ attributed: NSAttributedString, in rect: CGRect, context: CGContext) {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         context.saveGState()
         defer { context.restoreGState() }
-        context.translateBy(x: 0, y: bounds.height)
-        context.scaleBy(x: 1, y: -1)
-        let drawingRect = CanvasTileTextCoordinateSpace.drawingRect(for: rect, in: bounds)
-        // The outer authored clip was installed before converting this
-        // CoreGraphics context. Reinstall its tile-local counterpart after
-        // conversion so glyph antialiasing never escapes the canonical frame.
-        context.clip(to: drawingRect)
+        // The enclosing tile already converted Core Graphics to SiteForge's
+        // top-left coordinate space. AppKit must see that pre-flipped Core
+        // Graphics basis (rather than apply a second flipped-view contract),
+        // otherwise frame labels are painted upside down while their surface
+        // and selection outline remain correct.
+        context.clip(to: rect)
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
         attributed.draw(
-            with: drawingRect,
+            with: rect,
             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]
         )
     }

@@ -55,7 +55,12 @@ and Components are explicit accessible unavailable destinations until their
 separate storage/definition work exists.
 
 The inspector order is Design, Layout, Content, Interactions, and
-Accessibility. Design is a read-only appearance summary; Layout retains the
+Accessibility. Design provides bounded native `NSColorWell`/standard Colors
+panel, hexadecimal RGBA, and precise percentage `NSStepper` controls for
+applicable structural containers; their picker and text drafts are editor-only
+until a completed transaction. Mixed selection names skipped incompatible
+objects, while all-incompatible selection disables the controls with its
+reason. Layout retains the
 bounded geometry, transform, guide, and snapping controls. For applicable
 Frame, Text, Section, Stack, and Grid selection, Layout exposes native
 locale-aware X, Y, Width, and Height fields. Draft strings are editor-only;
@@ -93,13 +98,35 @@ fields, interaction controls, command, history, package, or canonical mutation.
   tile drawing boundary performs the one required Core Graphics Y-up → canvas
   Y-down conversion before AppKit draws text; individual labels never rotate
   or compensate for a coordinate mismatch.
+- **Canvas composition and adoption:** the editor draws, from back to front,
+  pasteboard, optional world grid, page/artboard surface and boundary,
+  authored raster content, guides, then selection/focus/text-editor overlays.
+  The grid and page decoration are editor-only. Each authored tile subtree is
+  bound to the immutable viewport snapshot that allocated its tiles; a
+  compositor-only reuse is permitted only when that snapshot is unchanged.
+  A newer preset, pan, zoom, resize, or Fit generation never transforms an
+  older raster into place: it withholds that raster until the matching plan
+  adopts, then presents raster, selection/transform chrome, and accessibility
+  from the same snapshot. Artboard clipping applies to authored pixels and
+  all editor object chrome; a selected off-artboard node retains its canonical
+  identity but has no ghost outline or handles on pasteboard space.
+- **Selection context chrome:** the selection badge, handles, hover chrome,
+  and focus chrome are editor-only and obey the active artboard clip. A badge
+  uses its actual native font measurement to fit within that boundary; it is
+  repositioned into the visible intersection, then switches to a compact
+  readable form only when necessary. Its complete NodeID-derived context is
+  still available through the real accessibility label and help. Editor Frame
+  names choose contrasting foregrounds against their resolved surface; none
+  of this chrome is authored or preview/export-facing content.
 - **Initial pasteboard policy:** a fresh or newly adopted document centers its
-  noncanonical pasteboard at the existing 100% initial zoom only after the
-  AppKit viewport has a usable size. Resize and pane changes retain that
-  centered origin until an explicit pan or viewport
-  command. This never changes authored world coordinates. The empty-state
-  message is centered over that viewport with a bounded, non-hit-testable
-  footprint, so blank canvas input remains available outside its visible card.
+  noncanonical viewport with Fit Document after AppKit reports a usable size.
+  The fit leaves a 48-point pasteboard/grid gutter around the active artboard
+  so the page boundary is visible at Desktop, Tablet, and Mobile. Resize and
+  pane changes preserve that fitted policy until an explicit pan or viewport
+  command. Preset changes refit and recenter the active artboard without
+  changing authored world coordinates. The empty-state message is centered
+  over that viewport with a bounded, non-hit-testable footprint, so blank
+  canvas input remains available outside its visible card.
 - **Plain-text geometry:** `CanvasTextLayout` is the shared native contract for
   committed tile text and the inline editor. It derives the exact viewport
   object rectangle, scaled font, insets, line fragment, and vertical glyph

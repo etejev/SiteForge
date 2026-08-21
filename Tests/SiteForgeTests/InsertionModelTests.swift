@@ -308,6 +308,11 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(state.canvasRenderPlan?.identity.revision, state.documentSession.document.revision)
         XCTAssertTrue(state.layerTargets.contains { $0.id == frame })
         XCTAssertTrue(state.canUndo)
+        // A named empty-canvas action is a one-shot transaction. It must not
+        // leave a stale insertion draft that can paint a second dashed ghost
+        // rectangle on a later pointer move.
+        XCTAssertEqual(state.selectedTool, .select)
+        XCTAssertEqual(state.insertionSession.phase, .inactive)
         var diagnostics = await state.insertionDiagnostics.snapshot()
         for _ in 0..<200 where diagnostics.isEmpty {
             await Task.yield()

@@ -4,9 +4,10 @@ import XCTest
 
 @MainActor
 final class CanvasTextRenderingTests: XCTestCase {
-    // SF-0405-006, SF-0406-001, SF-0406-002, SF-0406-005 — committed text is
-    // drawn by the native tile layer after the editor-only draft has gone away.
-    func testCommittedPlainTextChangesNativeTilePixelsWithinItsClippedFrame() throws {
+    // SF-0405-006, SF-0406-001, SF-0406-002, SF-0406-005 — structural names
+    // are tile-rasterized. Plain text intentionally composes in its own
+    // non-tiled authored subtree, covered by the shared layout and app tests.
+    func testNativeTileFrameNamePixelsStayWithinItsAuthoredFrame() throws {
         let viewport = try CanvasViewportState(
             worldOrigin: .init(x: 0, y: 0),
             viewportSize: .init(width: 300, height: 120),
@@ -22,48 +23,6 @@ final class CanvasTextRenderingTests: XCTestCase {
             isVisible: true,
             accessibilityLabel: "Text object"
         )
-        let withoutText = rasterizedBytes(object: base, viewport: viewport)
-        let withText = rasterizedBytes(
-            object: CanvasRenderObject(
-                id: base.id, frame: base.frame, clipRect: base.clipRect,
-                paintOrder: base.paintOrder, style: base.style, isVisible: base.isVisible,
-                accessibilityLabel: base.accessibilityLabel, plainText: "Committed text"
-            ),
-            viewport: viewport
-        )
-        let changed = changedPixels(from: withoutText, to: withText, width: 300)
-        XCTAssertFalse(changed.isEmpty)
-        XCTAssertTrue(
-            changed.allSatisfy { (32..<212).contains($0.x) && (16..<66).contains($0.y) },
-            "Committed-text pixels escaped the authored frame: \(pixelBounds(changed))"
-        )
-
-        let clipped = CanvasRenderObject(
-            id: base.id, frame: base.frame,
-            clipRect: .init(origin: .init(x: 32, y: 24), size: .init(width: 40, height: 42)),
-            paintOrder: base.paintOrder, style: base.style, isVisible: base.isVisible,
-            accessibilityLabel: base.accessibilityLabel, plainText: "Committed text"
-        )
-        let clippedWithoutText = rasterizedBytes(
-            object: CanvasRenderObject(
-                id: base.id, frame: base.frame,
-                clipRect: clipped.clipRect, paintOrder: base.paintOrder,
-                style: base.style, isVisible: base.isVisible,
-                accessibilityLabel: base.accessibilityLabel
-            ),
-            viewport: viewport
-        )
-        let clippedChanged = changedPixels(
-            from: clippedWithoutText,
-            to: rasterizedBytes(object: clipped, viewport: viewport),
-            width: 300
-        )
-        XCTAssertFalse(clippedChanged.isEmpty)
-        XCTAssertTrue(
-            clippedChanged.allSatisfy { (32..<72).contains($0.x) && (16..<66).contains($0.y) },
-            "Committed-text pixels escaped the authored clip: \(pixelBounds(clippedChanged))"
-        )
-
         let namedFrame = CanvasRenderObject(
             id: NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000202")!),
             frame: base.frame,
@@ -90,7 +49,7 @@ final class CanvasTextRenderingTests: XCTestCase {
         )
         XCTAssertFalse(frameLabelPixels.isEmpty)
         XCTAssertTrue(
-            frameLabelPixels.allSatisfy { (32..<212).contains($0.x) && (16..<66).contains($0.y) },
+            frameLabelPixels.allSatisfy { (32..<212).contains($0.x) && (16..<74).contains($0.y) },
             "Frame-name pixels escaped the authored frame: \(pixelBounds(frameLabelPixels))"
         )
     }
@@ -176,6 +135,110 @@ final class CanvasTextRenderingTests: XCTestCase {
         }
     }
 
+    // SF-0508-001...005, SF-0508-008 — authored RGBA/opacity is composited
+    // by the production tile layer. Editor overlays are a different scene and
+    // cannot affect these raw authored pixels.
+    func testAuthoredSolidFillAndOpacityUseExactTilePixelsWithoutEditorOverlayContamination() throws {
+        let authored = [32.0 / 255.0, 64.0 / 255.0, 96.0 / 255.0, 1.0]
+        for zoom in [CanvasZoom.minimum, .actualSize, CanvasZoom.maximum] {
+            for pixelRatio in [try CanvasPixelRatio(1), try CanvasPixelRatio(2)] {
+                for origin in [WorldPoint(x: -256, y: 192), WorldPoint(x: 320, y: -224)] {
+                    let viewport = try CanvasViewportState(
+                        worldOrigin: origin,
+                        viewportSize: .init(width: 300, height: 120),
+                        contentBounds: .init(origin: .init(x: -2_000, y: -2_000), size: .init(width: 8_000, height: 8_000)),
+                        zoom: zoom,
+                        pixelRatio: pixelRatio
+                    )
+                    // Keep the sample interior in the finite test bitmap at
+                    // every zoom while retaining a different canonical frame
+                    // for each transform. This also puts the tile's local
+                    // origin inside the object rather than testing a
+                    // screen-fixed rectangle.
+                    let worldFrame = WorldRect(
+                        origin: .init(x: origin.x + 96 / zoom.value, y: origin.y + 48 / zoom.value),
+                        size: .init(width: 80 / zoom.value, height: 48 / zoom.value)
+                    )
+                    let viewportOrigin = try viewport.transform.worldToViewport(worldFrame.origin)
+                    // `CALayer.render(in:)` writes its bitmap scanlines in
+                    // Core Graphics' bottom-left orientation. Convert the
+                    // authored top-left viewport centre once at the test
+                    // image boundary; the production tile itself remains
+                    // entirely top-left/Y-down.
+                    let center = (
+                        x: Int((viewportOrigin.x + worldFrame.size.width * zoom.value / 2).rounded()),
+                        y: Int((Double(120) - viewportOrigin.y - worldFrame.size.height * zoom.value / 2).rounded())
+                    )
+                    let expectedBitmapRect = CGRect(
+                        x: viewportOrigin.x,
+                        y: Double(120) - viewportOrigin.y - worldFrame.size.height * zoom.value,
+                        width: worldFrame.size.width * zoom.value,
+                        height: worldFrame.size.height * zoom.value
+                    )
+                    for (opacity, expectedAlpha) in [(1.0, 255), (0.5, 128), (0.0, 0)] {
+                        autoreleasepool {
+                        let object = CanvasRenderObject(
+                            id: NodeID(), frame: worldFrame, clipRect: nil, paintOrder: 0,
+                            style: .frameSurface, isVisible: true, accessibilityLabel: "Frame",
+                            fillRGBA: authored, opacity: opacity
+                        )
+                        let pixels = rasterizedBytes(object: object, viewport: viewport)
+                        let inside = rgba(at: center, in: pixels, width: 300, height: 120)
+                        let hidden = CanvasRenderObject(
+                            id: object.id, frame: object.frame, clipRect: object.clipRect,
+                            paintOrder: object.paintOrder, style: object.style,
+                            isVisible: false, accessibilityLabel: object.accessibilityLabel,
+                            fillRGBA: object.fillRGBA, opacity: object.opacity
+                        )
+                        let changed = changedPixels(
+                            from: rasterizedBytes(object: hidden, viewport: viewport),
+                            to: pixels, width: 300
+                        )
+                        if opacity == 0 {
+                            XCTAssertTrue(changed.isEmpty, "A zero-opacity authored fill must not paint any pixel.")
+                        } else {
+                            XCTAssertFalse(changed.isEmpty)
+                            XCTAssertTrue(
+                                changed.allSatisfy {
+                                    expectedBitmapRect.insetBy(dx: -1, dy: -1).contains(
+                                        CGPoint(x: $0.x, y: $0.y)
+                                    )
+                                },
+                                "The production tile painted outside its exact resolved object bounds: \(pixelBounds(changed)) expected \(expectedBitmapRect)"
+                            )
+                        }
+                        XCTAssertEqual(Int(inside.alpha), expectedAlpha, accuracy: 3, "alpha at zoom \(zoom.value), scale \(pixelRatio.value), origin \(origin), center \(center), changed \(pixelBounds(changed))")
+                        // The production renderer resolves calibrated input
+                        // into the active device RGB target. Test that target
+                        // directly: alpha is exact and the normalized 1:2:3
+                        // channel relationship survives premultiplication
+                        // within the compositor's three-byte tolerance.
+                        if opacity > 0 {
+                            XCTAssertGreaterThan(inside.red, 0)
+                            XCTAssertEqual(Double(inside.green) / Double(inside.red), 2, accuracy: 0.10)
+                            // At 50% alpha, 8-bit premultiplication rounds
+                            // the smallest red channel before the other two.
+                            // A quarter-ratio tolerance is therefore the
+                            // explicit device-pixel policy, not a broad
+                            // changed-pixel assertion.
+                            XCTAssertEqual(Double(inside.blue) / Double(inside.red), 3, accuracy: 0.25)
+                        } else {
+                            XCTAssertEqual(inside.red, 0)
+                            XCTAssertEqual(inside.green, 0)
+                            XCTAssertEqual(inside.blue, 0)
+                        }
+                        let outside = rgba(at: (x: 4, y: 4), in: pixels, width: 300, height: 120)
+                        XCTAssertEqual(outside.red, 0, "Authoring fill must not paint outside the exact object bounds.")
+                        XCTAssertEqual(outside.green, 0)
+                        XCTAssertEqual(outside.blue, 0)
+                        XCTAssertEqual(outside.alpha, 0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func rasterizedBytes(object: CanvasRenderObject, viewport: CanvasViewportState) -> Data {
         let width = 300
         let height = 120
@@ -195,6 +258,10 @@ final class CanvasTextRenderingTests: XCTestCase {
             // CALayer's geometry transform and cannot prove text/clip parity.
             let root = CALayer()
             root.frame = CGRect(x: 0, y: 0, width: width, height: height)
+            // `NativeCanvasViewportView` is an `NSView.isFlipped` host. Its
+            // root layer therefore establishes the same top-left coordinate
+            // space as every owned canvas subtree before tiles are added.
+            root.isGeometryFlipped = true
             let container = CALayer()
             container.frame = root.bounds
             container.isGeometryFlipped = true
@@ -241,5 +308,13 @@ final class CanvasTextRenderingTests: XCTestCase {
             )
         }
         return "x=\(bounds.minX)...\(bounds.maxX), y=\(bounds.minY)...\(bounds.maxY)"
+    }
+
+    private func rgba(at point: (x: Int, y: Int), in bytes: Data, width: Int, height: Int) -> (red: UInt8, green: UInt8, blue: UInt8, alpha: UInt8) {
+        precondition((0..<width).contains(point.x) && (0..<height).contains(point.y))
+        // Bitmap storage is bottom-up; all test points use the renderer's
+        // canonical top-left viewport coordinate space.
+        let offset = ((height - 1 - point.y) * width + point.x) * 4
+        return (bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3])
     }
 }

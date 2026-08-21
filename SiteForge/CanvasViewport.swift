@@ -365,6 +365,23 @@ struct CanvasViewportState: Codable, Equatable, Sendable {
         try commit(origin: proposed, zoom: nextZoom, fitPolicy: policy)
     }
 
+    /// Centers a canonical object in the editor viewport without modifying
+    /// the object or inventing breakpoint overrides. The caller decides
+    /// whether that object is paintable inside the active artboard.
+    mutating func reveal(_ frame: WorldRect) throws {
+        guard frame.isValid else { throw CanvasViewportError.invalidSize }
+        let visibleWidth = viewportSize.width / zoom.value
+        let visibleHeight = viewportSize.height / zoom.value
+        try commit(
+            origin: WorldPoint(
+                x: frame.origin.x - (visibleWidth - frame.size.width) / 2,
+                y: frame.origin.y - (visibleHeight - frame.size.height) / 2
+            ),
+            zoom: zoom,
+            fitPolicy: .none
+        )
+    }
+
     mutating func setContentBounds(_ bounds: WorldRect) throws {
         guard bounds.isValid else { throw CanvasViewportError.invalidSize }
         contentBounds = bounds
@@ -530,6 +547,116 @@ struct CanvasViewportAdoptionGate: Sendable {
         expected: CanvasViewportOperationIdentity
     ) throws {
         guard result.identity == expected else { throw CanvasViewportError.staleResult }
+    }
+}
+
+/// Editor-only grid policy. The values are world units, so grid lines pan and
+/// zoom with the viewport and never enter canonical project state.
+enum CanvasWorldGridPolicy {
+    static func minorInterval(for zoom: Double) -> Double {
+        zoom < 0.5 ? 64 : (zoom > 4 ? 8 : 16)
+    }
+    static func majorInterval(for zoom: Double) -> Double { minorInterval(for: zoom) * 4 }
+    static func deviceAligned(_ viewportValue: Double, scale: Double) -> Double {
+        (viewportValue * scale).rounded() / scale
+    }
+}
+
+/// Shared validation for editor-only drawing rectangles. AppKit can expose a
+/// transient zero-sized canvas while a window or split view is reconciling;
+/// drawing an inset from that rectangle would otherwise create invalid
+/// negative Core Animation geometry.
+enum CanvasViewportDrawGeometry {
+    static func inset(_ rect: CGRect, dx: CGFloat, dy: CGFloat) -> CGRect? {
+        guard rect.origin.x.isFinite, rect.origin.y.isFinite,
+              rect.size.width.isFinite, rect.size.height.isFinite,
+              dx.isFinite, dy.isFinite,
+              dx >= 0, dy >= 0,
+              rect.size.width >= dx * 2,
+              rect.size.height >= dy * 2 else { return nil }
+        return CGRect(
+            origin: CGPoint(x: rect.origin.x + dx, y: rect.origin.y + dy),
+            size: CGSize(width: rect.size.width - dx * 2, height: rect.size.height - dy * 2)
+        )
+    }
+}
+
+/// Editor-only placement for the selection context badge. The badge is not
+/// canonical content: it must remain entirely inside the active artboard just
+/// like selection strokes and transform handles, while the full context stays
+/// available through the selected object's accessibility value/help.
+struct CanvasSelectionBadgePlacement: Equatable {
+    let frame: CGRect
+    let text: String
+    let usesCompactText: Bool
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.frame.origin.x == rhs.frame.origin.x &&
+            lhs.frame.origin.y == rhs.frame.origin.y &&
+            lhs.frame.size.width == rhs.frame.size.width &&
+            lhs.frame.size.height == rhs.frame.size.height &&
+            lhs.text == rhs.text &&
+            lhs.usesCompactText == rhs.usesCompactText
+    }
+}
+
+enum CanvasSelectionChromeLayout {
+    static let badgeHeight: CGFloat = 18
+    static let edgeInset: CGFloat = 4
+    static let verticalGap: CGFloat = 4
+    static let minimumReadableWidth: CGFloat = 64
+
+    static func badgePlacement(
+        selectionRect: CGRect,
+        artboardRect: CGRect,
+        fullText: String,
+        fullWidth: CGFloat,
+        compactText: String,
+        compactWidth: CGFloat
+    ) -> CanvasSelectionBadgePlacement? {
+        guard selectionRect.isFiniteRect, artboardRect.isFiniteRect,
+              rectanglesIntersect(selectionRect, artboardRect),
+              artboardRect.size.width >= minimumReadableWidth + edgeInset * 2,
+              artboardRect.size.height >= badgeHeight + edgeInset * 2 else { return nil }
+
+        let availableWidth = artboardRect.size.width - edgeInset * 2
+        let useFull = fullWidth <= availableWidth
+        let requestedWidth = useFull ? fullWidth : compactWidth
+        guard requestedWidth <= availableWidth else { return nil }
+        let width = requestedWidth
+        let x = min(
+            max(selectionRect.origin.x, artboardRect.origin.x + edgeInset),
+            artboardRect.origin.x + artboardRect.size.width - edgeInset - width
+        )
+        let above = selectionRect.origin.y - verticalGap - badgeHeight
+        let y: CGFloat
+        if above >= artboardRect.origin.y + edgeInset {
+            y = above
+        } else {
+            y = min(
+                max(artboardRect.origin.y + edgeInset, selectionRect.origin.y + selectionRect.size.height + verticalGap),
+                artboardRect.origin.y + artboardRect.size.height - edgeInset - badgeHeight
+            )
+        }
+        return .init(
+            frame: CGRect(origin: CGPoint(x: x, y: y), size: CGSize(width: width, height: badgeHeight)),
+            text: useFull ? fullText : compactText,
+            usesCompactText: !useFull
+        )
+    }
+}
+
+private func rectanglesIntersect(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+    lhs.origin.x < rhs.origin.x + rhs.size.width &&
+        lhs.origin.x + lhs.size.width > rhs.origin.x &&
+        lhs.origin.y < rhs.origin.y + rhs.size.height &&
+        lhs.origin.y + lhs.size.height > rhs.origin.y
+}
+
+private extension CGRect {
+    var isFiniteRect: Bool {
+        origin.x.isFinite && origin.y.isFinite && size.width.isFinite && size.height.isFinite &&
+            size.width > 0 && size.height > 0
     }
 }
 

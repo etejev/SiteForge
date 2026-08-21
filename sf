@@ -25,6 +25,7 @@ if [[ -z "$CODEX_BIN" ]]; then
 fi
 
 typeset -ga CONTAINER_ARGS
+typeset -g SITEFORGE_UI_PROCESS_ENUMERATION_AVAILABLE=1
 
 resolve_container() {
   if [[ -n ${SITEFORGE_WORKSPACE:-} ]]; then
@@ -111,6 +112,7 @@ test_app() {
 
   print "Running SiteForge test level: $level"
   resolve_container
+  prepare_siteforge_ui_process_enumeration
   terminate_stale_siteforge_ui_processes
   cleanup_test_fixtures
   trap cleanup_test_fixtures EXIT
@@ -135,7 +137,22 @@ test_app() {
 # only touches abandoned processes from this repository's derived-data tree
 # whose command line carries SiteForge UI-test ownership. A user's normal
 # SiteForge installation or unrelated Xcode job is never a candidate.
+prepare_siteforge_ui_process_enumeration() {
+  # Some managed execution environments intentionally deny process listing.
+  # Probe that capability once before entering the set -e cleanup path. When
+  # available, later enumeration remains strict and an unexpected ps failure
+  # is still surfaced; when unavailable, XCTest and the fixture EXIT trap
+  # remain safe lifecycle owners for this one invocation.
+  if ps -axo pid=,command= >/dev/null 2>/dev/null; then
+    SITEFORGE_UI_PROCESS_ENUMERATION_AVAILABLE=1
+  else
+    SITEFORGE_UI_PROCESS_ENUMERATION_AVAILABLE=0
+    print -u2 "Warning: process enumeration is unavailable; skipping SiteForge UI stale/orphan checks for this test invocation."
+  fi
+}
+
 siteforge_ui_process_ids() {
+  (( SITEFORGE_UI_PROCESS_ENUMERATION_AVAILABLE )) || return 0
   ps -axo pid=,command= | while read -r pid command; do
     [[ -n "$pid" && -n "$command" ]] || continue
     if [[ "$command" == *"$DERIVED_DATA"* ]] && {

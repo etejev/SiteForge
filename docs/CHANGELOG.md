@@ -15,6 +15,16 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Bounded native Design Inspector solid-fill and opacity editing for Frame,
+  Section, Stack, and Grid. Canonical normalized RGBA channels and opacity
+  persist through the existing transaction/history/package boundary, while
+  native `NSColorWell`/Colors-panel, hexadecimal, percentage-field, and
+  `NSStepper` drafts remain editor-only until one typed transaction commits.
+  The controls now provide truthful accessible state and participate in native
+  focus, cancellation, undo/redo, Save/Close/Open, and mixed/inapplicable
+  selection flows. Gradients, layered fills, images, borders, effects, tokens,
+  and typography remain unavailable.
+
 - Native Layout Inspector X, Y, Width, and Height fields for applicable Frame,
   Text, Section, Stack, and Grid selections. Locale-aware drafts remain
   noncanonical until Return or focus loss commits one atomic geometry

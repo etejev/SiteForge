@@ -41,6 +41,10 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     /// A canonical node name is safe to render as authored chrome. It is
     /// deliberately distinct from editor-only selection labels and handles.
     let displayName: String?
+    /// Authored color is distinct from `CanvasPaintStyle` (the bounded
+    /// renderer's semantic fallback) and from editor-only overlays.
+    let fillRGBA: [Double]?
+    let opacity: Double
 
     init(
         id: NodeID,
@@ -51,7 +55,9 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         isVisible: Bool,
         accessibilityLabel: String,
         plainText: String? = nil,
-        displayName: String? = nil
+        displayName: String? = nil,
+        fillRGBA: [Double]? = nil,
+        opacity: Double = 1
     ) {
         self.id = id
         self.frame = frame
@@ -62,6 +68,8 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.accessibilityLabel = accessibilityLabel
         self.plainText = plainText
         self.displayName = displayName
+        self.fillRGBA = fillRGBA
+        self.opacity = opacity
     }
 }
 
@@ -164,6 +172,10 @@ enum CanvasInvalidationKind: String, Codable, Sendable {
 struct CanvasRenderPlan: Equatable, Sendable {
     let identity: CanvasRenderRequestIdentity
     let surfaceID: CanvasRenderSurfaceID
+    /// The immutable viewport snapshot used to allocate this plan's tiles.
+    /// Native composition must never substitute a newer live viewport while
+    /// adopting the plan; that would separate painted bounds from overlays.
+    let viewport: CanvasViewportState
     let authoredObjects: [CanvasRenderObject]
     let tiles: [CanvasRenderTile]
     let accessibilityElements: [CanvasAccessibilityElementSnapshot]
@@ -259,6 +271,7 @@ struct CanvasRendererCore: Sendable {
         return CanvasRenderPlan(
             identity: scene.identity,
             surfaceID: scene.surfaceID,
+            viewport: viewport,
             authoredObjects: painted,
             tiles: tiles,
             accessibilityElements: accessibility,

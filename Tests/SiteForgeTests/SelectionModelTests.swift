@@ -33,6 +33,54 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertNil(scopedState.activeContainerID)
     }
 
+    // SF-0402-001 through SF-0402-004, SF-0508-002 — additive Layers
+    // selection is ordered, remains valid through renderer adoption, and
+    // exposes mixed Design applicability without changing either identity.
+    func testSiblingFrameAndTextLayerAdditiveSelectionPreservesSemanticState() throws {
+        let fixture = try makeFixture(count: 2)
+        let frameID = fixture.ids[0]
+        let textID = fixture.ids[1]
+        let targets = [
+            SelectionTargetSnapshot(
+                id: frameID, pageID: fixture.pageID, parentID: nil, name: "Frame",
+                frame: fixture.targets[0].frame, clipRect: nil, paintOrder: 0,
+                isVisible: true, isLocked: false, isAvailable: true
+            ),
+            SelectionTargetSnapshot(
+                id: textID, pageID: fixture.pageID, parentID: nil, name: "Text",
+                frame: fixture.targets[1].frame, clipRect: nil, paintOrder: 1,
+                isVisible: true, isLocked: false, isAvailable: true
+            ),
+        ]
+        let scene = SelectionSceneSnapshot(
+            identity: fixture.identity, activePageID: fixture.pageID,
+            activeContainerID: nil, targets: targets
+        )
+        let registry = SelectionCommandRegistry()
+        var state = SelectionState()
+        _ = try registry.adopt(scene, boundary: .documentAdoption, state: &state)
+        try registry.apply(
+            .init(.replace, targetID: frameID, expectedIdentity: fixture.identity, provenance: .layersNavigator),
+            to: &state, scene: scene
+        )
+        try registry.apply(
+            .init(.add, targetID: textID, expectedIdentity: fixture.identity, provenance: .layersNavigator),
+            to: &state, scene: scene
+        )
+        XCTAssertEqual(state.orderedIDs, [frameID, textID])
+        XCTAssertEqual(state.primaryID, textID)
+        XCTAssertEqual(state.anchorID, frameID)
+        XCTAssertEqual(try registry.adopt(scene, boundary: .rendererGeneration, state: &state), .none)
+        XCTAssertEqual(state.orderedIDs, [frameID, textID])
+
+        let frame = DocumentNode(
+            id: frameID, kind: .frame, name: "Frame", parent: .page(fixture.pageID),
+            properties: [NodeProperty(key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted)]
+        )
+        let text = DocumentNode(id: textID, kind: .text, name: "Text", parent: .page(fixture.pageID))
+        XCTAssertEqual(DesignInspectorCommandRegistry.fillValue(nodes: [frame, text]), .mixed)
+    }
+
     // SF-0402-002 through SF-0402-004
     func testInvalidTargetsAndDuplicateSceneAreRejectedStateNeutrally() throws {
         var fixture = try makeFixture(count: 6)
@@ -149,6 +197,107 @@ final class SelectionModelTests: XCTestCase {
             XCTAssertEqual(plan.deterministicDigest, try renderPlan(fixture).deterministicDigest)
             XCTAssertFalse(String(describing: CanvasRendererCore().previewSnapshot(from: fixture.renderScene)).contains("selection-primary"))
         }
+    }
+
+    // SF-0401-001, SF-0402-005 — viewport/preset clipping does not repair a
+    // canonical selection, but an entirely off-artboard object must not leave
+    // a ghost editor overlay on the pasteboard.
+    func testOffArtboardSelectionRetainsIdentityAndSuppressesGhostOverlay() throws {
+        let fixture = try makeFixture(count: 1)
+        let offArtboardFrame = WorldRect(
+            origin: WorldPoint(x: 500, y: 0),
+            size: WorldSize(width: 10, height: 10)
+        )
+        let offArtboardTarget = SelectionTargetSnapshot(
+            id: fixture.ids[0], pageID: fixture.pageID, parentID: nil,
+            name: "Object 1", frame: offArtboardFrame, clipRect: nil,
+            paintOrder: 0, isVisible: true, isLocked: false, isAvailable: true
+        )
+        let selectionScene = SelectionSceneSnapshot(
+            identity: fixture.identity, activePageID: fixture.pageID,
+            activeContainerID: nil, targets: [offArtboardTarget]
+        )
+        var state = try established(selectionScene)
+        _ = try SelectionCommandRegistry().apply(
+            .init(.replace, targetID: fixture.ids[0], expectedIdentity: fixture.identity, provenance: .pointer),
+            to: &state, scene: selectionScene
+        )
+        let offArtboardObject = CanvasRenderObject(
+            id: fixture.ids[0],
+            frame: offArtboardFrame,
+            clipRect: .init(origin: .init(x: 0, y: 0), size: .init(width: 400, height: 100)),
+            paintOrder: 0,
+            style: .container,
+            isVisible: true,
+            accessibilityLabel: "Object 1"
+        )
+        let scene = CanvasRenderSceneSnapshot(
+            identity: fixture.renderScene.identity,
+            surfaceID: fixture.renderScene.surfaceID,
+            objects: [offArtboardObject]
+        )
+        var viewport = fixture.viewport
+        try viewport.setContentBounds(.init(origin: .init(x: 0, y: 0), size: .init(width: 400, height: 100)))
+        let plan = try CanvasRendererCore().prepare(
+            scene: scene,
+            overlays: .init(identity: fixture.identity, overlays: []),
+            viewport: viewport
+        )
+        let overlay = try SelectionOverlayPlanner().plan(
+            selection: state, scene: selectionScene, renderPlan: plan
+        )
+        XCTAssertEqual(state.primaryID, fixture.ids[0])
+        XCTAssertTrue(overlay.overlays.isEmpty)
+        XCTAssertFalse(overlay.authoredContentInvalidated)
+    }
+
+    // SF-0401-001, SF-0403-003 — transform chrome has the same artboard
+    // intersection as the authored raster and selection outline.  A partial
+    // breakpoint clip must not leave resize handles over pasteboard space.
+    func testPartialArtboardClipLimitsTransformChromeToVisibleAuthoredGeometry() throws {
+        let fixture = try makeFixture(count: 1)
+        let frame = WorldRect(
+            origin: WorldPoint(x: 350, y: 20),
+            size: WorldSize(width: 100, height: 80)
+        )
+        let target = SelectionTargetSnapshot(
+            id: fixture.ids[0], pageID: fixture.pageID, parentID: nil,
+            name: "Object 1", frame: frame, clipRect: nil,
+            paintOrder: 0, isVisible: true, isLocked: false, isAvailable: true
+        )
+        let selectionScene = SelectionSceneSnapshot(
+            identity: fixture.identity, activePageID: fixture.pageID,
+            activeContainerID: nil, targets: [target]
+        )
+        var selection = try established(selectionScene)
+        _ = try SelectionCommandRegistry().apply(
+            .init(.replace, targetID: fixture.ids[0], expectedIdentity: fixture.identity, provenance: .pointer),
+            to: &selection, scene: selectionScene
+        )
+        var viewport = fixture.viewport
+        try viewport.setContentBounds(.init(origin: .init(x: 0, y: 0), size: .init(width: 400, height: 100)))
+        let scene = CanvasRenderSceneSnapshot(
+            identity: fixture.renderScene.identity,
+            surfaceID: fixture.renderScene.surfaceID,
+            objects: [.init(
+                id: fixture.ids[0], frame: frame,
+                clipRect: viewport.contentBounds, paintOrder: 0,
+                style: .frameSurface, isVisible: true, accessibilityLabel: "Object 1"
+            )]
+        )
+        let plan = try CanvasRendererCore().prepare(
+            scene: scene, overlays: .init(identity: fixture.identity, overlays: []), viewport: viewport
+        )
+        let overlays = TransformOverlayPlanner.overlays(
+            selection: selection, renderPlan: plan, preview: nil, handleWorldSize: 8
+        )
+        let transformSelection = try XCTUnwrap(overlays.first(where: { $0.kind == "transform-selection" }))
+        XCTAssertEqual(transformSelection.frame, .init(
+            origin: .init(x: 350, y: 20), size: .init(width: 50, height: 80)
+        ))
+        XCTAssertTrue(overlays.filter { $0.kind.hasPrefix("transform-handle-") }.allSatisfy {
+            $0.frame.maxX <= viewport.contentBounds.maxX && $0.frame.maxY <= viewport.contentBounds.maxY
+        })
     }
 
     // SF-0402-008

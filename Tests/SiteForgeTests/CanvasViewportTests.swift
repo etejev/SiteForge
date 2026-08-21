@@ -10,7 +10,10 @@ final class CanvasViewportTests: XCTestCase {
         let document = state.documentSession.document
         state.resizeViewport(to: .init(width: 1_000, height: 700), pixelRatio: 2)
 
-        XCTAssertEqual(state.viewportState.fitPolicy, .none)
+        // A fresh workspace uses the editor-only Fit Document presentation so
+        // the artboard boundary and surrounding pasteboard remain visible.
+        // The fit must not alter canonical authored coordinates.
+        XCTAssertEqual(state.viewportState.fitPolicy, .fitDocument)
         let origin = try state.viewportState.transform.worldToViewport(
             state.viewportState.contentBounds.origin
         )
@@ -230,6 +233,27 @@ final class CanvasViewportTests: XCTestCase {
         XCTAssertEqual(adopted.generation, 0)
     }
 
+    // SF-0203-004, SF-0401-004, SF-0407-004 — canonical publication is
+    // forwarded to the shell on an event boundary. If two transactions arrive
+    // in one run-loop turn, only the newest document identity may prepare or
+    // adopt derived viewport/render state.
+    @MainActor
+    func testRapidDocumentPublicationsAdoptOnlyTheNewestRevision() async throws {
+        let state = WorkspaceShellState()
+        let pageID = try XCTUnwrap(state.documentSession.document.pages.first?.id)
+        try state.documentSession.execute(.renamePage(.init(pageID: pageID, name: "First")))
+        try state.documentSession.execute(.renamePage(.init(pageID: pageID, name: "Second")))
+        let expectedRevision = state.documentSession.document.revision
+
+        for _ in 0..<200 {
+            if state.canvasRenderPlan?.identity.revision == expectedRevision { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(state.documentSession.document.revision, expectedRevision)
+        XCTAssertEqual(state.canvasRenderPlan?.identity.revision, expectedRevision)
+        XCTAssertEqual(state.canvasRenderPlan?.identity.documentID, state.documentSession.document.id)
+    }
+
     // SF-0401-006, SF-0401-008
     @MainActor
     func testCentralViewportCommandsAnnounceAndDiagnosticsRemainRedacted() async {
@@ -278,6 +302,104 @@ final class CanvasViewportTests: XCTestCase {
                 )
             )
         }
+    }
+
+    func testWorldGridPolicyIsZoomAdaptiveWorldAnchoredAndDeviceCrisp() throws {
+        XCTAssertEqual(CanvasWorldGridPolicy.minorInterval(for: 0.25), 64)
+        XCTAssertEqual(CanvasWorldGridPolicy.minorInterval(for: 1), 16)
+        XCTAssertEqual(CanvasWorldGridPolicy.minorInterval(for: 8), 8)
+        XCTAssertEqual(CanvasWorldGridPolicy.majorInterval(for: 1), 64)
+        for scale in [1.0, 2.0] {
+            let aligned = CanvasWorldGridPolicy.deviceAligned(17.33, scale: scale)
+            XCTAssertEqual((aligned * scale).rounded(), aligned * scale, accuracy: 0.000_001)
+        }
+        for origin in [WorldPoint(x: -320, y: 160), WorldPoint(x: 480, y: -240)] {
+            let transform = try CanvasCoordinateTransform(worldOrigin: origin, zoom: .actualSize, pixelRatio: .init(2))
+            let worldLine = floor(origin.x / 16) * 16
+            XCTAssertEqual(try transform.viewportToWorld(transform.worldToViewport(.init(x: worldLine, y: 0))).x, worldLine, accuracy: 0.000_001)
+        }
+    }
+
+    // SF-0401-001 — initial/preset fitting is presentation-only and leaves
+    // a visible editor gutter around the real content bounds.
+    func testFitDocumentLeavesArtboardGutterAndRevealDoesNotMutateBounds() throws {
+        var state = try CanvasViewportState(
+            worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: 1_200, height: 800),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 900)),
+            pixelRatio: .init(2)
+        )
+        try state.fit(.fitDocument)
+        XCTAssertEqual(state.fitPolicy, .fitDocument)
+        XCTAssertGreaterThan(state.contentBounds.minX - state.visibleWorldRect.minX, 0)
+        XCTAssertGreaterThan(state.visibleWorldRect.maxX - state.contentBounds.maxX, 0)
+        let bounds = state.contentBounds
+        try state.reveal(.init(origin: .init(x: 1_800, y: 300), size: .init(width: 120, height: 80)))
+        XCTAssertEqual(state.contentBounds, bounds)
+        XCTAssertEqual(state.fitPolicy, .none)
+    }
+
+    // SF-0401-001, SF-0402-005 — AppKit can transiently reconcile a zero
+    // canvas size. Editor overlay insets must become neutral rather than
+    // creating negative layer geometry during that transition.
+    func testCanvasDrawingInsetsRejectTransientNegativeGeometry() {
+        XCTAssertNil(CanvasViewportDrawGeometry.inset(.zero, dx: 2, dy: 2))
+        XCTAssertNil(CanvasViewportDrawGeometry.inset(
+            CGRect(x: 0, y: 0, width: 3, height: 4), dx: 2, dy: 2
+        ))
+        XCTAssertNil(CanvasViewportDrawGeometry.inset(
+            CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 10), dx: 1, dy: 1
+        ))
+        XCTAssertEqual(
+            CanvasViewportDrawGeometry.inset(
+                CGRect(x: 4, y: 8, width: 20, height: 12), dx: 2, dy: 3
+            ),
+            CGRect(x: 6, y: 11, width: 16, height: 6)
+        )
+    }
+
+    // SF-0401-001, SF-0402-005 — object-context badges are editor chrome,
+    // not pasteboard decorations. Every edge relocates the complete badge
+    // inside the visible artboard intersection.
+    func testSelectionBadgePlacementRemainsInsideAllArtboardEdges() throws {
+        let artboard = CGRect(x: 100, y: 100, width: 400, height: 300)
+        let full = "Frame · 240 × 160 · Root"
+        let compact = "Frame · 240 × 160"
+        let rects = [
+            CGRect(x: 100, y: 180, width: 60, height: 80), // left
+            CGRect(x: 440, y: 180, width: 60, height: 80), // right
+            CGRect(x: 250, y: 100, width: 80, height: 50), // top
+            CGRect(x: 250, y: 350, width: 80, height: 50), // bottom
+        ]
+        for rect in rects {
+            let placement = try XCTUnwrap(CanvasSelectionChromeLayout.badgePlacement(
+                selectionRect: rect, artboardRect: artboard,
+                fullText: full, fullWidth: 180,
+                compactText: compact, compactWidth: 140
+            ))
+            XCTAssertTrue(artboard.contains(placement.frame), "\(rect)")
+            XCTAssertFalse(placement.usesCompactText)
+        }
+    }
+
+    // SF-0401-001, SF-0402-005 — narrow visible intersections receive a
+    // readable compact badge; entirely off-artboard selection is represented
+    // only through semantic status/accessibility, never a visual badge.
+    func testSelectionBadgePlacementUsesCompactFallbackAndSuppressesOffArtboard() throws {
+        let full = "Frame · 240 × 160 · Root"
+        let compact = "Frame · 240 × 160"
+        let narrowArtboard = CGRect(x: 0, y: 0, width: 156, height: 120)
+        let compactPlacement = try XCTUnwrap(CanvasSelectionChromeLayout.badgePlacement(
+            selectionRect: CGRect(x: 120, y: 12, width: 36, height: 60), artboardRect: narrowArtboard,
+            fullText: full, fullWidth: 180, compactText: compact, compactWidth: 140
+        ))
+        XCTAssertTrue(compactPlacement.usesCompactText)
+        XCTAssertEqual(compactPlacement.text, compact)
+        XCTAssertTrue(narrowArtboard.contains(compactPlacement.frame))
+        XCTAssertNil(CanvasSelectionChromeLayout.badgePlacement(
+            selectionRect: CGRect(x: 200, y: 10, width: 20, height: 20), artboardRect: narrowArtboard,
+            fullText: full, fullWidth: 180, compactText: compact, compactWidth: 140
+        ))
     }
 
     private func assertWorld(

@@ -653,8 +653,12 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var lastTransformAnnouncement = "Transform inactive"
     @Published private(set) var geometryInspectorFailure: GeometryInspectorError?
     @Published private(set) var lastGeometryInspectorAnnouncement = "Layout Inspector inactive"
+    @Published private(set) var designInspectorFailure: DesignInspectorError?
+    @Published private(set) var lastDesignInspectorAnnouncement = "Design Inspector inactive"
     @Published private(set) var snapResolution: SnapResolution?
     @Published private(set) var isSnappingSuppressed = false
+    /// Scene-local editor orientation preference; never canonical project data.
+    @Published var isWorldGridVisible = true
     @Published private(set) var selectedGuideID: GuideID?
     @Published private(set) var guideEditingSession = GuideEditingSession()
     @Published private(set) var guideFailure: GuideCommandError?
@@ -686,6 +690,7 @@ final class WorkspaceShellState: ObservableObject {
     private let textEditingRegistry = InlineTextCommandRegistry()
     private let transformRegistry = TransformCommandRegistry()
     private let geometryInspectorRegistry = GeometryInspectorCommandRegistry()
+    private let designInspectorRegistry = DesignInspectorCommandRegistry()
     private let snapResolver = SnapResolver()
     private let guideRegistry = GuideCommandRegistry()
     private let renderSurfaceID = CanvasRenderSurfaceID()
@@ -732,8 +737,20 @@ final class WorkspaceShellState: ObservableObject {
         precondition(lifecycle.session === documentSession, "Workspace state and lifecycle must own the same session")
         self.lifecycle = lifecycle
         documentSessionObservation = documentSession.$document.dropFirst().sink { [weak self] document in
-            self?.objectWillChange.send()
-            self?.synchronizeViewportDocumentBoundary(document)
+            // `DocumentSession` publishes synchronously as a transaction
+            // commits. Forwarding that publication directly into the shell
+            // can occur while SwiftUI is reconciling the originating control
+            // (notably an Inspector or Layers button), which is undefined.
+            // Synchronize derived editor state on the next main event turn;
+            // the revision guard makes superseded publications neutral.
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      self.documentSession.document.id == document.id,
+                      self.documentSession.document.revision == document.revision else {
+                    return
+                }
+                self.synchronizeViewportDocumentBoundary(document)
+            }
         }
     }
 
@@ -875,7 +892,11 @@ final class WorkspaceShellState: ObservableObject {
         do {
             try viewportState.resize(to: size, pixelRatio: pixelRatio)
             if shouldInitialFitViewport {
-                try viewportState.centerContent()
+                // New documents begin with the actual preset artboard fitted
+                // inside the usable canvas. This leaves an honest surrounding
+                // pasteboard/grid gutter instead of presenting an oversized
+                // Desktop artboard as if it were the entire canvas.
+                try viewportState.fit(.fitDocument)
                 shouldInitialFitViewport = false
             }
             viewportFailure = nil
@@ -949,6 +970,56 @@ final class WorkspaceShellState: ObservableObject {
         return "\(page.name) / \(selectionSummary)"
     }
 
+    /// A stable, content-independent accessibility value for the status bar.
+    /// The visible path remains useful context, while assistive clients can
+    /// query the actual selection cardinality without parsing page or layer
+    /// names. This is editor convenience state derived solely from the
+    /// scene-owned selection model.
+    var selectionAccessibilityValue: String {
+        guard !selectionState.isEmpty else { return "0 selected" }
+        let artboardStatus = selectionOutsideActiveArtboard
+            ? "; selection outside \(viewportPreset.title) artboard"
+            : ""
+        return "\(selectionState.count) selected; primary selection present\(artboardStatus)"
+    }
+
+    /// Breakpoint clipping is a renderer-presentation boundary, not a reason
+    /// to mutate or clear an otherwise valid active-page selection.
+    var selectionOutsideActiveArtboard: Bool {
+        guard !selectionState.isEmpty, let plan = canvasRenderPlan else { return false }
+        let artboard = viewportState.contentBounds
+        return selectionState.orderedIDs.contains { id in
+            guard let object = plan.authoredObjects.first(where: { $0.id == id }) else { return false }
+            return object.frame.maxX <= artboard.minX || object.frame.minX >= artboard.maxX
+                || object.frame.maxY <= artboard.minY || object.frame.minY >= artboard.maxY
+        }
+    }
+
+    var selectionArtboardStatus: String? {
+        selectionOutsideActiveArtboard
+            ? "Selection outside \(viewportPreset.title) artboard"
+            : nil
+    }
+
+    func revealSelection() {
+        guard let plan = canvasRenderPlan,
+              let primaryID = selectionState.primaryID,
+              let object = plan.authoredObjects.first(where: { $0.id == primaryID }) else { return }
+        // Desktop is the largest existing preview artboard. This changes only
+        // editor presentation and reveals fixed Desktop geometry; it never
+        // moves or reflows the canonical document.
+        if selectionOutsideActiveArtboard, viewportPreset != .desktop {
+            viewportPreset = .desktop
+        }
+        do {
+            try viewportState.reveal(object.frame)
+            lastViewportAnnouncement = "Revealed selection without changing authored geometry"
+            scheduleScenePreparation()
+        } catch {
+            viewportFailure = .invalidSize
+        }
+    }
+
     var transformGeometrySummary: String {
         guard let primaryID = selectionState.primaryID,
               let geometry = documentSession.document.pages
@@ -980,6 +1051,82 @@ final class WorkspaceShellState: ObservableObject {
     var geometryInspectorSelectionKey: String {
         selectionState.orderedIDs.map(\.description).joined(separator: ",")
             + ":\(documentSession.document.revision)"
+    }
+
+    private var selectedCanonicalNodes: [DocumentNode] {
+        guard let pageID = effectiveSelectedPageID,
+              let page = documentSession.document.pages.first(where: { $0.id == pageID }) else { return [] }
+        return selectionState.orderedIDs.compactMap { id in page.nodes.first(where: { $0.id == id }) }
+    }
+
+    func designInspectorFillValue() -> DesignInspectorValue {
+        DesignInspectorCommandRegistry.fillValue(nodes: selectedCanonicalNodes)
+    }
+
+    func designInspectorOpacityValue() -> DesignInspectorOpacityValue {
+        DesignInspectorCommandRegistry.opacityValue(nodes: selectedCanonicalNodes)
+    }
+
+    @discardableResult
+    func commitDesignFill(_ color: CanonicalSolidColor?, provenance: DesignInspectorProvenance = .picker) -> Bool {
+        commitDesignEdit(.fill(color), operation: "solid-fill", provenance: provenance)
+    }
+
+    @discardableResult
+    func commitDesignOpacity(percent: Double, provenance: DesignInspectorProvenance = .keyboard) -> Bool {
+        guard percent.isFinite, (0...100).contains(percent) else {
+            designInspectorFailure = .invalidOpacity
+            lastDesignInspectorAnnouncement = DesignInspectorError.invalidOpacity.localizedDescription
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        }
+        return commitDesignEdit(.opacity(percent / 100), operation: "opacity", provenance: provenance)
+    }
+
+    func cancelDesignInspectorDraft() {
+        designInspectorFailure = nil
+        lastDesignInspectorAnnouncement = "Design Inspector draft cancelled; committed appearance is unchanged"
+        announcementPoster.post(lastDesignInspectorAnnouncement)
+    }
+
+    private func commitDesignEdit(_ edit: DesignInspectorEdit, operation: String, provenance: DesignInspectorProvenance) -> Bool {
+        guard let pageID = effectiveSelectedPageID,
+              let plan = canvasRenderPlan,
+              plan.identity.documentID == documentSession.document.id,
+              plan.identity.revision == documentSession.document.revision else {
+            designInspectorFailure = .stale
+            return false
+        }
+        do {
+            let prepared = try designInspectorRegistry.prepare(.init(identity: .init(documentID: documentSession.document.id, pageID: pageID, revision: documentSession.document.revision, sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration), orderedNodeIDs: selectionState.orderedIDs, edit: edit, provenance: provenance, cancelled: false), in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.documentCommand)
+            designInspectorFailure = nil
+            let skipped = prepared.skippedNodeIDs.count
+            if skipped == 0 {
+                lastDesignInspectorAnnouncement = "Design \(operation) committed for \(prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s")"
+            } else {
+                // The view owns no canonical styling policy: the registry has
+                // already validated and named the inapplicable subset.  Keep
+                // the announcement count/reason based (never authored names
+                // or values) so mixed selection is truthful and redacted.
+                let reasons = Set(prepared.skippedReasons.values)
+                    .sorted()
+                    .joined(separator: ", ")
+                lastDesignInspectorAnnouncement = "Design \(operation) committed for \(prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s"); skipped \(skipped) incompatible object\(skipped == 1 ? "" : "s"): \(reasons)"
+            }
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
+        } catch let error as DesignInspectorError {
+            designInspectorFailure = error
+            lastDesignInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        } catch {
+            designInspectorFailure = .stale
+            lastDesignInspectorAnnouncement = "Design \(operation) could not commit; appearance is unchanged"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        }
     }
 
     var geometryInspectorApplicabilityMessage: String? {
@@ -1135,6 +1282,9 @@ final class WorkspaceShellState: ObservableObject {
             )
             _ = try selectionRegistry.apply(command, to: &selectionState, scene: scene)
             selectionFailure = nil
+            if selectionState != prior {
+                resetDesignInspectorContextForSelectionChange()
+            }
             rebuildSelectionOverlay()
             announceSelection()
             recordSelectionDiagnostic(name, start: start, result: .success, repair: nil, failure: nil)
@@ -1148,16 +1298,28 @@ final class WorkspaceShellState: ObservableObject {
         }
     }
 
+    /// Inspector operation feedback is scoped to the exact selection that
+    /// produced it. Retaining a mixed-edit announcement after a replacement
+    /// selection makes the visible inspector contradict its disabled state.
+    /// This is editor presentation state only; it never affects history or
+    /// canonical document data.
+    private func resetDesignInspectorContextForSelectionChange() {
+        designInspectorFailure = nil
+        lastDesignInspectorAnnouncement = DesignInspectorSelectionPresentation.contextAnnouncement(
+            selectionCount: selectionState.count
+        )
+    }
+
     func selectCanvasPoint(_ point: WorldPoint, modifier: SelectionPointerModifier) {
         if textEditingSession.isActive {
             commitTextEditing()
         }
         if selectedTool == .frame {
-            commitInsertion(.frame, at: point, provenance: .pointer)
+            commitInsertion(.frame, at: point, provenance: .pointer, keepsToolArmed: true)
             return
         }
         if selectedTool == .text {
-            commitInsertion(.text, at: point, provenance: .pointer)
+            commitInsertion(.text, at: point, provenance: .pointer, keepsToolArmed: true)
             return
         }
         guard selectedTool == .select, let plan = canvasRenderPlan, let scene = selectionScene,
@@ -2161,7 +2323,10 @@ final class WorkspaceShellState: ObservableObject {
             selectedTool = tool
             armInsertion(kind)
         }
-        commitInsertion(kind, at: defaultInsertionPoint, provenance: provenance)
+        // Named header/menu/accessibility actions are one-shot commands. Do
+        // not leave an armed tool behind to create a ghost preview on a later
+        // pointer move; explicit canvas tools retain repeat insertion below.
+        commitInsertion(kind, at: defaultInsertionPoint, provenance: provenance, keepsToolArmed: false)
     }
 
     func cancelInsertion(resetTool: Bool) {
@@ -2688,7 +2853,8 @@ final class WorkspaceShellState: ObservableObject {
     private func commitInsertion(
         _ kind: InsertionKind,
         at point: WorldPoint,
-        provenance: InsertionProvenance
+        provenance: InsertionProvenance,
+        keepsToolArmed: Bool
     ) {
         if insertionSession.identity == nil { armInsertion(kind) }
         let nodeID: NodeID
@@ -2754,7 +2920,14 @@ final class WorkspaceShellState: ObservableObject {
                 command, start: start, parentRevision: parentRevision,
                 resultRevision: documentSession.document.revision, result: .success, failure: nil
             )
-            armInsertion(kind)
+            if keepsToolArmed {
+                armInsertion(kind)
+            } else {
+                // This is only scene-local tool state. The canonical mutation
+                // and pending selection above remain intact.
+                insertionSession.deactivate()
+                selectedTool = .select
+            }
         } catch let error as InsertionError {
             insertionSession.fail(error)
             insertionFailure = error
@@ -2828,11 +3001,22 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private func updateViewportContentBounds() {
+        // The prior selection plan is expressed in the prior immutable
+        // viewport snapshot. Do not reinterpret it with the newly selected
+        // artboard while asynchronous renderer preparation is in flight: that
+        // would draw a stale Desktop outline over the Mobile pasteboard.
+        // Canonical selection identity stays intact and is rebuilt only when
+        // the matching renderer plan adopts.
+        selectionOverlayPlan = nil
         let bounds = WorldRect(
             origin: WorldPoint(x: 0, y: 0),
             size: WorldSize(width: Double(viewportPreset.width), height: 900)
         )
         try? viewportState.setContentBounds(bounds)
+        // A preset is presentation state. Fit with a pasteboard gutter so the
+        // real artboard boundary remains visible; authored coordinates and
+        // selection identity stay unchanged.
+        try? viewportState.fit(.fitDocument)
         cancelDragDrop()
         scheduleScenePreparation()
     }
@@ -2915,7 +3099,11 @@ final class WorkspaceShellState: ObservableObject {
         let objects = activeNodes.map {
             CanvasViewportSceneObject(id: $0.id, bounds: viewportState.contentBounds)
         }
-        preparationTask = Task { @MainActor [weak self] in
+        // Input handlers and accessibility clients may be user-interactive.
+        // Keep the cancellable preparation request at user-initiated priority
+        // instead of allowing actor work to inherit the runtime's default QoS
+        // while the UI awaits the next adopted generation.
+        preparationTask = Task(priority: .userInitiated) { @MainActor [weak self] in
             guard let self else { return }
             do {
                 _ = try await prepareViewportScene(objects: objects)
@@ -2973,7 +3161,9 @@ final class WorkspaceShellState: ObservableObject {
                 isVisible: !node.selectionBooleanProperty("hidden"),
                 accessibilityLabel: node.kind == .text ? "Text object" : node.name,
                 plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
-                displayName: node.kind == .text ? nil : node.name
+                displayName: node.kind == .text ? nil : node.name,
+                fillRGBA: DesignInspectorCommandRegistry.resolvedFill(for: node).0.map { [$0.red, $0.green, $0.blue, $0.alpha] },
+                opacity: DesignInspectorCommandRegistry.resolvedOpacity(for: node)?.0 ?? 1
             )
         }
         let scene = CanvasRenderSceneSnapshot(identity: identity, surfaceID: renderSurfaceID, objects: objects)
@@ -2989,7 +3179,11 @@ final class WorkspaceShellState: ObservableObject {
             "generation=%{public}llu",
             identity.viewportGeneration
         )
-        renderTask = Task { @MainActor [weak self] in
+        // Rendering remains off the main actor in CanvasRenderWorker, but its
+        // request priority must match the interaction that made it necessary.
+        // This prevents an accessibility/input turn from waiting behind a
+        // default-QoS render adoption.
+        renderTask = Task(priority: .userInitiated) { @MainActor [weak self] in
             defer {
                 os_signpost(
                     .end,
@@ -3069,7 +3263,13 @@ final class WorkspaceShellState: ObservableObject {
                     kind: node.kind,
                     parentName: parentID.flatMap { names[$0] },
                     frame: object?.frame ?? viewportState.contentBounds,
-                    clipRect: object?.clipRect,
+                    // The renderer's current artboard/viewport clip bounds
+                    // paint and virtualize accessibility; they are not a
+                    // canonical selection-validity boundary. A selected
+                    // active-page node may be off-artboard after a breakpoint
+                    // preset changes and must remain selected until removed,
+                    // hidden, unavailable, or replaced by a lifecycle event.
+                    clipRect: nil,
                     paintOrder: object?.paintOrder ?? fallbackOrder,
                     isVisible: object?.isVisible ?? true,
                     isLocked: node.selectionBooleanProperty("locked"),
@@ -3131,13 +3331,34 @@ final class WorkspaceShellState: ObservableObject {
                 rebuildSelectionOverlay()
                 announceSelection()
             }
-            if selectionState != prior || repair != .none { announceSelection() }
+            if selectionState != prior || repair != .none {
+                // Renderer adoption advances scene/generation identity even
+                // when the user's selected objects have not changed. Design
+                // feedback belongs to the semantic selection, not to that
+                // transient renderer identity; otherwise a successful style
+                // transaction immediately overwrites its own announcement.
+                if !hasSameSelectionPresentation(prior, selectionState) {
+                    resetDesignInspectorContextForSelectionChange()
+                }
+                announceSelection()
+            }
         } catch let error as SelectionCommandError {
             selectionState = prior
             selectionFailure = error
         } catch {
             selectionState = prior
         }
+    }
+
+    private func hasSameSelectionPresentation(
+        _ lhs: SelectionState,
+        _ rhs: SelectionState
+    ) -> Bool {
+        lhs.orderedIDs == rhs.orderedIDs
+            && lhs.primaryID == rhs.primaryID
+            && lhs.anchorID == rhs.anchorID
+            && lhs.activePageID == rhs.activePageID
+            && lhs.activeContainerID == rhs.activeContainerID
     }
 
     private func refreshSelectionScene(boundary: SelectionLifecycleBoundary) {

@@ -444,7 +444,17 @@ struct SelectionOverlayPlanner: Sendable {
         let targets = Dictionary(uniqueKeysWithValues: scene.targets.map { ($0.id, $0) })
         let overlays = selection.orderedIDs.compactMap { id -> CanvasEditorOverlay? in
             guard let target = targets[id], target.isSelectable else { return nil }
-            let frame = clippedFrame(target.frame, to: target.clipRect)
+            // Selection validity comes from the scene target. Presentation is
+            // bounded separately by the adopted renderer's active artboard
+            // clip, so an off-artboard node remains selected without drawing
+            // a ghost outline or handles on the pasteboard.
+            // `authoredObjects` contains only paintable objects. A selected
+            // node wholly outside the active artboard is therefore absent
+            // from that list, but it remains a valid canonical selection.
+            // Use the plan's immutable viewport/artboard snapshot rather
+            // than an optional per-object entry, or that absence would turn
+            // into an unclipped ghost overlay on the pasteboard.
+            guard let frame = clippedFrame(target.frame, to: renderPlan.viewport.contentBounds) else { return nil }
             let primary = selection.primaryID == id
             let kind = primary
                 ? (target.isLocked ? "selection-primary-locked" : "selection-primary")
@@ -474,13 +484,13 @@ struct SelectionOverlayPlanner: Sendable {
         )
     }
 
-    private func clippedFrame(_ frame: WorldRect, to clip: WorldRect?) -> WorldRect {
+    private func clippedFrame(_ frame: WorldRect, to clip: WorldRect?) -> WorldRect? {
         guard let clip else { return frame }
         let minX = max(frame.minX, clip.minX)
         let minY = max(frame.minY, clip.minY)
         let maxX = min(frame.maxX, clip.maxX)
         let maxY = min(frame.maxY, clip.maxY)
-        guard maxX > minX, maxY > minY else { return frame }
+        guard maxX > minX, maxY > minY else { return nil }
         return WorldRect(
             origin: WorldPoint(x: minX, y: minY),
             size: WorldSize(width: maxX - minX, height: maxY - minY)

@@ -337,6 +337,271 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
     }
 
+    // SF-0508-001...006 — real native Design controls, not an accessibility-only mock.
+    func testDesignInspectorSolidFillOpacityKeyboardUndoRedoJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        application.buttons["toolbar.tool.frame"].click()
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.4, dy: 0.4)).click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        // The pointer tool intentionally supports repeated placement, but
+        // screenshots for the Design Inspector must show committed authored
+        // state rather than an active insertion preview.
+        application.buttons["toolbar.tool.select"].click()
+        application.buttons["inspector.tab.design"].click()
+        let hex = application.textFields["inspector.design.fillHex"]
+        let opacity = application.textFields["inspector.design.opacity"]
+        let colorWell = application.colorWells["inspector.design.fillPicker"]
+        let opacityStepper = application.steppers["inspector.design.opacityStepper"]
+        XCTAssertTrue(hex.waitForExistence(timeout: 5)); XCTAssertTrue(opacity.exists)
+        XCTAssertTrue(colorWell.exists && colorWell.isEnabled)
+        XCTAssertTrue(opacityStepper.exists && opacityStepper.isEnabled)
+        XCTAssertEqual(opacityStepper.label, "Adjust opacity percent")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 default fill and opacity")
+        let designHierarchy = XCTAttachment(
+            string: redactedAccessibilityHierarchy(for: application)
+        )
+        designHierarchy.name = "SF-AUTHORING-012 native Design controls accessibility hierarchy"
+        designHierarchy.lifetime = .keepAlways
+        add(designHierarchy)
+        XCTAssertEqual(hex.label, "Solid fill hexadecimal RGBA")
+        // This is SiteForge's production NSColorWell bridge. Drive the real
+        // system Colors panel through its own visible slider; no model or
+        // test-only mutation path participates in this interaction.
+        let defaultHex = try XCTUnwrap(hex.value as? String)
+        colorWell.click()
+        let colorPanelHierarchy = XCTAttachment(
+            string: redactedAccessibilityHierarchy(for: application)
+        )
+        colorPanelHierarchy.name = "SF-AUTHORING-012 native color panel accessibility hierarchy"
+        colorPanelHierarchy.lifetime = .keepAlways
+        add(colorPanelHierarchy)
+        let nativeColorPanel = application.windows.matching(
+            NSPredicate(format: "title == %@", "Colors")
+        ).firstMatch
+        XCTAssertTrue(nativeColorPanel.waitForExistence(timeout: 3))
+        let nativeColorSlider = nativeColorPanel.sliders.firstMatch
+        XCTAssertTrue(nativeColorSlider.exists && nativeColorSlider.isHittable)
+        nativeColorSlider.coordinate(withNormalizedOffset: .init(dx: 0.72, dy: 0.5)).click()
+        XCTAssertTrue(waitForValueToChange(hex, from: defaultHex))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 native color well committed")
+        let closeColorPanel = nativeColorPanel.buttons["_XCUI:CloseWindow"]
+        XCTAssertTrue(closeColorPanel.exists && closeColorPanel.isEnabled)
+        closeColorPanel.click()
+        XCTAssertTrue(waitForNonexistence(nativeColorPanel, timeout: 2))
+        application.activate()
+        // Reopen and dismiss the actual system panel without a value change.
+        // Cancelling a native picker session is history-neutral.
+        let colorAfterNativeCommit = try XCTUnwrap(hex.value as? String)
+        let undoBeforeColorCancellation = application.buttons["toolbar.undo"].value as? String
+        colorWell.click()
+        XCTAssertTrue(nativeColorPanel.waitForExistence(timeout: 3))
+        nativeColorPanel.buttons["_XCUI:CloseWindow"].click()
+        XCTAssertTrue(waitForNonexistence(nativeColorPanel, timeout: 2))
+        application.activate()
+        XCTAssertEqual(hex.value as? String, colorAfterNativeCommit)
+        XCTAssertEqual(application.buttons["toolbar.undo"].value as? String, undoBeforeColorCancellation)
+        hex.click()
+        XCTAssertTrue(waitForKeyboardFocus(hex, in: application))
+
+        // A visible top/bottom arrow click is the native NSStepper operation,
+        // including its bridge's standard accessibility increment/decrement.
+        let opacityBeforeStepper = try XCTUnwrap(opacity.value as? String)
+        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75)).click()
+        XCTAssertTrue(waitForValueToChange(opacity, from: opacityBeforeStepper))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 native opacity stepper decrement")
+        let opacityAfterDecrement = try XCTUnwrap(opacity.value as? String)
+        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25)).click()
+        XCTAssertTrue(waitForValueToChange(opacity, from: opacityAfterDecrement))
+        XCTAssertTrue(waitForValue(opacity, containing: "100 percent"))
+        let undoAtOpacityMaximum = application.buttons["toolbar.undo"].value as? String
+        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25)).click()
+        XCTAssertTrue(waitForValue(opacity, containing: "100 percent"))
+        XCTAssertEqual(application.buttons["toolbar.undo"].value as? String, undoAtOpacityMaximum)
+
+        // Focus loss is a real Inspector boundary: a complete draft commits
+        // exactly once when another visible native Inspector control becomes
+        // first responder, while an invalid draft stays noncanonical and
+        // reports validation rather than being coerced.
+        hex.click(); hex.typeKey("a", modifierFlags: .command); hex.typeText("#203040FF")
+        opacity.click()
+        XCTAssertTrue(waitForValue(hex, containing: "#203040FF"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 valid focus loss")
+        let opacityBeforeInvalidFocusLoss = opacity.value as? String
+        hex.click(); hex.typeKey("a", modifierFlags: .command); hex.typeText("invalid")
+        opacity.click()
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.design.validation"].waitForExistence(timeout: 3))
+        XCTAssertEqual(opacity.value as? String, opacityBeforeInvalidFocusLoss)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 invalid focus loss")
+        hex.typeKey(.escape, modifierFlags: [])
+
+        let prior = hex.value as? String
+        hex.click(); hex.typeKey("a", modifierFlags: .command); hex.typeText("#20406080"); hex.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(hex, containing: "#20406080"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 authored fill")
+        opacity.click(); opacity.typeKey("a", modifierFlags: .command); opacity.typeText("40"); opacity.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(opacity, containing: "40 percent"))
+        hex.click(); hex.typeKey("a", modifierFlags: .command); hex.typeText("bad"); hex.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.design.validation"].waitForExistence(timeout: 5))
+        hex.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue((hex.value as? String)?.contains("#20406080") == true)
+        application.typeKey("z", modifierFlags: .command); application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(hex, containing: "#20406080"))
+        XCTAssertNotEqual(prior, hex.value as? String)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 cancel undo")
+    }
+
+    // SF-0508-001...006 — real Layers selection drives the same Design
+    // registry for a mixed structural/Text subset; no fixture or model path
+    // creates the selection.
+    func testDesignInspectorMixedAndInapplicableSelectionJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        application.buttons["toolbar.tool.frame"].click()
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.35, dy: 0.35)).click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        // Insert Text as a page sibling. The bounded selection model only
+        // permits additive selection within one active container; leaving the
+        // Frame selected here would intentionally make Text its child.
+        application.buttons["toolbar.tool.select"].click()
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.84, dy: 0.84)).click()
+        let emptySelectionStatus = application.descendants(matching: .any)["status.selectionPath"]
+        XCTAssertTrue(waitForValue(emptySelectionStatus, containing: "0 selected"))
+        application.buttons["toolbar.tool.text"].click()
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.65, dy: 0.65)).click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+
+        application.buttons["navigator.tab.layers"].click()
+        let frame = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame"
+        )).firstMatch
+        let text = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text"
+        )).firstMatch
+        XCTAssertTrue(frame.waitForExistence(timeout: 3)); XCTAssertTrue(text.exists)
+        frame.click()
+        XCUIElement.perform(withKeyModifiers: .shift) { text.click() }
+        let multipleStatus = application.descendants(matching: .any)["status.selectionPath"]
+        XCTAssertTrue(waitForValue(multipleStatus, containing: "2 selected; primary selection present"))
+        XCTAssertTrue(frame.isSelected)
+        XCTAssertTrue(text.isSelected)
+
+        application.buttons["inspector.tab.design"].click()
+        let hex = application.textFields["inspector.design.fillHex"]
+        XCTAssertTrue(hex.isEnabled)
+        hex.click(); hex.typeKey("a", modifierFlags: .command); hex.typeText("#112233FF"); hex.typeKey(.return, modifierFlags: [])
+        let announcement = application.descendants(matching: .any)["inspector.design.announcement"]
+        XCTAssertTrue(waitForValue(announcement, containing: "skipped 1 incompatible object"))
+        XCTAssertEqual(multipleStatus.value as? String, "2 selected; primary selection present")
+        XCTAssertTrue(frame.isSelected)
+        XCTAssertTrue(text.isSelected)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 mixed applicable fill")
+
+        // The all-Text fill selection is truthfully unavailable. It keeps the
+        // selection intact and exposes no enabled mutation control.
+        text.click()
+        XCTAssertFalse(hex.isEnabled)
+        XCTAssertFalse(application.colorWells["inspector.design.fillPicker"].isEnabled)
+        XCTAssertTrue((hex.value as? String)?.localizedCaseInsensitiveContains("Select a Frame") == true)
+        // Operation feedback is scoped to the selection that produced it.
+        // The previous mixed-edit success must not remain visible after Text
+        // becomes the sole, inapplicable selection.
+        XCTAssertTrue(waitForValue(announcement, containing: "updated for current selection"))
+        XCTAssertFalse((announcement.value as? String)?.contains("skipped 1 incompatible") == true)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 all-incompatible fill")
+    }
+
+    // SF-0508-001...008 — native Save, actual process close, and production
+    // package reopen. Selection/draft state is intentionally re-established
+    // through Layers because it is noncanonical editor convenience state.
+    func testDesignInspectorNativeSaveCloseReopenPersistsFillAndOpacityJourney() throws {
+        let fixture = legacyFixtureURL(named: "schema-v4-legacy-surface")
+        let project = fixtureRoot.appendingPathComponent("design-inspector-native-save.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: fixture)
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        // The historical schema-v4 member is deliberately geometry-less: it
+        // exercises default resolution but must not be mistaken for a visible
+        // authored object. Insert one real Frame through the public empty
+        // canvas action, keeping the legacy member as unrelated package data
+        // while this journey proves renderer adoption across Save/Close/Open.
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0"))
+        let insertFrame = application.buttons["canvas.empty.insert.frame"]
+        XCTAssertTrue(waitForHittable(insertFrame, in: application))
+        insertFrame.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["navigator.tab.layers"].click()
+        // Keep the immutable schema-v4 legacy member as unrelated package
+        // evidence, then select the inserted geometry-bearing Frame through
+        // the real Layers UI.
+        let legacyFrame = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Legacy Surface Frame"
+        )).firstMatch
+        XCTAssertTrue(legacyFrame.waitForExistence(timeout: 5))
+        let frame = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame"
+        )).firstMatch
+        XCTAssertTrue(frame.waitForExistence(timeout: 5))
+        frame.click()
+        application.buttons["inspector.tab.design"].click()
+        let hex = application.textFields["inspector.design.fillHex"]
+        let opacity = application.textFields["inspector.design.opacity"]
+        XCTAssertTrue(hex.waitForExistence(timeout: 5))
+        hex.click(); hex.typeKey("a", modifierFlags: .command); hex.typeText("#315A7C99"); hex.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(hex, containing: "#315A7C99"))
+        let designAnnouncement = application.descendants(matching: .any)["inspector.design.announcement"]
+        XCTAssertTrue(waitForValue(designAnnouncement, containing: "Design solid-fill committed"))
+        opacity.click(); opacity.typeKey("a", modifierFlags: .command); opacity.typeText("60"); opacity.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(opacity, containing: "60 percent"))
+        XCTAssertTrue(waitForValue(designAnnouncement, containing: "Design opacity committed"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 native saved appearance")
+
+        // Drive the visible native File command while the real opacity field
+        // remains first responder. This proves the document command route is
+        // independent of an AppKit inspector control owning keyboard focus.
+        application.menuBars.menuBarItems["File"].click()
+        let save = application.menuItems["Save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 3))
+        XCTAssertTrue(save.isEnabled)
+        // Establish the visible menu item's enabled/accessibility contract,
+        // then invoke its native Command-S equivalent. XCTest menu tracking
+        // can hold the menu's action target outside the workspace responder
+        // chain; the keyboard command is the same production command and
+        // avoids turning that framework behavior into a model shortcut.
+        application.typeKey(.escape, modifierFlags: [])
+        application.typeKey("s", modifierFlags: .command)
+        XCTAssertTrue(application.descendants(matching: .any)["status.document"].exists)
+        terminateAndWait(application)
+
+        // Reopen with a separate empty recovery directory. The assertions
+        // below must therefore read the package written by Save rather than
+        // accidentally adopting the prior process's recovery artifact.
+        let reopenRecoveryDirectory = fixtureRoot.appendingPathComponent("reopen-recovery", isDirectory: true)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: reopenRecoveryDirectory)
+        let reopenedCanvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(reopenedCanvas, containing: "rendered objects 1", timeout: 5))
+        XCTAssertFalse(application.descendants(matching: .any)["canvas.empty.state"].exists)
+        let selectionStatus = application.descendants(matching: .any)["status.selectionPath"]
+        XCTAssertTrue(waitForValue(selectionStatus, containing: "0 selected"))
+        application.buttons["navigator.tab.layers"].click()
+        let reopenedLegacyFrame = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Legacy Surface Frame"
+        )).firstMatch
+        XCTAssertTrue(reopenedLegacyFrame.waitForExistence(timeout: 5))
+        let reopenedFrame = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame"
+        )).firstMatch
+        XCTAssertTrue(reopenedFrame.waitForExistence(timeout: 5))
+        reopenedFrame.click()
+        application.buttons["inspector.tab.design"].click()
+        let reopenedHex = application.textFields["inspector.design.fillHex"]
+        let reopenedOpacity = application.textFields["inspector.design.opacity"]
+        XCTAssertTrue(waitForValue(reopenedHex, containing: "#315A7C99"))
+        XCTAssertTrue(waitForValue(reopenedOpacity, containing: "60 percent"))
+        XCTAssertTrue(reopenedFrame.isSelected)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-012 native reopened appearance")
+    }
+
     // SF-0404-001 through SF-0404-008
     func testSnappingRulersAuthoredGuidesSuppressionAndAccessibilityJourney() throws {
         let application = launchWorkspace()
@@ -430,7 +695,9 @@ final class SiteForgeLaunchTests: XCTestCase {
             .allElementsBoundByAccessibilityElement
         XCTAssertEqual(layers.count, 3)
         XCTAssertEqual(Set(layers.map(\.identifier)).count, 3)
-        XCTAssertTrue((application.descendants(matching: .any)["status.selectionPath"].value as? String)?.contains("No selection") == true)
+        let emptySelectionStatus = application.descendants(matching: .any)["status.selectionPath"]
+        XCTAssertTrue(emptySelectionStatus.label.contains("No selection"))
+        XCTAssertTrue((emptySelectionStatus.value as? String)?.contains("0 selected") == true)
         attachScreenshot(named: "SF-AUTHORING-004 empty selection")
 
         layers[0].click()
@@ -589,7 +856,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     /// particular, SwiftUI must not restore a previous zero-window scene,
     /// because that makes the real AppKit window absent rather than merely
     /// late in the accessibility hierarchy.
-    private func baseLaunchArguments() -> [String] {
+    private func baseLaunchArguments(recoveryDirectory overrideRecoveryDirectory: URL? = nil) -> [String] {
         [
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-ApplePersistenceIgnoreState", "YES",
@@ -597,7 +864,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             "-SiteForgeUITestMode", "YES",
             "-SiteForgeUITestRunID", uiTestRunID,
             "-SiteForgeUITestDiagnosticPath", lifecycleDiagnosticURL.path,
-            "-SiteForgeRecoveryDirectory", recoveryDirectory.path,
+            "-SiteForgeRecoveryDirectory", (overrideRecoveryDirectory ?? recoveryDirectory).path,
         ]
     }
 
@@ -915,6 +1182,26 @@ final class SiteForgeLaunchTests: XCTestCase {
         return application
     }
 
+    /// Reopens already-created bytes through the production loader. This
+    /// deliberately omits the fixture-writing argument so native Save bytes
+    /// from the preceding app lifetime cannot be replaced by a test fixture.
+    private func launchExistingIntegrationProject(
+        _ url: URL,
+        recoveryDirectory: URL? = nil
+    ) -> XCUIApplication {
+        continueAfterFailure = false
+        let application = trackedApplication()
+        application.launchArguments += baseLaunchArguments(recoveryDirectory: recoveryDirectory) + [
+            "-SiteForgeIntegrationOpenProject", url.path,
+        ]
+        recordLaunchState("before-reopen", application)
+        application.launch()
+        recordLaunchState("after-reopen", application)
+        application.activate()
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        return application
+    }
+
     private func legacyFixtureURL(named name: String) -> URL {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -1005,6 +1292,53 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForHittable(components, in: application))
         components.click()
         XCTAssertTrue(application.descendants(matching: .any)["navigator.components.unavailable"].exists)
+    }
+
+    // SF-0402-001 through SF-0402-008, SF-0407-001 through SF-0407-006
+    // The virtual canvas accessibility object and the selected render object
+    // are both derived from the adopted render plan. This fresh-process
+    // journey retains one settled application-window image for every
+    // supported authored kind, so enclosure by the editor-only outline is a
+    // visual contract rather than an object-count-only assertion.
+    @MainActor
+    func testSupportedElementsShareSelectedRenderGeometryJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0"))
+        func assertSelection(_ kind: String, count: Int) {
+            XCTAssertTrue(waitForValue(canvas, containing: "rendered objects \(count)"), kind)
+
+            let object = canvasObject(named: kind == "Text" ? "Text object" : kind, in: application)
+            XCTAssertTrue(object.waitForExistence(timeout: 3), kind)
+            XCTAssertTrue(object.isSelected, "\(kind) must expose the same selected render identity")
+            XCTAssertGreaterThan(object.frame.width, 0)
+            XCTAssertGreaterThan(object.frame.height, 0)
+            XCTAssertTrue(application.descendants(matching: .any)["inspector.selection.summary"].exists)
+            attachWindowScreenshot(application, named: "SF-AUTHORING-012 geometry \(kind.lowercased()) selected")
+        }
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.section"].click()
+        assertSelection("Section", count: 1)
+        application.buttons["navigator.elements.stack"].click()
+        assertSelection("Stack", count: 2)
+        application.buttons["navigator.tab.layers"].click()
+        let sectionLayer = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Section"))
+            .firstMatch
+        XCTAssertTrue(sectionLayer.waitForExistence(timeout: 3))
+        sectionLayer.click()
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.grid"].click()
+        assertSelection("Grid", count: 3)
+        application.menuBars.menuBarItems["Insert"].click()
+        application.menuItems["Insert Frame at Center"].click()
+        assertSelection("Frame", count: 4)
+        application.buttons["navigator.tab.layers"].click()
+        XCTAssertTrue(sectionLayer.waitForExistence(timeout: 3))
+        sectionLayer.click()
+        application.menuBars.menuBarItems["Insert"].click()
+        application.menuItems["Insert Text at Center"].click()
+        assertSelection("Text", count: 5)
     }
 
     // SF-0501-001 through SF-0503-008 — visible catalog/menu operations
@@ -1410,7 +1744,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let preset = application.descendants(matching: .any)["canvas.viewport.preset"]
         XCTAssertTrue(canvas.exists)
         XCTAssertEqual(canvas.label, "Canvas viewport")
-        XCTAssertTrue((canvas.value as? String)?.contains("Zoom 100 percent") == true)
+        XCTAssertFalse((canvas.value as? String)?.contains("Zoom 100 percent") == true)
         XCTAssertTrue(preset.exists)
         XCTAssertEqual(preset.label, "Viewport preset")
         XCTAssertEqual(preset.value as? String, "Desktop")
@@ -1423,6 +1757,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey(.downArrow, modifierFlags: [])
         XCTAssertTrue(waitForValue(preset, containing: "Mobile"))
 
+        application.buttons["canvas.zoom.reset"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "Zoom 100 percent"))
         application.buttons["canvas.zoom.in"].click()
         XCTAssertTrue(waitForValue(canvas, containing: "Zoom 125 percent"))
         application.typeKey("0", modifierFlags: .command)
@@ -1445,6 +1781,100 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValueToChange(canvas, from: beforeFitDocument))
         XCTAssertTrue(application.buttons["canvas.zoom.reset"].isHittable)
         XCTAssertTrue(application.descendants(matching: .any)["canvas.viewport.surface"].exists)
+    }
+
+    // SF-0401-001 through SF-0401-008 — editor-only world-grid orientation
+    // remains behind the artboard and never changes the selected authored
+    // render identity while viewport commands change.
+    @MainActor
+    func testWorldGridArtboardHierarchyVisualJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0"))
+        let grid = application.descendants(matching: .any)["canvas.grid.toggle"]
+        XCTAssertTrue(waitForHittable(grid, in: application))
+        XCTAssertTrue(grid.isSelected || (grid.value as? NSNumber)?.intValue == 1 || (grid.value as? String)?.contains("On") == true)
+
+        application.buttons["canvas.empty.insert.frame"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["status.activeTool"], containing: "Select"))
+        XCTAssertFalse(application.descendants(matching: .any)["status.insertion"].exists)
+        let frame = canvasObject(named: "Frame", in: application)
+        XCTAssertTrue(frame.waitForExistence(timeout: 3))
+        let identity = frame.identifier
+        let selectionPath = application.descendants(matching: .any)["status.selectionPath"]
+        XCTAssertTrue(frame.isSelected)
+        // New documents fit the real artboard with a visible surrounding
+        // pasteboard/grid gutter instead of letting Desktop 1440 consume the
+        // entire viewport at actual size.
+        XCTAssertFalse((canvas.value as? String)?.contains("Zoom 100 percent") == true)
+        attachWindowScreenshot(application, named: "SF-GRID desktop fitted")
+
+        let preset = application.descendants(matching: .any)["canvas.viewport.preset"]
+        preset.click(); application.menuItems["Tablet"].click()
+        XCTAssertTrue(waitForValue(preset, containing: "Tablet"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        XCTAssertTrue(waitForLabel(application.descendants(matching: .any)["status.selectionPath"], containing: "Frame"))
+        // Selection context is editor chrome, not authored content.  A
+        // partially clipped Frame remains selected, but its readable badge
+        // must be laid out wholly inside the visible Tablet artboard rather
+        // than bleeding over the surrounding pasteboard.
+        let tabletFrame = canvasObject(named: "Frame", in: application)
+        XCTAssertTrue(tabletFrame.waitForExistence(timeout: 3))
+        let nodeIdentity = identity.replacingOccurrences(of: "canvas.object.", with: "")
+        let selectionContext = application.descendants(matching: .any)["canvas.selection.context.\(nodeIdentity)"]
+        XCTAssertTrue(selectionContext.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForLabel(selectionContext, containing: "Frame"))
+        // A badge may be repositioned leftward to stay inside the artboard;
+        // the clipped Frame's right edge is the meaningful pasteboard edge.
+        XCTAssertLessThanOrEqual(selectionContext.frame.maxX, tabletFrame.frame.maxX + 1)
+        attachWindowScreenshot(application, named: "SF-GRID tablet fitted")
+        preset.click(); application.menuItems["Mobile"].click()
+        XCTAssertTrue(waitForValue(preset, containing: "Mobile"))
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        XCTAssertTrue(waitForLabel(application.descendants(matching: .any)["status.selectionPath"], containing: "Frame"))
+        let offArtboard = application.descendants(matching: .any)["status.selection.artboard"]
+        XCTAssertTrue(offArtboard.waitForExistence(timeout: 3))
+        // SwiftUI exposes a static status Label's spoken content as AXValue on
+        // macOS. Assert that semantic value rather than the unrelated shell
+        // selection-path value or an empty platform label.
+        XCTAssertTrue(waitForValue(offArtboard, containing: "outside Mobile artboard"))
+        XCTAssertTrue(application.buttons["canvas.selection.reveal"].isHittable)
+        // The canonical selection remains but no normal object/selection
+        // overlay is virtualized beyond the Mobile artboard clip.
+        XCTAssertFalse(canvasObject(named: "Frame", in: application).exists)
+        attachWindowScreenshot(application, named: "SF-GRID mobile fitted off-artboard")
+
+        application.buttons["canvas.selection.reveal"].click()
+        XCTAssertTrue(waitForValue(preset, containing: "Desktop"))
+        let revealedByAction = canvasObject(named: "Frame", in: application)
+        XCTAssertTrue(revealedByAction.waitForExistence(timeout: 3))
+        XCTAssertEqual(revealedByAction.identifier, identity)
+        XCTAssertTrue(revealedByAction.isSelected)
+        XCTAssertFalse(offArtboard.exists)
+        attachWindowScreenshot(application, named: "SF-GRID reveal selection")
+
+        application.menuBars.menuBarItems["View"].click()
+        // Native menu commands are AXMenuItem instances whose visible title
+        // is Grid (not the toolbar checkbox's accessibility identifier).
+        // Opening View scopes the first visible match to this actual command.
+        let menuGrid = application.menuItems["Grid"].firstMatch
+        XCTAssertTrue(menuGrid.waitForExistence(timeout: 2)); menuGrid.click()
+        XCTAssertFalse(grid.isSelected)
+        attachWindowScreenshot(application, named: "SF-GRID off")
+        grid.click(); XCTAssertTrue(grid.isSelected || (grid.value as? NSNumber)?.intValue == 1 || (grid.value as? String)?.contains("On") == true)
+        application.buttons["canvas.zoom.in"].click()
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.65)).scroll(byDeltaX: 80, deltaY: 0)
+        // Virtual canvas AX objects remain bounded to the visible artboard;
+        // a pan may correctly virtualize this offscreen frame. The canonical
+        // selection identity must nevertheless remain in scene-local status.
+        XCTAssertTrue(waitForLabel(selectionPath, containing: "Frame"))
+        attachWindowScreenshot(application, named: "SF-GRID positive pan zoom")
+        application.buttons["canvas.zoom.fit"].click()
+        let revealedFrame = canvasObject(named: "Frame", in: application)
+        XCTAssertTrue(revealedFrame.waitForExistence(timeout: 3))
+        XCTAssertEqual(revealedFrame.identifier, identity); XCTAssertTrue(revealedFrame.isSelected)
+        attachWindowScreenshot(application, named: "SF-GRID fit document")
     }
 
     // SF-0301-006, SF-0306-006, SF-1504-006
@@ -1663,7 +2093,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             application.descendants(matching: .any)["canvas.interaction"].firstMatch,
             containing: "rendered objects 1"
         ))
-        XCTAssertTrue(waitForValue(
+        XCTAssertTrue(waitForLabel(
             application.descendants(matching: .any)["status.selectionPath"],
             containing: "Frame"
         ))
@@ -1676,9 +2106,23 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["navigator.pages.list"].exists)
     }
 
-    private func waitForValue(_ element: XCUIElement, containing text: String) -> Bool {
+    private func waitForValue(
+        _ element: XCUIElement,
+        containing text: String,
+        timeout: TimeInterval = 2
+    ) -> Bool {
         let predicate = NSPredicate { object, _ in
             ((object as? XCUIElement)?.value as? String)?.contains(text) == true
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
+            timeout: timeout
+        ) == .completed
+    }
+
+    private func waitForLabel(_ element: XCUIElement, containing text: String) -> Bool {
+        let predicate = NSPredicate { object, _ in
+            (object as? XCUIElement)?.label.contains(text) == true
         }
         return XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],

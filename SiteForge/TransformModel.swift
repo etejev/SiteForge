@@ -3,6 +3,189 @@ import Foundation
 
 // SF-0403-001...008 — bounded deterministic move/resize geometry transforms.
 
+// SF-0508-001...008 — bounded solid fill and opacity authoring.  RGBA is
+// deliberately stored as four finite canonical numeric properties rather than
+// a presentation string, so locale/display color notation never becomes part
+// of the document format.
+struct CanonicalSolidColor: Equatable, Sendable {
+    let red: Double
+    let green: Double
+    let blue: Double
+    let alpha: Double
+
+    static let legacySurface = CanonicalSolidColor(red: 0.94, green: 0.95, blue: 0.97, alpha: 1)
+
+    init(red: Double, green: Double, blue: Double, alpha: Double) {
+        self.red = red; self.green = green; self.blue = blue; self.alpha = alpha
+    }
+
+    var isValid: Bool { [red, green, blue, alpha].allSatisfy { $0.isFinite && (0...1).contains($0) } }
+    var hexadecimalRGBA: String {
+        func channel(_ value: Double) -> String { String(format: "%02X", Int((value * 255).rounded())) }
+        return "#\(channel(red))\(channel(green))\(channel(blue))\(channel(alpha))"
+    }
+
+    static func parse(hexadecimal: String) -> CanonicalSolidColor? {
+        let source = hexadecimal.trimmingCharacters(in: .whitespacesAndNewlines)
+        let digits = source.hasPrefix("#") ? String(source.dropFirst()) : source
+        let hex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        guard digits.count == 6 || digits.count == 8,
+              digits.unicodeScalars.allSatisfy({ hex.contains($0) }) else { return nil }
+        var value: UInt64 = 0
+        guard Scanner(string: digits).scanHexInt64(&value) else { return nil }
+        let divisor = 255.0
+        if digits.count == 6 {
+            return CanonicalSolidColor(red: Double((value >> 16) & 0xff) / divisor, green: Double((value >> 8) & 0xff) / divisor, blue: Double(value & 0xff) / divisor, alpha: 1)
+        }
+        return CanonicalSolidColor(red: Double((value >> 24) & 0xff) / divisor, green: Double((value >> 16) & 0xff) / divisor, blue: Double((value >> 8) & 0xff) / divisor, alpha: Double(value & 0xff) / divisor)
+    }
+}
+
+enum DesignInspectorValue: Equatable, Sendable {
+    case unavailable(String), single(CanonicalSolidColor, PropertyOrigin), mixed
+}
+
+enum DesignInspectorOpacityValue: Equatable, Sendable { case unavailable(String), single(Double, PropertyOrigin), mixed }
+
+enum DesignInspectorEdit: Sendable { case fill(CanonicalSolidColor?), opacity(Double) }
+
+/// The initiating native control is retained only for bounded, redacted
+/// diagnostics. Canonical mutations still travel through the same registry.
+enum DesignInspectorProvenance: String, Codable, Sendable { case picker, stepper, hexadecimal, keyboard, focusLoss, accessibility, automation }
+
+struct DesignInspectorOperationIdentity: Equatable, Sendable {
+    let documentID: DocumentID
+    let pageID: PageID
+    let revision: UInt64
+    let sceneID: CanvasViewportSceneID
+    let rendererGeneration: UInt64
+}
+
+struct DesignInspectorCommand: Sendable {
+    let identity: DesignInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let edit: DesignInspectorEdit
+    let provenance: DesignInspectorProvenance
+    let cancelled: Bool
+}
+
+struct PreparedDesignInspectorEdit: Sendable {
+    let applicableNodeIDs: [NodeID]
+    let skippedNodeIDs: [NodeID]
+    /// A bounded, non-content explanation for every intentionally skipped
+    /// selection target. This keeps mixed-selection behavior inspectable
+    /// without making unsupported kinds look as if they were edited.
+    let skippedReasons: [NodeID: String]
+    let documentCommand: DocumentCommand
+}
+
+enum DesignInspectorError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String), stale, invalidColor, invalidOpacity, noApplicableTargets, noChanges
+    var errorDescription: String? { switch self {
+    case .unavailable(let reason): reason
+    case .stale: "The document, selection, or canvas changed before the Design edit could commit."
+    case .invalidColor: "Enter a complete #RRGGBB or #RRGGBBAA color."
+    case .invalidOpacity: "Opacity must be a finite value from 0 through 100 percent."
+    case .noApplicableTargets: "The selected objects do not support solid background fills."
+    case .noChanges: "The authored appearance already has that value."
+    } }
+}
+
+struct DesignInspectorCommandRegistry: Sendable {
+    static let requirementIDs: Set<String> = ["SF-0508-001", "SF-0508-002", "SF-0508-003", "SF-0508-004", "SF-0508-005", "SF-0508-006", "SF-0508-007", "SF-0508-008"]
+    static let fillKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
+
+    static func resolvedFill(for node: DocumentNode) -> (CanonicalSolidColor?, PropertyOrigin) {
+        guard fillKinds.contains(node.kind) else { return (nil, .defaulted) }
+        let keys = ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"]
+        let channels = keys.compactMap(node.insertionNumberProperty)
+        if channels.count == 4 {
+            let color = CanonicalSolidColor(red: channels[0], green: channels[1], blue: channels[2], alpha: channels[3])
+            if color.isValid { return (color, node.insertionProperty("style.fill.red")?.origin ?? .authored) }
+        }
+        // schema-v4 legacy default: `surface` was a renderer label only. It
+        // deterministically resolves to this v1 neutral surface until removed.
+        return node.insertionStringProperty("style.fill") == "surface" ? (.legacySurface, .defaulted) : (nil, .defaulted)
+    }
+
+    static func resolvedOpacity(for node: DocumentNode) -> (Double, PropertyOrigin)? {
+        guard fillKinds.contains(node.kind) || node.kind == .text else { return nil }
+        if let value = node.insertionNumberProperty("style.opacity"), value.isFinite, (0...1).contains(value) {
+            return (value, node.insertionProperty("style.opacity")?.origin ?? .authored)
+        }
+        return (1, .defaulted)
+    }
+
+    static func fillValue(nodes: [DocumentNode]) -> DesignInspectorValue {
+        let values = nodes.map(resolvedFill)
+        guard !values.isEmpty, values.contains(where: { $0.0 != nil }) else { return .unavailable("Select a Frame, Section, Stack, or Grid to edit its fill.") }
+        guard let first = values.first else { return .unavailable("No solid fill is applied.") }
+        guard values.allSatisfy({ $0.0 == first.0 }) else { return .mixed }
+        guard let color = first.0 else { return .unavailable("No solid fill is applied.") }
+        return .single(color, values.first!.1)
+    }
+
+    static func opacityValue(nodes: [DocumentNode]) -> DesignInspectorOpacityValue {
+        let values = nodes.compactMap(resolvedOpacity)
+        guard !values.isEmpty else { return .unavailable("The selected objects do not support opacity.") }
+        guard values.allSatisfy({ $0.0 == values.first!.0 }) else { return .mixed }
+        return .single(values[0].0, values[0].1)
+    }
+
+    func prepare(_ command: DesignInspectorCommand, in document: CanonicalDocument, context: TransformValidationContext) throws -> PreparedDesignInspectorEdit {
+        guard !command.cancelled else { throw DesignInspectorError.unavailable("The Design edit was cancelled; committed appearance is unchanged.") }
+        guard command.identity.documentID == document.id, command.identity.revision == document.revision else { throw DesignInspectorError.stale }
+        guard command.identity.pageID == context.activePageID,
+              command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration else { throw DesignInspectorError.stale }
+        guard command.orderedNodeIDs == context.selectedNodeIDs, !command.orderedNodeIDs.isEmpty else { throw DesignInspectorError.stale }
+        guard Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count else { throw DesignInspectorError.unavailable("A Design edit cannot contain the same object twice.") }
+        guard document.revision < UInt64.max else { throw DesignInspectorError.unavailable("The document revision cannot accept another Design edit.") }
+        guard let page = document.pages.first(where: { $0.id == command.identity.pageID }) else { throw DesignInspectorError.unavailable("The active page is unavailable.") }
+        if case .fill(let color) = command.edit, let color, !color.isValid { throw DesignInspectorError.invalidColor }
+        if case .opacity(let opacity) = command.edit, (!opacity.isFinite || !(0...1).contains(opacity)) { throw DesignInspectorError.invalidOpacity }
+        var applicable: [NodeID] = [], skipped: [NodeID] = [], skippedReasons: [NodeID: String] = [:], changes: [DocumentCommand] = []
+        for id in command.orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw DesignInspectorError.unavailable("A selected object no longer exists.") }
+            guard context.availableNodeIDs.contains(id), !node.selectionBooleanProperty("hidden"), !node.selectionBooleanProperty("locked") else { throw DesignInspectorError.unavailable("A selected object is unavailable, hidden, or locked.") }
+            let applies: Bool = switch command.edit { case .fill: Self.fillKinds.contains(node.kind); case .opacity: Self.resolvedOpacity(for: node) != nil }
+            guard applies else {
+                skipped.append(id)
+                skippedReasons[id] = "This object kind does not support this appearance property."
+                continue
+            }
+            applicable.append(id)
+            switch command.edit {
+            case .fill(let color):
+                let keys = ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"]
+                if let color {
+                    for (key, value) in zip(keys, [color.red, color.green, color.blue, color.alpha]) {
+                        let old = node.insertionProperty(key)
+                        // Setting an authored value that is already exact is
+                        // intentionally history-neutral. A defaulted legacy
+                        // value remains a real transition because provenance
+                        // changes from defaulted to authored.
+                        guard old?.value != .number(value) || old?.origin != .authored else { continue }
+                        changes.append(.setProperty(SetPropertyCommand(pageID: page.id, nodeID: id, property: NodeProperty(id: old?.id ?? PropertyID(), key: .init(rawValue: key), value: .number(value), origin: .authored))))
+                    }
+                } else {
+                    for key in keys { if let old = node.insertionProperty(key) { changes.append(.removeProperty(RemovePropertyCommand(pageID: page.id, nodeID: id, propertyID: old.id))) } }
+                    // An explicit legacy fallback is removed too: authored
+                    // removal means omitted fill, never an accidental surface.
+                    if let legacy = node.insertionProperty("style.fill"), legacy.origin == .defaulted { changes.append(.removeProperty(RemovePropertyCommand(pageID: page.id, nodeID: id, propertyID: legacy.id))) }
+                }
+            case .opacity(let value):
+                let old = node.insertionProperty("style.opacity")
+                guard old?.value != .number(value) || old?.origin != .authored else { continue }
+                changes.append(.setProperty(SetPropertyCommand(pageID: page.id, nodeID: id, property: NodeProperty(id: old?.id ?? PropertyID(), key: .init(rawValue: "style.opacity"), value: .number(value), origin: .authored))))
+            }
+        }
+        guard !applicable.isEmpty else { throw DesignInspectorError.noApplicableTargets }
+        guard !changes.isEmpty else { throw DesignInspectorError.noChanges }
+        return PreparedDesignInspectorEdit(applicableNodeIDs: applicable, skippedNodeIDs: skipped, skippedReasons: skippedReasons, documentCommand: .batch(changes))
+    }
+}
+
 enum TransformSessionIdentifierDomain: StableIdentifierDomain {
     static let diagnosticNamespace = "transform-session"
 }
@@ -696,10 +879,18 @@ enum TransformOverlayPlanner {
             guard let object = renderPlan.authoredObjects.first(where: { $0.id == id }) else {
                 return nil
             }
+            // Transform chrome is editor-only presentation, but it must
+            // still describe the same visible authored intersection as the
+            // raster. A Desktop-positioned node can remain canonically
+            // selected after a narrower preset without drawing a ghost
+            // outline over the pasteboard.
+            guard let frame = clipped(previewByID[id] ?? object.frame, to: renderPlan.viewport.contentBounds) else {
+                return nil
+            }
             return CanvasEditorOverlay(
                 id: CanvasOverlayID(derivedUUID(namespace: id.rawValue, label: "preview")),
                 objectID: id,
-                frame: previewByID[id] ?? object.frame,
+                frame: frame,
                 kind: preview == nil ? "transform-selection" : "transform-preview"
             )
         }
@@ -711,20 +902,42 @@ enum TransformOverlayPlanner {
         let frame = previewByID[primaryID] ?? object.frame
         for handle in TransformHandle.allCases {
             let point = handlePoint(handle, frame: frame)
+            let handleFrame = WorldRect(
+                origin: WorldPoint(
+                    x: point.x - handleWorldSize / 2,
+                    y: point.y - handleWorldSize / 2
+                ),
+                size: WorldSize(width: handleWorldSize, height: handleWorldSize)
+            )
+            // Do not create a clipped/partial handle at the artboard edge:
+            // it would imply that a non-visible region is directly
+            // transformable. Keep only fully visible affordances.
+            guard contains(renderPlan.viewport.contentBounds, handleFrame) else { continue }
             result.append(CanvasEditorOverlay(
                 id: CanvasOverlayID(derivedUUID(namespace: primaryID.rawValue, label: handle.rawValue)),
                 objectID: primaryID,
-                frame: WorldRect(
-                    origin: WorldPoint(
-                        x: point.x - handleWorldSize / 2,
-                        y: point.y - handleWorldSize / 2
-                    ),
-                    size: WorldSize(width: handleWorldSize, height: handleWorldSize)
-                ),
+                frame: handleFrame,
                 kind: "transform-handle-\(handle.rawValue)"
             ))
         }
         return result
+    }
+
+    private static func clipped(_ frame: WorldRect, to clip: WorldRect) -> WorldRect? {
+        let minX = max(frame.minX, clip.minX)
+        let minY = max(frame.minY, clip.minY)
+        let maxX = min(frame.maxX, clip.maxX)
+        let maxY = min(frame.maxY, clip.maxY)
+        guard maxX > minX, maxY > minY else { return nil }
+        return WorldRect(
+            origin: WorldPoint(x: minX, y: minY),
+            size: WorldSize(width: maxX - minX, height: maxY - minY)
+        )
+    }
+
+    private static func contains(_ outer: WorldRect, _ inner: WorldRect) -> Bool {
+        inner.minX >= outer.minX && inner.maxX <= outer.maxX &&
+            inner.minY >= outer.minY && inner.maxY <= outer.maxY
     }
 
     static func hitHandle(
@@ -871,5 +1084,17 @@ enum GeometryInspectorDiagnosticFactory {
     private static func sanitize(_ id: NodeID) -> String {
         let digest = SHA256.hash(data: Data(("geometry-inspector:" + id.description).utf8))
         return "node-" + digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+    }
+}
+// MARK: - Design inspector presentation
+
+/// Editor-only feedback derived from the current selection. Keeping this
+/// policy pure makes it impossible for a previous edit's mixed-target result
+/// to be represented as feedback for a replacement selection.
+enum DesignInspectorSelectionPresentation {
+    static func contextAnnouncement(selectionCount: Int) -> String {
+        selectionCount == 0
+            ? "Design Inspector requires a selection."
+            : "Design Inspector updated for current selection."
     }
 }

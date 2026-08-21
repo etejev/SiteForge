@@ -816,7 +816,6 @@ final class DocumentSession: ObservableObject {
         redoStack.removeAll()
         historyBoundaryRevision = boundaryRevision ?? baseline.revision
         lastError = nil
-        objectWillChange.send()
     }
 
     @discardableResult
@@ -833,7 +832,6 @@ final class DocumentSession: ObservableObject {
             forward: command, inverse: mutation.inverse
         ))
         redoStack.removeAll()
-        objectWillChange.send()
         return document
     }
 
@@ -846,7 +844,6 @@ final class DocumentSession: ObservableObject {
         _ = try commit(entry.inverse, diagnosticName: .undo, cancellation: .never)
         undoStack.removeLast()
         redoStack.append(entry)
-        objectWillChange.send()
     }
 
     func redo() throws {
@@ -858,7 +855,6 @@ final class DocumentSession: ObservableObject {
         _ = try commit(entry.forward, diagnosticName: .redo, cancellation: .never)
         redoStack.removeLast()
         undoStack.append(entry)
-        objectWillChange.send()
     }
 
     func historySnapshot() -> PersistedHistorySnapshot {

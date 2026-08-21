@@ -242,6 +242,73 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(reopened, first)
     }
 
+    // SF-0508-001...005, SF-0508-008 — this checked-in package is a real
+    // schema-v4 payload from before canonical RGBA existed. It exercises the
+    // production container, integrity, strict decoder, transaction, and save
+    // path rather than building a pretend legacy document inside the test.
+    @MainActor
+    func testImmutableSchemaFourLegacySurfaceFixtureResolvesAuthorsAndRemovesFillDeterministically() async throws {
+        let store = ProjectPackageStore()
+        let legacyData = try legacyGolden(
+            named: "schema-v4-legacy-surface",
+            sha256: "3ab14ab513e8932395579540750016e3a73f4742e9d463574c6443b3f4303b12"
+        )
+        let legacy = try await store.decode(legacyData)
+        let page = try XCTUnwrap(legacy.document.pages.only)
+        let nodeID = NodeID(UUID(uuidString: "63000000-0000-0000-0000-000000000004")!)
+        let legacyNode = try XCTUnwrap(page.nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: legacyNode).0, .legacySurface)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: legacyNode).1, .defaulted)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedOpacity(for: legacyNode)?.0, 1)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedOpacity(for: legacyNode)?.1, .defaulted)
+
+        let registry = DesignInspectorCommandRegistry()
+        let sceneID = CanvasViewportSceneID(UUID(uuidString: "83000000-0000-0000-0000-000000000004")!)
+        func context(_ document: CanonicalDocument) -> TransformValidationContext {
+            TransformValidationContext(
+                activePageID: page.id, currentSceneID: sceneID, rendererGeneration: 4,
+                selectedNodeIDs: [nodeID], availableNodeIDs: Set(document.pages[0].nodes.map(\.id)),
+                isLifecycleAvailable: true, lifecycleDisabledReason: nil
+            )
+        }
+        func command(_ document: CanonicalDocument, _ edit: DesignInspectorEdit) -> DesignInspectorCommand {
+            .init(
+                identity: .init(documentID: document.id, pageID: page.id, revision: document.revision, sceneID: sceneID, rendererGeneration: 4),
+                orderedNodeIDs: [nodeID], edit: edit, provenance: .automation, cancelled: false
+            )
+        }
+
+        let authored = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#20406080"))
+        let session = DocumentSession(document: legacy.document)
+        _ = try session.execute(registry.prepare(command(session.document, .fill(authored)), in: session.document, context: context(session.document)).documentCommand)
+        let authoredNode = try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: authoredNode).0, authored)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: authoredNode).1, .authored)
+
+        _ = try session.execute(registry.prepare(command(session.document, .fill(nil)), in: session.document, context: context(session.document)).documentCommand)
+        let removed = try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: removed).0, nil)
+        XCTAssertNil(removed.insertionProperty("style.fill"), "Removing an authored fill must not revive legacy surface fallback.")
+        try session.undo()
+        let undoneNode = try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: undoneNode).0, authored)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: undoneNode).1, .authored)
+        try session.redo()
+
+        let resaved = ProjectPackage(
+            projectID: legacy.projectID, createdAt: legacy.createdAt, modifiedAt: legacy.modifiedAt,
+            document: session.document, optionalMembers: legacy.optionalMembers, compatibility: legacy.compatibility
+        )
+        let reopened = try await store.decode(try await store.encode(resaved))
+        let reopenedNode = try XCTUnwrap(reopened.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: reopenedNode).0, nil)
+        XCTAssertNil(reopenedNode.insertionProperty("style.fill"))
+
+        var originallyOmitted = reopenedNode
+        originallyOmitted.properties.removeAll { $0.key.rawValue.hasPrefix("style.fill") }
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: originallyOmitted).0, nil)
+    }
+
     // SF-0301-004, SF-0301-005, SF-1702-004 — a newer canonical payload
     // cannot be relabeled as an older schema and silently discard fields such
     // as guides during migration.

@@ -442,6 +442,43 @@ final class TransformModelTests: XCTestCase {
         XCTAssertEqual(core.hitTest(.init(x: 61, y: 61), in: plan), fixture.nodeID)
     }
 
+    // Shared resolved-frame contract: authored tile pixels, hit testing,
+    // selection, accessibility, and Inspector all begin with one world frame.
+    // A centered overlay stroke may extend half a device pixel; its path never
+    // applies a separate logical inset.
+    func testResolvedGeometryIsSharedAcrossRendererSelectionAccessibilityAndStyles() throws {
+        let fixture = makeFixture()
+        let core = CanvasRendererCore()
+        let kinds: [NodeKind] = [.frame, .text, .section, .stack, .grid]
+        for scale in [1.0, 2.0] {
+            for zoom in [0.25, 1.0, 8.0] {
+                for origin in [WorldPoint(x: 512, y: 512), WorldPoint(x: -80, y: 40)] {
+                    // Keep the object visible at every zoom while placing its device
+                    // raster near a tile boundary as the transform changes.
+                    let frame = WorldRect(origin: .init(x: origin.x + 31, y: origin.y + 29), size: .init(width: 96, height: 48))
+                    let identity = fixture.renderIdentity(revision: fixture.document.revision)
+                    let objects = kinds.enumerated().map { index, kind in CanvasRenderObject(id: NodeID(), frame: frame, clipRect: nil, paintOrder: index, style: kind == .text ? .textPlaceholder : .frameSurface, isVisible: true, accessibilityLabel: kind.rawValue, plainText: kind == .text ? "Text" : nil, fillRGBA: [0.2, 0.4, 0.6, 0.5], opacity: 0.4) }
+                    let viewport = try CanvasViewportState(worldOrigin: origin, viewportSize: .init(width: 800, height: 600), contentBounds: .init(origin: .init(x: -2_000, y: -2_000), size: .init(width: 8_000, height: 8_000)), zoom: try .init(zoom), pixelRatio: .init(scale))
+                    let scene = CanvasRenderSceneSnapshot(identity: identity, surfaceID: CanvasRenderSurfaceID(), objects: objects)
+                    let plan = try core.prepare(scene: scene, overlays: .init(identity: identity, overlays: []), viewport: viewport)
+                    for object in plan.authoredObjects {
+                        XCTAssertEqual(object.frame, frame)
+                        XCTAssertEqual(core.hitTest(.init(x: frame.origin.x + 10, y: frame.origin.y + 10), in: plan), objects.last?.id)
+                        let accessible = try XCTUnwrap(plan.accessibilityElements.first(where: { $0.objectID == object.id }))
+                        let expected = try viewport.transform.worldToViewport(frame.origin)
+                        XCTAssertEqual(accessible.frame.origin, expected)
+                        XCTAssertEqual(accessible.frame.size.width, frame.size.width * zoom, accuracy: 1 / scale)
+                    }
+                    let targets = plan.authoredObjects.enumerated().map { index, object in SelectionTargetSnapshot(id: object.id, pageID: fixture.pageID, parentID: nil, name: "node", kind: kinds[index], frame: object.frame, clipRect: nil, paintOrder: index, isVisible: true, isLocked: false, isAvailable: true) }
+                    let selectionScene = SelectionSceneSnapshot(identity: identity, activePageID: fixture.pageID, activeContainerID: nil, targets: targets)
+                    var selection = SelectionState(); selection.establishScene(selectionScene); selection.setSelection([objects[0].id], primary: objects[0].id, anchor: objects[0].id, provenance: .pointer)
+                    let overlay = try SelectionOverlayPlanner().plan(selection: selection, scene: selectionScene, renderPlan: plan)
+                    XCTAssertEqual(overlay.overlays.first?.frame, frame)
+                }
+            }
+        }
+    }
+
     // SF-0403-007, SF-0403-008
     func testTransformCapacityEvidence() throws {
         var maximumResidentBytes: UInt64 = 0
@@ -603,6 +640,198 @@ final class TransformModelTests: XCTestCase {
         XCTAssertEqual(record.requirementIDs, (1...8).map { "SF-0403-00\($0)" })
         XCTAssertFalse(record.sanitizedIdentifiers.joined().contains(fixture.nodeID.description))
         XCTAssertFalse(String(describing: record).contains("/Users/"))
+    }
+    // SF-0508-001...006, SF-0508-008 — canonical RGBA channels preserve
+    // legacy defaults and never store a display hexadecimal string.
+    func testDesignSolidFillAndOpacityResolveCommitUndoAndPersist() throws {
+        var fixture = makeFixture()
+        var node = fixture.document.pages[0].nodes[1]
+        node.kind = .frame
+        node.properties.append(NodeProperty(key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted))
+        fixture.document.pages[0].nodes[1] = node
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: node).0, .legacySurface)
+        XCTAssertEqual(CanonicalSolidColor.parse(hexadecimal: "#20406080")?.hexadecimalRGBA, "#20406080")
+        XCTAssertNil(CanonicalSolidColor.parse(hexadecimal: "#zzzzzz"))
+
+        let color = CanonicalSolidColor(red: 0.125, green: 0.25, blue: 0.375, alpha: 0.5)
+        let keys = ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"]
+        let values = [color.red, color.green, color.blue, color.alpha]
+        let commands = zip(keys, values).map { key, value in
+            DocumentCommand.setProperty(SetPropertyCommand(pageID: fixture.pageID, nodeID: fixture.nodeID, property: NodeProperty(key: .init(rawValue: key), value: .number(value), origin: .authored)))
+        } + [.setProperty(SetPropertyCommand(pageID: fixture.pageID, nodeID: fixture.nodeID, property: NodeProperty(key: .init(rawValue: "style.opacity"), value: .number(0.4), origin: .authored)))]
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(.batch(commands))
+        let committed = session.document.pages[0].nodes[1]
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: committed).0, color)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedOpacity(for: committed)?.0, 0.4)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.undo()
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: session.document.pages[0].nodes[1]).0, .legacySurface)
+        try session.redo()
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: session.document.pages[0].nodes[1]).0, color)
+    }
+
+    // SF-0402-001, SF-0508-004 — a selection replacement clears feedback
+    // from a prior mixed Design transaction instead of exposing it for the
+    // new, potentially inapplicable target.
+    func testDesignInspectorSelectionContextAnnouncementIsSelectionScoped() {
+        XCTAssertEqual(
+            DesignInspectorSelectionPresentation.contextAnnouncement(selectionCount: 2),
+            "Design Inspector updated for current selection."
+        )
+        XCTAssertEqual(
+            DesignInspectorSelectionPresentation.contextAnnouncement(selectionCount: 1),
+            "Design Inspector updated for current selection."
+        )
+        XCTAssertEqual(
+            DesignInspectorSelectionPresentation.contextAnnouncement(selectionCount: 0),
+            "Design Inspector requires a selection."
+        )
+    }
+
+    // SF-0508-001...008 — registry is the single pre-mutation gate.
+    func testDesignInspectorRegistryAdversarialIdentitySubsetAndHistoryMatrix() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        fixture.document.pages[0].nodes[1].kind = .frame
+        fixture.document.pages[0].nodes[2].kind = .text
+        fixture.document.pages[0].nodes[1].properties.append(
+            NodeProperty(key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted)
+        )
+        fixture.selectedIDs = [fixture.nodeID, fixture.secondNodeID]
+        let registry = DesignInspectorCommandRegistry()
+        let color = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: " #20406080 "))
+        XCTAssertEqual(color.hexadecimalRGBA, "#20406080")
+        XCTAssertEqual(CanonicalSolidColor.parse(hexadecimal: "20406080"), color)
+        XCTAssertEqual(CanonicalSolidColor.parse(hexadecimal: "#204060")?.alpha, 1)
+        for source in ["#20406", "#204060800", "#20GG60", "#"] { XCTAssertNil(CanonicalSolidColor.parse(hexadecimal: source)) }
+        func command(_ edit: DesignInspectorEdit, identity: DesignInspectorOperationIdentity? = nil, ids: [NodeID]? = nil, cancelled: Bool = false) -> DesignInspectorCommand {
+            .init(identity: identity ?? .init(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: ids ?? fixture.selectedIDs, edit: edit, provenance: .automation, cancelled: cancelled)
+        }
+        let prepared = try registry.prepare(command(.fill(color)), in: fixture.document, context: fixture.context)
+        XCTAssertEqual(prepared.applicableNodeIDs, [fixture.nodeID]); XCTAssertEqual(prepared.skippedNodeIDs, [fixture.secondNodeID])
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(prepared.documentCommand)
+        let opacity = try registry.prepare(command(.opacity(0.4), identity: .init(documentID: session.document.id, pageID: fixture.pageID, revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration), ids: [fixture.nodeID]), in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))
+        _ = try session.execute(opacity.documentCommand)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 2)
+        try session.undo(); XCTAssertNil(session.document.pages[0].nodes[1].insertionProperty("style.opacity")); try session.redo()
+        for value in [0.0, 1.0, 0.4] { XCTAssertNoThrow(try registry.prepare(command(.opacity(value)), in: fixture.document, context: fixture.context)) }
+        for value in [Double.nan, Double.infinity, -0.01, 1.01] { XCTAssertThrowsError(try registry.prepare(command(.opacity(value)), in: fixture.document, context: fixture.context)) }
+        let stale = DesignInspectorOperationIdentity(documentID: DocumentID(), pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration)
+        XCTAssertThrowsError(try registry.prepare(command(.fill(color), identity: stale), in: fixture.document, context: fixture.context))
+        XCTAssertThrowsError(try registry.prepare(command(.fill(color), ids: [fixture.nodeID, fixture.nodeID]), in: fixture.document, context: fixture.context))
+        XCTAssertThrowsError(try registry.prepare(command(.fill(color), cancelled: true), in: fixture.document, context: fixture.context))
+    }
+
+    // SF-0508-001...006, SF-0508-008 — each view entry path uses exactly the
+    // same strict normalizer and one registry-owned transaction boundary.
+    func testDesignInspectorRegistryNormalizesValuesAndKeepsNoOpsNeutral() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[1].kind = .frame
+        let registry = DesignInspectorCommandRegistry()
+        let lowercase = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: " #20406080 "))
+        let picker = CanonicalSolidColor(red: 32 / 255, green: 64 / 255, blue: 96 / 255, alpha: 128 / 255)
+        XCTAssertEqual(lowercase, picker)
+        XCTAssertEqual(lowercase.hexadecimalRGBA, "#20406080")
+        for invalid in ["", "#2040608", "#204060800", "#20406G", "#20406080 \\n"] {
+            XCTAssertNil(CanonicalSolidColor.parse(hexadecimal: invalid))
+        }
+        let command = DesignInspectorCommand(
+            identity: .init(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .fill(lowercase), provenance: .hexadecimal, cancelled: false
+        )
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(registry.prepare(command, in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])).documentCommand)
+        let authored = try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == fixture.nodeID }))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: authored).0, picker)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: authored).1, .authored)
+        let authoredIDs = ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"].compactMap { authored.insertionProperty($0)?.id }
+
+        let noOp = DesignInspectorCommand(
+            identity: .init(documentID: session.document.id, pageID: fixture.pageID, revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .fill(picker), provenance: .picker, cancelled: false
+        )
+        XCTAssertThrowsError(try registry.prepare(noOp, in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? DesignInspectorError, .noChanges)
+        }
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        XCTAssertEqual(authoredIDs, ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"].compactMap { authored.insertionProperty($0)?.id })
+
+        for value in [0.0, 0.4, 1.0] {
+            let opacity = DesignInspectorCommand(
+                identity: .init(documentID: session.document.id, pageID: fixture.pageID, revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: [fixture.nodeID], edit: .opacity(value), provenance: .keyboard, cancelled: false
+            )
+            _ = try session.execute(registry.prepare(opacity, in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])).documentCommand)
+        }
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedOpacity(for: try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == fixture.nodeID })))?.0, 1)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 4, "Fill and each completed opacity edit retain separate exact history entries.")
+        try session.undo(); try session.undo(); try session.undo()
+        XCTAssertNil(try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == fixture.nodeID })).insertionProperty("style.opacity"))
+        try session.redo(); try session.redo(); try session.redo()
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedOpacity(for: try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == fixture.nodeID })))?.0, 1)
+        _ = try session.execute(registry.prepare(
+            .init(identity: .init(documentID: session.document.id, pageID: fixture.pageID, revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: [fixture.nodeID], edit: .opacity(0.25), provenance: .automation, cancelled: false),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        ).documentCommand)
+        XCTAssertTrue(session.historySnapshot().redoEntries.isEmpty, "A later opacity commit invalidates only its redo branch.")
+    }
+
+    // SF-0508-002...006 — stale and invalid inputs must be entirely neutral;
+    // mixed valid selection edits name unsupported skips instead of coercing.
+    func testDesignInspectorRegistryRejectsAllBoundariesAndReportsMixedApplicableSubset() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        fixture.document.pages[0].nodes[1].kind = .frame
+        fixture.document.pages[0].nodes[2].kind = .text
+        fixture.document.pages[0].nodes[1].properties.append(
+            NodeProperty(key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted)
+        )
+        let registry = DesignInspectorCommandRegistry()
+        let color = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#10203040"))
+        func command(
+            identity: DesignInspectorOperationIdentity? = nil,
+            ids: [NodeID] = [fixture.nodeID, fixture.secondNodeID],
+            edit: DesignInspectorEdit = .fill(color),
+            cancelled: Bool = false
+        ) -> DesignInspectorCommand {
+            .init(identity: identity ?? .init(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: ids, edit: edit, provenance: .automation, cancelled: cancelled)
+        }
+        let before = fixture.document
+        let mixed = try registry.prepare(command(), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID]))
+        XCTAssertEqual(mixed.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(mixed.skippedNodeIDs, [fixture.secondNodeID])
+        XCTAssertEqual(mixed.skippedReasons[fixture.secondNodeID], "This object kind does not support this appearance property.")
+        XCTAssertEqual(DesignInspectorCommandRegistry.fillValue(nodes: [fixture.document.pages[0].nodes[1], fixture.document.pages[0].nodes[2]]), .mixed)
+
+        let staleIdentities = [
+            DesignInspectorOperationIdentity(documentID: DocumentID(), pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            DesignInspectorOperationIdentity(documentID: fixture.document.id, pageID: PageID(), revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            DesignInspectorOperationIdentity(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision + 1, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            DesignInspectorOperationIdentity(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision, sceneID: CanvasViewportSceneID(), rendererGeneration: fixture.rendererGeneration),
+            DesignInspectorOperationIdentity(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration + 1),
+        ]
+        for identity in staleIdentities {
+            XCTAssertThrowsError(try registry.prepare(command(identity: identity), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID]))) { XCTAssertEqual($0 as? DesignInspectorError, .stale) }
+        }
+        let invalidOpacityEdits: [DesignInspectorEdit] = [.opacity(.nan), .opacity(.infinity), .opacity(-0.01), .opacity(1.01)]
+        for edit in invalidOpacityEdits {
+            XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID], edit: edit), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        }
+        XCTAssertThrowsError(try registry.prepare(command(ids: [], edit: .fill(color)), in: fixture.document, context: fixture.context(selectedIDs: [])))
+        XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID, fixture.nodeID]), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID, fixture.nodeID])))
+        XCTAssertThrowsError(try registry.prepare(command(ids: [NodeID()], edit: .fill(color)), in: fixture.document, context: fixture.context(selectedIDs: [NodeID()])))
+        XCTAssertThrowsError(try registry.prepare(command(cancelled: true), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID])))
+
+        var locked = fixture.document
+        locked.pages[0].nodes[1].properties.append(booleanProperty("locked", true))
+        XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID]), in: locked, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        var hidden = fixture.document
+        hidden.pages[0].nodes[1].properties.append(booleanProperty("hidden", true))
+        XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID]), in: hidden, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID]), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID], availableIDs: [])))
+        fixture.document.pages[0].nodes[1].kind = .image
+        XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID]), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) { XCTAssertEqual($0 as? DesignInspectorError, .noApplicableTargets) }
+        XCTAssertEqual(before.revision, 0)
     }
 }
 
