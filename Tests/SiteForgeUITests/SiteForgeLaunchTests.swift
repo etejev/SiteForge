@@ -305,7 +305,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         widthField.typeKey(.escape, modifierFlags: [])
         XCTAssertEqual(widthField.value as? String, committedWidth)
 
-        let objectCenter = resizeDestination.withOffset(.init(dx: -130, dy: 0))
+        // Do not retain a coordinate rooted at the old resize-handle AX node:
+        // successful numeric edits replace that editor-only node. Re-query the
+        // current rendered object, whose stable identity is the production
+        // source for the pointer-move gesture.
+        let movedFrame = canvasObject(named: "Frame", in: application)
+        XCTAssertTrue(movedFrame.waitForExistence(timeout: 3))
+        let objectCenter = movedFrame.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5))
         let moveDestination = objectCenter.withOffset(.init(dx: 20, dy: -10))
         let beforePointerMove = try XCTUnwrap(geometry.value as? String)
         objectCenter.click(forDuration: 0.2, thenDragTo: moveDestination)
@@ -407,15 +413,19 @@ final class SiteForgeLaunchTests: XCTestCase {
         // A visible top/bottom arrow click is the native NSStepper operation,
         // including its bridge's standard accessibility increment/decrement.
         let opacityBeforeStepper = try XCTUnwrap(opacity.value as? String)
-        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75)).click()
+        // NSStepper's lower visible affordance is decrement. XCTest expresses
+        // the element-relative Y coordinate in AppKit's window coordinate
+        // orientation here, so .25 reaches that lower native arrow without
+        // relying on a test-only mutation path.
+        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25)).click()
         XCTAssertTrue(waitForValueToChange(opacity, from: opacityBeforeStepper))
         attachWindowScreenshot(application, named: "SF-AUTHORING-012 native opacity stepper decrement")
         let opacityAfterDecrement = try XCTUnwrap(opacity.value as? String)
-        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25)).click()
+        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75)).click()
         XCTAssertTrue(waitForValueToChange(opacity, from: opacityAfterDecrement))
         XCTAssertTrue(waitForValue(opacity, containing: "100 percent"))
         let undoAtOpacityMaximum = application.buttons["toolbar.undo"].value as? String
-        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25)).click()
+        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75)).click()
         XCTAssertTrue(waitForValue(opacity, containing: "100 percent"))
         XCTAssertEqual(application.buttons["toolbar.undo"].value as? String, undoAtOpacityMaximum)
 
@@ -1306,7 +1316,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0"))
         func assertSelection(_ kind: String, count: Int) {
-            XCTAssertTrue(waitForValue(canvas, containing: "rendered objects \(count)"), kind)
+            XCTAssertTrue(
+                waitForLiveCanvasValue(
+                    in: application,
+                    containing: "rendered objects \(count)",
+                    timeout: 5
+                ),
+                "\(kind): \(String(describing: liveCanvas(in: application).value))"
+            )
 
             let object = canvasObject(named: kind == "Text" ? "Text object" : kind, in: application)
             XCTAssertTrue(object.waitForExistence(timeout: 3), kind)
@@ -2118,6 +2135,30 @@ final class SiteForgeLaunchTests: XCTestCase {
             for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
             timeout: timeout
         ) == .completed
+    }
+
+    /// Renderer adoption may replace the virtual canvas accessibility node.
+    /// Query the live production node for an adopted render-plan assertion;
+    /// retaining the original AX proxy would test a stale accessibility
+    /// snapshot rather than the renderer's current canonical scene.
+    private func waitForLiveCanvasValue(
+        in application: XCUIApplication,
+        containing text: String,
+        timeout: TimeInterval
+    ) -> Bool {
+        let predicate = NSPredicate { [weak application] _, _ in
+            guard let application else { return false }
+            let canvas = self.liveCanvas(in: application)
+            return (canvas.value as? String)?.contains(text) == true
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
+            timeout: timeout
+        ) == .completed
+    }
+
+    private func liveCanvas(in application: XCUIApplication) -> XCUIElement {
+        application.descendants(matching: .any)["canvas.interaction"].firstMatch
     }
 
     private func waitForLabel(_ element: XCUIElement, containing text: String) -> Bool {
