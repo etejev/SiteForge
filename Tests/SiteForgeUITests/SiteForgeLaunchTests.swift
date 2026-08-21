@@ -336,6 +336,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         layoutTab.click()
         let keyboardGeometry = application.descendants(matching: .any)["inspector.transform.geometry"]
         XCTAssertTrue(keyboardGeometry.waitForExistence(timeout: 3))
+        // The Layers/Inspector path establishes semantic selection; return
+        // first responder to the same selected Canvas object before sending a
+        // keyboard transform. This is the real canvas-focus boundary, not a
+        // synthetic command invocation.
+        let focusedCanvasObject = canvasObject(named: "Frame", in: application)
+        XCTAssertTrue(focusedCanvasObject.waitForExistence(timeout: 3))
+        focusedCanvasObject.click()
+        XCTAssertTrue(waitForKeyboardFocus(liveCanvas(in: application), in: application))
         let beforeKeyboard = try XCTUnwrap(keyboardGeometry.value as? String)
         // A large keyboard step deliberately exits the snapping hysteresis envelope.
         application.typeKey(.rightArrow, modifierFlags: .shift)

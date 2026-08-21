@@ -2498,7 +2498,11 @@ struct SiteForgeCommands: Commands {
     @FocusedObject private var launchExperience: LaunchExperienceController?
 
     private var commandState: WorkspaceShellState? {
-        state ?? WorkspaceCommandTargetRegistry.shared.activeState()
+        // Menu tracking and native Inspector controls can leave SwiftUI's
+        // FocusedObject snapshot stale even though the AppKit key window is
+        // unambiguous. Prefer the window-keyed production registry, then fall
+        // back to FocusedObject for view-local command composition.
+        WorkspaceCommandTargetRegistry.shared.activeState() ?? state
     }
 
     var body: some Commands {
