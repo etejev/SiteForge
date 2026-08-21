@@ -324,6 +324,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         let keyboardFrame = canvasObject(named: "Frame", in: application)
         XCTAssertTrue(keyboardFrame.waitForExistence(timeout: 3))
         keyboardFrame.click()
+        // A selection click may preserve the user-selected Inspector tab. The
+        // geometry assertion belongs to the actual Layout destination, rather
+        // than relying on an incidental previous tab selection.
+        let layoutTab = application.buttons["inspector.tab.layout"]
+        XCTAssertTrue(waitForHittable(layoutTab, in: application))
+        layoutTab.click()
         let keyboardGeometry = application.descendants(matching: .any)["inspector.transform.geometry"]
         XCTAssertTrue(keyboardGeometry.waitForExistence(timeout: 3))
         let beforeKeyboard = try XCTUnwrap(keyboardGeometry.value as? String)
@@ -352,7 +358,12 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     // SF-0508-001...006 — real native Design controls, not an accessibility-only mock.
     func testDesignInspectorSolidFillOpacityKeyboardUndoRedoJourney() throws {
-        let application = launchWorkspace()
+        // The native opacity stepper is a genuine trailing Inspector control.
+        // This explicitly named pointer journey uses the established right-edge
+        // test placement so its real AppKit affordance remains visible on a
+        // constrained hosted display; normal launches retain visible-frame
+        // presentation.
+        let application = launchWorkspace(windowAlignment: .right)
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         application.buttons["toolbar.tool.frame"].click()
         canvas.coordinate(withNormalizedOffset: .init(dx: 0.4, dy: 0.4)).click()
@@ -578,13 +589,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         let save = application.menuItems["Save"]
         XCTAssertTrue(save.waitForExistence(timeout: 3))
         XCTAssertTrue(save.isEnabled)
-        // Establish the visible menu item's enabled/accessibility contract,
-        // then invoke its native Command-S equivalent. XCTest menu tracking
-        // can hold the menu's action target outside the workspace responder
-        // chain; the keyboard command is the same production command and
-        // avoids turning that framework behavior into a model shortcut.
-        application.typeKey(.escape, modifierFlags: [])
-        application.typeKey("s", modifierFlags: .command)
+        // Invoke the visible, enabled native menu item itself. This exercises
+        // the production command target even while an AppKit Inspector field
+        // owns first responder, without assuming keyboard routing through a
+        // system menu-tracking loop.
+        save.click()
         XCTAssertTrue(
             waitForLabel(
                 application.descendants(matching: .any)["status.document"],
@@ -1387,7 +1396,7 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         // The selected Section is the validated parent for the Stack.
         application.buttons["navigator.elements.stack"].click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 2"))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         let stack = canvasObject(named: "Stack", in: application)
         XCTAssertTrue(stack.waitForExistence(timeout: 3))
 
@@ -1396,7 +1405,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(frameCommand.waitForExistence(timeout: 2))
         XCTAssertTrue(frameCommand.isEnabled)
         frameCommand.click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 3"))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
         let stackChild = canvasObject(named: "Frame", in: application)
         XCTAssertTrue(stackChild.waitForExistence(timeout: 3))
         XCTAssertGreaterThan(stackChild.frame.minX, stack.frame.minX)
@@ -1413,25 +1422,25 @@ final class SiteForgeLaunchTests: XCTestCase {
         sectionLayer.click()
         application.buttons["navigator.tab.elements"].click()
         application.buttons["navigator.elements.grid"].click()
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 4"))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 4", timeout: 5))
         let grid = canvasObject(named: "Grid", in: application)
         XCTAssertTrue(grid.waitForExistence(timeout: 3))
 
         for expectedCount in [5, 6] {
             application.menuBars.menuBarItems["Insert"].click()
             application.menuItems["Insert Frame at Center"].click()
-            XCTAssertTrue(waitForValue(canvas, containing: "rendered objects \(expectedCount)"))
+            XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects \(expectedCount)", timeout: 5))
         }
         // Canvas count is the live adopted render plan (not a catalogue
         // fixture); exact Stack/Grid child geometry is asserted at the shared
         // headless resolver boundary, where AX viewport clipping cannot hide
         // valid offscreen children.
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 6"))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 6", timeout: 5))
 
         application.typeKey("z", modifierFlags: .command)
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 5"))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 5", timeout: 5))
         application.typeKey("z", modifierFlags: [.command, .shift])
-        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 6"))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 6", timeout: 5))
         attachScreenshot(named: "SF-AUTHORING-010 nested section stack grid")
     }
 
