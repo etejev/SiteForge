@@ -2517,9 +2517,14 @@ struct SiteForgeCommands: Commands {
 
         CommandGroup(replacing: .saveItem) {
             Button("Save") {
-                guard let state = commandState else { return }
-                if state.lifecycle.fileURL == nil { state.lifecycle.presentSavePanel() }
-                else { Task { _ = await state.lifecycle.save() } }
+                // Resolve at the native menu action boundary. SwiftUI can
+                // retain a pre-menu FocusedObject snapshot while AppKit clears
+                // the key responder for menu tracking; the registry is bound
+                // to the actual workspace window and therefore owns this
+                // command deterministically.
+                guard let target = WorkspaceCommandTargetRegistry.shared.activeState() ?? state else { return }
+                if target.lifecycle.fileURL == nil { target.lifecycle.presentSavePanel() }
+                else { Task { _ = await target.lifecycle.save() } }
             }
             .keyboardShortcut("s", modifiers: .command)
             .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.lifecycle.canSave != true)

@@ -334,8 +334,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         let layoutTab = application.buttons["inspector.tab.layout"]
         XCTAssertTrue(waitForHittable(layoutTab, in: application))
         layoutTab.click()
-        let keyboardGeometry = application.descendants(matching: .any)["inspector.transform.geometry"]
-        XCTAssertTrue(keyboardGeometry.waitForExistence(timeout: 3))
+        let preFocusGeometry = application.descendants(matching: .any)["inspector.transform.geometry"]
+        XCTAssertTrue(preFocusGeometry.waitForExistence(timeout: 3))
         // The Layers/Inspector path establishes semantic selection; return
         // first responder to the same selected Canvas object before sending a
         // keyboard transform. This is the real canvas-focus boundary, not a
@@ -344,6 +344,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(focusedCanvasObject.waitForExistence(timeout: 3))
         focusedCanvasObject.click()
         XCTAssertTrue(waitForKeyboardFocus(liveCanvas(in: application), in: application))
+        // Returning first responder to the native canvas replaces the SwiftUI
+        // Inspector AX proxy. Re-query the current production element before
+        // asserting a keyboard-driven geometry transition.
+        let keyboardGeometry = application.descendants(matching: .any)["inspector.transform.geometry"]
+        XCTAssertTrue(keyboardGeometry.waitForExistence(timeout: 3))
         let beforeKeyboard = try XCTUnwrap(keyboardGeometry.value as? String)
         // A large keyboard step deliberately exits the snapping hysteresis envelope.
         application.typeKey(.rightArrow, modifierFlags: .shift)
