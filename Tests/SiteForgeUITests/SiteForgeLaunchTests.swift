@@ -318,19 +318,26 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValueToChange(geometry, from: beforePointerMove))
         attachScreenshot(named: "SF-AUTHORING-006 pointer move")
 
-        moveDestination.click()
-        let beforeKeyboard = try XCTUnwrap(geometry.value as? String)
+        // The drag creates a new editor overlay/accessibility snapshot. Focus
+        // the stable live render object instead of the old destination
+        // coordinate, which can legitimately lie outside the moved frame.
+        let keyboardFrame = canvasObject(named: "Frame", in: application)
+        XCTAssertTrue(keyboardFrame.waitForExistence(timeout: 3))
+        keyboardFrame.click()
+        let keyboardGeometry = application.descendants(matching: .any)["inspector.transform.geometry"]
+        XCTAssertTrue(keyboardGeometry.waitForExistence(timeout: 3))
+        let beforeKeyboard = try XCTUnwrap(keyboardGeometry.value as? String)
         // A large keyboard step deliberately exits the snapping hysteresis envelope.
         application.typeKey(.rightArrow, modifierFlags: .shift)
-        XCTAssertTrue(waitForValueToChange(geometry, from: beforeKeyboard))
+        XCTAssertTrue(waitForValueToChange(keyboardGeometry, from: beforeKeyboard))
 
-        let committed = try XCTUnwrap(geometry.value as? String)
+        let committed = try XCTUnwrap(keyboardGeometry.value as? String)
         application.typeKey("z", modifierFlags: .command)
-        XCTAssertTrue(waitForValueToChange(geometry, from: committed))
+        XCTAssertTrue(waitForValueToChange(keyboardGeometry, from: committed))
         application.typeKey("z", modifierFlags: [.command, .shift])
-        XCTAssertTrue(waitForValue(geometry, containing: committed))
+        XCTAssertTrue(waitForValue(keyboardGeometry, containing: committed))
 
-        let beforeEscape = try XCTUnwrap(geometry.value as? String)
+        let beforeEscape = try XCTUnwrap(keyboardGeometry.value as? String)
         application.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(application.descendants(matching: .any)["inspector.empty"].exists)
         XCTAssertTrue(waitForKeyboardFocus(canvas, in: application))
@@ -410,22 +417,20 @@ final class SiteForgeLaunchTests: XCTestCase {
         hex.click()
         XCTAssertTrue(waitForKeyboardFocus(hex, in: application))
 
-        // A visible top/bottom arrow click is the native NSStepper operation,
-        // including its bridge's standard accessibility increment/decrement.
+        // Focus the genuine visible NSStepper, then use its standard native
+        // Up/Down keyboard operation. The production AppKit bridge routes
+        // this through the same target-action as the visible arrows.
         let opacityBeforeStepper = try XCTUnwrap(opacity.value as? String)
-        // NSStepper's lower visible affordance is decrement. XCTest expresses
-        // the element-relative Y coordinate in AppKit's window coordinate
-        // orientation here, so .25 reaches that lower native arrow without
-        // relying on a test-only mutation path.
-        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25)).click()
+        opacityStepper.click()
+        application.typeKey(.downArrow, modifierFlags: [])
         XCTAssertTrue(waitForValueToChange(opacity, from: opacityBeforeStepper))
         attachWindowScreenshot(application, named: "SF-AUTHORING-012 native opacity stepper decrement")
         let opacityAfterDecrement = try XCTUnwrap(opacity.value as? String)
-        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75)).click()
+        application.typeKey(.upArrow, modifierFlags: [])
         XCTAssertTrue(waitForValueToChange(opacity, from: opacityAfterDecrement))
         XCTAssertTrue(waitForValue(opacity, containing: "100 percent"))
         let undoAtOpacityMaximum = application.buttons["toolbar.undo"].value as? String
-        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75)).click()
+        application.typeKey(.upArrow, modifierFlags: [])
         XCTAssertTrue(waitForValue(opacity, containing: "100 percent"))
         XCTAssertEqual(application.buttons["toolbar.undo"].value as? String, undoAtOpacityMaximum)
 
@@ -580,7 +585,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         // avoids turning that framework behavior into a model shortcut.
         application.typeKey(.escape, modifierFlags: [])
         application.typeKey("s", modifierFlags: .command)
-        XCTAssertTrue(application.descendants(matching: .any)["status.document"].exists)
+        XCTAssertTrue(
+            waitForLabel(
+                application.descendants(matching: .any)["status.document"],
+                containing: "Saved",
+                timeout: 5
+            ),
+            "Native Save must complete before the process is closed."
+        )
         terminateAndWait(application)
 
         // Reopen with a separate empty recovery directory. The assertions
@@ -588,8 +600,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         // accidentally adopting the prior process's recovery artifact.
         let reopenRecoveryDirectory = fixtureRoot.appendingPathComponent("reopen-recovery", isDirectory: true)
         application = launchExistingIntegrationProject(project, recoveryDirectory: reopenRecoveryDirectory)
-        let reopenedCanvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
-        XCTAssertTrue(waitForValue(reopenedCanvas, containing: "rendered objects 1", timeout: 5))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
         XCTAssertFalse(application.descendants(matching: .any)["canvas.empty.state"].exists)
         let selectionStatus = application.descendants(matching: .any)["status.selectionPath"]
         XCTAssertTrue(waitForValue(selectionStatus, containing: "0 selected"))
@@ -2161,13 +2172,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.descendants(matching: .any)["canvas.interaction"].firstMatch
     }
 
-    private func waitForLabel(_ element: XCUIElement, containing text: String) -> Bool {
+    private func waitForLabel(
+        _ element: XCUIElement,
+        containing text: String,
+        timeout: TimeInterval = 2
+    ) -> Bool {
         let predicate = NSPredicate { object, _ in
             (object as? XCUIElement)?.label.contains(text) == true
         }
         return XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
-            timeout: 2
+            timeout: timeout
         ) == .completed
     }
 

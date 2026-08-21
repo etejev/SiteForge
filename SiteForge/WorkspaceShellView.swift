@@ -2134,6 +2134,36 @@ private struct NativeDesignOpacityStepper: NSViewRepresentable {
 private final class AccessibleDesignOpacityStepper: NSStepper {
     override var acceptsFirstResponder: Bool { isEnabled }
 
+    override func mouseDown(with event: NSEvent) {
+        // Make an ordinary visible click establish the native first responder
+        // before AppKit processes the arrow hit region. This preserves normal
+        // mouse behavior and makes subsequent standard keyboard adjustment
+        // belong to this scene-local control.
+        if isEnabled { window?.makeFirstResponder(self) }
+        super.mouseDown(with: event)
+    }
+
+    /// `NSStepper` is a genuine native control, but its arrow-key handling is
+    /// not consistently adopted when embedded through SwiftUI on current
+    /// macOS releases. Keep the visible arrows and target-action semantics,
+    /// while making the focused production control operable through the
+    /// standard Up/Down keyboard convention used by VoiceOver and Full
+    /// Keyboard Access.
+    override func keyDown(with event: NSEvent) {
+        guard isEnabled else {
+            super.keyDown(with: event)
+            return
+        }
+        switch event.keyCode {
+        case 126: // Up Arrow
+            _ = accessibilityPerformIncrement()
+        case 125: // Down Arrow
+            _ = accessibilityPerformDecrement()
+        default:
+            super.keyDown(with: event)
+        }
+    }
+
     override func accessibilityPerformIncrement() -> Bool {
         adjustAccessibilityValue(by: increment)
     }
