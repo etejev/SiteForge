@@ -318,10 +318,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValueToChange(geometry, from: beforePointerMove))
         attachScreenshot(named: "SF-AUTHORING-006 pointer move")
 
-        // The drag creates a new editor overlay/accessibility snapshot. Focus
-        // the stable live render object instead of the old destination
-        // coordinate, which can legitimately lie outside the moved frame.
-        let keyboardFrame = canvasObject(named: "Frame", in: application)
+        // The drag replaces its virtual canvas object. Re-establish selection
+        // through the production Layers path before testing keyboard movement:
+        // that is the stable semantic route, rather than an obsolete AX canvas
+        // proxy or a destination coordinate that can lie outside the new frame.
+        application.buttons["navigator.tab.layers"].click()
+        let keyboardFrame = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame"
+        )).firstMatch
         XCTAssertTrue(keyboardFrame.waitForExistence(timeout: 3))
         keyboardFrame.click()
         // A selection click may preserve the user-selected Inspector tab. The
@@ -428,20 +432,20 @@ final class SiteForgeLaunchTests: XCTestCase {
         hex.click()
         XCTAssertTrue(waitForKeyboardFocus(hex, in: application))
 
-        // Focus the genuine visible NSStepper, then use its standard native
-        // Up/Down keyboard operation. The production AppKit bridge routes
-        // this through the same target-action as the visible arrows.
+        // Drive the genuine visible NSStepper's two arrow affordances. Their
+        // element-relative coordinates remain within the native control across
+        // display placements, unlike an arbitrary screen coordinate.
         let opacityBeforeStepper = try XCTUnwrap(opacity.value as? String)
-        opacityStepper.click()
-        application.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(waitForHittable(opacityStepper, in: application))
+        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75)).click()
         XCTAssertTrue(waitForValueToChange(opacity, from: opacityBeforeStepper))
         attachWindowScreenshot(application, named: "SF-AUTHORING-012 native opacity stepper decrement")
         let opacityAfterDecrement = try XCTUnwrap(opacity.value as? String)
-        application.typeKey(.upArrow, modifierFlags: [])
+        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25)).click()
         XCTAssertTrue(waitForValueToChange(opacity, from: opacityAfterDecrement))
         XCTAssertTrue(waitForValue(opacity, containing: "100 percent"))
         let undoAtOpacityMaximum = application.buttons["toolbar.undo"].value as? String
-        application.typeKey(.upArrow, modifierFlags: [])
+        opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25)).click()
         XCTAssertTrue(waitForValue(opacity, containing: "100 percent"))
         XCTAssertEqual(application.buttons["toolbar.undo"].value as? String, undoAtOpacityMaximum)
 
@@ -595,8 +599,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         // system menu-tracking loop.
         save.click()
         XCTAssertTrue(
-            waitForLabel(
-                application.descendants(matching: .any)["status.document"],
+            waitForLiveDocumentStatus(
+                in: application,
                 containing: "Saved",
                 timeout: 5
             ),
@@ -2179,6 +2183,25 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     private func liveCanvas(in application: XCUIApplication) -> XCUIElement {
         application.descendants(matching: .any)["canvas.interaction"].firstMatch
+    }
+
+    /// Save transitions can replace the status view's AX proxy. Query the live
+    /// shipping status element so the assertion observes durable completion,
+    /// not an obsolete pre-save accessibility snapshot.
+    private func waitForLiveDocumentStatus(
+        in application: XCUIApplication,
+        containing text: String,
+        timeout: TimeInterval
+    ) -> Bool {
+        let predicate = NSPredicate { [weak application] _, _ in
+            guard let application else { return false }
+            let status = application.descendants(matching: .any)["status.document"].firstMatch
+            return status.label.contains(text)
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
+            timeout: timeout
+        ) == .completed
     }
 
     private func waitForLabel(
