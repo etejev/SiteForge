@@ -2460,13 +2460,26 @@ private final class WorkspaceCommandTargetRegistry {
 
     private final class Entry {
         weak var state: WorkspaceShellState?
-        init(_ state: WorkspaceShellState) { self.state = state }
+        weak var window: NSWindow?
+
+        init(_ state: WorkspaceShellState, window: NSWindow) {
+            self.state = state
+            self.window = window
+        }
     }
 
     private var entries: [ObjectIdentifier: Entry] = [:]
 
     func bind(_ state: WorkspaceShellState, to window: NSWindow) {
-        entries[ObjectIdentifier(window)] = Entry(state)
+        // A SwiftUI host view can be replaced during a scene transition before
+        // its old AppKit window finishes dismantling. Keep one ownership entry
+        // per state and discard only obsolete window bindings; otherwise a
+        // native File menu can resolve an old, untitled workspace while its
+        // visible document window is tracking the menu.
+        entries = entries.filter { _, entry in
+            entry.state != nil && entry.window != nil && entry.state !== state
+        }
+        entries[ObjectIdentifier(window)] = Entry(state, window: window)
     }
 
     func unbind(_ state: WorkspaceShellState?, from window: NSWindow) {
@@ -2477,7 +2490,7 @@ private final class WorkspaceCommandTargetRegistry {
     }
 
     func activeState() -> WorkspaceShellState? {
-        entries = entries.filter { $0.value.state != nil }
+        entries = entries.filter { $0.value.state != nil && $0.value.window != nil }
         // AppKit temporarily clears key/main window while a menu tracks. In a
         // single-scene application there is still exactly one safe command
         // target; returning it prevents a native inspector control from
@@ -2487,6 +2500,16 @@ private final class WorkspaceCommandTargetRegistry {
             if let window, let state = entries[ObjectIdentifier(window)]?.state {
                 return state
             }
+        }
+        // AppKit clears key/main-window state while a native menu tracks.
+        // The visible SiteForge window remains the authoritative command
+        // owner; use it only when unambiguous, never across two scenes.
+        let visibleEntries = entries.values.filter { entry in
+            guard let window = entry.window else { return false }
+            return window.isVisible && !window.isMiniaturized
+        }
+        if visibleEntries.count == 1 {
+            return visibleEntries[0].state
         }
         guard entries.count == 1 else { return nil }
         return entries.values.first?.state

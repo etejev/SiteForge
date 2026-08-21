@@ -336,23 +336,19 @@ final class SiteForgeLaunchTests: XCTestCase {
         layoutTab.click()
         let preFocusGeometry = application.descendants(matching: .any)["inspector.transform.geometry"]
         XCTAssertTrue(preFocusGeometry.waitForExistence(timeout: 3))
-        // The Layers/Inspector path establishes semantic selection; return
-        // first responder to the same selected Canvas object before sending a
-        // keyboard transform. This is the real canvas-focus boundary, not a
-        // synthetic command invocation.
-        let focusedCanvasObject = canvasObject(named: "Frame", in: application)
-        XCTAssertTrue(focusedCanvasObject.waitForExistence(timeout: 3))
-        focusedCanvasObject.click()
-        XCTAssertTrue(waitForKeyboardFocus(liveCanvas(in: application), in: application))
-        // Returning first responder to the native canvas replaces the SwiftUI
-        // Inspector AX proxy. Re-query the current production element before
-        // asserting a keyboard-driven geometry transition.
+        // Drive the shipping Selection-menu keyboard shortcut. It is a real
+        // keyboard transform command but, unlike an AX click on a tiled canvas
+        // proxy, it does not replace semantic Layers selection while routing
+        // first responder through AppKit.
+        let beforeKeyboard = try XCTUnwrap(preFocusGeometry.value as? String)
+        application.typeKey(.rightArrow, modifierFlags: .control)
+        XCTAssertTrue(waitForLiveElementValueToChange(
+            in: application,
+            identifier: "inspector.transform.geometry",
+            from: beforeKeyboard
+        ))
         let keyboardGeometry = application.descendants(matching: .any)["inspector.transform.geometry"]
         XCTAssertTrue(keyboardGeometry.waitForExistence(timeout: 3))
-        let beforeKeyboard = try XCTUnwrap(keyboardGeometry.value as? String)
-        // A large keyboard step deliberately exits the snapping hysteresis envelope.
-        application.typeKey(.rightArrow, modifierFlags: .shift)
-        XCTAssertTrue(waitForValueToChange(keyboardGeometry, from: beforeKeyboard))
 
         let committed = try XCTUnwrap(keyboardGeometry.value as? String)
         application.typeKey("z", modifierFlags: .command)
@@ -2210,6 +2206,23 @@ final class SiteForgeLaunchTests: XCTestCase {
             guard let application else { return false }
             let status = application.descendants(matching: .any)["status.document"].firstMatch
             return status.label.contains(text)
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
+            timeout: timeout
+        ) == .completed
+    }
+
+    private func waitForLiveElementValueToChange(
+        in application: XCUIApplication,
+        identifier: String,
+        from value: String,
+        timeout: TimeInterval = 3
+    ) -> Bool {
+        let predicate = NSPredicate { [weak application] _, _ in
+            guard let application else { return false }
+            let element = application.descendants(matching: .any)[identifier].firstMatch
+            return (element.value as? String) != value
         }
         return XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
