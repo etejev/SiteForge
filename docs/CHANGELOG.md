@@ -6,6 +6,12 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Fixed
 
+- Corrected native command ownership when SwiftUI replaces a workspace state
+  inside an existing AppKit window. Save, Selection keyboard/Escape, and Insert
+  actions now resolve the same live window-owned document state during normal
+  interaction and native menu tracking, so their status, renderer, Layers,
+  Inspector, and accessibility updates adopt the committed result together.
+
 - Centered the fresh-document pasteboard and empty-canvas state in the usable
   canvas viewport without changing authored coordinates or blocking empty
   canvas input. Committed plain text and the native inline editor now share

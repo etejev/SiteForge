@@ -17,6 +17,29 @@ recovery, preview, and editor overlays.
 
 ## Evidence and limits
 
+### Window-owned command-target correction (2026-08-24)
+
+The hosted failure was a state-ownership defect, not a persistence or renderer
+timing failure. `WorkspaceWindowTabRouterHostView` previously changed its weak
+`WorkspaceShellState` reference without rebinding the existing AppKit window.
+The target registry could consequently retain the replaced lifecycle during
+native menu tracking, while the visible shell continued to display a newer
+document. The host now atomically unbinds the prior state/window pair, assigns
+the replacement, binds it to that same window, and updates last-active window
+ownership. Stale, hidden, and dismantling window bindings are pruned before
+command resolution; a focused-object fallback is allowed only when no live
+binding exists.
+
+Focused native UI evidence passed individually and together for
+`testDesignInspectorNativeSaveCloseReopenPersistsFillAndOpacityJourney`,
+`testGeometryTransformPointerKeyboardNumericUndoRedoAndAccessibilityJourney`,
+and `testSupportedElementsShareSelectedRenderGeometryJourney` (3/3). The
+complete UI target passed 38/38, and the authoritative local `./sf verify`
+passed 323 unit/integration plus 38 UI tests (361 total), all with zero
+failures. The full result bundle was retained in the configured local
+test-results root and is intentionally not a repository artifact. Hosted CI
+remains the external confirmation for this correction.
+
 - Focused registry/migration acceptance passed 3/3 on 2026-08-13:
   `testDesignInspectorRegistryNormalizesValuesAndKeepsNoOpsNeutral`,
   `testDesignInspectorRegistryRejectsAllBoundariesAndReportsMixedApplicableSubset`,

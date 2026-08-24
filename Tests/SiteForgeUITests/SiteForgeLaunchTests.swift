@@ -607,13 +607,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         // owns first responder, without assuming keyboard routing through a
         // system menu-tracking loop.
         save.click()
+        let saveStatus = application.descendants(matching: .any)["status.document"].firstMatch
         XCTAssertTrue(
             waitForLiveDocumentStatus(
                 in: application,
                 containing: "Saved",
                 timeout: 5
             ),
-            "Native Save must complete before the process is closed."
+            "Native Save must complete before the process is closed; live status: \(saveStatus.label)"
         )
         terminateAndWait(application)
 
@@ -2205,7 +2206,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         let predicate = NSPredicate { [weak application] _, _ in
             guard let application else { return false }
             let status = application.descendants(matching: .any)["status.document"].firstMatch
-            return status.label.contains(text)
+            // SwiftUI may replace the status Label's AX proxy as lifecycle
+            // state changes. Native macOS exposes the shipping label through
+            // either AXLabel or AXValue depending on that replacement; both
+            // are semantic status properties and must report the same Saved
+            // lifecycle state.
+            return status.label.contains(text) || (status.value as? String)?.contains(text) == true
         }
         return XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],

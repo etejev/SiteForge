@@ -88,6 +88,10 @@ struct WorkspaceShellView: View {
         }
         .onExitCommand {
             state.performEscape()
+            // Escape that clears a selection returns keyboard ownership to
+            // the live canvas rather than leaving first responder on a stale
+            // Inspector proxy.
+            focusedControl = .viewportCanvas
         }
     }
 }
@@ -1364,14 +1368,14 @@ private struct WorkspaceWindowTabRouterInstaller: NSViewRepresentable {
     func makeNSView(context: Context) -> WorkspaceWindowTabRouterHostView {
         let view = WorkspaceWindowTabRouterHostView()
         view.router = router
-        view.commandState = state
+        view.updateCommandState(state)
         configureRouter()
         return view
     }
 
     func updateNSView(_ view: WorkspaceWindowTabRouterHostView, context: Context) {
         view.router = router
-        view.commandState = state
+        view.updateCommandState(state)
         configureRouter()
         router.bind(to: view.window)
     }
@@ -1401,6 +1405,29 @@ private final class WorkspaceWindowTabRouterHostView: NSView {
     weak var router: WorkspaceWindowTabRouter?
     weak var commandState: WorkspaceShellState?
     private weak var boundWindow: NSWindow?
+
+    func updateCommandState(_ state: WorkspaceShellState) {
+        if commandState === state {
+            // SwiftUI can update this representable after AppKit has made the
+            // window visible without moving the host view again. Reaffirm the
+            // existing binding so it becomes the menu-tracking owner even
+            // when the original viewDidMoveToWindow occurred before key/main
+            // window state was established.
+            if let boundWindow {
+                WorkspaceCommandTargetRegistry.shared.bind(state, to: boundWindow)
+                WorkspaceCommandTargetRegistry.shared.markActive(boundWindow)
+            }
+            return
+        }
+        if let boundWindow, let commandState {
+            WorkspaceCommandTargetRegistry.shared.unbind(commandState, from: boundWindow)
+        }
+        commandState = state
+        if let boundWindow {
+            WorkspaceCommandTargetRegistry.shared.bind(state, to: boundWindow)
+            WorkspaceCommandTargetRegistry.shared.markActive(boundWindow)
+        }
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -2334,6 +2361,12 @@ private struct GeometryInspectorFieldsView: View {
 
 private struct StatusBarView: View {
     @ObservedObject var state: WorkspaceShellState
+    @ObservedObject private var lifecycle: DocumentLifecycleController
+
+    init(state: WorkspaceShellState) {
+        _state = ObservedObject(wrappedValue: state)
+        _lifecycle = ObservedObject(wrappedValue: state.lifecycle)
+    }
 
     var body: some View {
         HStack(spacing: 14) {
@@ -2396,13 +2429,14 @@ private struct StatusBarView: View {
                     .accessibilityIdentifier("status.snapping")
             }
             Spacer()
-            if state.lifecycle.phase == .saving || state.lifecycle.phase == .autosaving {
-                ProgressView().controlSize(.small).accessibilityLabel(state.lifecycle.statusText)
+            if lifecycle.phase == .saving || lifecycle.phase == .autosaving {
+                ProgressView().controlSize(.small).accessibilityLabel(lifecycle.statusText)
             }
-            Label(state.lifecycle.statusText,
-                  systemImage: state.lifecycle.phase == .failed || state.lifecycle.phase == .conflicted ? "exclamationmark.triangle.fill" : "doc.badge.clock")
-                .foregroundStyle(state.lifecycle.phase == .failed || state.lifecycle.phase == .conflicted ? .red : .secondary)
-                .accessibilityLabel("Document status: \(state.lifecycle.statusText)")
+            Label(lifecycle.statusText,
+                  systemImage: lifecycle.phase == .failed || lifecycle.phase == .conflicted ? "exclamationmark.triangle.fill" : "doc.badge.clock")
+                .foregroundStyle(lifecycle.phase == .failed || lifecycle.phase == .conflicted ? .red : .secondary)
+                .accessibilityLabel("Document status: \(lifecycle.statusText)")
+                .accessibilityValue(lifecycle.statusText)
                 .accessibilityIdentifier("status.document")
             Divider().frame(height: 14)
             Text("Tool: \(state.selectedTool.title)")
@@ -2455,7 +2489,7 @@ private struct PreviewPlaceholderView: View {
 /// FocusedObject remains the preferred route; this keyed fallback keeps native
 /// File commands available when an NSColorWell or NSStepper owns focus.
 @MainActor
-private final class WorkspaceCommandTargetRegistry {
+private final class WorkspaceCommandTargetRegistry: NSObject {
     static let shared = WorkspaceCommandTargetRegistry()
 
     private final class Entry {
@@ -2469,6 +2503,32 @@ private final class WorkspaceCommandTargetRegistry {
     }
 
     private var entries: [ObjectIdentifier: Entry] = [:]
+    private weak var lastActiveWindow: NSWindow?
+
+    private override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowBecameActive(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowBecameActive(_:)),
+            name: NSWindow.didBecomeMainNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    var hasBindings: Bool {
+        prune()
+        return !entries.isEmpty
+    }
 
     func bind(_ state: WorkspaceShellState, to window: NSWindow) {
         // A SwiftUI host view can be replaced during a scene transition before
@@ -2480,6 +2540,20 @@ private final class WorkspaceCommandTargetRegistry {
             entry.state != nil && entry.window != nil && entry.state !== state
         }
         entries[ObjectIdentifier(window)] = Entry(state, window: window)
+        if window.isKeyWindow || window.isMainWindow { markActive(window) }
+    }
+
+    func markActive(_ window: NSWindow) {
+        prune()
+        guard entries[ObjectIdentifier(window)]?.state != nil,
+              window.isVisible,
+              !window.isMiniaturized else { return }
+        lastActiveWindow = window
+    }
+
+    @objc private func windowBecameActive(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        markActive(window)
     }
 
     func unbind(_ state: WorkspaceShellState?, from window: NSWindow) {
@@ -2487,10 +2561,11 @@ private final class WorkspaceCommandTargetRegistry {
         guard let entry = entries[key] else { return }
         guard state == nil || entry.state === state else { return }
         entries.removeValue(forKey: key)
+        if lastActiveWindow === window { lastActiveWindow = nil }
     }
 
     func activeState() -> WorkspaceShellState? {
-        entries = entries.filter { $0.value.state != nil && $0.value.window != nil }
+        prune()
         // AppKit temporarily clears key/main window while a menu tracks. In a
         // single-scene application there is still exactly one safe command
         // target; returning it prevents a native inspector control from
@@ -2498,8 +2573,15 @@ private final class WorkspaceCommandTargetRegistry {
         // strictly window-keyed and never guess across ambiguous targets.
         for window in [NSApp.keyWindow, NSApp.mainWindow] {
             if let window, let state = entries[ObjectIdentifier(window)]?.state {
+                markActive(window)
                 return state
             }
+        }
+        if let window = lastActiveWindow,
+           window.isVisible,
+           !window.isMiniaturized,
+           let state = entries[ObjectIdentifier(window)]?.state {
+            return state
         }
         // AppKit clears key/main-window state while a native menu tracks.
         // The visible SiteForge window remains the authoritative command
@@ -2511,8 +2593,17 @@ private final class WorkspaceCommandTargetRegistry {
         if visibleEntries.count == 1 {
             return visibleEntries[0].state
         }
-        guard entries.count == 1 else { return nil }
-        return entries.values.first?.state
+        return entries.count == 1 ? entries.values.first?.state : nil
+    }
+
+    private func prune() {
+        entries = entries.filter { _, entry in
+            entry.state != nil && entry.window != nil
+        }
+        if let lastActiveWindow,
+           entries[ObjectIdentifier(lastActiveWindow)] == nil {
+            self.lastActiveWindow = nil
+        }
     }
 }
 
@@ -2525,7 +2616,11 @@ struct SiteForgeCommands: Commands {
         // FocusedObject snapshot stale even though the AppKit key window is
         // unambiguous. Prefer the window-keyed production registry, then fall
         // back to FocusedObject for view-local command composition.
-        WorkspaceCommandTargetRegistry.shared.activeState() ?? state
+        let registered = WorkspaceCommandTargetRegistry.shared.activeState()
+        // A focused SwiftUI value is valid only before any AppKit window has
+        // registered. Once windows exist, ambiguity must disable commands
+        // rather than target a dismantling scene.
+        return registered ?? (WorkspaceCommandTargetRegistry.shared.hasBindings ? nil : state)
     }
 
     var body: some Commands {
@@ -2545,7 +2640,7 @@ struct SiteForgeCommands: Commands {
                 // the key responder for menu tracking; the registry is bound
                 // to the actual workspace window and therefore owns this
                 // command deterministically.
-                guard let target = WorkspaceCommandTargetRegistry.shared.activeState() ?? state else { return }
+                guard let target = commandState else { return }
                 if target.lifecycle.fileURL == nil { target.lifecycle.presentSavePanel() }
                 else { Task { _ = await target.lifecycle.save() } }
             }
@@ -2562,89 +2657,89 @@ struct SiteForgeCommands: Commands {
         }
         CommandGroup(replacing: .undoRedo) {
             Button("Undo") {
-                state?.undo()
+                commandState?.undo()
             }
                 .keyboardShortcut("z", modifiers: .command)
-                .disabled(launchExperience?.isWorkspaceVisible != true || state?.canUndo != true)
+                .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.canUndo != true)
             Button("Redo") {
-                state?.redo()
+                commandState?.redo()
             }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(launchExperience?.isWorkspaceVisible != true || state?.canRedo != true)
+                .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.canRedo != true)
         }
 
         CommandMenu("Insert") {
             ForEach(CanvasTool.allCases) { tool in
                 Button {
-                    state?.selectTool(tool)
+                    commandState?.selectTool(tool)
                 } label: {
                     Label(tool.title, systemImage: tool.systemImage)
                 }
                 .keyboardShortcut(tool.shortcut, modifiers: [])
-                .disabled(state?.textEditingSession.isActive == true)
+                .disabled(commandState?.textEditingSession.isActive == true)
             }
             Divider()
             Button("Insert Frame at Center") {
-                state?.performDefaultInsertion(.frame, provenance: .menu)
+                commandState?.performDefaultInsertion(.frame, provenance: .menu)
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
-            .disabled(state?.insertionAvailability(.frame).isEnabled != true)
+            .disabled(commandState?.insertionAvailability(.frame).isEnabled != true)
             Button("Insert Text at Center") {
-                state?.performDefaultInsertion(.text, provenance: .menu)
+                commandState?.performDefaultInsertion(.text, provenance: .menu)
             }
             .keyboardShortcut("t", modifiers: [.command, .shift])
-            .disabled(state?.insertionAvailability(.text).isEnabled != true)
+            .disabled(commandState?.insertionAvailability(.text).isEnabled != true)
             Divider()
             Button("Insert Section at Center") {
-                state?.performDefaultInsertion(.section, provenance: .menu)
+                commandState?.performDefaultInsertion(.section, provenance: .menu)
             }
             .keyboardShortcut("1", modifiers: [.command, .option])
-            .disabled(state?.insertionAvailability(.section).isEnabled != true)
+            .disabled(commandState?.insertionAvailability(.section).isEnabled != true)
             Button("Insert Stack at Center") {
-                state?.performDefaultInsertion(.stack, provenance: .menu)
+                commandState?.performDefaultInsertion(.stack, provenance: .menu)
             }
             .keyboardShortcut("2", modifiers: [.command, .option])
-            .disabled(state?.insertionAvailability(.stack).isEnabled != true)
+            .disabled(commandState?.insertionAvailability(.stack).isEnabled != true)
             Button("Insert Grid at Center") {
-                state?.performDefaultInsertion(.grid, provenance: .menu)
+                commandState?.performDefaultInsertion(.grid, provenance: .menu)
             }
             .keyboardShortcut("3", modifiers: [.command, .option])
-            .disabled(state?.insertionAvailability(.grid).isEnabled != true)
+            .disabled(commandState?.insertionAvailability(.grid).isEnabled != true)
         }
 
         CommandMenu("Selection") {
             Button("Edit Selected Text") {
-                guard let nodeID = state?.selectionState.primaryID else { return }
-                state?.beginTextEditing(nodeID: nodeID, provenance: .menu)
+                guard let nodeID = commandState?.selectionState.primaryID else { return }
+                commandState?.beginTextEditing(nodeID: nodeID, provenance: .menu)
             }
             .keyboardShortcut(.return, modifiers: [])
             .disabled(
-                state?.textEditingSession.isActive == true
-                    || (state?.selectionState.primaryID.map {
-                    state?.textEditingAvailability(nodeID: $0).isEnabled != true
+                commandState?.textEditingSession.isActive == true
+                    || (commandState?.selectionState.primaryID.map {
+                    commandState?.textEditingAvailability(nodeID: $0).isEnabled != true
                 } ?? true)
             )
             Button("Commit Text Edit") {
-                state?.commitTextEditing()
+                commandState?.commitTextEditing()
             }
             .keyboardShortcut(.return, modifiers: .command)
-            .disabled(state?.textEditingSession.isActive != true)
+            .disabled(commandState?.textEditingSession.isActive != true)
             Divider()
             Button("Select Next Object") {
-                state?.performSelectionCommand(.next, provenance: .menu)
+                commandState?.performSelectionCommand(.next, provenance: .menu)
             }
             .keyboardShortcut("]", modifiers: .command)
-            .disabled(state?.selectionAvailability(.next).isEnabled != true)
+            .disabled(commandState?.selectionAvailability(.next).isEnabled != true)
             Button("Select Previous Object") {
-                state?.performSelectionCommand(.previous, provenance: .menu)
+                commandState?.performSelectionCommand(.previous, provenance: .menu)
             }
             .keyboardShortcut("[", modifiers: .command)
-            .disabled(state?.selectionAvailability(.previous).isEnabled != true)
+            .disabled(commandState?.selectionAvailability(.previous).isEnabled != true)
             Divider()
             Button("Clear Selection") {
-                state?.performSelectionCommand(.clear, provenance: .menu)
+                commandState?.performSelectionCommand(.clear, provenance: .menu)
             }
-            .disabled(state?.selectionAvailability(.clear).isEnabled != true)
+            .disabled(commandState?.selectionAvailability(.clear).isEnabled != true)
         }
 
         CommandMenu("Preview") {
