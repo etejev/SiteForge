@@ -2,6 +2,13 @@
 
 Last updated: 2026-08-24.
 
+Current work: `SF-AUTHORING-013` is an in-progress, remotely checkpointed
+ordered-fill and linear-gradient foundation. It adds canonical v1 layer/stop
+identity, atomic registry mutation, immutable native renderer adoption, and
+accessible single-selection Inspector layer controls. Six focused selectors
+passed; full visual/persistence/recovery coverage and the milestone gate have
+not yet run. See `docs/evidence/SF-AUTHORING-013-FILL-LAYERS-CHECKPOINT.md`.
+
 Milestone 0 feature work and the final audit-correction pass are complete within their verified scope. The bounded authoring runway is accepted; `SF-AUTHORING-001` through `SF-AUTHORING-009` supply the production viewport, deterministic layout, native renderer, undo-neutral selection, transactional frame/plain-text insertion, move/resize transforms, snapping/guides, inline plain-text editing, and bounded local drag-and-drop foundations for Milestone 1. `SF-PRODUCT-UI-001` adds a full-window native launch/shell visual-system foundation; `SF-PRODUCT-UI-002` adds truthful Pages/Layers/Elements/Assets/Components navigation; `SF-PRODUCT-UI-003` aligns the Inspector and visible-canvas foundations; `SF-AUTHORING-010` makes the first structural Elements—Section, Stack, and Grid—real canonical authoring operations; and `SF-AUTHORING-011` adds bounded native fixed-geometry Inspector editing through the existing canonical transaction path. The final audit records the residual security, migration, accessibility, and product-scope boundaries; this is not a claim that SiteForge is a complete Framer/Webflow replacement.
 
 - Bounded verified foundation slices: native app/test targets, native shell, canonical command model, deterministic project packages, open/save/autosave/recovery, persisted bounded history, approved blank-project defaults, and native launch/loading behavior. This is not an aggregate Milestone 0 release-verification claim.

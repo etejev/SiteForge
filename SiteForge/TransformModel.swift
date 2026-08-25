@@ -41,6 +41,183 @@ struct CanonicalSolidColor: Equatable, Sendable {
     }
 }
 
+// SF-0508-001...008 — canonical ordered fill-layer foundation. Layer and
+// stop identities belong to the document representation; previews and picker
+// drafts deliberately do not. The property codec/registry adoption follows in
+// this bounded slice, so these value types keep validation deterministic and
+// independent of SwiftUI/AppKit presentation.
+enum FillLayerIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "fill-layer"
+}
+typealias FillLayerID = StableIdentifier<FillLayerIdentifierDomain>
+
+enum GradientStopIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "gradient-stop"
+}
+typealias GradientStopID = StableIdentifier<GradientStopIdentifierDomain>
+
+struct CanonicalGradientStop: Equatable, Sendable {
+    let id: GradientStopID
+    let position: Double
+    let color: CanonicalSolidColor
+
+    var isValid: Bool { position.isFinite && (0...1).contains(position) && color.isValid }
+}
+
+enum CanonicalFillLayerKind: String, Equatable, Sendable {
+    case solid
+    case linearGradient
+}
+
+struct CanonicalFillLayer: Equatable, Sendable {
+    let id: FillLayerID
+    let kind: CanonicalFillLayerKind
+    let isEnabled: Bool
+    let solidColor: CanonicalSolidColor?
+    let angleDegrees: Double?
+    let stops: [CanonicalGradientStop]
+
+    static func solid(id: FillLayerID = FillLayerID(), color: CanonicalSolidColor, isEnabled: Bool = true) -> CanonicalFillLayer {
+        CanonicalFillLayer(id: id, kind: .solid, isEnabled: isEnabled, solidColor: color, angleDegrees: nil, stops: [])
+    }
+
+    static func linearGradient(id: FillLayerID = FillLayerID(), angleDegrees: Double = 180, stops: [CanonicalGradientStop], isEnabled: Bool = true) -> CanonicalFillLayer {
+        CanonicalFillLayer(id: id, kind: .linearGradient, isEnabled: isEnabled, solidColor: nil, angleDegrees: angleDegrees, stops: stops)
+    }
+
+    var isValid: Bool {
+        switch kind {
+        case .solid:
+            return solidColor?.isValid == true && angleDegrees == nil && stops.isEmpty
+        case .linearGradient:
+            guard solidColor == nil, let angleDegrees, angleDegrees.isFinite,
+                  stops.count >= 2, Set(stops.map(\.id)).count == stops.count,
+                  stops.allSatisfy(\.isValid) else { return false }
+            // Stop list order is a stable authored/UI ordering. Position is a
+            // separate normalized interpolation coordinate; the renderer will
+            // sort a local immutable copy by position (then stable list index)
+            // so a requested reorder never becomes an impossible operation.
+            return true
+        }
+    }
+
+    /// Canonicalized angle keeps equality, history, and renderer snapshots
+    /// stable while accepting any finite user-facing turn count.
+    var normalizedAngleDegrees: Double? {
+        guard let angleDegrees else { return nil }
+        let value = angleDegrees.truncatingRemainder(dividingBy: 360)
+        return value < 0 ? value + 360 : value
+    }
+}
+
+/// Versioned property codec for the v5 layer model. The ordered identity lists
+/// are canonical identifiers (not presentation color strings); all visual
+/// values remain typed finite numbers. Legacy v4 solid properties are read
+/// only as a deterministic migration input and are never consulted once a v5
+/// order property exists.
+enum CanonicalFillLayerCodec {
+    static let orderKey = "style.fill.layers.v1.order"
+
+    static func layers(for node: DocumentNode) -> [CanonicalFillLayer]? {
+        guard let order = node.insertionStringProperty(orderKey) else { return nil }
+        let identifiers = order.split(separator: ",")
+        // An explicitly empty order is the canonical, authored "no fill"
+        // value. Invalid nonempty orders fail closed to the same no-layer
+        // rendering rather than reviving a legacy property as a second source.
+        if identifiers.isEmpty { return [] }
+        let ids = identifiers.compactMap { FillLayerID(uuidString: String($0)) }
+        guard ids.count == identifiers.count,
+              Set(ids).count == ids.count else { return [] }
+        let layers = ids.compactMap { layer(id: $0, node: node) }
+        return layers.count == ids.count ? layers : []
+    }
+
+    static func legacySolidLayer(for node: DocumentNode) -> CanonicalFillLayer? {
+        let keys = ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"]
+        let channels = keys.compactMap(node.insertionNumberProperty)
+        let color: CanonicalSolidColor
+        let property: NodeProperty
+        if channels.count == 4,
+           let authored = node.insertionProperty("style.fill.red") {
+            color = .init(red: channels[0], green: channels[1], blue: channels[2], alpha: channels[3])
+            property = authored
+        } else if node.insertionStringProperty("style.fill") == "surface",
+                  let legacy = node.insertionProperty("style.fill") {
+            color = .legacySurface
+            property = legacy
+        } else {
+            return nil
+        }
+        guard color.isValid else { return nil }
+        return .solid(id: FillLayerID(property.id.rawValue), color: color)
+    }
+
+    /// Produces the complete canonical property set for a layer snapshot. The
+    /// caller replaces the v1 namespace atomically, so reorder/remove cannot
+    /// leave a second ordering authority behind.
+    static func propertyValues(for layers: [CanonicalFillLayer]) -> [String: PropertyValue] {
+        var values: [String: PropertyValue] = [orderKey: .string(layers.map(\.id.description).joined(separator: ","))]
+        for layer in layers {
+            let prefix = "style.fill.layers.v1.\(layer.id.description)"
+            values["\(prefix).kind"] = .string(layer.kind.rawValue)
+            values["\(prefix).enabled"] = .boolean(layer.isEnabled)
+            switch layer.kind {
+            case .solid:
+                guard let color = layer.solidColor else { continue }
+                values["\(prefix).red"] = .number(color.red); values["\(prefix).green"] = .number(color.green)
+                values["\(prefix).blue"] = .number(color.blue); values["\(prefix).alpha"] = .number(color.alpha)
+            case .linearGradient:
+                values["\(prefix).angle"] = .number(layer.normalizedAngleDegrees ?? 0)
+                values["\(prefix).stops"] = .string(layer.stops.map(\.id.description).joined(separator: ","))
+                for stop in layer.stops {
+                    let stopPrefix = "\(prefix).stop.\(stop.id.description)"
+                    values["\(stopPrefix).position"] = .number(stop.position)
+                    values["\(stopPrefix).red"] = .number(stop.color.red); values["\(stopPrefix).green"] = .number(stop.color.green)
+                    values["\(stopPrefix).blue"] = .number(stop.color.blue); values["\(stopPrefix).alpha"] = .number(stop.color.alpha)
+                }
+            }
+        }
+        return values
+    }
+
+    private static func layer(id: FillLayerID, node: DocumentNode) -> CanonicalFillLayer? {
+        let prefix = "style.fill.layers.v1.\(id.description)"
+        guard let kind = node.insertionStringProperty("\(prefix).kind").flatMap(CanonicalFillLayerKind.init(rawValue:)) else { return nil }
+        guard let enabledProperty = node.insertionProperty("\(prefix).enabled"),
+              case .boolean(let enabled) = enabledProperty.value else { return nil }
+        switch kind {
+        case .solid:
+            guard let color = color(prefix: prefix, node: node) else { return nil }
+            let layer = CanonicalFillLayer.solid(id: id, color: color, isEnabled: enabled)
+            return layer.isValid ? layer : nil
+        case .linearGradient:
+            guard let angle = node.insertionNumberProperty("\(prefix).angle"),
+                  let stopOrder = node.insertionStringProperty("\(prefix).stops") else { return nil }
+            let stopIdentifiers = stopOrder.split(separator: ",")
+            let stops = stopIdentifiers.compactMap { value -> CanonicalGradientStop? in
+                guard let stopID = GradientStopID(uuidString: String(value)) else { return nil }
+                let stopPrefix = "\(prefix).stop.\(stopID.description)"
+                guard let position = node.insertionNumberProperty("\(stopPrefix).position"),
+                      let color = color(prefix: stopPrefix, node: node) else { return nil }
+                return CanonicalGradientStop(id: stopID, position: position, color: color)
+            }
+            guard stops.count == stopIdentifiers.count,
+                  Set(stops.map(\.id)).count == stops.count else { return nil }
+            let layer = CanonicalFillLayer.linearGradient(id: id, angleDegrees: angle, stops: stops, isEnabled: enabled)
+            return layer.isValid ? layer : nil
+        }
+    }
+
+    private static func color(prefix: String, node: DocumentNode) -> CanonicalSolidColor? {
+        guard let red = node.insertionNumberProperty("\(prefix).red"),
+              let green = node.insertionNumberProperty("\(prefix).green"),
+              let blue = node.insertionNumberProperty("\(prefix).blue"),
+              let alpha = node.insertionNumberProperty("\(prefix).alpha") else { return nil }
+        let color = CanonicalSolidColor(red: red, green: green, blue: blue, alpha: alpha)
+        return color.isValid ? color : nil
+    }
+}
+
 enum DesignInspectorValue: Equatable, Sendable {
     case unavailable(String), single(CanonicalSolidColor, PropertyOrigin), mixed
 }
@@ -48,6 +225,109 @@ enum DesignInspectorValue: Equatable, Sendable {
 enum DesignInspectorOpacityValue: Equatable, Sendable { case unavailable(String), single(Double, PropertyOrigin), mixed }
 
 enum DesignInspectorEdit: Sendable { case fill(CanonicalSolidColor?), opacity(Double) }
+
+/// Layer mutations are expressed as values only; the registry validates the
+/// identity-bound selection and emits the existing atomic document command.
+/// No Inspector control may write these properties directly.
+enum DesignFillLayerEdit: Sendable {
+    /// Compatibility operation for the existing single-colour Inspector. It
+    /// resolves or creates one solid layer per applicable node so legacy
+    /// controls migrate through the v1 write path rather than resurrecting
+    /// v4 channel properties.
+    case replaceSolid(CanonicalSolidColor?)
+    case addSolid(id: FillLayerID, color: CanonicalSolidColor)
+    case addLinearGradient(id: FillLayerID, angleDegrees: Double, stops: [CanonicalGradientStop])
+    case remove(FillLayerID)
+    case reorder(FillLayerID, to: Int)
+    case setEnabled(FillLayerID, Bool)
+    case setSolidColor(FillLayerID, CanonicalSolidColor)
+    case setGradientAngle(FillLayerID, Double)
+    case addStop(FillLayerID, CanonicalGradientStop, at: Int)
+    case removeStop(FillLayerID, GradientStopID)
+    case reorderStop(FillLayerID, GradientStopID, to: Int)
+    case setStop(FillLayerID, GradientStopID, position: Double, color: CanonicalSolidColor)
+}
+
+enum DesignFillLayerEditError: Error, Equatable, Sendable {
+    case missingLayer, missingStop, invalidIndex, invalidLayer, invalidStop
+}
+
+extension Array where Element == CanonicalFillLayer {
+    func applying(_ edit: DesignFillLayerEdit) throws -> [CanonicalFillLayer] {
+        var result = self
+        func layerIndex(_ id: FillLayerID) throws -> Int {
+            guard let index = result.firstIndex(where: { $0.id == id }) else { throw DesignFillLayerEditError.missingLayer }
+            return index
+        }
+        switch edit {
+        case .replaceSolid(let color):
+            if let color {
+                guard color.isValid else { throw DesignFillLayerEditError.invalidLayer }
+                if let index = result.lastIndex(where: { $0.kind == .solid }) {
+                    result[index] = .solid(id: result[index].id, color: color, isEnabled: result[index].isEnabled)
+                } else {
+                    result.append(.solid(color: color))
+                }
+            } else {
+                result.removeAll { $0.kind == .solid }
+            }
+        case .addSolid(let id, let color):
+            guard color.isValid, !result.contains(where: { $0.id == id }) else { throw DesignFillLayerEditError.invalidLayer }
+            result.append(.solid(id: id, color: color))
+        case .addLinearGradient(let id, let angle, let stops):
+            let layer = CanonicalFillLayer.linearGradient(id: id, angleDegrees: angle, stops: stops)
+            guard layer.isValid, !result.contains(where: { $0.id == id }) else { throw DesignFillLayerEditError.invalidLayer }
+            result.append(layer)
+        case .remove(let id): result.remove(at: try layerIndex(id))
+        case .reorder(let id, let target):
+            let source = try layerIndex(id); guard result.indices.contains(target) else { throw DesignFillLayerEditError.invalidIndex }
+            let layer = result.remove(at: source); result.insert(layer, at: target)
+        case .setEnabled(let id, let enabled):
+            let index = try layerIndex(id); let layer = result[index]
+            result[index] = CanonicalFillLayer(id: layer.id, kind: layer.kind, isEnabled: enabled, solidColor: layer.solidColor, angleDegrees: layer.angleDegrees, stops: layer.stops)
+        case .setSolidColor(let id, let color):
+            let index = try layerIndex(id); guard color.isValid, result[index].kind == .solid else { throw DesignFillLayerEditError.invalidLayer }
+            result[index] = .solid(id: id, color: color, isEnabled: result[index].isEnabled)
+        case .setGradientAngle(let id, let angle):
+            let index = try layerIndex(id); let layer = result[index]
+            guard layer.kind == .linearGradient, angle.isFinite else { throw DesignFillLayerEditError.invalidLayer }
+            result[index] = .linearGradient(id: id, angleDegrees: angle, stops: layer.stops, isEnabled: layer.isEnabled)
+        case .addStop(let id, let stop, let target):
+            let index = try layerIndex(id); var layer = result[index]
+            guard layer.kind == .linearGradient, stop.isValid, !layer.stops.contains(where: { $0.id == stop.id }), (0...layer.stops.count).contains(target) else { throw DesignFillLayerEditError.invalidStop }
+            var stops = layer.stops
+            stops.insert(stop, at: target)
+            layer = .linearGradient(id: id, angleDegrees: layer.angleDegrees ?? 0, stops: stops, isEnabled: layer.isEnabled)
+            guard layer.isValid else { throw DesignFillLayerEditError.invalidStop }; result[index] = layer
+        case .removeStop(let id, let stopID):
+            let index = try layerIndex(id); let layer = result[index]
+            guard layer.kind == .linearGradient,
+                  let stopIndex = layer.stops.firstIndex(where: { $0.id == stopID }),
+                  layer.stops.count > 2 else { throw DesignFillLayerEditError.invalidStop }
+            var stops = layer.stops
+            stops.remove(at: stopIndex)
+            result[index] = .linearGradient(id: id, angleDegrees: layer.angleDegrees ?? 0, stops: stops, isEnabled: layer.isEnabled)
+        case .reorderStop(let id, let stopID, let target):
+            let index = try layerIndex(id); let layer = result[index]
+            guard layer.kind == .linearGradient,
+                  let source = layer.stops.firstIndex(where: { $0.id == stopID }),
+                  layer.stops.indices.contains(target) else { throw DesignFillLayerEditError.invalidStop }
+            var stops = layer.stops
+            let stop = stops.remove(at: source)
+            stops.insert(stop, at: target)
+            result[index] = .linearGradient(id: id, angleDegrees: layer.angleDegrees ?? 0, stops: stops, isEnabled: layer.isEnabled)
+        case .setStop(let id, let stopID, let position, let color):
+            let index = try layerIndex(id); let layer = result[index]
+            guard layer.kind == .linearGradient, position.isFinite, (0...1).contains(position), color.isValid,
+                  let stopIndex = layer.stops.firstIndex(where: { $0.id == stopID }) else { throw DesignFillLayerEditError.invalidStop }
+            var stops = layer.stops
+            stops[stopIndex] = .init(id: stopID, position: position, color: color)
+            result[index] = .linearGradient(id: id, angleDegrees: layer.angleDegrees ?? 0, stops: stops, isEnabled: layer.isEnabled)
+        }
+        guard Set(result.map(\.id)).count == result.count, result.allSatisfy(\.isValid) else { throw DesignFillLayerEditError.invalidLayer }
+        return result
+    }
+}
 
 /// The initiating native control is retained only for bounded, redacted
 /// diagnostics. Canonical mutations still travel through the same registry.
@@ -65,6 +345,17 @@ struct DesignInspectorCommand: Sendable {
     let identity: DesignInspectorOperationIdentity
     let orderedNodeIDs: [NodeID]
     let edit: DesignInspectorEdit
+    let provenance: DesignInspectorProvenance
+    let cancelled: Bool
+}
+
+/// Identity-gated layer operation. This deliberately shares the same scene,
+/// selection and renderer preconditions as the existing solid/opacity command;
+/// the Inspector only supplies a value edit, never direct property mutation.
+struct DesignFillLayerCommand: Sendable {
+    let identity: DesignInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let edit: DesignFillLayerEdit
     let provenance: DesignInspectorProvenance
     let cancelled: Bool
 }
@@ -95,8 +386,25 @@ struct DesignInspectorCommandRegistry: Sendable {
     static let requirementIDs: Set<String> = ["SF-0508-001", "SF-0508-002", "SF-0508-003", "SF-0508-004", "SF-0508-005", "SF-0508-006", "SF-0508-007", "SF-0508-008"]
     static let fillKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
 
+    /// The v5 layer representation wins whenever its order key is present.
+    /// This prevents a migrated document from consulting legacy RGBA fields as
+    /// a second visual authority; an empty but valid v5 order means no fill.
+    static func resolvedLayers(for node: DocumentNode) -> [CanonicalFillLayer] {
+        guard fillKinds.contains(node.kind) else { return [] }
+        if let layers = CanonicalFillLayerCodec.layers(for: node) { return layers }
+        return CanonicalFillLayerCodec.legacySolidLayer(for: node).map { [$0] } ?? []
+    }
+
     static func resolvedFill(for node: DocumentNode) -> (CanonicalSolidColor?, PropertyOrigin) {
         guard fillKinds.contains(node.kind) else { return (nil, .defaulted) }
+        if let layers = CanonicalFillLayerCodec.layers(for: node) {
+            // A layer document has a single authoritative source. The legacy
+            // keys must never influence the Design summary after migration.
+            guard let solid = layers.last(where: { $0.isEnabled && $0.kind == .solid }),
+                  let color = solid.solidColor else { return (nil, .defaulted) }
+            let key = "style.fill.layers.v1.\(solid.id.description).red"
+            return (color, node.insertionProperty(key)?.origin ?? .authored)
+        }
         let keys = ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"]
         let channels = keys.compactMap(node.insertionNumberProperty)
         if channels.count == 4 {
@@ -183,6 +491,107 @@ struct DesignInspectorCommandRegistry: Sendable {
         guard !applicable.isEmpty else { throw DesignInspectorError.noApplicableTargets }
         guard !changes.isEmpty else { throw DesignInspectorError.noChanges }
         return PreparedDesignInspectorEdit(applicableNodeIDs: applicable, skippedNodeIDs: skipped, skippedReasons: skippedReasons, documentCommand: .batch(changes))
+    }
+
+    /// Compiles one complete layer snapshot per applicable target. v1 keys are
+    /// replaced as a namespace in one batch, while v4 fill keys are removed in
+    /// that same transaction. CommandRegistry supplies the exact inverse,
+    /// including property IDs, origins and prior ordering.
+    func prepare(_ command: DesignFillLayerCommand, in document: CanonicalDocument, context: TransformValidationContext) throws -> PreparedDesignInspectorEdit {
+        guard !command.cancelled else {
+            throw DesignInspectorError.unavailable("The Design layer edit was cancelled; committed appearance is unchanged.")
+        }
+        guard context.isLifecycleAvailable else {
+            throw DesignInspectorError.unavailable(context.lifecycleDisabledReason ?? "Design editing is unavailable during the current document operation.")
+        }
+        guard command.identity.documentID == document.id,
+              command.identity.revision == document.revision,
+              command.identity.pageID == context.activePageID,
+              command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration else {
+            throw DesignInspectorError.stale
+        }
+        guard command.orderedNodeIDs == context.selectedNodeIDs, !command.orderedNodeIDs.isEmpty else {
+            throw DesignInspectorError.stale
+        }
+        guard Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count else {
+            throw DesignInspectorError.unavailable("A Design layer edit cannot contain the same object twice.")
+        }
+        guard document.revision < UInt64.max else {
+            throw DesignInspectorError.unavailable("The document revision cannot accept another Design layer edit.")
+        }
+        guard let page = document.pages.first(where: { $0.id == command.identity.pageID }) else {
+            throw DesignInspectorError.unavailable("The active page is unavailable.")
+        }
+
+        var applicable: [NodeID] = []
+        var skipped: [NodeID] = []
+        var skippedReasons: [NodeID: String] = [:]
+        var changes: [DocumentCommand] = []
+        let legacyKeys: Set<String> = ["style.fill", "style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"]
+
+        for id in command.orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else {
+                throw DesignInspectorError.unavailable("A selected object no longer exists.")
+            }
+            guard context.availableNodeIDs.contains(id),
+                  !node.selectionBooleanProperty("hidden"),
+                  !node.selectionBooleanProperty("locked") else {
+                throw DesignInspectorError.unavailable("A selected object is unavailable, hidden, or locked.")
+            }
+            guard Self.fillKinds.contains(node.kind) else {
+                skipped.append(id)
+                skippedReasons[id] = "This object kind does not support background fill layers."
+                continue
+            }
+
+            let before = Self.resolvedLayers(for: node)
+            let after: [CanonicalFillLayer]
+            do {
+                after = try before.applying(command.edit)
+            } catch {
+                // Error text deliberately carries only the property category,
+                // never node names, document paths, or user-authored content.
+                throw DesignInspectorError.unavailable("The requested fill-layer values are invalid.")
+            }
+            guard after != before || CanonicalFillLayerCodec.layers(for: node) == nil else { continue }
+            applicable.append(id)
+
+            let desired = CanonicalFillLayerCodec.propertyValues(for: after)
+            let owned = node.properties.filter {
+                $0.key.rawValue.hasPrefix("style.fill.layers.v1.") || legacyKeys.contains($0.key.rawValue)
+            }
+            let ownedByKey = Dictionary(uniqueKeysWithValues: owned.map { ($0.key.rawValue, $0) })
+
+            // Deterministic lexical order makes the forward transaction
+            // inspectable and preserves stable IDs when a property survives.
+            for key in desired.keys.sorted() {
+                guard let value = desired[key] else { continue }
+                let old = ownedByKey[key]
+                guard old?.value != value || old?.origin != .authored else { continue }
+                changes.append(.setProperty(.init(
+                    pageID: page.id,
+                    nodeID: id,
+                    property: .init(id: old?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored)
+                )))
+            }
+            for old in owned.sorted(by: { $0.key.rawValue < $1.key.rawValue }) where desired[old.key.rawValue] == nil {
+                changes.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: old.id)))
+            }
+        }
+
+        guard !applicable.isEmpty else { throw DesignInspectorError.noApplicableTargets }
+        guard !changes.isEmpty else { throw DesignInspectorError.noChanges }
+        let documentCommand: DocumentCommand = .batch(changes)
+        guard CommandRegistry().availability(for: documentCommand, in: document).isEnabled else {
+            throw DesignInspectorError.unavailable("The fill-layer edit is no longer valid for the active document.")
+        }
+        return .init(
+            applicableNodeIDs: applicable,
+            skippedNodeIDs: skipped,
+            skippedReasons: skippedReasons,
+            documentCommand: documentCommand
+        )
     }
 }
 

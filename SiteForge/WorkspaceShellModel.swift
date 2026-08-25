@@ -1067,9 +1067,76 @@ final class WorkspaceShellState: ObservableObject {
         DesignInspectorCommandRegistry.opacityValue(nodes: selectedCanonicalNodes)
     }
 
+    /// A scene-facing projection of the canonical v1 ordered layer list. The
+    /// Inspector never owns another copy: its rows are rebuilt from the
+    /// selected node's current document properties after each transaction.
+    func designInspectorFillLayers() -> [CanonicalFillLayer] {
+        guard selectionState.orderedIDs.count == 1,
+              let node = selectedCanonicalNodes.first else { return [] }
+        return DesignInspectorCommandRegistry.resolvedLayers(for: node)
+    }
+
+    var designInspectorLayerEditingReason: String? {
+        guard !selectionState.orderedIDs.isEmpty else {
+            return "Select a Frame, Section, Stack, or Grid to edit fill layers."
+        }
+        let supported = selectedCanonicalNodes.filter { DesignInspectorCommandRegistry.fillKinds.contains($0.kind) }
+        guard !supported.isEmpty else {
+            return "The selected objects do not support background fill layers."
+        }
+        guard selectionState.orderedIDs.count == 1 else {
+            return "Select one supported object to edit its ordered fill layers."
+        }
+        return nil
+    }
+
+    @discardableResult
+    func commitDesignFillLayer(_ edit: DesignFillLayerEdit, operation: String, provenance: DesignInspectorProvenance = .picker) -> Bool {
+        guard let pageID = effectiveSelectedPageID,
+              let plan = canvasRenderPlan,
+              plan.identity.documentID == documentSession.document.id,
+              plan.identity.revision == documentSession.document.revision else {
+            designInspectorFailure = .stale
+            return false
+        }
+        do {
+            let prepared = try designInspectorRegistry.prepare(.init(
+                identity: .init(
+                    documentID: documentSession.document.id,
+                    pageID: pageID,
+                    revision: documentSession.document.revision,
+                    sceneID: plan.identity.sceneID,
+                    rendererGeneration: plan.identity.sceneGeneration
+                ),
+                orderedNodeIDs: selectionState.orderedIDs,
+                edit: edit,
+                provenance: provenance,
+                cancelled: false
+            ), in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.documentCommand)
+            designInspectorFailure = nil
+            lastDesignInspectorAnnouncement = "Design (operation) committed for (prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s")"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
+        } catch let error as DesignInspectorError {
+            designInspectorFailure = error
+            lastDesignInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        } catch {
+            designInspectorFailure = .stale
+            lastDesignInspectorAnnouncement = "Design (operation) could not commit; appearance is unchanged"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        }
+    }
+
     @discardableResult
     func commitDesignFill(_ color: CanonicalSolidColor?, provenance: DesignInspectorProvenance = .picker) -> Bool {
-        commitDesignEdit(.fill(color), operation: "solid-fill", provenance: provenance)
+        // The established colour well and hexadecimal path now compile to the
+        // v1 layer registry as well. That atomically adapts legacy fill data
+        // on first edit and never leaves v4 channels as a competing source.
+        commitDesignFillLayer(.replaceSolid(color), operation: "solid-fill", provenance: provenance)
     }
 
     @discardableResult
@@ -3152,6 +3219,28 @@ final class WorkspaceShellState: ObservableObject {
             case .image: .imagePlaceholder
             case .component: .container
             }
+            // Resolve canonical v1 layers before the immutable scene crosses
+            // to the render worker. `resolvedLayers` adapts legacy v4 solid
+            // data only when no v1 order key exists, so the worker never has
+            // two competing fill authorities for the same geometry snapshot.
+            let fillLayers = DesignInspectorCommandRegistry.resolvedLayers(for: node).map { layer in
+                switch layer.kind {
+                case .solid:
+                    return CanvasAuthoredFillLayer(
+                        id: layer.id.rawValue, kind: .solid, isEnabled: layer.isEnabled,
+                        rgba: layer.solidColor.map { [$0.red, $0.green, $0.blue, $0.alpha] },
+                        angleDegrees: nil, stops: []
+                    )
+                case .linearGradient:
+                    return CanvasAuthoredFillLayer(
+                        id: layer.id.rawValue, kind: .linearGradient, isEnabled: layer.isEnabled,
+                        rgba: nil, angleDegrees: layer.normalizedAngleDegrees,
+                        stops: layer.stops.map {
+                            .init(id: $0.id.rawValue, position: $0.position, rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha])
+                        }
+                    )
+                }
+            }
             return CanvasRenderObject(
                 id: node.id,
                 frame: frame,
@@ -3162,7 +3251,8 @@ final class WorkspaceShellState: ObservableObject {
                 accessibilityLabel: node.kind == .text ? "Text object" : node.name,
                 plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
                 displayName: node.kind == .text ? nil : node.name,
-                fillRGBA: DesignInspectorCommandRegistry.resolvedFill(for: node).0.map { [$0.red, $0.green, $0.blue, $0.alpha] },
+                fillRGBA: nil,
+                fillLayers: fillLayers,
                 opacity: DesignInspectorCommandRegistry.resolvedOpacity(for: node)?.0 ?? 1
             )
         }

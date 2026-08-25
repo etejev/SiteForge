@@ -95,6 +95,110 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(preview.deterministicDigest, CanvasRendererCore().previewSnapshot(from: fixture.scene).deterministicDigest)
     }
 
+    // SF-0508-001, SF-0508-003, SF-0508-004, SF-0508-005
+    func testAuthoredFillLayerCompositorPreservesOrderDisabledLayersStopsAnglesAndOpacity() throws {
+        let bottom = fillLayer("11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa", rgba: [1, 0, 0, 1])
+        let top = fillLayer("22222222-aaaa-aaaa-aaaa-aaaaaaaaaaaa", rgba: [0, 0, 1, 0.5])
+        let disabled = CanvasAuthoredFillLayer(
+            id: UUID(uuidString: "33333333-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+            kind: .solid,
+            isEnabled: false,
+            rgba: [0, 1, 0, 1],
+            angleDegrees: nil,
+            stops: []
+        )
+        assertRGBA(
+            try XCTUnwrap(CanvasAuthoredFillCompositor.resolvedColor(layers: [bottom, disabled, top], atNormalizedPoint: (x: 0.5, y: 0.5))),
+            equals: [0.5, 0, 0.5, 1]
+        )
+        assertRGBA(
+            try XCTUnwrap(CanvasAuthoredFillCompositor.resolvedColor(layers: [top, bottom], atNormalizedPoint: (x: 0.5, y: 0.5))),
+            equals: [1, 0, 0, 1]
+        )
+        XCTAssertEqual(
+            CanvasAuthoredFillCompositor.applyingObjectOpacity([0.5, 0, 0.5, 1], opacity: 0.4),
+            [0.5, 0, 0.5, 0.4]
+        )
+        XCTAssertNil(CanvasAuthoredFillCompositor.applyingObjectOpacity([0, 0, 0], opacity: 1))
+
+        let gradient = gradientLayer(
+            "44444444-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            angle: 0,
+            // Authored stop identity/order is deliberately not positional.
+            stops: [
+                gradientStop("aaaaaaaa-bbbb-cccc-dddd-000000000003", position: 1, rgba: [0, 0, 1, 1]),
+                gradientStop("aaaaaaaa-bbbb-cccc-dddd-000000000001", position: 0, rgba: [1, 0, 0, 1]),
+                gradientStop("aaaaaaaa-bbbb-cccc-dddd-000000000002", position: 0.5, rgba: [0, 1, 0, 1]),
+            ]
+        )
+        XCTAssertEqual(CanvasAuthoredFillCompositor.interpolationStops(for: gradient).map(\.id), [
+            UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-000000000001")!,
+            UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-000000000002")!,
+            UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-000000000003")!,
+        ])
+        assertRGBA(try XCTUnwrap(CanvasAuthoredFillCompositor.color(for: gradient, atNormalizedPoint: (x: 0.25, y: 0.5))), equals: [0.5, 0.5, 0, 1])
+        assertRGBA(try XCTUnwrap(CanvasAuthoredFillCompositor.color(for: gradient, atNormalizedPoint: (x: 0.75, y: 0.5))), equals: [0, 0.5, 0.5, 1])
+        let vertical = gradientLayer(
+            "55555555-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            angle: 90,
+            stops: [
+                gradientStop("aaaaaaaa-bbbb-cccc-dddd-000000000004", position: 0, rgba: [0, 0, 0, 1]),
+                gradientStop("aaaaaaaa-bbbb-cccc-dddd-000000000005", position: 1, rgba: [1, 1, 1, 1]),
+            ]
+        )
+        assertRGBA(try XCTUnwrap(CanvasAuthoredFillCompositor.color(for: vertical, atNormalizedPoint: (x: 0.5, y: 0))), equals: [0, 0, 0, 1])
+        assertRGBA(try XCTUnwrap(CanvasAuthoredFillCompositor.color(for: vertical, atNormalizedPoint: (x: 0.5, y: 1))), equals: [1, 1, 1, 1])
+    }
+
+    // SF-0508-001, SF-0508-004, SF-0508-005
+    func testFillLayersAreImmutablePlanDataAndExcludeEditorOverlays() throws {
+        let fixture = try makeFixture(count: 1)
+        let legacyColor = [0.12, 0.34, 0.56, 0.78]
+        let v1Layer = fillLayer("66666666-aaaa-aaaa-aaaa-aaaaaaaaaaaa", rgba: legacyColor)
+        let object = CanvasRenderObject(
+            id: fixture.scene.objects[0].id,
+            frame: fixture.scene.objects[0].frame,
+            clipRect: fixture.scene.objects[0].clipRect,
+            paintOrder: 0,
+            style: .frameSurface,
+            isVisible: true,
+            accessibilityLabel: "Frame",
+            fillRGBA: legacyColor,
+            fillLayers: [v1Layer],
+            opacity: 0.5
+        )
+        let scene = CanvasRenderSceneSnapshot(identity: fixture.scene.identity, surfaceID: fixture.scene.surfaceID, objects: [object])
+        let overlay = CanvasEditorOverlay(
+            id: CanvasOverlayID(UUID(uuidString: "77777777-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!),
+            objectID: object.id,
+            frame: object.frame,
+            kind: "selection"
+        )
+        let plan = try CanvasRendererCore().prepare(
+            scene: scene,
+            overlays: .init(identity: scene.identity, overlays: [overlay]),
+            viewport: fixture.viewport
+        )
+        XCTAssertEqual(plan.authoredObjects.first?.fillLayers, [v1Layer])
+        XCTAssertEqual(CanvasRendererCore().hitTest(WorldPoint(x: 5, y: 5), in: plan), object.id)
+        let preview = CanvasRendererCore().previewSnapshot(from: scene)
+        XCTAssertEqual(preview.objects.first?.fillLayers, [v1Layer])
+        XCTAssertFalse(String(describing: preview).contains("selection"))
+
+        var display = CanvasRenderDisplayState()
+        try display.adopt(plan, expected: scene.identity)
+        let staleIdentity = CanvasRenderRequestIdentity(
+            documentID: scene.identity.documentID,
+            revision: scene.identity.revision + 1,
+            sceneID: scene.identity.sceneID,
+            sceneGeneration: scene.identity.sceneGeneration,
+            viewportGeneration: scene.identity.viewportGeneration,
+            scale: scene.identity.scale
+        )
+        XCTAssertThrowsError(try display.adopt(plan, expected: staleIdentity))
+        XCTAssertEqual(display.lastValidPlan?.authoredObjects.first?.fillLayers, [v1Layer])
+    }
+
     // SF-0407-002, SF-0407-003, SF-0407-007
     func testIncrementalDirtyRegionsAndCompositorOnlyViewportChanges() throws {
         let fixture = try makeFixture(count: 4)
@@ -327,5 +431,36 @@ final class CanvasRendererTests: XCTestCase {
     private func deterministicUUID(_ value: Int) -> UUID {
         let suffix = String(format: "%012x", value + 1)
         return UUID(uuidString: "44444444-4444-4444-8444-\(suffix)")!
+    }
+
+    private func fillLayer(_ identifier: String, rgba: [Double]) -> CanvasAuthoredFillLayer {
+        CanvasAuthoredFillLayer(
+            id: UUID(uuidString: identifier)!, kind: .solid,
+            isEnabled: true, rgba: rgba, angleDegrees: nil, stops: []
+        )
+    }
+
+    private func gradientLayer(_ identifier: String, angle: Double, stops: [CanvasGradientStop]) -> CanvasAuthoredFillLayer {
+        CanvasAuthoredFillLayer(
+            id: UUID(uuidString: identifier)!, kind: .linearGradient,
+            isEnabled: true, rgba: nil, angleDegrees: angle, stops: stops
+        )
+    }
+
+    private func gradientStop(_ identifier: String, position: Double, rgba: [Double]) -> CanvasGradientStop {
+        CanvasGradientStop(id: UUID(uuidString: identifier)!, position: position, rgba: rgba)
+    }
+
+    private func assertRGBA(
+        _ actual: [Double],
+        equals expected: [Double],
+        accuracy: Double = 0.000_001,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(actual.count, expected.count, file: file, line: line)
+        for (actualChannel, expectedChannel) in zip(actual, expected) {
+            XCTAssertEqual(actualChannel, expectedChannel, accuracy: accuracy, file: file, line: line)
+        }
     }
 }

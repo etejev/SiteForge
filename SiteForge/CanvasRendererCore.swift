@@ -29,6 +29,136 @@ enum CanvasPaintStyle: String, Codable, Hashable, Sendable {
     case canvas, page, container, frameSurface, sectionSurface, stackSurface, gridSurface, imagePlaceholder, textPlaceholder
 }
 
+/// Immutable, renderer-facing fill data. This is derived from the canonical
+/// `style.fill.layers.v1` properties while building a scene snapshot; it is
+/// never edited by the renderer and therefore cannot race geometry adoption.
+struct CanvasGradientStop: Codable, Hashable, Sendable {
+    /// Renderer snapshots use raw stable UUID values so this headless canvas
+    /// contract remains independent of the canonical command/model slice.
+    let id: UUID
+    let position: Double
+    let rgba: [Double]
+
+    var isValid: Bool {
+        position.isFinite && (0...1).contains(position)
+            && rgba.count == 4 && rgba.allSatisfy { $0.isFinite && (0...1).contains($0) }
+    }
+}
+
+enum CanvasAuthoredFillKind: String, Codable, Hashable, Sendable {
+    case solid
+    case linearGradient
+}
+
+struct CanvasAuthoredFillLayer: Codable, Hashable, Sendable {
+    let id: UUID
+    let kind: CanvasAuthoredFillKind
+    let isEnabled: Bool
+    let rgba: [Double]?
+    /// Degrees are normalized to [0, 360), where 0 is left-to-right in the
+    /// canonical top-left/Y-down viewport coordinate convention.
+    let angleDegrees: Double?
+    /// Stable authored order is retained here. Interpolation uses a local
+    /// stable position sort so the author can reorder equal/overlapping stops.
+    let stops: [CanvasGradientStop]
+
+    var isValid: Bool {
+        switch kind {
+        case .solid:
+            return rgba?.count == 4 && rgba!.allSatisfy { $0.isFinite && (0...1).contains($0) }
+                && angleDegrees == nil && stops.isEmpty
+        case .linearGradient:
+            return rgba == nil && (angleDegrees?.isFinite ?? false)
+                && stops.count >= 2 && Set(stops.map(\.id)).count == stops.count
+                && stops.allSatisfy(\.isValid)
+        }
+    }
+}
+
+/// Pure compositing policy shared by focused renderer tests and native paint
+/// preparation. Alpha uses ordinary source-over compositing; object opacity is
+/// intentionally applied by the caller exactly once after all layer values.
+enum CanvasAuthoredFillCompositor {
+    /// The gradient stop list is authored and persisted in identity/order
+    /// order. Sampling deliberately uses this local stable position order so
+    /// rendering cannot mutate or reinterpret the canonical stop list.
+    static func interpolationStops(for layer: CanvasAuthoredFillLayer) -> [CanvasGradientStop] {
+        layer.stops.enumerated().sorted {
+            $0.element.position == $1.element.position ? $0.offset < $1.offset : $0.element.position < $1.element.position
+        }.map(\.element)
+    }
+
+    /// A unit-space direction for the top-left/Y-down canvas convention.
+    /// Zero degrees therefore runs left-to-right and ninety degrees runs
+    /// top-to-bottom. Native paint and deterministic sampling use this one
+    /// conversion rather than applying independent Core Graphics flips.
+    static func normalizedGradientLine(angleDegrees: Double) -> (start: (x: Double, y: Double), end: (x: Double, y: Double)) {
+        let radians = angleDegrees * .pi / 180
+        let dx = cos(radians), dy = sin(radians)
+        let extent = max(Double.leastNonzeroMagnitude, abs(dx) + abs(dy))
+        return (
+            start: (x: 0.5 - dx / (2 * extent), y: 0.5 - dy / (2 * extent)),
+            end: (x: 0.5 + dx / (2 * extent), y: 0.5 + dy / (2 * extent))
+        )
+    }
+
+    /// Object opacity is applied once after the complete authored layer
+    /// stack. Layer colors remain straight RGBA, which matches CGContext's
+    /// alpha compositing and prevents a layer alpha from being multiplied
+    /// twice during renderer adoption.
+    static func applyingObjectOpacity(_ rgba: [Double], opacity: Double) -> [Double]? {
+        guard rgba.count == 4, rgba.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
+              opacity.isFinite, (0...1).contains(opacity) else { return nil }
+        return [rgba[0], rgba[1], rgba[2], rgba[3] * opacity]
+    }
+
+    static func resolvedColor(
+        layers: [CanvasAuthoredFillLayer],
+        atNormalizedPoint point: (x: Double, y: Double)
+    ) -> [Double]? {
+        var result: [Double]?
+        for layer in layers where layer.isEnabled {
+            guard let source = color(for: layer, atNormalizedPoint: point) else { continue }
+            result = composite(source: source, over: result)
+        }
+        return result
+    }
+
+    static func color(for layer: CanvasAuthoredFillLayer, atNormalizedPoint point: (x: Double, y: Double)) -> [Double]? {
+        guard layer.isValid else { return nil }
+        switch layer.kind {
+        case .solid: return layer.rgba
+        case .linearGradient:
+            guard let angle = layer.angleDegrees else { return nil }
+            let line = normalizedGradientLine(angleDegrees: angle)
+            let dx = line.end.x - line.start.x, dy = line.end.y - line.start.y
+            let denominator = dx * dx + dy * dy
+            guard denominator > 0 else { return nil }
+            let projection = ((point.x - line.start.x) * dx + (point.y - line.start.y) * dy) / denominator
+            let ordered = interpolationStops(for: layer)
+            guard let first = ordered.first, let last = ordered.last else { return nil }
+            if projection <= first.position { return first.rgba }
+            if projection >= last.position { return last.rgba }
+            for pair in zip(ordered, ordered.dropFirst()) where projection <= pair.1.position {
+                let span = pair.1.position - pair.0.position
+                let t = span == 0 ? 1 : (projection - pair.0.position) / span
+                return zip(pair.0.rgba, pair.1.rgba).map { $0 + ($1 - $0) * t }
+            }
+            return last.rgba
+        }
+    }
+
+    private static func composite(source: [Double], over destination: [Double]?) -> [Double] {
+        guard let destination else { return source }
+        let sourceAlpha = source[3], destinationAlpha = destination[3]
+        let outputAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha)
+        guard outputAlpha > 0 else { return [0, 0, 0, 0] }
+        return (0..<3).map { channel in
+            (source[channel] * sourceAlpha + destination[channel] * destinationAlpha * (1 - sourceAlpha)) / outputAlpha
+        } + [outputAlpha]
+    }
+}
+
 struct CanvasRenderObject: Codable, Hashable, Sendable {
     let id: NodeID
     let frame: WorldRect
@@ -44,6 +174,9 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     /// Authored color is distinct from `CanvasPaintStyle` (the bounded
     /// renderer's semantic fallback) and from editor-only overlays.
     let fillRGBA: [Double]?
+    /// Authoritative ordered layers for v1 documents. An empty value means
+    /// legacy scene input, where `fillRGBA` retains compatibility only.
+    let fillLayers: [CanvasAuthoredFillLayer]
     let opacity: Double
 
     init(
@@ -57,6 +190,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         plainText: String? = nil,
         displayName: String? = nil,
         fillRGBA: [Double]? = nil,
+        fillLayers: [CanvasAuthoredFillLayer] = [],
         opacity: Double = 1
     ) {
         self.id = id
@@ -69,6 +203,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.plainText = plainText
         self.displayName = displayName
         self.fillRGBA = fillRGBA
+        self.fillLayers = fillLayers
         self.opacity = opacity
     }
 }
@@ -330,7 +465,10 @@ struct CanvasRendererCore: Sendable {
             }
             guard object.frame.isValid, object.frame.size.width <= CanvasRendererPolicy.maximumRasterDimension,
                   object.frame.size.height <= CanvasRendererPolicy.maximumRasterDimension,
-                  object.clipRect?.isValid != false, !object.accessibilityLabel.isEmpty else {
+                  object.clipRect?.isValid != false, !object.accessibilityLabel.isEmpty,
+                  object.opacity.isFinite, (0...1).contains(object.opacity),
+                  (object.fillRGBA == nil || (object.fillRGBA?.count == 4 && object.fillRGBA!.allSatisfy({ $0.isFinite && (0...1).contains($0) }))),
+                  object.fillLayers.allSatisfy(\.isValid) else {
                 throw CanvasRendererError.invalidObject(object.id)
             }
         }

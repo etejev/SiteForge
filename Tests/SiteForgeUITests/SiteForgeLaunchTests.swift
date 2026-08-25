@@ -27,7 +27,7 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     // SF-0406-001 through SF-0406-008
     func testInlinePlainTextEditingCommitCancelUndoRedoAndAccessibilityJourney() throws {
-        let application = launchWorkspace()
+        let application = launchWorkspace(windowAlignment: .right)
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
 
@@ -488,6 +488,41 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValue(hex, containing: "#20406080"))
         XCTAssertNotEqual(prior, hex.value as? String)
         attachWindowScreenshot(application, named: "SF-AUTHORING-012 cancel undo")
+    }
+
+    // SF-0508-001 through SF-0508-006 — visible, keyboard/accessibility
+    // discoverable v1 layer controls must drive the same canonical registry
+    // as the established native colour and opacity controls.
+    func testDesignInspectorOrderedFillLayersAccessibilityJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        application.buttons["canvas.empty.insert.frame"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["inspector.tab.design"].click()
+
+        let layerList = application.descendants(matching: .any)["inspector.design.layers"]
+        let addSolid = application.buttons["inspector.design.layers.addSolid"]
+        let addGradient = application.buttons["inspector.design.layers.addGradient"]
+        XCTAssertTrue(layerList.waitForExistence(timeout: 5))
+        XCTAssertTrue(addSolid.isHittable && addGradient.isHittable)
+        addGradient.click()
+        let angle = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier CONTAINS %@", ".angle"))
+            .firstMatch
+        XCTAssertTrue(angle.waitForExistence(timeout: 5))
+        XCTAssertEqual(angle.label, "Linear gradient angle")
+        angle.click(); angle.typeKey("a", modifierFlags: .command); angle.typeText("90"); angle.typeKey(.return, modifierFlags: [])
+
+        let enabled = application.checkBoxes.matching(NSPredicate(format: "identifier CONTAINS %@", ".enabled"))
+            .allElementsBoundByIndex.last ?? application.checkBoxes.firstMatch
+        XCTAssertTrue(enabled.waitForExistence(timeout: 5))
+        XCTAssertTrue(enabled.isEnabled)
+        enabled.click()
+        let delete = application.buttons[angle.identifier.replacingOccurrences(of: ".angle", with: ".delete")]
+        XCTAssertTrue(delete.exists && delete.isHittable)
+        delete.click()
+        XCTAssertTrue(waitForNonexistence(angle, timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-013 ordered fill layers")
     }
 
     // SF-0508-001...006 — real Layers selection drives the same Design

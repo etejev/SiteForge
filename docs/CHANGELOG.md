@@ -4,6 +4,15 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
+### Added
+
+- Started the bounded ordered-fill and linear-gradient foundation. Structural
+  surfaces can now adopt immutable, canonical ordered v1 solid/linear layers
+  in the native renderer, while the Design Inspector exposes accessible layer
+  add, enable, reorder, delete, angle, and stop controls. This remains an
+  in-progress checkpoint; image/effect fills and the broader SF-0508 module
+  are still deferred.
+
 ### Fixed
 
 - Corrected native command ownership when SwiftUI replaces a workspace state

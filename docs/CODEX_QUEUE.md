@@ -8,7 +8,14 @@ None.
 
 ## IN PROGRESS
 
-None.
+- [ ] `SF-AUTHORING-013` Implement bounded ordered fill layers and linear gradients.
+  - Requirements: bounded continuation of `SF-0508-001` through `SF-0508-008` following `SF-AUTHORING-012`.
+  - Plan: retain `DocumentNode.properties` as the only canonical style storage. Introduce stable fill-layer and gradient-stop identities, versioned ordered property encoding, deterministic solid/linear-gradient resolution, and schema-v4 solid-fill migration before wiring one central Design Inspector registry and native renderer/Inspector presentation. Draft previews stay scene-local; each committed layer operation remains a single atomic existing-property transaction with an exact inverse.
+  - Acceptance: applicable Frame, Section, Stack, and Grid selections can add, remove, reorder, enable/disable, and edit solid/linear-gradient layers; gradient stops have finite normalized RGBA/position and deterministic angle/defaults. Renderer, history, persistence/recovery, selection, and accessibility share the committed identities and style.
+  - Current checkpoint evidence (2026-08-24): `testCanonicalFillLayerFoundationValidatesStableOrderAndGradientDefaults`, `testDesignFillLayerRegistryCommitsOrderedLayersWithExactHistoryAndPersistence`, `testDesignFillLayerRegistryRejectsInvalidStaleCancelAndAllInapplicableEdits`, `testAuthoredFillLayerCompositorPreservesOrderDisabledLayersStopsAnglesAndOpacity`, `testFillLayersAreImmutablePlanDataAndExcludeEditorOverlays`, and `testDesignInspectorOrderedFillLayersAccessibilityJourney` each passed as focused selectors (6/6). The registry serializes complete `style.fill.layers.v1` snapshots, atomically retires v4 fill keys on first v1 write, and the native renderer now adopts an immutable ordered layer snapshot for structural surfaces. The visible Inspector has an accessible single-selection layer list with add-solid, add-gradient, enable, reorder, delete, angle, and stop-position controls; every operation routes through the registry. Evidence: `docs/evidence/SF-AUTHORING-013-FILL-LAYERS-CHECKPOINT.md`.
+  - Next machine action: extend the visible layer editor with native colour controls for individual solid layers and gradient stops, then add focused persistence/migration and exact raster pixel coverage before any milestone-wide test gate.
+  - Explicit exclusions: image fills, blend/filter effects, borders, shadows, tokens, broad color-profile work, responsive overrides, preview/export parity, and release acceptance.
+  - Dependencies: `SF-AUTHORING-012`; the separate `SF-TEST-HARNESS-001` runner issue does not change product behavior or block focused model work.
 
 ## DONE
 

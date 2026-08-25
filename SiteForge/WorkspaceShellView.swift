@@ -1895,6 +1895,7 @@ private struct DesignInspectorFieldsView: View {
             }
             if let message { Text(message).font(.caption).foregroundStyle(.red).accessibilityIdentifier("inspector.design.validation") }
             Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("inspector.design.announcement")
+            FillLayerListInspectorView(state: state)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Design appearance")
@@ -2009,6 +2010,159 @@ private struct DesignInspectorFieldsView: View {
     private func unavailableHint(_ value: DesignInspectorOpacityValue) -> String {
         if case .unavailable(let reason) = value { return reason }
         return ""
+    }
+}
+
+/// Accessible editor for the canonical `style.fill.layers.v1` list. The
+/// controls intentionally submit value edits to `DesignInspectorCommandRegistry`
+/// through `WorkspaceShellState`; their row state is a document projection,
+/// never a second mutable layer model.
+private struct FillLayerListInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @State private var angleDrafts: [FillLayerID: String] = [:]
+    @State private var stopDrafts: [GradientStopID: String] = [:]
+
+    private var layers: [CanonicalFillLayer] { state.designInspectorFillLayers() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Divider()
+            Text("Fill Layers").font(.headline)
+            if let reason = state.designInspectorLayerEditingReason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.design.layers.unavailable")
+            } else {
+                ForEach(Array(layers.enumerated()), id: \.element.id) { index, layer in
+                    layerRow(layer, index: index)
+                }
+                HStack(spacing: 7) {
+                    Button("Add Solid") {
+                        _ = state.commitDesignFillLayer(
+                            .addSolid(id: FillLayerID(), color: .legacySurface),
+                            operation: "add solid layer", provenance: .accessibility
+                        )
+                    }
+                    .accessibilityIdentifier("inspector.design.layers.addSolid")
+                    Button("Add Linear Gradient") {
+                        _ = state.commitDesignFillLayer(
+                            .addLinearGradient(
+                                id: FillLayerID(), angleDegrees: 0,
+                                stops: [
+                                    .init(id: GradientStopID(), position: 0, color: .legacySurface),
+                                    .init(id: GradientStopID(), position: 1, color: .init(red: 0.18, green: 0.36, blue: 0.86, alpha: 1)),
+                                ]
+                            ), operation: "add linear gradient", provenance: .accessibility
+                        )
+                    }
+                    .accessibilityIdentifier("inspector.design.layers.addGradient")
+                }
+                .controlSize(.small)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Fill layers")
+        .accessibilityIdentifier("inspector.design.layers")
+    }
+
+    @ViewBuilder
+    private func layerRow(_ layer: CanonicalFillLayer, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Toggle(isOn: Binding(
+                    get: { layer.isEnabled },
+                    set: { enabled in
+                        _ = state.commitDesignFillLayer(.setEnabled(layer.id, enabled), operation: enabled ? "enable fill layer" : "disable fill layer", provenance: .accessibility)
+                    }
+                )) {
+                    Text(layer.kind == .solid ? "Solid fill" : "Linear gradient")
+                        .lineLimit(1)
+                }
+                .toggleStyle(.checkbox)
+                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).enabled")
+                Spacer(minLength: 0)
+                Button("Up") { move(layer, from: index, by: -1) }
+                    .disabled(index == 0)
+                    .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).up")
+                Button("Down") { move(layer, from: index, by: 1) }
+                    .disabled(index + 1 == layers.count)
+                    .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).down")
+                Button("Delete") {
+                    _ = state.commitDesignFillLayer(.remove(layer.id), operation: "remove fill layer", provenance: .accessibility)
+                }
+                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).delete")
+            }
+            if layer.kind == .linearGradient {
+                HStack(spacing: 6) {
+                    TextField("Angle", text: angleBinding(for: layer))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 110)
+                        .onSubmit { commitAngle(layer) }
+                        .accessibilityLabel("Linear gradient angle")
+                        .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).angle")
+                    Text("degrees").font(.caption).foregroundStyle(.secondary)
+                    Button("Add Stop") {
+                        _ = state.commitDesignFillLayer(
+                            .addStop(layer.id, .init(id: GradientStopID(), position: 0.5, color: .legacySurface), at: layer.stops.count),
+                            operation: "add gradient stop", provenance: .accessibility
+                        )
+                    }
+                    .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).addStop")
+                }
+                ForEach(layer.stops, id: \.id) { stop in
+                    HStack(spacing: 6) {
+                        Text("Stop")
+                        TextField("Position", text: stopBinding(for: stop))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 80)
+                            .onSubmit { commitStopPosition(stop, in: layer) }
+                            .accessibilityLabel("Gradient stop position")
+                            .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).stop.\(stop.id.description).position")
+                        Text("%")
+                        Button("Remove Stop") {
+                            _ = state.commitDesignFillLayer(.removeStop(layer.id, stop.id), operation: "remove gradient stop", provenance: .accessibility)
+                        }
+                        .disabled(layer.stops.count <= 2)
+                    }
+                    .font(.caption)
+                }
+            }
+        }
+        .padding(6)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func move(_ layer: CanonicalFillLayer, from index: Int, by delta: Int) {
+        let target = index + delta
+        guard layers.indices.contains(target) else { return }
+        _ = state.commitDesignFillLayer(.reorder(layer.id, to: target), operation: "reorder fill layer", provenance: .accessibility)
+    }
+
+    private func angleBinding(for layer: CanonicalFillLayer) -> Binding<String> {
+        Binding(
+            get: { angleDrafts[layer.id] ?? String(format: "%.0f", layer.normalizedAngleDegrees ?? 0) },
+            set: { angleDrafts[layer.id] = $0 }
+        )
+    }
+
+    private func stopBinding(for stop: CanonicalGradientStop) -> Binding<String> {
+        Binding(
+            get: { stopDrafts[stop.id] ?? String(format: "%.0f", stop.position * 100) },
+            set: { stopDrafts[stop.id] = $0 }
+        )
+    }
+
+    private func commitAngle(_ layer: CanonicalFillLayer) {
+        guard let text = angleDrafts[layer.id], let angle = Double(text), angle.isFinite else { return }
+        _ = state.commitDesignFillLayer(.setGradientAngle(layer.id, angle), operation: "edit gradient angle", provenance: .keyboard)
+        angleDrafts.removeValue(forKey: layer.id)
+    }
+
+    private func commitStopPosition(_ stop: CanonicalGradientStop, in layer: CanonicalFillLayer) {
+        guard let text = stopDrafts[stop.id], let percent = Double(text), percent.isFinite, (0...100).contains(percent) else { return }
+        _ = state.commitDesignFillLayer(.setStop(layer.id, stop.id, position: percent / 100, color: stop.color), operation: "edit gradient stop", provenance: .keyboard)
+        stopDrafts.removeValue(forKey: stop.id)
     }
 }
 
@@ -4251,18 +4405,34 @@ final class CanvasContentTileLayer: CALayer {
             case .imagePlaceholder: .systemPurple.withAlphaComponent(0.22)
             case .textPlaceholder: .labelColor.withAlphaComponent(0.12)
             }
-            let color: NSColor
-            if let rgba = object.fillRGBA, rgba.count == 4 {
-                color = NSColor(calibratedRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3] * object.opacity)
+            // Object opacity applies once to the complete authored layer
+            // stack. Individual layer alpha remains part of normal source-over
+            // compositing; editor overlays are painted by separate layers.
+            context.setAlpha(CGFloat(object.opacity))
+            let renderedSurface: NSColor
+            if !object.fillLayers.isEmpty {
+                for layer in object.fillLayers where layer.isEnabled {
+                    drawAuthoredFillLayer(layer, in: rect, context: context)
+                }
+                renderedSurface = CanvasAuthoredFillCompositor.resolvedColor(
+                    layers: object.fillLayers,
+                    atNormalizedPoint: (x: 0.5, y: 0.5)
+                ).flatMap { self.nsColor($0) } ?? fallback
+            } else if let rgba = object.fillRGBA, rgba.count == 4 {
+                // Compatibility for pre-v1 render snapshots only. Workspace
+                // preparation always supplies `fillLayers` for canonical data.
+                renderedSurface = NSColor(calibratedRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+                context.setFillColor(renderedSurface.cgColor)
+                context.fill(rect)
             } else {
-                color = fallback.withAlphaComponent(fallback.alphaComponent * object.opacity)
+                renderedSurface = fallback
+                context.setFillColor(fallback.cgColor)
+                context.fill(rect)
             }
-            context.setFillColor(color.cgColor)
-            context.fill(rect)
             let baseStroke = object.style == .frameSurface
                 ? NSColor.separatorColor.withAlphaComponent(0.85)
                 : NSColor.separatorColor
-            context.setStrokeColor(baseStroke.withAlphaComponent(baseStroke.alphaComponent * object.opacity).cgColor)
+            context.setStrokeColor(baseStroke.cgColor)
             context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
             context.stroke(rect)
             if [.frameSurface, .sectionSurface, .stackSurface, .gridSurface].contains(object.style), let name = object.displayName {
@@ -4270,7 +4440,7 @@ final class CanvasContentTileLayer: CALayer {
                     name,
                     in: rect,
                     zoom: viewportState.zoom.value,
-                    backgroundColor: color,
+                    backgroundColor: renderedSurface,
                     context: context
                 )
             }
@@ -4279,6 +4449,41 @@ final class CanvasContentTileLayer: CALayer {
             // surfaces so a line crossing a tile boundary cannot duplicate,
             // flip, or drift relative to its selection frame.
             context.restoreGState()
+        }
+    }
+
+    private func nsColor(_ rgba: [Double]) -> NSColor? {
+        guard rgba.count == 4 else { return nil }
+        return NSColor(calibratedRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+    }
+
+    private func drawAuthoredFillLayer(_ layer: CanvasAuthoredFillLayer, in rect: CGRect, context: CGContext) {
+        switch layer.kind {
+        case .solid:
+            guard let rgba = layer.rgba, let color = nsColor(rgba) else { return }
+            context.setFillColor(color.cgColor)
+            context.fill(rect)
+        case .linearGradient:
+            guard let angle = layer.angleDegrees else { return }
+            let ordered = CanvasAuthoredFillCompositor.interpolationStops(for: layer)
+            let colors = ordered.compactMap { nsColor($0.rgba)?.cgColor }
+            guard ordered.count >= 2,
+                  colors.count == ordered.count,
+                  let gradient = CGGradient(
+                    colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                    colors: colors as CFArray,
+                    locations: ordered.map { CGFloat($0.position) }
+                  ) else { return }
+            let line = CanvasAuthoredFillCompositor.normalizedGradientLine(angleDegrees: angle)
+            let start = CGPoint(
+                x: rect.minX + rect.width * line.start.x,
+                y: rect.minY + rect.height * line.start.y
+            )
+            let end = CGPoint(
+                x: rect.minX + rect.width * line.end.x,
+                y: rect.minY + rect.height * line.end.y
+            )
+            context.drawLinearGradient(gradient, start: start, end: end, options: [])
         }
     }
 

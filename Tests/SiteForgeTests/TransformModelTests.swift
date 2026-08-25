@@ -833,6 +833,210 @@ final class TransformModelTests: XCTestCase {
         XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID]), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) { XCTAssertEqual($0 as? DesignInspectorError, .noApplicableTargets) }
         XCTAssertEqual(before.revision, 0)
     }
+    func testCanonicalFillLayerFoundationValidatesStableOrderAndGradientDefaults() {
+        let start = CanonicalGradientStop(id: GradientStopID(UUID(uuidString: "A0000000-0000-4000-8000-000000000001")!), position: 0, color: .legacySurface)
+        let end = CanonicalGradientStop(id: GradientStopID(UUID(uuidString: "A0000000-0000-4000-8000-000000000002")!), position: 1, color: .init(red: 0.1, green: 0.2, blue: 0.3, alpha: 0.4))
+        let layerID = FillLayerID(UUID(uuidString: "A0000000-0000-4000-8000-000000000003")!)
+        let gradient = CanonicalFillLayer.linearGradient(id: layerID, angleDegrees: -180, stops: [start, end])
+        XCTAssertTrue(gradient.isValid)
+        XCTAssertEqual(gradient.normalizedAngleDegrees, 180)
+        XCTAssertTrue(CanonicalFillLayer.solid(color: .legacySurface).isValid)
+        XCTAssertTrue(CanonicalFillLayer.linearGradient(stops: [end, start]).isValid, "Stable stop order is distinct from interpolation position.")
+        XCTAssertFalse(CanonicalFillLayer.linearGradient(stops: [start, start]).isValid)
+        let replacement = CanonicalSolidColor(red: 0.1, green: 0.3, blue: 0.5, alpha: 0.7)
+        let migrated = try? [CanonicalFillLayer.solid(color: .legacySurface)].applying(.replaceSolid(replacement))
+        XCTAssertEqual(migrated?.count, 1)
+        XCTAssertEqual(migrated?.first?.solidColor, replacement)
+        XCTAssertEqual(try? migrated?.applying(.replaceSolid(nil)), [])
+    }
+
+    // SF-0508-001...008 — each layer reducer result is compiled by the
+    // central registry into one identity-gated, invertible property batch.
+    func testDesignFillLayerRegistryCommitsOrderedLayersWithExactHistoryAndPersistence() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        fixture.document.pages[0].nodes[1].kind = .frame
+        fixture.document.pages[0].nodes[2].kind = .text
+        fixture.document.pages[0].nodes[1].properties.append(
+            .init(key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted)
+        )
+        let registry = DesignInspectorCommandRegistry()
+        let solidID = FillLayerID(UUID(uuidString: "A1000000-0000-4000-8000-000000000001")!)
+        let gradientID = FillLayerID(UUID(uuidString: "A1000000-0000-4000-8000-000000000002")!)
+        let startID = GradientStopID(UUID(uuidString: "A1000000-0000-4000-8000-000000000003")!)
+        let endID = GradientStopID(UUID(uuidString: "A1000000-0000-4000-8000-000000000004")!)
+        let middleID = GradientStopID(UUID(uuidString: "A1000000-0000-4000-8000-000000000005")!)
+        let red = CanonicalSolidColor(red: 1, green: 0, blue: 0, alpha: 1)
+        let blue = CanonicalSolidColor(red: 0, green: 0, blue: 1, alpha: 0.5)
+        let stops = [
+            CanonicalGradientStop(id: startID, position: 0, color: red),
+            CanonicalGradientStop(id: endID, position: 1, color: blue),
+        ]
+        func command(
+            _ document: CanonicalDocument,
+            ids: [NodeID],
+            _ edit: DesignFillLayerEdit,
+            cancelled: Bool = false,
+            identity: DesignInspectorOperationIdentity? = nil
+        ) -> DesignFillLayerCommand {
+            .init(
+                identity: identity ?? .init(documentID: document.id, pageID: fixture.pageID, revision: document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: ids,
+                edit: edit,
+                provenance: .automation,
+                cancelled: cancelled
+            )
+        }
+        func context(_ ids: [NodeID]) -> TransformValidationContext {
+            fixture.context(selectedIDs: ids)
+        }
+
+        let addSolid = try registry.prepare(
+            command(fixture.document, ids: [fixture.nodeID, fixture.secondNodeID], .addSolid(id: solidID, color: red)),
+            in: fixture.document,
+            context: context([fixture.nodeID, fixture.secondNodeID])
+        )
+        XCTAssertEqual(addSolid.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(addSolid.skippedNodeIDs, [fixture.secondNodeID])
+        XCTAssertEqual(addSolid.skippedReasons[fixture.secondNodeID], "This object kind does not support background fill layers.")
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(addSolid.documentCommand)
+        func currentFrame(in document: CanonicalDocument) throws -> DocumentNode {
+            try XCTUnwrap(document.pages[0].nodes.first(where: { $0.id == fixture.nodeID }))
+        }
+        var frame = try currentFrame(in: session.document)
+        let legacyLayerID = try XCTUnwrap(DesignInspectorCommandRegistry.resolvedLayers(for: frame).first?.id)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: frame), [
+            .solid(id: legacyLayerID, color: .legacySurface),
+            .solid(id: solidID, color: red),
+        ])
+        XCTAssertNil(frame.insertionProperty("style.fill"), "Legacy fallback is consumed and removed atomically on the first v1 write.")
+        XCTAssertNotNil(frame.insertionProperty(CanonicalFillLayerCodec.orderKey))
+        let solidPropertyIDs = frame.properties.filter { $0.key.rawValue.contains(solidID.description) }.map { $0.id }
+
+        let replacement = CanonicalSolidColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 0.8)
+        let replaceSolid = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .setSolidColor(solidID, replacement)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(replaceSolid.documentCommand)
+
+        let addGradient = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .addLinearGradient(id: gradientID, angleDegrees: 90, stops: stops)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(addGradient.documentCommand)
+        let reorder = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .reorder(gradientID, to: 0)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(reorder.documentCommand)
+        let addStop = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .addStop(gradientID, .init(id: middleID, position: 0.5, color: .legacySurface), at: 1)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(addStop.documentCommand)
+        let changeAngle = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .setGradientAngle(gradientID, 495)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(changeAngle.documentCommand)
+        let editStop = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .setStop(gradientID, middleID, position: 0.75, color: replacement)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(editStop.documentCommand)
+        let reorderStop = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .reorderStop(gradientID, middleID, to: 2)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(reorderStop.documentCommand)
+        let removeStop = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .removeStop(gradientID, middleID)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(removeStop.documentCommand)
+        let disable = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .setEnabled(solidID, false)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(disable.documentCommand)
+
+        frame = try currentFrame(in: session.document)
+        let layers = DesignInspectorCommandRegistry.resolvedLayers(for: frame)
+        XCTAssertEqual(layers.map { $0.id }, [gradientID, legacyLayerID, solidID])
+        XCTAssertEqual(layers[0].normalizedAngleDegrees, 135)
+        XCTAssertEqual(layers[0].stops.map { $0.id }, [startID, endID])
+        XCTAssertEqual(layers[2].solidColor, replacement)
+        XCTAssertFalse(layers[2].isEnabled)
+        XCTAssertEqual(frame.properties.filter { $0.key.rawValue.hasPrefix("style.fill.layers.v1.") && $0.key.rawValue.contains(solidID.description) }.map { $0.id }.filter { solidPropertyIDs.contains($0) }.count, solidPropertyIDs.count)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+
+        let removeGradient = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], .remove(gradientID)),
+            in: session.document,
+            context: context([fixture.nodeID])
+        )
+        _ = try session.execute(removeGradient.documentCommand)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: try currentFrame(in: session.document)).map { $0.id }, [legacyLayerID, solidID])
+        let snapshot = session.document
+        try session.undo()
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: try currentFrame(in: session.document)).first?.id, gradientID)
+        try session.redo()
+        XCTAssertEqual(try currentFrame(in: session.document).properties, try currentFrame(in: snapshot).properties, "Redo restores the complete ordered v1 layer representation exactly.")
+        while session.historySnapshot().undoEntries.count > 0 { try session.undo() }
+        frame = try currentFrame(in: session.document)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: frame).0, .legacySurface)
+        XCTAssertNil(frame.insertionProperty(CanonicalFillLayerCodec.orderKey))
+    }
+
+    // SF-0508-002...006 — invalid/stale/cancelled layer inputs remain fully
+    // neutral and diagnostics disclose category only, never stable IDs.
+    func testDesignFillLayerRegistryRejectsInvalidStaleCancelAndAllInapplicableEdits() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        fixture.document.pages[0].nodes[1].kind = .frame
+        fixture.document.pages[0].nodes[2].kind = .text
+        let registry = DesignInspectorCommandRegistry()
+        let layerID = FillLayerID(UUID(uuidString: "A2000000-0000-4000-8000-000000000001")!)
+        let invalidColor = CanonicalSolidColor(red: .nan, green: 0, blue: 0, alpha: 1)
+        func command(
+            ids: [NodeID],
+            edit: DesignFillLayerEdit,
+            cancelled: Bool = false,
+            identity: DesignInspectorOperationIdentity? = nil
+        ) -> DesignFillLayerCommand {
+            .init(
+                identity: identity ?? .init(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: ids, edit: edit, provenance: .accessibility, cancelled: cancelled
+            )
+        }
+        let before = fixture.document
+        let base = command(ids: [fixture.nodeID], edit: .addSolid(id: layerID, color: .legacySurface))
+        for identity in [
+            DesignInspectorOperationIdentity(documentID: DocumentID(), pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            DesignInspectorOperationIdentity(documentID: fixture.document.id, pageID: PageID(), revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            DesignInspectorOperationIdentity(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision + 1, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            DesignInspectorOperationIdentity(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision, sceneID: CanvasViewportSceneID(), rendererGeneration: fixture.rendererGeneration),
+            DesignInspectorOperationIdentity(documentID: fixture.document.id, pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration + 1),
+        ] {
+            XCTAssertThrowsError(try registry.prepare(.init(identity: identity, orderedNodeIDs: base.orderedNodeIDs, edit: base.edit, provenance: base.provenance, cancelled: false), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) { XCTAssertEqual($0 as? DesignInspectorError, .stale) }
+        }
+        XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID], edit: .addSolid(id: layerID, color: invalidColor)), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) { error in
+            XCTAssertFalse(error.localizedDescription.contains(layerID.description))
+        }
+        XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID], edit: .addSolid(id: layerID, color: .legacySurface), cancelled: true), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.secondNodeID], edit: .addSolid(id: layerID, color: .legacySurface)), in: fixture.document, context: fixture.context(selectedIDs: [fixture.secondNodeID]))) { XCTAssertEqual($0 as? DesignInspectorError, .noApplicableTargets) }
+        XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID, fixture.nodeID], edit: .addSolid(id: layerID, color: .legacySurface)), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID, fixture.nodeID])))
+        XCTAssertEqual(fixture.document, before)
+    }
 }
 
 private struct TransformFixture {
