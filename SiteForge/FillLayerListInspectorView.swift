@@ -139,10 +139,13 @@ struct FillLayerListInspectorView: View {
                     )
                     .frame(width: 38, height: 22)
                 }
-                Button("Delete") {
+                Button("Delete", systemImage: "trash") {
                     _ = state.commitDesignFillLayer(.remove(layer.id), operation: "remove fill layer", provenance: .accessibility)
                 }
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 28, minHeight: 24)
                 .controlSize(.small)
+                .accessibilityLabel("Delete fill layer")
                 .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).delete")
             }
             HStack(spacing: 6) {
@@ -169,14 +172,16 @@ struct FillLayerListInspectorView: View {
                         .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).angle")
                     Text("°").font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    Button("Add Stop") {
-                        _ = state.commitDesignFillLayer(
-                            .addStop(layer.id, .init(id: GradientStopID(), position: 0.5, color: .legacySurface), at: layer.stops.count),
-                            operation: "add gradient stop", provenance: .accessibility
-                        )
-                    }
-                    .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).addStop")
                 }
+                Button("Add Stop") {
+                    _ = state.commitDesignFillLayer(
+                        .addStop(layer.id, .init(id: GradientStopID(), position: 0.5, color: .legacySurface), at: layer.stops.count),
+                        operation: "add gradient stop", provenance: .accessibility
+                    )
+                }
+                .controlSize(.small)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).addStop")
                 if let message = validationMessages[.angle(layer.id)] {
                     validationMessage(message, identifier: "inspector.design.layers.\(layer.id.description).angle.validation")
                 }

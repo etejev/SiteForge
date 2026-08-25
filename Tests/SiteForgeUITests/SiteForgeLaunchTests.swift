@@ -1536,7 +1536,15 @@ final class SiteForgeLaunchTests: XCTestCase {
         for _ in 0..<4 {
             let addStop = application.buttons[addStopIdentifier]
             for _ in 0..<8 where !addStop.isHittable {
-                inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
+                let controlFrame = addStop.frame
+                let viewportFrame = inspectorScroll.frame
+                if controlFrame.maxY > viewportFrame.maxY {
+                    inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
+                } else if controlFrame.minY < viewportFrame.minY {
+                    inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
+                } else {
+                    break
+                }
             }
             XCTAssertTrue(waitForHittable(addStop, in: application))
             addStop.click()
