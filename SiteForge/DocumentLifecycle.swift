@@ -86,10 +86,14 @@ struct LifecycleDestinationIdentity: Equatable, Sendable {
         // destination. Do not resolve or normalize symlinks for an operation
         // identity; descriptor-bound package I/O supplies the actual file
         // identity proof separately.
-        let lexicalPath = url.path
-        let digest = SHA256.hash(data: Data(lexicalPath.utf8)).prefix(8)
-            .map { String(format: "%02x", $0) }.joined()
-        return LifecycleDestinationIdentity(kind: kind, sanitizedToken: "destination-\(digest)")
+        return LifecycleDestinationIdentity(
+            kind: kind,
+            sanitizedToken: DiagnosticStableIdentifier.sanitize(
+                url.path,
+                domain: .lifecycleDestination,
+                kind: "destination"
+            )
+        )
     }
 }
 
@@ -224,8 +228,15 @@ struct LifecycleDiagnostic: Equatable, Sendable {
 }
 
 actor DocumentLifecycleDiagnostics {
-    private(set) var records: [LifecycleDiagnostic] = []
-    func append(_ record: LifecycleDiagnostic) { records.append(record) }
+    private var buffer: BoundedDiagnosticBuffer<LifecycleDiagnostic>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    var records: [LifecycleDiagnostic] { buffer.snapshot() }
+    func append(_ record: LifecycleDiagnostic) { buffer.append(record) }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 struct LoadedProject: Sendable {
@@ -654,22 +665,51 @@ actor DocumentLifecycleBackend {
         await diagnostics.append(LifecycleDiagnostic(
             requirementIDs: ["SF-0301-008", "SF-0306-008", "SF-1504-008"],
             operation: identity.intent,
-            sanitizedOperationID: Self.sanitized(identity.id.rawValue.uuidString, namespace: "operation"),
-            sanitizedEpoch: Self.sanitized(identity.epoch.rawValue.uuidString, namespace: "epoch"),
-            sanitizedDocumentID: Self.sanitized(identity.documentID.description, namespace: "document"),
-            sanitizedProjectID: Self.sanitized(projectID.description, namespace: "project"),
+            sanitizedOperationID: DiagnosticStableIdentifier.sanitize(
+                identity.id.rawValue.uuidString,
+                domain: .lifecycleOperation,
+                kind: "operation"
+            ),
+            sanitizedEpoch: DiagnosticStableIdentifier.sanitize(
+                identity.epoch.rawValue.uuidString,
+                domain: .lifecycleEpoch,
+                kind: "epoch"
+            ),
+            sanitizedDocumentID: DiagnosticStableIdentifier.sanitize(
+                identity.documentID.description,
+                domain: .lifecycleDocument,
+                kind: "document"
+            ),
+            sanitizedProjectID: DiagnosticStableIdentifier.sanitize(
+                projectID.description,
+                domain: .lifecycleProject,
+                kind: "project"
+            ),
             revision: identity.revision,
             destinationKind: identity.destination.kind,
             sanitizedDestination: identity.destination.sanitizedToken,
             durationNanoseconds: nanos,
             result: result,
-            failure: failure.map { String(describing: $0) }
+            failure: failure.map(\.diagnosticCategory)
         ))
     }
+}
 
-    private nonisolated static func sanitized(_ value: String, namespace: String) -> String {
-        namespace + "-" + SHA256.hash(data: Data(value.utf8)).prefix(5)
-            .map { String(format: "%02x", $0) }.joined()
+extension DocumentLifecycleFailure {
+    var diagnosticCategory: String {
+        switch self {
+        case .permissionDenied: "permission-denied"
+        case .staleSecurityScope: "stale-security-scope"
+        case .externalModification: "external-modification"
+        case .conflict: "conflict"
+        case .malformedPackage: "malformed-package"
+        case .incompatiblePackage: "incompatible-package"
+        case .malformedRecovery: "malformed-recovery"
+        case .ioFailure: "io-failure"
+        case .unsafeFileMetadata: "unsafe-file-metadata"
+        case .recoveryArtifactConflict: "recovery-artifact-conflict"
+        case .recoveryDeletionFailed: "recovery-deletion-failed"
+        }
     }
 }
 

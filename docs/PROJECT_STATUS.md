@@ -1,13 +1,15 @@
 # SiteForge Project Status
 
-Last updated: 2026-08-24.
+Last updated: 2026-08-25.
 
-Current work: `SF-AUTHORING-013` is an in-progress, remotely checkpointed
-ordered-fill and linear-gradient foundation. It adds canonical v1 layer/stop
-identity, atomic registry mutation, immutable native renderer adoption, and
-accessible single-selection Inspector layer controls. Six focused selectors
-passed; full visual/persistence/recovery coverage and the milestone gate have
-not yet run. See `docs/evidence/SF-AUTHORING-013-FILL-LAYERS-CHECKPOINT.md`.
+Current work: `SF-AUDIT-001` is complete within its bounded corrective scope.
+Strict fill/package adoption, descriptor-bound resource I/O, cancellation,
+linear Grid preparation, off-main scene projection, bounded redacted
+diagnostics, portable checksums, workspace-window role, minimum layout, and
+selection lifecycle repair have focused regressions. The minimum and normal
+maximized running-app states were reviewed against the visual contract. Final
+`./sf verify` passed 356 unit/integration plus 41 UI tests (397 total), zero
+failures, with all repository gates green. No next feature item is READY.
 
 Milestone 0 feature work and the final audit-correction pass are complete within their verified scope. The bounded authoring runway is accepted; `SF-AUTHORING-001` through `SF-AUTHORING-009` supply the production viewport, deterministic layout, native renderer, undo-neutral selection, transactional frame/plain-text insertion, move/resize transforms, snapping/guides, inline plain-text editing, and bounded local drag-and-drop foundations for Milestone 1. `SF-PRODUCT-UI-001` adds a full-window native launch/shell visual-system foundation; `SF-PRODUCT-UI-002` adds truthful Pages/Layers/Elements/Assets/Components navigation; `SF-PRODUCT-UI-003` aligns the Inspector and visible-canvas foundations; `SF-AUTHORING-010` makes the first structural Elements—Section, Stack, and Grid—real canonical authoring operations; and `SF-AUTHORING-011` adds bounded native fixed-geometry Inspector editing through the existing canonical transaction path. The final audit records the residual security, migration, accessibility, and product-scope boundaries; this is not a claim that SiteForge is a complete Framer/Webflow replacement.
 
@@ -54,7 +56,6 @@ Milestone 0 feature work and the final audit-correction pass are complete within
 - Local drag-and-drop foundation: `document.node.move` is the only canonical mutation for bounded local sibling reorder and frame-container nesting. A Foundation-only registry scopes one noncanonical drag session to document/page/revision/scene/renderer identity; validates availability, locks, visibility, same-page ownership, destination compatibility, insertion index adjustment, cycles, depth, lifecycle, cancellation, and revision exhaustion; then prepares one atomic transaction with its exact inverse. The source-level Layers pointer capability implements bounded same-page “before row” placement, including compatible cross-parent placement; final-audit model coverage includes invalid-hover repair, malformed-parent-cycle rejection, payload-free diagnostics, and unavailable accessibility feedback. Contextual controls, named accessibility actions, and automation share the registry for supported reorder/nesting; production keyboard and application-menu drag commands and native pointer nesting remain unproven. A native drag that ends outside every row lacks a source-side terminal callback, so its editor-only capability is only repaired at the next boundary; no end-to-end native AppKit drag journey is claimed. Generic text/Finder input cannot accidentally become a move. Preview indicators, hover state, payloads, and session identity remain outside packages, history, recovery, preview/export snapshots, and autosave. The bounded slice excludes Finder/external assets, cross-window/project transfer, components, responsive editing, and autoscroll beyond the local list.
 - Drag capacity evidence: optimized production registry preparation measured 0.614 ms P95 at 100 nodes and 27.903 ms P95 at 10,000 nodes, with a 112,099,328-byte resident-memory high water. Raw samples, named environment, methodology, limitations, and a reviewed running-app Layers contextual reorder/undo/redo screenshot are retained under `docs/evidence/drag-drop-foundation/`. The 10,000-node full hierarchy scan exceeds one 60 Hz interval and is capacity evidence only; it does not prove native drag tracking, layout/raster, incremental indexing, or release hardware budgets.
 - Verification: the SF-AUTHORING-009 checkpoint's `./sf build`, focused drag/evidence checks, complete `SiteForgeUITests` (29/29), and `./sf verify` (248 unit + 29 UI, zero failures) passed on 2026-07-31. The final audit gate passed on 2026-08-09 with 288 unit tests and 29 UI tests (317 total), zero failures, and repository, security, traceability, architecture, migration, evidence, and fixture-hygiene checks green; see `docs/audits/FINAL_IMPLEMENTATION_AUDIT.md`.
-- Current work: `SF-AUTHORING-011` is complete locally for bounded fixed-geometry Inspector editing. Each cited normative requirement remains Partial overall. No next feature item is ready.
 - Open platform decision: minimum supported macOS and reference hardware (`OD-001`). Persistence representation (`OD-002`) is resolved by ADR-0001/0003/0007. Open release decisions are publisher/public bundle identity (`OD-012`) and distribution trust level (`OD-013`). OD-014 governs trusted app-owned staging/quarantine/tombstone retention and reclamation. No publishing, distribution signing, or notarization is authorized.
 
 Detailed requirement evidence remains in `IMPLEMENTATION_STATUS.md`; ordered work remains in `CODEX_QUEUE.md`.

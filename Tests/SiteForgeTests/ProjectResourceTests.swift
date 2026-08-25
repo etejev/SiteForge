@@ -64,6 +64,58 @@ final class ProjectResourceTests: XCTestCase {
         XCTAssertNil(try ProjectResourceIndex.decode(from: ProjectPackage(document: ProjectCreation.blank())))
     }
 
+    func testResourceIndexRejectsUnknownFieldsAndIncorrectPackageRole() throws {
+        let resource = descriptor(id: "50000000-0000-0000-0000-000000000001", bytes: Data([1]))
+        let index = ProjectResourceIndex(resources: [resource])
+        let encoded = try JSONEncoder().encode(index)
+
+        var indexObject = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        indexObject["futureField"] = true
+        let unknownIndex = try JSONSerialization.data(withJSONObject: indexObject)
+        let unknownIndexPackage = ProjectPackage(
+            document: ProjectCreation.blank(),
+            optionalMembers: [.init(
+                path: ProjectResourceIndex.packageMemberPath,
+                role: .resource,
+                data: unknownIndex
+            )]
+        )
+        XCTAssertThrowsError(try ProjectResourceIndex.decode(from: unknownIndexPackage)) {
+            XCTAssertEqual($0 as? ProjectResourceError, .corruptIndex)
+        }
+
+        var descriptorObject = try XCTUnwrap(
+            (indexObject["resources"] as? [[String: Any]])?.first
+        )
+        descriptorObject["futureField"] = "unapproved"
+        indexObject.removeValue(forKey: "futureField")
+        indexObject["resources"] = [descriptorObject]
+        let unknownDescriptor = try JSONSerialization.data(withJSONObject: indexObject)
+        let unknownDescriptorPackage = ProjectPackage(
+            document: ProjectCreation.blank(),
+            optionalMembers: [.init(
+                path: ProjectResourceIndex.packageMemberPath,
+                role: .resource,
+                data: unknownDescriptor
+            )]
+        )
+        XCTAssertThrowsError(try ProjectResourceIndex.decode(from: unknownDescriptorPackage)) {
+            XCTAssertEqual($0 as? ProjectResourceError, .corruptIndex)
+        }
+
+        let wrongRolePackage = ProjectPackage(
+            document: ProjectCreation.blank(),
+            optionalMembers: [.init(
+                path: ProjectResourceIndex.packageMemberPath,
+                role: .optional,
+                data: encoded
+            )]
+        )
+        XCTAssertThrowsError(try ProjectResourceIndex.decode(from: wrongRolePackage)) {
+            XCTAssertEqual($0 as? ProjectResourceError, .corruptIndex)
+        }
+    }
+
     func testMissingAndCorruptResourcesAreRejectedWithoutChangingPackageBytes() async throws {
         let fixture = try makeFixture()
         let root = fixture.url.appendingPathComponent("Resources")
@@ -136,6 +188,63 @@ final class ProjectResourceTests: XCTestCase {
         )
     }
 
+    func testResourceStoreRejectsExtendedACLsOnRootAndBlob() async throws {
+        let fixture = try makeFixture()
+        let root = fixture.url.appendingPathComponent("Resources")
+        let store = ProjectResourceStore(root: root)
+        let resource = try await store.put(
+            filename: "private.bin",
+            mediaType: "application/octet-stream",
+            data: representativeAsset(index: 6)
+        )
+        let index = ProjectResourceIndex(resources: [resource])
+        let blob = root.appendingPathComponent("\(resource.sha256).blob")
+
+        try run("/bin/chmod", arguments: ["+a", "everyone allow search", root.path])
+        await XCTAssertThrowsErrorAsync(try await store.validate(index), equals: .unsafeStore)
+        try run("/bin/chmod", arguments: ["-a", "everyone allow search", root.path])
+
+        try run("/bin/chmod", arguments: ["+a", "everyone allow read", blob.path])
+        await XCTAssertThrowsErrorAsync(try await store.validate(index), equals: .unsafeStore)
+    }
+
+    func testResourceStoreRemainsBoundToValidatedRootWhenPathIsExchanged() async throws {
+        let fixture = try makeFixture()
+        let root = fixture.url.appendingPathComponent("Resources")
+        let displaced = fixture.url.appendingPathComponent("Displaced")
+        let redirected = fixture.url.appendingPathComponent("Redirected")
+        let originalBytes = representativeAsset(index: 7)
+        let base = ProjectResourceStore(root: root)
+        let resource = try await base.put(
+            filename: "original.bin",
+            mediaType: "application/octet-stream",
+            data: originalBytes
+        )
+
+        try FileManager.default.createDirectory(at: redirected, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: redirected.path)
+        let redirectedBlob = redirected.appendingPathComponent("\(resource.sha256).blob")
+        try Data(repeating: 0xff, count: originalBytes.count).write(to: redirectedBlob)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: redirectedBlob.path)
+
+        let barrier = ResourceStoreDescriptorBarrier()
+        let guarded = ProjectResourceStore(
+            root: root,
+            ioObserver: ProjectResourceIOObserver { phase in
+                if case .storeDescriptorBound = phase { barrier.reachAndWait() }
+            }
+        )
+        let read = Task { try await guarded.data(for: resource) }
+        await barrier.waitUntilReached()
+        try FileManager.default.moveItem(at: root, to: displaced)
+        try FileManager.default.createSymbolicLink(at: root, withDestinationURL: redirected)
+        barrier.release()
+
+        let readBytes = try await read.value
+        XCTAssertEqual(readBytes, originalBytes)
+        XCTAssertEqual(try Data(contentsOf: redirectedBlob), Data(repeating: 0xff, count: originalBytes.count))
+    }
+
     func testResourceIndexSurvivesRecoveryPackageRoundTrip() async throws {
         let fixture = try makeFixture()
         let projectURL = fixture.url.appendingPathComponent("Recovered.siteforge")
@@ -187,6 +296,53 @@ final class ProjectResourceTests: XCTestCase {
     private func permissions(at url: URL) throws -> Int {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         return try XCTUnwrap((attributes[.posixPermissions] as? NSNumber)?.intValue)
+    }
+
+    private func run(_ executable: String, arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
+}
+
+private actor ResourceStoreDescriptorBarrier {
+    private var hasReached = false
+    private var reachedContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    nonisolated func reachAndWait() {
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            await markReached()
+            await waitForRelease()
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+
+    func waitUntilReached() async {
+        if hasReached { return }
+        await withCheckedContinuation { reachedContinuation = $0 }
+    }
+
+    nonisolated func release() { Task { await releaseNow() } }
+
+    private func markReached() {
+        hasReached = true
+        reachedContinuation?.resume()
+        reachedContinuation = nil
+    }
+
+    private func waitForRelease() async {
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    private func releaseNow() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
 

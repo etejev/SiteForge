@@ -660,9 +660,15 @@ struct SnapDiagnosticRecord: Equatable, Sendable {
 }
 
 actor SnapDiagnostics {
-    private var records: [SnapDiagnosticRecord] = []
-    func append(_ value: SnapDiagnosticRecord) { records.append(value) }
-    func snapshot() -> [SnapDiagnosticRecord] { records }
+    private var buffer: BoundedDiagnosticBuffer<SnapDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ value: SnapDiagnosticRecord) { buffer.append(value) }
+    func snapshot() -> [SnapDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 enum SnapDiagnosticFactory {
@@ -683,12 +689,17 @@ enum SnapDiagnosticFactory {
             candidateCount: max(0, candidateCount),
             winnerCount: max(0, winnerCount),
             result: result,
-            failureCategory: failureCategory
+            failureCategory: failureCategory.map {
+                DiagnosticErrorCategory.closedCategory(forUntrustedValue: $0).rawValue
+            }
         )
     }
 
     private static func sanitize(_ value: String) -> String {
-        SHA256.hash(data: Data(("snap:" + value).utf8)).prefix(6)
-            .map { String(format: "%02x", $0) }.joined()
+        DiagnosticStableIdentifier.sanitize(
+            value,
+            domain: .snapping,
+            kind: "target"
+        )
     }
 }

@@ -95,8 +95,15 @@ struct HistoryDiagnosticRecord: Equatable, Sendable {
 }
 
 actor PersistedHistoryDiagnostics {
-    private(set) var records: [HistoryDiagnosticRecord] = []
-    func append(_ record: HistoryDiagnosticRecord) { records.append(record) }
+    private var buffer: BoundedDiagnosticBuffer<HistoryDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    var records: [HistoryDiagnosticRecord] { buffer.snapshot() }
+    func append(_ record: HistoryDiagnosticRecord) { buffer.append(record) }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 enum PersistedHistoryLoadResult: Equatable, Sendable {
@@ -456,12 +463,32 @@ private extension PersistedHistoryStore {
 
     func record(_ result: HistoryDiagnosticResult, document: CanonicalDocument, undoCount: Int = 0,
                 redoCount: Int = 0, error: PersistedHistoryError?) async {
-        let digest = SHA256.hash(data: Data(document.id.description.utf8)).prefix(5)
-            .map { String(format: "%02x", $0) }.joined()
         await diagnostics.append(HistoryDiagnosticRecord(
             requirementIDs: ["SF-0306-008", "SF-0307-008"], result: result,
-            sanitizedDocumentID: "document-\(digest)", undoCount: undoCount, redoCount: redoCount,
-            failureCategory: error.map { String(describing: $0) }
+            sanitizedDocumentID: DiagnosticStableIdentifier.sanitize(
+                document.id.description,
+                domain: .history,
+                kind: "document"
+            ),
+            undoCount: undoCount, redoCount: redoCount,
+            failureCategory: error.map(\.diagnosticCategory)
         ))
+    }
+}
+
+private extension PersistedHistoryError {
+    var diagnosticCategory: String {
+        switch self {
+        case .missing: "missing"
+        case .corrupt: "corrupt"
+        case .oversized: "oversized"
+        case .unsupportedSchema: "unsupported-schema"
+        case .duplicateTransaction: "duplicate-transaction"
+        case .reorderedTransactions: "reordered-transactions"
+        case .documentMismatch: "document-mismatch"
+        case .revisionMismatch: "revision-mismatch"
+        case .identityMismatch: "identity-mismatch"
+        case .inverseMismatch: "inverse-mismatch"
+        }
     }
 }

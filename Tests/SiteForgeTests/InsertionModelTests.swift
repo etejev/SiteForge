@@ -91,6 +91,27 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(gridResolved[gridChildren[0].id]?.size.width, 84)
     }
 
+    // SF-0407-007, SF-0503-007, SF-1601-007
+    func testGridRowOffsetsReadEveryLargeFixtureChildExactlyOnce() {
+        let childCount = 10_000
+        var heightReadCount = 0
+
+        let offsets = GridRowOffsetResolver.resolve(
+            childCount: childCount,
+            columns: 2,
+            startY: 10,
+            gap: 4
+        ) { index in
+            heightReadCount += 1
+            return index.isMultiple(of: 2) ? 10 : 20
+        }
+
+        XCTAssertEqual(heightReadCount, childCount)
+        XCTAssertEqual(offsets.count, childCount / 2)
+        XCTAssertEqual(offsets.first, 10)
+        XCTAssertEqual(offsets.last, 10 + (Double((childCount / 2) - 1) * 24))
+    }
+
     // SF-0405-002, SF-0405-003, SF-0405-008
     func testEveryInputPathUsesTheSameTypedPreparationAndDisabledReasons() throws {
         let fixture = makeFixture()

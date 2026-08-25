@@ -465,9 +465,24 @@ final class TransformModelTests: XCTestCase {
                         XCTAssertEqual(object.frame, frame)
                         XCTAssertEqual(core.hitTest(.init(x: frame.origin.x + 10, y: frame.origin.y + 10), in: plan), objects.last?.id)
                         let accessible = try XCTUnwrap(plan.accessibilityElements.first(where: { $0.objectID == object.id }))
-                        let expected = try viewport.transform.worldToViewport(frame.origin)
+                        // Accessibility virtualizes only the visible authored
+                        // intersection. At 800% this object intentionally
+                        // crosses the viewport edge, while canonical/render/
+                        // selection geometry remains the complete world rect.
+                        let visible = viewport.visibleWorldRect
+                        let visibleFrame = WorldRect(
+                            origin: .init(
+                                x: max(frame.minX, visible.minX),
+                                y: max(frame.minY, visible.minY)
+                            ),
+                            size: .init(
+                                width: max(0, min(frame.maxX, visible.maxX) - max(frame.minX, visible.minX)),
+                                height: max(0, min(frame.maxY, visible.maxY) - max(frame.minY, visible.minY))
+                            )
+                        )
+                        let expected = try viewport.transform.worldToViewport(visibleFrame.origin)
                         XCTAssertEqual(accessible.frame.origin, expected)
-                        XCTAssertEqual(accessible.frame.size.width, frame.size.width * zoom, accuracy: 1 / scale)
+                        XCTAssertEqual(accessible.frame.size.width, visibleFrame.size.width * zoom, accuracy: 1 / scale)
                     }
                     let targets = plan.authoredObjects.enumerated().map { index, object in SelectionTargetSnapshot(id: object.id, pageID: fixture.pageID, parentID: nil, name: "node", kind: kinds[index], frame: object.frame, clipRect: nil, paintOrder: index, isVisible: true, isLocked: false, isAvailable: true) }
                     let selectionScene = SelectionSceneSnapshot(identity: identity, activePageID: fixture.pageID, activeContainerID: nil, targets: targets)
@@ -745,7 +760,13 @@ final class TransformModelTests: XCTestCase {
         let authored = try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == fixture.nodeID }))
         XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: authored).0, picker)
         XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: authored).1, .authored)
-        let authoredIDs = ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"].compactMap { authored.insertionProperty($0)?.id }
+        let authoredIDs = authored.properties
+            .filter { $0.key.rawValue.hasPrefix("\(CanonicalFillLayerCodec.namespaceRoot).") }
+            .map(\.id)
+        XCTAssertFalse(authoredIDs.isEmpty)
+        for legacyKey in ["style.fill", "style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"] {
+            XCTAssertNil(authored.insertionProperty(legacyKey), "Compatibility fill commands must not write legacy key \(legacyKey).")
+        }
 
         let noOp = DesignInspectorCommand(
             identity: .init(documentID: session.document.id, pageID: fixture.pageID, revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
@@ -755,7 +776,13 @@ final class TransformModelTests: XCTestCase {
             XCTAssertEqual($0 as? DesignInspectorError, .noChanges)
         }
         XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
-        XCTAssertEqual(authoredIDs, ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"].compactMap { authored.insertionProperty($0)?.id })
+        let unchanged = try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == fixture.nodeID }))
+        XCTAssertEqual(
+            authoredIDs,
+            unchanged.properties
+                .filter { $0.key.rawValue.hasPrefix("\(CanonicalFillLayerCodec.namespaceRoot).") }
+                .map(\.id)
+        )
 
         for value in [0.0, 0.4, 1.0] {
             let opacity = DesignInspectorCommand(
@@ -800,7 +827,7 @@ final class TransformModelTests: XCTestCase {
         let mixed = try registry.prepare(command(), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID]))
         XCTAssertEqual(mixed.applicableNodeIDs, [fixture.nodeID])
         XCTAssertEqual(mixed.skippedNodeIDs, [fixture.secondNodeID])
-        XCTAssertEqual(mixed.skippedReasons[fixture.secondNodeID], "This object kind does not support this appearance property.")
+        XCTAssertEqual(mixed.skippedReasons[fixture.secondNodeID], "This object kind does not support background fill layers.")
         XCTAssertEqual(DesignInspectorCommandRegistry.fillValue(nodes: [fixture.document.pages[0].nodes[1], fixture.document.pages[0].nodes[2]]), .mixed)
 
         let staleIdentities = [
@@ -848,6 +875,200 @@ final class TransformModelTests: XCTestCase {
         XCTAssertEqual(migrated?.count, 1)
         XCTAssertEqual(migrated?.first?.solidColor, replacement)
         XCTAssertEqual(try? migrated?.applying(.replaceSolid(nil)), [])
+    }
+
+    // SF-0301-004...006, SF-0303-005, SF-0508-001...008 — namespace
+    // absence is legacy-compatible and distinct from an explicitly authored
+    // empty layer order. Complete generated stacks decode exactly.
+    func testCanonicalFillLayerStrictDecoderDistinguishesAbsentEmptyLegacyAndValidStacks() throws {
+        var node = makeGeometryNode(id: NodeID(), parent: NodeID(), x: 0, y: 0, width: 100, height: 100)
+        XCTAssertEqual(try CanonicalFillLayerCodec.decodeLayers(for: node), .absent)
+
+        node.properties.append(NodeProperty(
+            key: .init(rawValue: CanonicalFillLayerCodec.orderKey),
+            value: .string("")
+        ))
+        XCTAssertEqual(try CanonicalFillLayerCodec.decodeLayers(for: node), .layers([]))
+
+        var legacy = makeGeometryNode(id: NodeID(), parent: NodeID(), x: 0, y: 0, width: 100, height: 100)
+        legacy.properties.append(NodeProperty(
+            key: .init(rawValue: "style.fill"),
+            value: .string("surface"),
+            origin: .defaulted
+        ))
+        XCTAssertEqual(try CanonicalFillLayerCodec.decodeLayers(for: legacy), .absent)
+        XCTAssertEqual(CanonicalFillLayerCodec.legacySolidLayer(for: legacy)?.solidColor, .legacySurface)
+
+        let layer = CanonicalFillLayer.solid(
+            id: FillLayerID(UUID(uuidString: "A0600000-0000-4000-8000-000000000001")!),
+            color: .init(red: 0.1, green: 0.2, blue: 0.3, alpha: 0.4)
+        )
+        node.properties.removeAll { $0.key.rawValue.hasPrefix("\(CanonicalFillLayerCodec.namespaceRoot).") }
+        node.properties.append(contentsOf: CanonicalFillLayerCodec.propertyValues(for: [layer]).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value)
+        })
+        XCTAssertEqual(try CanonicalFillLayerCodec.decodeLayers(for: node), .layers([layer]))
+
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[1].properties.append(contentsOf: CanonicalFillLayerCodec.propertyValues(for: [layer]).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value)
+        })
+        XCTAssertNoThrow(try fixture.document.validate())
+    }
+
+    // SF-0301-004...006, SF-0303-005, SF-0508-001...008 — every owned
+    // namespace field must be reachable, complete, typed, canonical, and
+    // valid. Corruption may not collapse into the same state as authored
+    // "no fill" or be adopted by the canonical document.
+    func testCanonicalFillLayerStrictDecoderRejectsMalformedNamespaceMatrix() throws {
+        let fixture = makeFixture()
+        let layerID = FillLayerID(UUID(uuidString: "A0610000-0000-4000-8000-000000000001")!)
+        let startID = GradientStopID(UUID(uuidString: "A0610000-0000-4000-8000-000000000002")!)
+        let endID = GradientStopID(UUID(uuidString: "A0610000-0000-4000-8000-000000000003")!)
+        let gradient = CanonicalFillLayer.linearGradient(
+            id: layerID,
+            angleDegrees: 45,
+            stops: [
+                .init(id: startID, position: 0, color: .legacySurface),
+                .init(id: endID, position: 1, color: .init(red: 0.2, green: 0.4, blue: 0.6, alpha: 0.8)),
+            ]
+        )
+        var valid = fixture.document.pages[0].nodes[1]
+        valid.properties.append(contentsOf: CanonicalFillLayerCodec.propertyValues(for: [gradient]).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value)
+        })
+        XCTAssertEqual(try CanonicalFillLayerCodec.decodeLayers(for: valid), .layers([gradient]))
+
+        let layerPrefix = "\(CanonicalFillLayerCodec.namespaceRoot).\(layerID.description)"
+        let startPrefix = "\(layerPrefix).stop.\(startID.description)"
+        func replacing(_ key: String, with value: PropertyValue?, in input: DocumentNode) -> DocumentNode {
+            var node = input
+            node.properties.removeAll { $0.key.rawValue == key }
+            if let value {
+                node.properties.append(NodeProperty(key: .init(rawValue: key), value: value))
+            }
+            return node
+        }
+        func assertMalformed(
+            _ label: String,
+            _ candidate: DocumentNode,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            XCTAssertThrowsError(
+                try CanonicalFillLayerCodec.decodeLayers(for: candidate),
+                label,
+                file: file,
+                line: line
+            )
+            var document = fixture.document
+            document.pages[0].nodes[1] = candidate
+            XCTAssertThrowsError(try document.validate(), label, file: file, line: line) { error in
+                XCTAssertEqual(error as? ModelValidationError, .invalidFillLayerState, file: file, line: line)
+            }
+        }
+
+        assertMalformed("namespace properties without order", replacing(CanonicalFillLayerCodec.orderKey, with: nil, in: valid))
+        assertMalformed("wrong order type", replacing(CanonicalFillLayerCodec.orderKey, with: .boolean(true), in: valid))
+        assertMalformed("trailing empty layer token", replacing(CanonicalFillLayerCodec.orderKey, with: .string("\(layerID.description),"), in: valid))
+        assertMalformed("duplicate layer identity", replacing(CanonicalFillLayerCodec.orderKey, with: .string("\(layerID.description),\(layerID.description)"), in: valid))
+        assertMalformed("unknown layer kind", replacing("\(layerPrefix).kind", with: .string("radialGradient"), in: valid))
+        assertMalformed("missing enabled field", replacing("\(layerPrefix).enabled", with: nil, in: valid))
+        assertMalformed("noncanonical angle", replacing("\(layerPrefix).angle", with: .number(360), in: valid))
+        assertMalformed("trailing empty stop token", replacing("\(layerPrefix).stops", with: .string("\(startID.description),\(endID.description),"), in: valid))
+        assertMalformed("duplicate stop identity", replacing("\(layerPrefix).stops", with: .string("\(startID.description),\(startID.description)"), in: valid))
+        assertMalformed("insufficient gradient stops", replacing("\(layerPrefix).stops", with: .string(startID.description), in: valid))
+        assertMalformed("missing stop field", replacing("\(startPrefix).position", with: nil, in: valid))
+        assertMalformed("invalid stop position", replacing("\(startPrefix).position", with: .number(1.1), in: valid))
+        assertMalformed("invalid stop color", replacing("\(startPrefix).alpha", with: .number(-0.1), in: valid))
+        assertMalformed("orphaned namespace property", replacing("\(layerPrefix).unused", with: .number(1), in: valid))
+
+        var unsupported = valid
+        unsupported.kind = .text
+        assertMalformed("unsupported node kind", unsupported)
+
+        let solid = CanonicalFillLayer.solid(id: layerID, color: .legacySurface)
+        var invalidSolid = fixture.document.pages[0].nodes[1]
+        invalidSolid.properties.append(contentsOf: CanonicalFillLayerCodec.propertyValues(for: [solid]).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value)
+        })
+        invalidSolid = replacing("\(layerPrefix).red", with: .number(1.1), in: invalidSolid)
+        assertMalformed("invalid solid color", invalidSolid)
+    }
+
+    // SF-0508-002, SF-0508-004, SF-0508-006 — ordered rows are shared across
+    // a multiple selection only when every applicable object owns the exact
+    // same stable layer/stop identities and values. Differing stacks remain a
+    // truthful non-editable mixed state; unsupported objects are counted and
+    // left unchanged by the same registry command.
+    func testFillLayerMultipleSelectionDistinguishesSharedMixedAndSkippedStacks() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        let selected = [fixture.nodeID, fixture.secondNodeID]
+        fixture.document.pages[0].nodes[1].kind = .frame
+        fixture.document.pages[0].nodes[2].kind = .frame
+        let layerID = FillLayerID(UUID(uuidString: "A0500000-0000-4000-8000-000000000001")!)
+        let sharedLayers = [CanonicalFillLayer.solid(
+            id: layerID,
+            color: .init(red: 0.2, green: 0.4, blue: 0.6, alpha: 0.8)
+        )]
+        func install(_ layers: [CanonicalFillLayer], on node: inout DocumentNode) {
+            node.properties.removeAll {
+                $0.key.rawValue.hasPrefix("style.fill.layers.v1.")
+                    || ["style.fill", "style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"].contains($0.key.rawValue)
+            }
+            node.properties.append(contentsOf: CanonicalFillLayerCodec.propertyValues(for: layers)
+                .sorted(by: { $0.key < $1.key })
+                .map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value, origin: .authored) })
+        }
+        install(sharedLayers, on: &fixture.document.pages[0].nodes[1])
+        install(sharedLayers, on: &fixture.document.pages[0].nodes[2])
+        let frame = fixture.document.pages[0].nodes[1]
+        let secondFrame = fixture.document.pages[0].nodes[2]
+        XCTAssertEqual(
+            DesignInspectorCommandRegistry.fillLayerSelectionValue(nodes: [frame, secondFrame]),
+            .shared(layers: sharedLayers, applicableCount: 2, skippedCount: 0)
+        )
+
+        var text = secondFrame
+        text.kind = .text
+        XCTAssertEqual(
+            DesignInspectorCommandRegistry.fillLayerSelectionValue(nodes: [frame, text]),
+            .shared(layers: sharedLayers, applicableCount: 1, skippedCount: 1)
+        )
+        var different = secondFrame
+        install([.solid(id: layerID, color: .legacySurface)], on: &different)
+        XCTAssertEqual(
+            DesignInspectorCommandRegistry.fillLayerSelectionValue(nodes: [frame, different]),
+            .mixed(applicableCount: 2, skippedCount: 0)
+        )
+
+        let registry = DesignInspectorCommandRegistry()
+        let prepared = try registry.prepare(
+            .init(
+                identity: .init(
+                    documentID: fixture.document.id,
+                    pageID: fixture.pageID,
+                    revision: fixture.document.revision,
+                    sceneID: fixture.sceneID,
+                    rendererGeneration: fixture.rendererGeneration
+                ),
+                orderedNodeIDs: selected,
+                edit: .setEnabled(layerID, false),
+                provenance: .accessibility,
+                cancelled: false
+            ),
+            in: fixture.document,
+            context: fixture.context(selectedIDs: selected)
+        )
+        XCTAssertEqual(prepared.applicableNodeIDs, selected)
+        XCTAssertTrue(prepared.skippedNodeIDs.isEmpty)
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(prepared.documentCommand)
+        let edited = session.document.pages[0].nodes.filter { selected.contains($0.id) }
+        XCTAssertEqual(edited.count, 2)
+        XCTAssertTrue(edited.allSatisfy {
+            DesignInspectorCommandRegistry.resolvedLayers(for: $0).first?.isEnabled == false
+        })
     }
 
     // SF-0508-001...008 — each layer reducer result is compiled by the
@@ -1036,6 +1257,22 @@ final class TransformModelTests: XCTestCase {
         XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.secondNodeID], edit: .addSolid(id: layerID, color: .legacySurface)), in: fixture.document, context: fixture.context(selectedIDs: [fixture.secondNodeID]))) { XCTAssertEqual($0 as? DesignInspectorError, .noApplicableTargets) }
         XCTAssertThrowsError(try registry.prepare(command(ids: [fixture.nodeID, fixture.nodeID], edit: .addSolid(id: layerID, color: .legacySurface)), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID, fixture.nodeID])))
         XCTAssertEqual(fixture.document, before)
+    }
+
+    // SF-0508-004/005 — Inspector numeric drafts must fail visibly instead of
+    // silently disappearing on Return or focus loss, while valid values are
+    // normalized before the transactional command is prepared.
+    func testFillLayerNumericDraftValidationIsExplicitAndCanonical() throws {
+        XCTAssertEqual(try FillLayerNumericDraftValidator.angle(" 495 ").get(), 135)
+        XCTAssertEqual(try FillLayerNumericDraftValidator.angle("-180").get(), 180)
+        XCTAssertEqual(FillLayerNumericDraftValidator.angle(" "), .failure(.empty))
+        XCTAssertEqual(FillLayerNumericDraftValidator.angle("nan"), .failure(.notFinite))
+
+        XCTAssertEqual(try FillLayerNumericDraftValidator.percentage("25").get(), 0.25)
+        XCTAssertEqual(try FillLayerNumericDraftValidator.percentage("100").get(), 1)
+        XCTAssertEqual(FillLayerNumericDraftValidator.percentage("-1"), .failure(.outsidePercentageRange))
+        XCTAssertEqual(FillLayerNumericDraftValidator.percentage("101"), .failure(.outsidePercentageRange))
+        XCTAssertEqual(FillLayerNumericDraftValidator.percentage("invalid"), .failure(.notFinite))
     }
 }
 

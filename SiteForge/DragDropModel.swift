@@ -334,11 +334,25 @@ enum DragDropDiagnosticResult: String, Codable, Sendable { case success, failure
 struct DragDropDiagnosticRecord: Codable, Equatable, Sendable {
     let requirementIDs: [String]; let operationType: String; let provenance: DragDropProvenance; let sanitizedIdentifiers: [String]; let durationMilliseconds: Double; let result: DragDropDiagnosticResult; let failureCategory: String?
 }
-actor DragDropDiagnostics { private var records: [DragDropDiagnosticRecord] = []; func append(_ value: DragDropDiagnosticRecord) { records.append(value) }; func snapshot() -> [DragDropDiagnosticRecord] { records } }
+actor DragDropDiagnostics {
+    private var buffer: BoundedDiagnosticBuffer<DragDropDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ value: DragDropDiagnosticRecord) { buffer.append(value) }
+    func snapshot() -> [DragDropDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
+}
 enum DragDropDiagnosticFactory {
     static func make(command: DragDropCommand, durationMilliseconds: Double, result: DragDropDiagnosticResult, failure: DragDropError?) -> DragDropDiagnosticRecord {
-        let digest = SHA256.hash(data: Data(("drag:" + command.sourceNodeID.description).utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
-        return .init(requirementIDs: DragDropPolicy.requirementIDs.sorted(), operationType: "move-node", provenance: command.provenance, sanitizedIdentifiers: ["node-" + digest], durationMilliseconds: max(0, durationMilliseconds), result: result, failureCategory: failure.map(\.diagnosticCategory))
+        let identifier = DiagnosticStableIdentifier.sanitize(
+            command.sourceNodeID.description,
+            domain: .dragDrop,
+            kind: "node"
+        )
+        return .init(requirementIDs: DragDropPolicy.requirementIDs.sorted(), operationType: "move-node", provenance: command.provenance, sanitizedIdentifiers: [identifier], durationMilliseconds: max(0, durationMilliseconds), result: result, failureCategory: failure.map(\.diagnosticCategory))
     }
 }
 

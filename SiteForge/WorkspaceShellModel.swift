@@ -376,8 +376,7 @@ enum WorkspaceMetrics {
     }
 
     static func requestedWindowSize(composition: DebugTestComposition = .current()) -> CGSize? {
-        guard composition.value(after: "-SiteForgeWindowSize") == "minimum"
-                || composition.boolValue(after: "-SiteForgeUITestMode") == true else { return nil }
+        guard composition.value(after: "-SiteForgeWindowSize") == "minimum" else { return nil }
         return minimumWindowSize
     }
 
@@ -580,17 +579,240 @@ enum WorkspaceSelectionFixture: String {
 
     func document() -> CanonicalDocument {
         var document = ProjectCreation.blank()
-        guard var page = document.pages.first else { return document }
+        guard var page = document.pages.first,
+              let structuralRootID = page.rootNodeIDs.first,
+              let structuralRootIndex = page.nodes.firstIndex(where: { $0.id == structuralRootID }) else {
+            return document
+        }
         let extraIDs = [
             NodeID(UUID(uuidString: "77777777-7777-4777-8777-777777777701")!),
             NodeID(UUID(uuidString: "77777777-7777-4777-8777-777777777702")!),
         ]
-        page.rootNodeIDs.append(contentsOf: extraIDs)
+        page.nodes[structuralRootIndex].childIDs.append(contentsOf: extraIDs)
         page.nodes.append(contentsOf: extraIDs.enumerated().map { offset, id in
-            DocumentNode(id: id, kind: .frame, name: "Fixture Layer \(offset + 2)", parent: .page(page.id))
+            let x = Double(80 + (offset * 280))
+            return DocumentNode(
+                id: id,
+                kind: .frame,
+                name: "Fixture Layer \(offset + 1)",
+                parent: .node(structuralRootID),
+                properties: [
+                    NodeProperty(key: .init(rawValue: "layout.x"), value: .number(x), origin: .defaulted),
+                    NodeProperty(key: .init(rawValue: "layout.y"), value: .number(120), origin: .defaulted),
+                    NodeProperty(key: .init(rawValue: "layout.width"), value: .number(240), origin: .defaulted),
+                    NodeProperty(key: .init(rawValue: "layout.height"), value: .number(160), origin: .defaulted),
+                    NodeProperty(key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted),
+                ]
+            )
         })
         document.pages[0] = page
         return document
+    }
+}
+
+/// Immutable input for the production workspace-scene projection. Copying the
+/// canonical value here is cheap (its arrays are copy-on-write); all tree
+/// traversal, geometry resolution, and renderer/selection projection happens
+/// on `WorkspaceScenePreparationWorker`, away from the main actor.
+struct WorkspaceScenePreparationRequest: Sendable {
+    let document: CanonicalDocument
+    let activePageID: PageID?
+    let activeContainerID: NodeID?
+    let viewport: CanvasViewportState
+    let surfaceID: CanvasRenderSurfaceID
+}
+
+struct WorkspaceScenePreparationResult: Sendable {
+    let viewportRequest: CanvasViewportPreparationRequest
+    let renderScene: CanvasRenderSceneSnapshot
+    let overlays: CanvasEditorOverlaySnapshot
+    let selectionScene: SelectionSceneSnapshot?
+}
+
+struct WorkspaceScenePreparationProgress: Sendable {
+    let checkpoint: @Sendable (Int) -> Void
+
+    static let none = WorkspaceScenePreparationProgress(checkpoint: { _ in })
+}
+
+enum WorkspaceScenePreparationError: Error, Equatable, Sendable {
+    case cancelled
+}
+
+/// SF-0407-006 / SF-1502-001: the projection is deliberately actor-isolated
+/// so a 10,000-object/page fixture cannot monopolize AppKit's main actor. The
+/// returned snapshots retain the exact document, scene, viewport generation,
+/// and stable identities that adoption validates later on the main actor.
+actor WorkspaceScenePreparationWorker {
+    func prepare(
+        _ request: WorkspaceScenePreparationRequest,
+        progress: WorkspaceScenePreparationProgress = .none
+    ) throws -> WorkspaceScenePreparationResult {
+        var completed = 0
+        func checkpoint() throws {
+            completed += 1
+            if completed.isMultiple(of: 64) {
+                progress.checkpoint(completed)
+                guard !Task.isCancelled else { throw WorkspaceScenePreparationError.cancelled }
+            }
+        }
+
+        guard !Task.isCancelled else { throw WorkspaceScenePreparationError.cancelled }
+        let identity = CanvasRenderRequestIdentity(
+            documentID: request.document.id,
+            revision: request.document.revision,
+            sceneID: request.viewport.sceneID,
+            sceneGeneration: request.document.revision,
+            viewportGeneration: request.viewport.generation,
+            scale: request.viewport.pixelRatio
+        )
+
+        let activePage = request.document.pages.first { $0.id == request.activePageID }
+        let orderedActiveNodes = activePage?.canonicalDepthFirstNodes() ?? []
+        let resolvedGeometry = activePage?.resolvedStructuralGeometry() ?? [:]
+        var renderObjects: [CanvasRenderObject] = []
+        renderObjects.reserveCapacity(orderedActiveNodes.count)
+
+        for node in orderedActiveNodes {
+            try checkpoint()
+            // Structural roots intentionally have no authored geometry and
+            // never receive a fabricated fallback rectangle.
+            guard let authoredGeometry = node.insertionGeometry else { continue }
+            let frame = (resolvedGeometry[node.id] ?? authoredGeometry).frame
+            let style: CanvasPaintStyle = switch node.kind {
+            case .frame:
+                if case .page(let pageID) = node.parent, pageID == request.activePageID {
+                    .page
+                } else if node.insertionStringProperty("style.fill") == "surface" {
+                    .frameSurface
+                } else {
+                    .container
+                }
+            case .section: .sectionSurface
+            case .stack: .stackSurface
+            case .grid: .gridSurface
+            case .text: .textPlaceholder
+            case .image: .imagePlaceholder
+            case .component: .container
+            }
+            let fillLayers = DesignInspectorCommandRegistry.resolvedLayers(for: node).map { layer in
+                switch layer.kind {
+                case .solid:
+                    return CanvasAuthoredFillLayer(
+                        id: layer.id.rawValue,
+                        kind: .solid,
+                        isEnabled: layer.isEnabled,
+                        rgba: layer.solidColor.map { [$0.red, $0.green, $0.blue, $0.alpha] },
+                        angleDegrees: nil,
+                        stops: []
+                    )
+                case .linearGradient:
+                    return CanvasAuthoredFillLayer(
+                        id: layer.id.rawValue,
+                        kind: .linearGradient,
+                        isEnabled: layer.isEnabled,
+                        rgba: nil,
+                        angleDegrees: layer.normalizedAngleDegrees,
+                        stops: layer.stops.map {
+                            .init(
+                                id: $0.id.rawValue,
+                                position: $0.position,
+                                rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha]
+                            )
+                        }
+                    )
+                }
+            }
+            renderObjects.append(CanvasRenderObject(
+                id: node.id,
+                frame: frame,
+                clipRect: request.viewport.contentBounds,
+                paintOrder: renderObjects.count,
+                style: style,
+                isVisible: !node.selectionBooleanProperty("hidden"),
+                accessibilityLabel: node.kind == .text ? "Text object" : node.name,
+                plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
+                displayName: node.kind == .text ? nil : node.name,
+                fillRGBA: nil,
+                fillLayers: fillLayers,
+                opacity: DesignInspectorCommandRegistry.resolvedOpacity(for: node)?.0 ?? 1
+            ))
+        }
+
+        let rendered = Dictionary(uniqueKeysWithValues: renderObjects.map { ($0.id, $0) })
+        var fallbackOrder = renderObjects.count
+        var selectionTargets: [SelectionTargetSnapshot] = []
+        selectionTargets.reserveCapacity(activePage?.nodes.count ?? 0)
+        if let page = activePage {
+            let names = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0.name) })
+            let structuralRootIDs = Set(page.rootNodeIDs.filter { rootID in
+                page.nodes.first(where: { $0.id == rootID })?.insertionGeometry == nil
+            })
+            for node in page.canonicalDepthFirstNodes() {
+                try checkpoint()
+                let object = rendered[node.id]
+                // The implicit ownership root remains available to Layers once
+                // authored children exist, but it never enters canvas traversal
+                // or receives a fabricated editor overlay. Its direct children
+                // behave as page-level visible objects for selection scope.
+                guard object != nil || page.nodes.count > 1 else { continue }
+                let canonicalParentID: NodeID? = if case .node(let id) = node.parent { id } else { nil }
+                let selectionParentID = canonicalParentID.flatMap {
+                    structuralRootIDs.contains($0) ? nil : $0
+                }
+                selectionTargets.append(SelectionTargetSnapshot(
+                    id: node.id,
+                    pageID: page.id,
+                    parentID: selectionParentID,
+                    name: node.name,
+                    kind: node.kind,
+                    parentName: canonicalParentID.flatMap { names[$0] },
+                    frame: object?.frame ?? request.viewport.contentBounds,
+                    clipRect: nil,
+                    paintOrder: object?.paintOrder ?? fallbackOrder,
+                    isVisible: object?.isVisible ?? true,
+                    isLocked: node.selectionBooleanProperty("locked"),
+                    isAvailable: object != nil || page.nodes.count > 1,
+                    participatesInCanvasTraversal: object != nil
+                ))
+                fallbackOrder += 1
+            }
+        }
+        progress.checkpoint(completed)
+        guard !Task.isCancelled else { throw WorkspaceScenePreparationError.cancelled }
+
+        let scene = CanvasRenderSceneSnapshot(
+            identity: identity,
+            surfaceID: request.surfaceID,
+            objects: renderObjects
+        )
+        let viewportObjects = renderObjects.map {
+            CanvasViewportSceneObject(id: $0.id, bounds: request.viewport.contentBounds)
+        }
+        let viewportIdentity = CanvasViewportOperationIdentity(
+            documentID: request.document.id,
+            revision: request.document.revision,
+            sceneID: request.viewport.sceneID,
+            generation: request.viewport.generation
+        )
+        let selectionScene = request.activePageID.map {
+            SelectionSceneSnapshot(
+                identity: identity,
+                activePageID: $0,
+                activeContainerID: request.activeContainerID,
+                targets: selectionTargets
+            )
+        }
+        return WorkspaceScenePreparationResult(
+            viewportRequest: CanvasViewportPreparationRequest(
+                identity: viewportIdentity,
+                viewport: request.viewport,
+                objects: viewportObjects
+            ),
+            renderScene: scene,
+            overlays: CanvasEditorOverlaySnapshot(identity: identity, overlays: []),
+            selectionScene: selectionScene
+        )
     }
 }
 
@@ -682,6 +904,7 @@ final class WorkspaceShellState: ObservableObject {
     private var documentSessionObservation: AnyCancellable?
     private let viewportRegistry = CanvasViewportCommandRegistry()
     private let viewportPreparer: CanvasViewportScenePreparer
+    private let scenePreparationWorker = WorkspaceScenePreparationWorker()
     private let renderWorker = CanvasRenderWorker()
     private let selectionRegistry = SelectionCommandRegistry()
     private let selectionOverlayPlanner = SelectionOverlayPlanner()
@@ -706,9 +929,9 @@ final class WorkspaceShellState: ObservableObject {
     private let announcementPoster: AccessibilityAnnouncementPoster
     private var viewportDocumentID: DocumentID
     private var preparationTask: Task<Void, Never>?
-    private var renderTask: Task<Void, Never>?
     private var previousRenderScene: CanvasRenderSceneSnapshot?
     private var selectionScene: SelectionSceneSnapshot?
+    private var pendingSelectionLifecycleBoundary: SelectionLifecycleBoundary?
     private var pendingSelectionAfterInsertion: NodeID?
     private var retainedTextEditingFrame: WorldRect?
     // A viewport is editor convenience state. Fit a fresh/adopted document
@@ -799,7 +1022,6 @@ final class WorkspaceShellState: ObservableObject {
         selectedGuideID = nil
         selectedPageID = pageID
         refreshSelectionScene(boundary: .pageSwitch)
-        scheduleScenePreparation()
     }
 
     func adjacentPage(to pageID: PageID, offset: Int) -> PageID? {
@@ -913,8 +1135,6 @@ final class WorkspaceShellState: ObservableObject {
     func cancelViewportPreparation() {
         preparationTask?.cancel()
         preparationTask = nil
-        renderTask?.cancel()
-        renderTask = nil
     }
 
     func prepareViewportScene(objects: [CanvasViewportSceneObject]) async throws -> PreparedCanvasViewportScene {
@@ -1067,27 +1287,41 @@ final class WorkspaceShellState: ObservableObject {
         DesignInspectorCommandRegistry.opacityValue(nodes: selectedCanonicalNodes)
     }
 
-    /// A scene-facing projection of the canonical v1 ordered layer list. The
-    /// Inspector never owns another copy: its rows are rebuilt from the
-    /// selected node's current document properties after each transaction.
+    /// A scene-facing projection of canonical v1 layers across the complete
+    /// selection. Exact shared stacks remain addressable by stable IDs;
+    /// differing stacks are presented as mixed instead of borrowing rows from
+    /// the primary selection.
+    func designInspectorFillLayerSelectionValue() -> DesignFillLayerSelectionValue {
+        DesignInspectorCommandRegistry.fillLayerSelectionValue(nodes: selectedCanonicalNodes)
+    }
+
     func designInspectorFillLayers() -> [CanonicalFillLayer] {
-        guard selectionState.orderedIDs.count == 1,
-              let node = selectedCanonicalNodes.first else { return [] }
-        return DesignInspectorCommandRegistry.resolvedLayers(for: node)
+        guard case .shared(let layers, _, _) = designInspectorFillLayerSelectionValue() else {
+            return []
+        }
+        return layers
     }
 
     var designInspectorLayerEditingReason: String? {
-        guard !selectionState.orderedIDs.isEmpty else {
-            return "Select a Frame, Section, Stack, or Grid to edit fill layers."
+        switch designInspectorFillLayerSelectionValue() {
+        case .unavailable(let reason):
+            return reason
+        case .mixed(let count, let skipped):
+            let skippedText = skipped == 0
+                ? ""
+                : " \(skipped) incompatible selection\(skipped == 1 ? " is" : "s are") unchanged."
+            return "\(count) selected object\(count == 1 ? " has" : "s have") different fill-layer stacks. Select one object or make their stacks identical before editing ordered rows.\(skippedText)"
+        case .shared(_, _, _):
+            return nil
         }
-        let supported = selectedCanonicalNodes.filter { DesignInspectorCommandRegistry.fillKinds.contains($0.kind) }
-        guard !supported.isEmpty else {
-            return "The selected objects do not support background fill layers."
-        }
-        guard selectionState.orderedIDs.count == 1 else {
-            return "Select one supported object to edit its ordered fill layers."
-        }
-        return nil
+    }
+
+    var designInspectorLayerSelectionSummary: String? {
+        guard case .shared(_, let applicable, let skipped) = designInspectorFillLayerSelectionValue(),
+              applicable > 1 || skipped > 0 else { return nil }
+        let shared = "Shared fill-layer stack across \(applicable) compatible object\(applicable == 1 ? "" : "s")."
+        guard skipped > 0 else { return shared }
+        return "\(shared) \(skipped) incompatible selection\(skipped == 1 ? " remains" : "s remain") unchanged."
     }
 
     @discardableResult
@@ -1115,7 +1349,14 @@ final class WorkspaceShellState: ObservableObject {
             ), in: documentSession.document, context: transformValidationContext)
             _ = try documentSession.execute(prepared.documentCommand)
             designInspectorFailure = nil
-            lastDesignInspectorAnnouncement = "Design (operation) committed for (prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s")"
+            let applied = prepared.applicableNodeIDs.count
+            let skipped = prepared.skippedNodeIDs.count
+            if skipped == 0 {
+                lastDesignInspectorAnnouncement = "Design \(operation) committed for \(applied) object\(applied == 1 ? "" : "s")"
+            } else {
+                let reasons = Set(prepared.skippedReasons.values).sorted().joined(separator: ", ")
+                lastDesignInspectorAnnouncement = "Design \(operation) committed for \(applied) object\(applied == 1 ? "" : "s"); skipped \(skipped) incompatible object\(skipped == 1 ? "" : "s"): \(reasons)"
+            }
             announcementPoster.post(lastDesignInspectorAnnouncement)
             return true
         } catch let error as DesignInspectorError {
@@ -1125,7 +1366,7 @@ final class WorkspaceShellState: ObservableObject {
             return false
         } catch {
             designInspectorFailure = .stale
-            lastDesignInspectorAnnouncement = "Design (operation) could not commit; appearance is unchanged"
+            lastDesignInspectorAnnouncement = "Design \(operation) could not commit; appearance is unchanged"
             announcementPoster.post(lastDesignInspectorAnnouncement)
             return false
         }
@@ -2976,11 +3217,6 @@ final class WorkspaceShellState: ObservableObject {
             // here as well so post-commit selection adoption is deterministic
             // and never depends on a structural-root fallback scene.
             scheduleScenePreparation()
-            // The viewport preparer is an auxiliary accessibility/viewport
-            // snapshot. A successful canonical insertion must not wait for
-            // that asynchronous preparation before publishing its authored
-            // render scene to the live canvas.
-            scheduleRendererPreparation()
             lastInsertionAnnouncement = "Inserted \(kind.rawValue)"
             announcementPoster.post(lastInsertionAnnouncement)
             recordInsertionDiagnostic(
@@ -3153,6 +3389,7 @@ final class WorkspaceShellState: ObservableObject {
         textEditingFailure = nil
         selectedGuideID = nil
         pendingSelectionAfterInsertion = nil
+        pendingSelectionLifecycleBoundary = nil
         canvasRendererFailure = nil
         viewportFailure = nil
         lastViewportAnnouncement = "Canvas viewport reset for the opened document"
@@ -3162,104 +3399,24 @@ final class WorkspaceShellState: ObservableObject {
 
     private func scheduleScenePreparation() {
         preparationTask?.cancel()
-        let activeNodes = renderableNodesForActivePage()
-        let objects = activeNodes.map {
-            CanvasViewportSceneObject(id: $0.id, bounds: viewportState.contentBounds)
-        }
-        // Input handlers and accessibility clients may be user-interactive.
-        // Keep the cancellable preparation request at user-initiated priority
-        // instead of allowing actor work to inherit the runtime's default QoS
-        // while the UI awaits the next adopted generation.
-        preparationTask = Task(priority: .userInitiated) { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                _ = try await prepareViewportScene(objects: objects)
-                scheduleRendererPreparation()
-            } catch CanvasViewportError.cancelled {
-                // Cancellation and stale completion are deliberately state neutral.
-            } catch CanvasViewportError.staleResult {
-                // A newer generation owns adoption.
-            } catch let error as CanvasViewportError {
-                viewportFailure = error
-            } catch {}
-        }
-    }
-
-    private func scheduleRendererPreparation() {
-        renderTask?.cancel()
-        let start = DispatchTime.now().uptimeNanoseconds
-        let identity = CanvasRenderRequestIdentity(
-            documentID: documentSession.document.id,
-            revision: documentSession.document.revision,
-            sceneID: viewportState.sceneID,
-            sceneGeneration: documentSession.document.revision,
-            viewportGeneration: viewportState.generation,
-            scale: viewportState.pixelRatio
+        let request = WorkspaceScenePreparationRequest(
+            document: documentSession.document,
+            activePageID: effectiveSelectedPageID,
+            activeContainerID: selectionState.activeContainerID,
+            viewport: viewportState,
+            surfaceID: renderSurfaceID
         )
-        let activeNodes = renderableNodesForActivePage()
-        let resolvedGeometry = pages.first(where: { $0.id == effectiveSelectedPageID })?.resolvedStructuralGeometry() ?? [:]
-        let objects = activeNodes.enumerated().map { index, node in
-            // `renderableNodesForActivePage` excludes structural roots, whose
-            // absent geometry is intentional and must never be replaced with a
-            // visual/debug fallback rectangle.
-            let frame = (resolvedGeometry[node.id] ?? node.insertionGeometry!).frame
-            let style: CanvasPaintStyle = switch node.kind {
-            case .frame:
-                if node.parent == .page(effectiveSelectedPageID ?? PageID()) {
-                    .page
-                } else if node.insertionStringProperty("style.fill") == "surface" {
-                    .frameSurface
-                } else {
-                    .container
-                }
-            case .section: .sectionSurface
-            case .stack: .stackSurface
-            case .grid: .gridSurface
-            case .text: .textPlaceholder
-            case .image: .imagePlaceholder
-            case .component: .container
-            }
-            // Resolve canonical v1 layers before the immutable scene crosses
-            // to the render worker. `resolvedLayers` adapts legacy v4 solid
-            // data only when no v1 order key exists, so the worker never has
-            // two competing fill authorities for the same geometry snapshot.
-            let fillLayers = DesignInspectorCommandRegistry.resolvedLayers(for: node).map { layer in
-                switch layer.kind {
-                case .solid:
-                    return CanvasAuthoredFillLayer(
-                        id: layer.id.rawValue, kind: .solid, isEnabled: layer.isEnabled,
-                        rgba: layer.solidColor.map { [$0.red, $0.green, $0.blue, $0.alpha] },
-                        angleDegrees: nil, stops: []
-                    )
-                case .linearGradient:
-                    return CanvasAuthoredFillLayer(
-                        id: layer.id.rawValue, kind: .linearGradient, isEnabled: layer.isEnabled,
-                        rgba: nil, angleDegrees: layer.normalizedAngleDegrees,
-                        stops: layer.stops.map {
-                            .init(id: $0.id.rawValue, position: $0.position, rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha])
-                        }
-                    )
-                }
-            }
-            return CanvasRenderObject(
-                id: node.id,
-                frame: frame,
-                clipRect: viewportState.contentBounds,
-                paintOrder: index,
-                style: style,
-                isVisible: !node.selectionBooleanProperty("hidden"),
-                accessibilityLabel: node.kind == .text ? "Text object" : node.name,
-                plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
-                displayName: node.kind == .text ? nil : node.name,
-                fillRGBA: nil,
-                fillLayers: fillLayers,
-                opacity: DesignInspectorCommandRegistry.resolvedOpacity(for: node)?.0 ?? 1
-            )
-        }
-        let scene = CanvasRenderSceneSnapshot(identity: identity, surfaceID: renderSurfaceID, objects: objects)
-        let overlays = CanvasEditorOverlaySnapshot(identity: identity, overlays: [])
-        let viewport = viewportState
+        let expectedIdentity = CanvasRenderRequestIdentity(
+            documentID: request.document.id,
+            revision: request.document.revision,
+            sceneID: request.viewport.sceneID,
+            sceneGeneration: request.document.revision,
+            viewportGeneration: request.viewport.generation,
+            scale: request.viewport.pixelRatio
+        )
         let previous = previousRenderScene
+        let selectionBoundary = pendingSelectionLifecycleBoundary ?? .rendererGeneration
+        let start = DispatchTime.now().uptimeNanoseconds
         let signpostID = OSSignpostID(log: CanvasRendererSignposts.log)
         os_signpost(
             .begin,
@@ -3267,13 +3424,12 @@ final class WorkspaceShellState: ObservableObject {
             name: "CanvasRenderPrepare",
             signpostID: signpostID,
             "generation=%{public}llu",
-            identity.viewportGeneration
+            expectedIdentity.viewportGeneration
         )
-        // Rendering remains off the main actor in CanvasRenderWorker, but its
-        // request priority must match the interaction that made it necessary.
-        // This prevents an accessibility/input turn from waiting behind a
-        // default-QoS render adoption.
-        renderTask = Task(priority: .userInitiated) { @MainActor [weak self] in
+        // The task remains main-actor owned only for state adoption. Snapshot
+        // projection, viewport preparation, and renderer planning each execute
+        // on their dedicated actors at user-initiated priority.
+        preparationTask = Task(priority: .userInitiated) { @MainActor [weak self] in
             defer {
                 os_signpost(
                     .end,
@@ -3284,112 +3440,97 @@ final class WorkspaceShellState: ObservableObject {
             }
             guard let self else { return }
             do {
-                let plan = try await renderWorker.prepare(
-                    scene: scene,
-                    overlays: overlays,
-                    viewport: viewport,
-                    previous: previous
+                let prepared = try await scenePreparationWorker.prepare(request)
+                async let viewportPreparation = viewportPreparer.prepare(
+                    prepared.viewportRequest,
+                    cancellation: CanvasViewportCancellation(isCancelled: { Task.isCancelled })
                 )
-                let expected = CanvasRenderRequestIdentity(
-                    documentID: documentSession.document.id,
-                    revision: documentSession.document.revision,
-                    sceneID: viewportState.sceneID,
-                    sceneGeneration: documentSession.document.revision,
-                    viewportGeneration: viewportState.generation,
-                    scale: viewportState.pixelRatio
-                )
-                try CanvasRenderAdoptionGate().validate(plan, expected: expected)
-                previousRenderScene = scene
-                canvasRenderPlan = plan
-                canvasRendererFailure = nil
-                adoptSelectionScene(from: plan, boundary: .rendererGeneration)
+
+                do {
+                    let plan = try await renderWorker.prepare(
+                        scene: prepared.renderScene,
+                        overlays: prepared.overlays,
+                        viewport: request.viewport,
+                        previous: previous
+                    )
+                    let currentIdentity = CanvasRenderRequestIdentity(
+                        documentID: documentSession.document.id,
+                        revision: documentSession.document.revision,
+                        sceneID: viewportState.sceneID,
+                        sceneGeneration: documentSession.document.revision,
+                        viewportGeneration: viewportState.generation,
+                        scale: viewportState.pixelRatio
+                    )
+                    try CanvasRenderAdoptionGate().validate(plan, expected: currentIdentity)
+                    previousRenderScene = prepared.renderScene
+                    canvasRenderPlan = plan
+                    canvasRendererFailure = nil
+                    adoptSelectionScene(
+                        prepared.selectionScene,
+                        from: plan,
+                        boundary: selectionBoundary
+                    )
+                    pendingSelectionLifecycleBoundary = nil
+                    await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
+                        operation: "prepare",
+                        plan: plan,
+                        identity: expectedIdentity,
+                        surfaceID: renderSurfaceID,
+                        durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+                        result: .success
+                    ))
+                } catch CanvasRendererError.cancelled {
+                    await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
+                        operation: "prepare", plan: nil, identity: expectedIdentity, surfaceID: renderSurfaceID,
+                        durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+                        result: .cancelled, failureCategory: "cancelled"
+                    ))
+                } catch CanvasRendererError.staleResult {
+                    await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
+                        operation: "adopt", plan: nil, identity: expectedIdentity, surfaceID: renderSurfaceID,
+                        durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+                        result: .stale, failureCategory: "stale-result"
+                    ))
+                } catch let error as CanvasRendererError {
+                    canvasRendererFailure = error
+                    await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
+                        operation: "prepare", plan: nil, identity: expectedIdentity, surfaceID: renderSurfaceID,
+                        durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
+                        result: .failure, failureCategory: String(describing: error)
+                    ))
+                } catch {}
+
+                do {
+                    let viewportResult = try await viewportPreparation
+                    try CanvasViewportAdoptionGate().validate(
+                        viewportResult,
+                        expected: currentViewportOperationIdentity
+                    )
+                    preparedViewportScene = viewportResult
+                    viewportFailure = nil
+                } catch CanvasViewportError.cancelled {
+                    // Cancellation and stale completion are state neutral.
+                } catch CanvasViewportError.staleResult {
+                    // A newer generation owns adoption.
+                } catch let error as CanvasViewportError {
+                    viewportFailure = error
+                } catch {}
+            } catch WorkspaceScenePreparationError.cancelled {
                 await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
-                    operation: "prepare", plan: plan, identity: identity, surfaceID: renderSurfaceID,
-                    durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
-                    result: .success
-                ))
-            } catch CanvasRendererError.cancelled {
-                await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
-                    operation: "prepare", plan: nil, identity: identity, surfaceID: renderSurfaceID,
+                    operation: "prepare", plan: nil, identity: expectedIdentity, surfaceID: renderSurfaceID,
                     durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
                     result: .cancelled, failureCategory: "cancelled"
-                ))
-            } catch CanvasRendererError.staleResult {
-                await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
-                    operation: "adopt", plan: nil, identity: identity, surfaceID: renderSurfaceID,
-                    durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
-                    result: .stale, failureCategory: "stale-result"
-                ))
-            } catch let error as CanvasRendererError {
-                canvasRendererFailure = error
-                await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
-                    operation: "prepare", plan: nil, identity: identity, surfaceID: renderSurfaceID,
-                    durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
-                    result: .failure, failureCategory: String(describing: error)
                 ))
             } catch {}
         }
     }
 
-    private func makeSelectionScene(from plan: CanvasRenderPlan) -> SelectionSceneSnapshot? {
-        guard let pageID = effectiveSelectedPageID else { return nil }
-        let rendered = Dictionary(uniqueKeysWithValues: plan.authoredObjects.map { ($0.id, $0) })
-        var fallbackOrder = plan.authoredObjects.count
-        let targets = documentSession.document.pages.flatMap { page in
-            let names = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0.name) })
-            return page.canonicalDepthFirstNodes().compactMap { node -> SelectionTargetSnapshot? in
-                let object = rendered[node.id]
-                // A one-node blank-project root is never visual or
-                // selectable. Legacy/nonblank hierarchy roots remain
-                // available to the bounded Layers drag-ownership contract.
-                guard object != nil || page.nodes.count > 1 else { return nil }
-                defer { fallbackOrder += 1 }
-                let parentID: NodeID? = if case .node(let id) = node.parent { id } else { nil }
-                return SelectionTargetSnapshot(
-                    id: node.id,
-                    pageID: page.id,
-                    parentID: parentID,
-                    name: node.name,
-                    kind: node.kind,
-                    parentName: parentID.flatMap { names[$0] },
-                    frame: object?.frame ?? viewportState.contentBounds,
-                    // The renderer's current artboard/viewport clip bounds
-                    // paint and virtualize accessibility; they are not a
-                    // canonical selection-validity boundary. A selected
-                    // active-page node may be off-artboard after a breakpoint
-                    // preset changes and must remain selected until removed,
-                    // hidden, unavailable, or replaced by a lifecycle event.
-                    clipRect: nil,
-                    paintOrder: object?.paintOrder ?? fallbackOrder,
-                    isVisible: object?.isVisible ?? true,
-                    isLocked: node.selectionBooleanProperty("locked"),
-                    isAvailable: object != nil || page.nodes.count > 1
-                )
-            }
-        }
-        return SelectionSceneSnapshot(
-            identity: plan.identity,
-            activePageID: pageID,
-            activeContainerID: selectionState.activeContainerID,
-            targets: targets
-        )
-    }
-
-    /// Only nodes with canonical authored geometry enter the viewport scene.
-    /// Page roots intentionally have no geometry and therefore remain a
-    /// nonvisual ownership boundary for an otherwise empty blank project.
-    private func renderableNodesForActivePage() -> [DocumentNode] {
-        documentSession.document.pages
-            .first(where: { $0.id == effectiveSelectedPageID })?
-            .canonicalDepthFirstNodes()
-            .filter { $0.insertionGeometry != nil } ?? []
-    }
-
     private func adoptSelectionScene(
+        _ preparedScene: SelectionSceneSnapshot?,
         from plan: CanvasRenderPlan,
         boundary: SelectionLifecycleBoundary
     ) {
-        guard var scene = makeSelectionScene(from: plan) else { return }
+        guard var scene = preparedScene, scene.identity == plan.identity else { return }
         if let pending = pendingSelectionAfterInsertion,
            let target = scene.targets.first(where: { $0.id == pending }) {
             scene = SelectionSceneSnapshot(
@@ -3452,13 +3593,51 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private func refreshSelectionScene(boundary: SelectionLifecycleBoundary) {
-        guard let plan = canvasRenderPlan else {
-            selectionState = SelectionState()
-            selectionScene = nil
-            selectionOverlayPlan = nil
-            return
+        pendingSelectionLifecycleBoundary = boundary
+        let activePageID = effectiveSelectedPageID
+        if selectionState.activePageID != nil,
+           selectionState.activePageID != activePageID {
+            selectionState.setSelection(
+                [], primary: nil, anchor: nil,
+                provenance: .lifecycleRepair,
+                repair: .pageChanged
+            )
+            selectionState.setContainer(nil)
+        } else if let activePageID,
+                  let page = documentSession.document.pages.first(where: { $0.id == activePageID }) {
+            // Keep the synchronous lifecycle repair proportional to the
+            // current selection, not to the whole document. The complete
+            // target catalog and renderer projection are rebuilt off-main.
+            // The implicit structural root is deliberately projected as the
+            // page-level (nil) selection container by scene preparation. Use
+            // that same projection here so undo/redo cannot misclassify a
+            // surviving page-level node as removed before async adoption.
+            let structuralRootIDs = Set(page.rootNodeIDs.filter { rootID in
+                page.nodes.first(where: { $0.id == rootID })?.insertionGeometry == nil
+            })
+            let retained = selectionState.orderedIDs.filter { id in
+                guard let node = page.nodes.first(where: { $0.id == id }) else { return false }
+                let canonicalParentID: NodeID? = if case .node(let value) = node.parent { value } else { nil }
+                let parentID = canonicalParentID.flatMap {
+                    structuralRootIDs.contains($0) ? nil : $0
+                }
+                return parentID == selectionState.activeContainerID
+                    && !node.selectionBooleanProperty("hidden")
+                    && !node.selectionBooleanProperty("locked")
+            }
+            let primary = selectionState.primaryID.flatMap { retained.contains($0) ? $0 : nil } ?? retained.last
+            let anchor = selectionState.anchorID.flatMap { retained.contains($0) ? $0 : nil } ?? retained.first
+            selectionState.setSelection(
+                retained,
+                primary: primary,
+                anchor: anchor,
+                provenance: retained == selectionState.orderedIDs ? selectionState.provenance : .lifecycleRepair,
+                repair: retained == selectionState.orderedIDs ? .none : .removed
+            )
         }
-        adoptSelectionScene(from: plan, boundary: boundary)
+        selectionScene = nil
+        selectionOverlayPlan = nil
+        scheduleScenePreparation()
     }
 
     private func rebuildSelectionOverlay() {
@@ -3522,7 +3701,11 @@ final class WorkspaceShellState: ObservableObject {
         failure: String?
     ) {
         let elapsed = DispatchTime.now().uptimeNanoseconds - start
-        let sceneIdentifier = String(viewportState.sceneID.description.prefix(8))
+        let sceneIdentifier = DiagnosticStableIdentifier.sanitize(
+            viewportState.sceneID.description,
+            domain: .viewport,
+            kind: "scene"
+        )
         let record = CanvasViewportDiagnosticRecord(
             requirementID: "SF-0401-008",
             operation: operation,
@@ -3530,7 +3713,9 @@ final class WorkspaceShellState: ObservableObject {
             generation: viewportState.generation,
             durationMilliseconds: Double(elapsed) / 1_000_000,
             result: result,
-            failureCategory: failure
+            failureCategory: failure.map {
+                DiagnosticErrorCategory.closedCategory(forUntrustedValue: $0).rawValue
+            }
         )
         Task { await viewportDiagnostics.append(record) }
     }

@@ -501,6 +501,37 @@ extension DocumentNode {
 /// ownership and defaulted properties. World space remains top-left/Y-down;
 /// this shared resolver feeds the renderer and selection scene rather than
 /// storing an editor-only second geometry source.
+enum GridRowOffsetResolver {
+    /// Computes each row origin with one height read per child and one pass
+    /// over the resulting rows. Keeping this work explicit prevents a prefix
+    /// reduction per child from turning large grids into quadratic work.
+    static func resolve(
+        childCount: Int,
+        columns: Int,
+        startY: Double,
+        gap: Double,
+        heightAt: (Int) -> Double?
+    ) -> [Double] {
+        guard childCount > 0 else { return [] }
+        let columns = max(1, columns)
+        let rowCount = (childCount + columns - 1) / columns
+        var rowHeights = Array(repeating: 0.0, count: rowCount)
+        for index in 0..<childCount {
+            guard let height = heightAt(index) else { continue }
+            let row = index / columns
+            rowHeights[row] = max(rowHeights[row], height)
+        }
+
+        var rowOffsets = Array(repeating: startY, count: rowCount)
+        var cursor = startY
+        for row in 0..<rowCount {
+            rowOffsets[row] = cursor
+            cursor += rowHeights[row] + gap
+        }
+        return rowOffsets
+    }
+}
+
 extension DocumentPage {
     func resolvedStructuralGeometry() -> [NodeID: InsertionGeometry] {
         let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
@@ -527,16 +558,26 @@ extension DocumentPage {
                 let columns = max(1, Int(parent.insertionNumberProperty("layout.grid.columns") ?? 2))
                 let usableWidth = max(1, parentGeometry.size.width - (2 * padding) - (Double(columns - 1) * gap))
                 let cellWidth = usableWidth / Double(columns)
-                var rowHeights: [Double] = []
+                let rowOffsets = GridRowOffsetResolver.resolve(
+                    childCount: children.count,
+                    columns: columns,
+                    startY: parentGeometry.origin.y + padding,
+                    gap: gap
+                ) { index in
+                    result[children[index].id]?.size.height
+                }
                 for (index, child) in children.enumerated() {
                     guard var geometry = result[child.id] else { continue }
                     let row = index / columns
                     let column = index % columns
-                    while rowHeights.count <= row { rowHeights.append(0) }
-                    let y = parentGeometry.origin.y + padding + rowHeights.prefix(row).reduce(0, +) + (Double(row) * gap)
-                    geometry = .init(origin: .init(x: parentGeometry.origin.x + padding + Double(column) * (cellWidth + gap), y: y), size: .init(width: cellWidth, height: geometry.size.height))
+                    geometry = .init(
+                        origin: .init(
+                            x: parentGeometry.origin.x + padding + Double(column) * (cellWidth + gap),
+                            y: rowOffsets[row]
+                        ),
+                        size: .init(width: cellWidth, height: geometry.size.height)
+                    )
                     result[child.id] = geometry
-                    rowHeights[row] = max(rowHeights[row], geometry.size.height)
                 }
             case .frame, .section, .text, .image, .component: break
             }

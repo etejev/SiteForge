@@ -26,6 +26,11 @@ if ! scripts/test-secret-scanner.py || ! scripts/scan-repository-secrets.py .; t
   failed=1
 fi
 
+if ! /bin/zsh scripts/test-portable-checksum.sh; then
+  print -u2 "Portable local-alpha checksum tests failed."
+  failed=1
+fi
+
 if rg -n --hidden -g '!**/.git/**' -g '!**/.build/**' \
   '(TODO|FIXME):?\s*$' SiteForge Tests 2>/dev/null; then
   print -u2 "Empty TODO/FIXME markers are not allowed; include an issue or requirement ID."

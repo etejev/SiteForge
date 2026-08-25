@@ -110,26 +110,90 @@ struct CanonicalFillLayer: Equatable, Sendable {
     }
 }
 
+enum CanonicalFillLayerDecodingResult: Equatable, Sendable {
+    case absent
+    case layers([CanonicalFillLayer])
+}
+
+enum CanonicalFillLayerDecodingError: Error, Equatable, Sendable {
+    case unsupportedNodeKind
+    case duplicateProperty
+    case missingOrder
+    case invalidOrder
+    case duplicateLayerID
+    case invalidLayer
+    case invalidStopOrder
+    case duplicateStopID
+    case invalidStop
+    case orphanedProperty
+}
+
 /// Versioned property codec for the v5 layer model. The ordered identity lists
 /// are canonical identifiers (not presentation color strings); all visual
 /// values remain typed finite numbers. Legacy v4 solid properties are read
 /// only as a deterministic migration input and are never consulted once a v5
 /// order property exists.
 enum CanonicalFillLayerCodec {
+    static let namespaceRoot = "style.fill.layers.v1"
     static let orderKey = "style.fill.layers.v1.order"
+    private static let supportedKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
 
     static func layers(for node: DocumentNode) -> [CanonicalFillLayer]? {
-        guard let order = node.insertionStringProperty(orderKey) else { return nil }
-        let identifiers = order.split(separator: ",")
-        // An explicitly empty order is the canonical, authored "no fill"
-        // value. Invalid nonempty orders fail closed to the same no-layer
-        // rendering rather than reviving a legacy property as a second source.
-        if identifiers.isEmpty { return [] }
-        let ids = identifiers.compactMap { FillLayerID(uuidString: String($0)) }
-        guard ids.count == identifiers.count,
-              Set(ids).count == ids.count else { return [] }
-        let layers = ids.compactMap { layer(id: $0, node: node) }
-        return layers.count == ids.count ? layers : []
+        do {
+            switch try decodeLayers(for: node) {
+            case .absent: return nil
+            case .layers(let layers): return layers
+            }
+        } catch {
+            // A malformed candidate never revives legacy values as a second
+            // visual authority. Canonical document validation rejects this
+            // state before adoption; this fallback keeps projections safe for
+            // transient test/debug values that have not crossed that gate.
+            return []
+        }
+    }
+
+    /// Strictly decodes the owned namespace. Absence is distinct from an
+    /// explicitly authored empty list, while every malformed or unreachable
+    /// property is rejected instead of being presented as "no fill".
+    static func decodeLayers(for node: DocumentNode) throws -> CanonicalFillLayerDecodingResult {
+        let namespaceProperties = node.properties.filter { ownsNamespace($0.key.rawValue) }
+        guard !namespaceProperties.isEmpty else { return .absent }
+        guard supportedKinds.contains(node.kind) else {
+            throw CanonicalFillLayerDecodingError.unsupportedNodeKind
+        }
+
+        let keys = namespaceProperties.map(\.key.rawValue)
+        guard Set(keys).count == keys.count else {
+            throw CanonicalFillLayerDecodingError.duplicateProperty
+        }
+        let properties = Dictionary(uniqueKeysWithValues: namespaceProperties.map { ($0.key.rawValue, $0.value) })
+        guard let orderValue = properties[orderKey] else {
+            throw CanonicalFillLayerDecodingError.missingOrder
+        }
+        guard case .string(let order) = orderValue else {
+            throw CanonicalFillLayerDecodingError.invalidOrder
+        }
+
+        let ids = try layerIdentifiers(in: order)
+        guard Set(ids).count == ids.count else {
+            throw CanonicalFillLayerDecodingError.duplicateLayerID
+        }
+
+        var expectedKeys: Set<String> = [orderKey]
+        var decoded: [CanonicalFillLayer] = []
+        decoded.reserveCapacity(ids.count)
+        for id in ids {
+            decoded.append(try layer(
+                id: id,
+                properties: properties,
+                expectedKeys: &expectedKeys
+            ))
+        }
+        guard Set(keys) == expectedKeys else {
+            throw CanonicalFillLayerDecodingError.orphanedProperty
+        }
+        return .layers(decoded)
     }
 
     static func legacySolidLayer(for node: DocumentNode) -> CanonicalFillLayer? {
@@ -180,41 +244,121 @@ enum CanonicalFillLayerCodec {
         return values
     }
 
-    private static func layer(id: FillLayerID, node: DocumentNode) -> CanonicalFillLayer? {
+    private static func layer(
+        id: FillLayerID,
+        properties: [String: PropertyValue],
+        expectedKeys: inout Set<String>
+    ) throws -> CanonicalFillLayer {
         let prefix = "style.fill.layers.v1.\(id.description)"
-        guard let kind = node.insertionStringProperty("\(prefix).kind").flatMap(CanonicalFillLayerKind.init(rawValue:)) else { return nil }
-        guard let enabledProperty = node.insertionProperty("\(prefix).enabled"),
-              case .boolean(let enabled) = enabledProperty.value else { return nil }
+        let kindKey = "\(prefix).kind"
+        let enabledKey = "\(prefix).enabled"
+        expectedKeys.formUnion([kindKey, enabledKey])
+        guard case .string(let kindValue)? = properties[kindKey],
+              let kind = CanonicalFillLayerKind(rawValue: kindValue),
+              case .boolean(let enabled)? = properties[enabledKey] else {
+            throw CanonicalFillLayerDecodingError.invalidLayer
+        }
         switch kind {
         case .solid:
-            guard let color = color(prefix: prefix, node: node) else { return nil }
+            let color = try color(
+                prefix: prefix,
+                properties: properties,
+                expectedKeys: &expectedKeys,
+                error: .invalidLayer
+            )
             let layer = CanonicalFillLayer.solid(id: id, color: color, isEnabled: enabled)
-            return layer.isValid ? layer : nil
+            guard layer.isValid else { throw CanonicalFillLayerDecodingError.invalidLayer }
+            return layer
         case .linearGradient:
-            guard let angle = node.insertionNumberProperty("\(prefix).angle"),
-                  let stopOrder = node.insertionStringProperty("\(prefix).stops") else { return nil }
-            let stopIdentifiers = stopOrder.split(separator: ",")
-            let stops = stopIdentifiers.compactMap { value -> CanonicalGradientStop? in
-                guard let stopID = GradientStopID(uuidString: String(value)) else { return nil }
-                let stopPrefix = "\(prefix).stop.\(stopID.description)"
-                guard let position = node.insertionNumberProperty("\(stopPrefix).position"),
-                      let color = color(prefix: stopPrefix, node: node) else { return nil }
-                return CanonicalGradientStop(id: stopID, position: position, color: color)
+            let angleKey = "\(prefix).angle"
+            let stopsKey = "\(prefix).stops"
+            expectedKeys.formUnion([angleKey, stopsKey])
+            guard case .number(let angle)? = properties[angleKey],
+                  angle.isFinite, (0..<360).contains(angle),
+                  case .string(let stopOrder)? = properties[stopsKey] else {
+                throw CanonicalFillLayerDecodingError.invalidLayer
             }
-            guard stops.count == stopIdentifiers.count,
-                  Set(stops.map(\.id)).count == stops.count else { return nil }
+            let stopIDs = try stopIdentifiers(in: stopOrder)
+            guard stopIDs.count >= 2 else {
+                throw CanonicalFillLayerDecodingError.invalidStopOrder
+            }
+            guard Set(stopIDs).count == stopIDs.count else {
+                throw CanonicalFillLayerDecodingError.duplicateStopID
+            }
+            let stops = try stopIDs.map { stopID -> CanonicalGradientStop in
+                let stopPrefix = "\(prefix).stop.\(stopID.description)"
+                let positionKey = "\(stopPrefix).position"
+                expectedKeys.insert(positionKey)
+                guard case .number(let position)? = properties[positionKey],
+                      position.isFinite, (0...1).contains(position) else {
+                    throw CanonicalFillLayerDecodingError.invalidStop
+                }
+                let color = try color(
+                    prefix: stopPrefix,
+                    properties: properties,
+                    expectedKeys: &expectedKeys,
+                    error: .invalidStop
+                )
+                let stop = CanonicalGradientStop(id: stopID, position: position, color: color)
+                guard stop.isValid else { throw CanonicalFillLayerDecodingError.invalidStop }
+                return stop
+            }
             let layer = CanonicalFillLayer.linearGradient(id: id, angleDegrees: angle, stops: stops, isEnabled: enabled)
-            return layer.isValid ? layer : nil
+            guard layer.isValid else { throw CanonicalFillLayerDecodingError.invalidLayer }
+            return layer
         }
     }
 
-    private static func color(prefix: String, node: DocumentNode) -> CanonicalSolidColor? {
-        guard let red = node.insertionNumberProperty("\(prefix).red"),
-              let green = node.insertionNumberProperty("\(prefix).green"),
-              let blue = node.insertionNumberProperty("\(prefix).blue"),
-              let alpha = node.insertionNumberProperty("\(prefix).alpha") else { return nil }
+    private static func color(
+        prefix: String,
+        properties: [String: PropertyValue],
+        expectedKeys: inout Set<String>,
+        error: CanonicalFillLayerDecodingError
+    ) throws -> CanonicalSolidColor {
+        let redKey = "\(prefix).red"
+        let greenKey = "\(prefix).green"
+        let blueKey = "\(prefix).blue"
+        let alphaKey = "\(prefix).alpha"
+        expectedKeys.formUnion([redKey, greenKey, blueKey, alphaKey])
+        guard case .number(let red)? = properties[redKey],
+              case .number(let green)? = properties[greenKey],
+              case .number(let blue)? = properties[blueKey],
+              case .number(let alpha)? = properties[alphaKey] else { throw error }
         let color = CanonicalSolidColor(red: red, green: green, blue: blue, alpha: alpha)
-        return color.isValid ? color : nil
+        guard color.isValid else { throw error }
+        return color
+    }
+
+    private static func layerIdentifiers(in value: String) throws -> [FillLayerID] {
+        if value.isEmpty { return [] }
+        let tokens = value.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard tokens.allSatisfy({ !$0.isEmpty }) else {
+            throw CanonicalFillLayerDecodingError.invalidOrder
+        }
+        return try tokens.map { token in
+            guard let id = FillLayerID(uuidString: token), token == id.description else {
+                throw CanonicalFillLayerDecodingError.invalidOrder
+            }
+            return id
+        }
+    }
+
+    private static func stopIdentifiers(in value: String) throws -> [GradientStopID] {
+        guard !value.isEmpty else { throw CanonicalFillLayerDecodingError.invalidStopOrder }
+        let tokens = value.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard tokens.allSatisfy({ !$0.isEmpty }) else {
+            throw CanonicalFillLayerDecodingError.invalidStopOrder
+        }
+        return try tokens.map { token in
+            guard let id = GradientStopID(uuidString: token), token == id.description else {
+                throw CanonicalFillLayerDecodingError.invalidStopOrder
+            }
+            return id
+        }
+    }
+
+    private static func ownsNamespace(_ key: String) -> Bool {
+        key == namespaceRoot || key.hasPrefix("\(namespaceRoot).")
     }
 }
 
@@ -223,6 +367,17 @@ enum DesignInspectorValue: Equatable, Sendable {
 }
 
 enum DesignInspectorOpacityValue: Equatable, Sendable { case unavailable(String), single(Double, PropertyOrigin), mixed }
+
+/// A truthful projection of ordered fill layers across the current selection.
+/// Shared rows are editable only when every applicable object owns the exact
+/// same stable layer/stop identities and values. Differing stacks stay mixed;
+/// the Inspector never borrows the primary object's rows and implies a bulk
+/// mutation that the other selected objects cannot address by identity.
+enum DesignFillLayerSelectionValue: Equatable, Sendable {
+    case unavailable(String)
+    case shared(layers: [CanonicalFillLayer], applicableCount: Int, skippedCount: Int)
+    case mixed(applicableCount: Int, skippedCount: Int)
+}
 
 enum DesignInspectorEdit: Sendable { case fill(CanonicalSolidColor?), opacity(Double) }
 
@@ -395,6 +550,27 @@ struct DesignInspectorCommandRegistry: Sendable {
         return CanonicalFillLayerCodec.legacySolidLayer(for: node).map { [$0] } ?? []
     }
 
+    static func fillLayerSelectionValue(nodes: [DocumentNode]) -> DesignFillLayerSelectionValue {
+        guard !nodes.isEmpty else {
+            return .unavailable("Select a Frame, Section, Stack, or Grid to edit fill layers.")
+        }
+        let applicable = nodes.filter { fillKinds.contains($0.kind) }
+        guard !applicable.isEmpty else {
+            return .unavailable("The selected objects do not support background fill layers.")
+        }
+        let stacks = applicable.map(resolvedLayers)
+        let skippedCount = nodes.count - applicable.count
+        guard let first = stacks.first,
+              stacks.dropFirst().allSatisfy({ $0 == first }) else {
+            return .mixed(applicableCount: applicable.count, skippedCount: skippedCount)
+        }
+        return .shared(
+            layers: first,
+            applicableCount: applicable.count,
+            skippedCount: skippedCount
+        )
+    }
+
     static func resolvedFill(for node: DocumentNode) -> (CanonicalSolidColor?, PropertyOrigin) {
         guard fillKinds.contains(node.kind) else { return (nil, .defaulted) }
         if let layers = CanonicalFillLayerCodec.layers(for: node) {
@@ -442,6 +618,23 @@ struct DesignInspectorCommandRegistry: Sendable {
 
     func prepare(_ command: DesignInspectorCommand, in document: CanonicalDocument, context: TransformValidationContext) throws -> PreparedDesignInspectorEdit {
         guard !command.cancelled else { throw DesignInspectorError.unavailable("The Design edit was cancelled; committed appearance is unchanged.") }
+        if case .fill(let color) = command.edit {
+            if let color, !color.isValid { throw DesignInspectorError.invalidColor }
+            // The compatibility solid-fill entry point delegates to the sole
+            // v1 layer registry. It must never write the retired v4 channel
+            // keys or create a second appearance authority.
+            return try prepare(
+                DesignFillLayerCommand(
+                    identity: command.identity,
+                    orderedNodeIDs: command.orderedNodeIDs,
+                    edit: .replaceSolid(color),
+                    provenance: command.provenance,
+                    cancelled: false
+                ),
+                in: document,
+                context: context
+            )
+        }
         guard command.identity.documentID == document.id, command.identity.revision == document.revision else { throw DesignInspectorError.stale }
         guard command.identity.pageID == context.activePageID,
               command.identity.sceneID == context.currentSceneID,
@@ -450,43 +643,24 @@ struct DesignInspectorCommandRegistry: Sendable {
         guard Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count else { throw DesignInspectorError.unavailable("A Design edit cannot contain the same object twice.") }
         guard document.revision < UInt64.max else { throw DesignInspectorError.unavailable("The document revision cannot accept another Design edit.") }
         guard let page = document.pages.first(where: { $0.id == command.identity.pageID }) else { throw DesignInspectorError.unavailable("The active page is unavailable.") }
-        if case .fill(let color) = command.edit, let color, !color.isValid { throw DesignInspectorError.invalidColor }
-        if case .opacity(let opacity) = command.edit, (!opacity.isFinite || !(0...1).contains(opacity)) { throw DesignInspectorError.invalidOpacity }
+        guard case .opacity(let opacity) = command.edit else {
+            throw DesignInspectorError.unavailable("The Design edit is unavailable.")
+        }
+        guard opacity.isFinite, (0...1).contains(opacity) else { throw DesignInspectorError.invalidOpacity }
         var applicable: [NodeID] = [], skipped: [NodeID] = [], skippedReasons: [NodeID: String] = [:], changes: [DocumentCommand] = []
         for id in command.orderedNodeIDs {
             guard let node = page.nodes.first(where: { $0.id == id }) else { throw DesignInspectorError.unavailable("A selected object no longer exists.") }
             guard context.availableNodeIDs.contains(id), !node.selectionBooleanProperty("hidden"), !node.selectionBooleanProperty("locked") else { throw DesignInspectorError.unavailable("A selected object is unavailable, hidden, or locked.") }
-            let applies: Bool = switch command.edit { case .fill: Self.fillKinds.contains(node.kind); case .opacity: Self.resolvedOpacity(for: node) != nil }
+            let applies = Self.resolvedOpacity(for: node) != nil
             guard applies else {
                 skipped.append(id)
                 skippedReasons[id] = "This object kind does not support this appearance property."
                 continue
             }
             applicable.append(id)
-            switch command.edit {
-            case .fill(let color):
-                let keys = ["style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"]
-                if let color {
-                    for (key, value) in zip(keys, [color.red, color.green, color.blue, color.alpha]) {
-                        let old = node.insertionProperty(key)
-                        // Setting an authored value that is already exact is
-                        // intentionally history-neutral. A defaulted legacy
-                        // value remains a real transition because provenance
-                        // changes from defaulted to authored.
-                        guard old?.value != .number(value) || old?.origin != .authored else { continue }
-                        changes.append(.setProperty(SetPropertyCommand(pageID: page.id, nodeID: id, property: NodeProperty(id: old?.id ?? PropertyID(), key: .init(rawValue: key), value: .number(value), origin: .authored))))
-                    }
-                } else {
-                    for key in keys { if let old = node.insertionProperty(key) { changes.append(.removeProperty(RemovePropertyCommand(pageID: page.id, nodeID: id, propertyID: old.id))) } }
-                    // An explicit legacy fallback is removed too: authored
-                    // removal means omitted fill, never an accidental surface.
-                    if let legacy = node.insertionProperty("style.fill"), legacy.origin == .defaulted { changes.append(.removeProperty(RemovePropertyCommand(pageID: page.id, nodeID: id, propertyID: legacy.id))) }
-                }
-            case .opacity(let value):
-                let old = node.insertionProperty("style.opacity")
-                guard old?.value != .number(value) || old?.origin != .authored else { continue }
-                changes.append(.setProperty(SetPropertyCommand(pageID: page.id, nodeID: id, property: NodeProperty(id: old?.id ?? PropertyID(), key: .init(rawValue: "style.opacity"), value: .number(value), origin: .authored))))
-            }
+            let old = node.insertionProperty("style.opacity")
+            guard old?.value != .number(opacity) || old?.origin != .authored else { continue }
+            changes.append(.setProperty(SetPropertyCommand(pageID: page.id, nodeID: id, property: NodeProperty(id: old?.id ?? PropertyID(), key: .init(rawValue: "style.opacity"), value: .number(opacity), origin: .authored))))
         }
         guard !applicable.isEmpty else { throw DesignInspectorError.noApplicableTargets }
         guard !changes.isEmpty else { throw DesignInspectorError.noChanges }
@@ -554,8 +728,8 @@ struct DesignInspectorCommandRegistry: Sendable {
                 // never node names, document paths, or user-authored content.
                 throw DesignInspectorError.unavailable("The requested fill-layer values are invalid.")
             }
-            guard after != before || CanonicalFillLayerCodec.layers(for: node) == nil else { continue }
             applicable.append(id)
+            guard after != before || CanonicalFillLayerCodec.layers(for: node) == nil else { continue }
 
             let desired = CanonicalFillLayerCodec.propertyValues(for: after)
             let owned = node.properties.filter {
@@ -1407,9 +1581,15 @@ struct TransformDiagnosticRecord: Codable, Equatable, Sendable {
 }
 
 actor TransformDiagnostics {
-    private var records: [TransformDiagnosticRecord] = []
-    func append(_ record: TransformDiagnosticRecord) { records.append(record) }
-    func snapshot() -> [TransformDiagnosticRecord] { records }
+    private var buffer: BoundedDiagnosticBuffer<TransformDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ record: TransformDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [TransformDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 enum TransformDiagnosticFactory {
@@ -1430,13 +1610,16 @@ enum TransformDiagnosticFactory {
             resultRevision: resultRevision,
             affectedObjectCount: command.orderedNodeIDs.count,
             result: result,
-            failureCategory: failure.map { String(describing: $0).prefix(64).description }
+            failureCategory: failure.map(\.diagnosticCategory)
         )
     }
 
     private static func sanitize(_ id: NodeID) -> String {
-        let digest = SHA256.hash(data: Data(("transform:" + id.description).utf8))
-        return "node-" + digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+        DiagnosticStableIdentifier.sanitize(
+            id.description,
+            domain: .transform,
+            kind: "node"
+        )
     }
 }
 
@@ -1463,9 +1646,15 @@ struct GeometryInspectorDiagnosticRecord: Codable, Equatable, Sendable {
 }
 
 actor GeometryInspectorDiagnostics {
-    private var records: [GeometryInspectorDiagnosticRecord] = []
-    func append(_ record: GeometryInspectorDiagnosticRecord) { records.append(record) }
-    func snapshot() -> [GeometryInspectorDiagnosticRecord] { records }
+    private var buffer: BoundedDiagnosticBuffer<GeometryInspectorDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ record: GeometryInspectorDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [GeometryInspectorDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 enum GeometryInspectorDiagnosticFactory {
@@ -1486,13 +1675,65 @@ enum GeometryInspectorDiagnosticFactory {
             resultRevision: resultRevision,
             affectedObjectCount: command.orderedNodeIDs.count,
             result: result,
-            failureCategory: failure.map { String(describing: $0).prefix(64).description }
+            failureCategory: failure.map(\.diagnosticCategory)
         )
     }
 
     private static func sanitize(_ id: NodeID) -> String {
-        let digest = SHA256.hash(data: Data(("geometry-inspector:" + id.description).utf8))
-        return "node-" + digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+        DiagnosticStableIdentifier.sanitize(
+            id.description,
+            domain: .geometryInspector,
+            kind: "node"
+        )
+    }
+}
+
+private extension TransformError {
+    var diagnosticCategory: String {
+        switch self {
+        case .lifecycleUnavailable: "lifecycle-unavailable"
+        case .emptySelection: "empty-selection"
+        case .duplicateTarget: "duplicate-target"
+        case .staleDocument: "stale-document"
+        case .staleRevision: "stale-revision"
+        case .revisionExhausted: "revision-exhausted"
+        case .staleRenderer: "stale-renderer"
+        case .pageUnavailable: "page-unavailable"
+        case .crossPageTarget: "cross-page-target"
+        case .selectionMismatch: "selection-mismatch"
+        case .missingTarget: "missing-target"
+        case .lockedTarget: "locked-target"
+        case .hiddenTarget: "hidden-target"
+        case .unavailableTarget: "unavailable-target"
+        case .incompatibleGeometry: "incompatible-geometry"
+        case .incompatibleMultipleResize: "incompatible-multiple-resize"
+        case .invalidDelta: "invalid-delta"
+        case .invalidResult: "invalid-result"
+        case .cancelled: "cancelled"
+        }
+    }
+}
+
+private extension GeometryInspectorError {
+    var diagnosticCategory: String {
+        switch self {
+        case .lifecycleUnavailable: "lifecycle-unavailable"
+        case .emptySelection: "empty-selection"
+        case .duplicateTarget: "duplicate-target"
+        case .staleDocument: "stale-document"
+        case .staleRevision: "stale-revision"
+        case .staleRenderer: "stale-renderer"
+        case .pageUnavailable: "page-unavailable"
+        case .selectionMismatch: "selection-mismatch"
+        case .revisionExhausted: "revision-exhausted"
+        case .missingTarget: "missing-target"
+        case .lockedTarget: "locked-target"
+        case .hiddenTarget: "hidden-target"
+        case .unavailableTarget: "unavailable-target"
+        case .noApplicableTargets: "no-applicable-targets"
+        case .invalidValue: "invalid-value"
+        case .cancelled: "cancelled"
+        }
     }
 }
 // MARK: - Design inspector presentation

@@ -1,6 +1,25 @@
 import AppKit
 import XCTest
 
+private enum LaunchLifecycleReadinessHandshake {
+    /// All current window-presentation paths emit one of these phases after
+    /// an AppKit window is usable. Keep this set in lockstep with
+    /// `WorkspaceWindowPresentationOwner` so launch tests fail loudly when
+    /// the diagnostic vocabulary changes instead of timing out opaquely.
+    static let supportedPhaseFields: Set<Substring> = [
+        "phase=window-became-usable",
+        "phase=configuration-succeeded-constrained",
+        "phase=configuration-succeeded-minimum",
+        "phase=window-ready",
+    ]
+
+    static func reportsUsableWindow(in records: String) -> Bool {
+        records.split(separator: "\n").contains { record in
+            !supportedPhaseFields.isDisjoint(with: record.split(separator: ";"))
+        }
+    }
+}
+
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
     private static let applicationBundleIdentifier = "app.siteforge.SiteForge"
@@ -23,6 +42,22 @@ final class SiteForgeLaunchTests: XCTestCase {
             }
             return min(700, max(1, visibleHeight - (2 * safeScreenInset)))
         }
+    }
+
+    // SF-0201-002, SF-0201-008 — the UI harness recognizes every canonical
+    // native-window readiness path and rejects merely similar phase names.
+    func testLaunchLifecycleReadinessVocabularyIsExact() {
+        for phase in LaunchLifecycleReadinessHandshake.supportedPhaseFields {
+            XCTAssertTrue(LaunchLifecycleReadinessHandshake.reportsUsableWindow(
+                in: "run=test;\(phase);windowCount=1;windows=visible=true"
+            ), String(phase))
+        }
+        XCTAssertFalse(LaunchLifecycleReadinessHandshake.reportsUsableWindow(
+            in: "run=test;phase=window-became-usable-later;windowCount=1;windows=visible=true"
+        ))
+        XCTAssertFalse(LaunchLifecycleReadinessHandshake.reportsUsableWindow(
+            in: "run=test;phase=configuration-deferred;windowCount=1;windows=visible=false"
+        ))
     }
 
     // SF-0406-001 through SF-0406-008
@@ -377,6 +412,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         // constrained hosted display; normal launches retain visible-frame
         // presentation.
         let application = launchWorkspace(windowAlignment: .right)
+        let workspaceFrameBeforeColorPanel = application.windows.firstMatch.frame
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         application.buttons["toolbar.tool.frame"].click()
         canvas.coordinate(withNormalizedOffset: .init(dx: 0.4, dy: 0.4)).click()
@@ -417,6 +453,15 @@ final class SiteForgeLaunchTests: XCTestCase {
             NSPredicate(format: "title == %@", "Colors")
         ).firstMatch
         XCTAssertTrue(nativeColorPanel.waitForExistence(timeout: 3))
+        XCTAssertLessThan(
+            nativeColorPanel.frame.width,
+            workspaceFrameBeforeColorPanel.width,
+            "The auxiliary NSColorPanel must not inherit workspace window sizing."
+        )
+        let workspaceWindow = application.windows.matching(
+            NSPredicate(format: "title != %@", "Colors")
+        ).firstMatch
+        XCTAssertEqual(workspaceWindow.frame, workspaceFrameBeforeColorPanel)
         let nativeColorSlider = nativeColorPanel.sliders.firstMatch
         XCTAssertTrue(nativeColorSlider.exists && nativeColorSlider.isHittable)
         nativeColorSlider.coordinate(withNormalizedOffset: .init(dx: 0.72, dy: 0.5)).click()
@@ -513,6 +558,27 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(angle.label, "Linear gradient angle")
         angle.click(); angle.typeKey("a", modifierFlags: .command); angle.typeText("90"); angle.typeKey(.return, modifierFlags: [])
 
+        let gradientPrefix = angle.identifier.replacingOccurrences(of: ".angle", with: "")
+        let stopColorWells = application.colorWells.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND identifier CONTAINS %@ AND identifier ENDSWITH %@",
+            "\(gradientPrefix).stop.", ".stop.", ".color"
+        ))
+        XCTAssertEqual(stopColorWells.count, 2)
+        XCTAssertTrue(stopColorWells.allElementsBoundByIndex.allSatisfy { $0.isHittable })
+        let stopUpButtons = application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
+            "\(gradientPrefix).stop.", ".up"
+        ))
+        let stopDownButtons = application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
+            "\(gradientPrefix).stop.", ".down"
+        ))
+        XCTAssertEqual(stopUpButtons.count, 2)
+        XCTAssertEqual(stopDownButtons.count, 2)
+        XCTAssertFalse(stopUpButtons.element(boundBy: 0).isEnabled)
+        XCTAssertTrue(stopDownButtons.element(boundBy: 0).isEnabled)
+        stopDownButtons.element(boundBy: 0).click()
+
         let enabled = application.checkBoxes.matching(NSPredicate(format: "identifier CONTAINS %@", ".enabled"))
             .allElementsBoundByIndex.last ?? application.checkBoxes.firstMatch
         XCTAssertTrue(enabled.waitForExistence(timeout: 5))
@@ -522,6 +588,18 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(delete.exists && delete.isHittable)
         delete.click()
         XCTAssertTrue(waitForNonexistence(angle, timeout: 3))
+
+        let solidColorWells = application.colorWells.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND NOT identifier CONTAINS %@ AND identifier ENDSWITH %@",
+            "inspector.design.layers.", ".stop.", ".color"
+        ))
+        // Deleting the temporary gradient must retain the migrated default
+        // solid layer. Adding another solid appends a distinct authored row;
+        // it must not replace or hide the existing layer.
+        XCTAssertEqual(solidColorWells.count, 1)
+        addSolid.click()
+        XCTAssertEqual(solidColorWells.count, 2)
+        XCTAssertTrue(solidColorWells.allElementsBoundByIndex.allSatisfy(\.isHittable))
         attachWindowScreenshot(application, named: "SF-AUTHORING-013 ordered fill layers")
     }
 
@@ -781,7 +859,9 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         layers[0].click()
         XCTAssertTrue((layers[0].value as? String)?.contains("Primary selection") == true)
-        XCTAssertTrue((application.descendants(matching: .any)["status.selectionPath"].label).contains("Fixture") == false)
+        let singleStatus = application.descendants(matching: .any)["status.selectionPath"]
+        XCTAssertTrue(singleStatus.label.contains("Fixture Layer 1"))
+        XCTAssertTrue((singleStatus.value as? String)?.contains("1 selected; primary selection present") == true)
         attachScreenshot(named: "SF-AUTHORING-004 single selection")
 
         XCUIElement.perform(withKeyModifiers: .shift) { layers[1].click() }
@@ -796,7 +876,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("]", modifierFlags: .command)
         XCTAssertTrue((layers[0].value as? String)?.contains("Primary selection") == true)
         application.typeKey("[", modifierFlags: .command)
-        XCTAssertTrue((layers[2].value as? String)?.contains("Primary selection") == true)
+        XCTAssertTrue((layers[1].value as? String)?.contains("Primary selection") == true)
+        XCTAssertFalse(
+            (layers[2].value as? String)?.contains("Primary selection") == true,
+            "The nonvisual structural Root must remain outside visible-object keyboard traversal"
+        )
     }
 
     private var fixtureLease: ApplicationOwnedTestFixture!
@@ -1000,6 +1084,24 @@ final class SiteForgeLaunchTests: XCTestCase {
         return result
     }
 
+    private func assertElement(
+        _ element: XCUIElement,
+        isContainedIn container: XCUIElement,
+        _ description: String? = nil,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(element.exists, description ?? element.identifier, file: file, line: line)
+        XCTAssertTrue(container.exists, container.identifier, file: file, line: line)
+        let permittedBounds = container.frame.insetBy(dx: -1, dy: -1)
+        XCTAssertTrue(
+            permittedBounds.contains(element.frame),
+            "\(description ?? element.identifier) frame \(element.frame) is outside \(container.identifier) frame \(container.frame)",
+            file: file,
+            line: line
+        )
+    }
+
     private func waitForNonexistence(
         _ element: XCUIElement,
         timeout: TimeInterval = 5
@@ -1189,8 +1291,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         guard let records = try? String(contentsOf: lifecycleDiagnosticURL, encoding: .utf8) else {
             return false
         }
-        return records.contains("phase=window-ready")
-            || records.contains("phase=configuration-succeeded-constrained")
+        return LaunchLifecycleReadinessHandshake.reportsUsableWindow(in: records)
     }
 
     private func launchLifecycleDiagnostics(for application: XCUIApplication) -> String {
@@ -1316,6 +1417,104 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["status.selectionPath"].exists)
         XCTAssertTrue(application.descendants(matching: .any)["status.diagnostics"].exists)
         XCTAssertTrue(application.descendants(matching: .any)["status.document"].exists)
+    }
+
+    // SF-0201-002, SF-0201-006, SF-0201-008, SF-0401-006,
+    // SF-0508-006, SF-1605-006 — the actual minimum workspace must not expose
+    // clipped controls only through accessibility. Every named viewport action
+    // and a deeply nested fill stop remains visibly contained and reachable.
+    @MainActor
+    func testMinimumWorkspaceContainsViewportAndScrollableFillInspectorControls() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeWindowSize", "minimum",
+        ])
+        let shell = application.descendants(matching: .any)["workspace.shell"]
+        XCTAssertTrue(shell.waitForExistence(timeout: 5))
+        if abs(shell.frame.width - 1_100) > 2 {
+            attachReadinessDiagnostics(for: application)
+        }
+        XCTAssertEqual(shell.frame.width, 1_100, accuracy: 2)
+        XCTAssertGreaterThanOrEqual(shell.frame.height, 700 - 2)
+
+        // The minimum-layout contract is a real pointer contract, so restore
+        // the launched application to the foreground immediately before
+        // checking its trailing controls. Developer tooling may legitimately
+        // become active while the launch/readiness diagnostics settle; an
+        // occluding foreign window must not be misclassified as SiteForge
+        // clipping its Inspector.
+        application.activate()
+        for identifier in ["navigator.tab.overflow", "inspector.tab.overflow"] {
+            let overflow = application.descendants(matching: .any)[identifier]
+            XCTAssertTrue(waitForHittable(overflow, in: application), identifier)
+        }
+
+        let canvasRegion = application.descendants(matching: .any)["shell.canvas"]
+        let viewportControls = application.descendants(matching: .any)["canvas.viewport.controls"]
+        XCTAssertTrue(viewportControls.exists)
+        assertElement(viewportControls, isContainedIn: canvasRegion)
+
+        for identifier in [
+            "canvas.viewport.preset",
+            "canvas.grid.toggle",
+            "canvas.zoom.out",
+            "canvas.zoom.in",
+            "canvas.zoom.reset",
+            "canvas.zoom.fitCanvas",
+            "canvas.zoom.fit",
+            "canvas.empty.insert.frame",
+            "canvas.empty.insert.text",
+        ] {
+            let control = application.descendants(matching: .any)[identifier]
+            XCTAssertTrue(waitForHittable(control, in: application), identifier)
+            assertElement(control, isContainedIn: viewportControls, identifier)
+        }
+
+        application.buttons["canvas.empty.insert.frame"].click()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["inspector.tab.design"].click()
+
+        let inspector = application.descendants(matching: .any)["shell.inspector"]
+        let inspectorScroll = application.descendants(matching: .any)["inspector.selection.scroll"]
+        XCTAssertTrue(inspectorScroll.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(inspector.frame.width, 280 - 2)
+        assertElement(inspectorScroll, isContainedIn: inspector)
+
+        let addGradient = application.buttons["inspector.design.layers.addGradient"]
+        XCTAssertTrue(waitForHittable(addGradient, in: application))
+        addGradient.click()
+        let angle = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier CONTAINS %@", ".angle"))
+            .firstMatch
+        XCTAssertTrue(angle.waitForExistence(timeout: 5))
+        let gradientPrefix = angle.identifier.replacingOccurrences(of: ".angle", with: "")
+        let addStop = application.buttons["\(gradientPrefix).addStop"]
+        for _ in 0..<4 {
+            XCTAssertTrue(waitForHittable(addStop, in: application))
+            addStop.click()
+        }
+
+        let removeStops = application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
+            "\(gradientPrefix).stop.", ".remove"
+        ))
+        XCTAssertEqual(removeStops.count, 6)
+        let lastRemove = removeStops.element(boundBy: 5)
+        for _ in 0..<8 {
+            if lastRemove.isHittable { break }
+            inspectorScroll.scroll(byDeltaX: 0, deltaY: -180)
+        }
+        XCTAssertTrue(waitForHittable(lastRemove, in: application))
+        let lastStopPrefix = lastRemove.identifier.replacingOccurrences(of: ".remove", with: "")
+        let lastRow = application.descendants(matching: .any)["\(lastStopPrefix).row"]
+        XCTAssertTrue(lastRow.waitForExistence(timeout: 3))
+        assertElement(lastRow, isContainedIn: inspectorScroll)
+        for suffix in [".position", ".color", ".up", ".down", ".remove"] {
+            let control = application.descendants(matching: .any)["\(lastStopPrefix)\(suffix)"]
+            XCTAssertTrue(control.exists, suffix)
+            assertElement(control, isContainedIn: lastRow, suffix)
+        }
+        attachWindowScreenshot(application, named: "minimum viewport and scrollable fill Inspector")
     }
 
     // SF-0201-002, SF-0201-006, SF-0201-008
@@ -1907,6 +2106,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         // than bleeding over the surrounding pasteboard.
         let tabletFrame = canvasObject(named: "Frame", in: application)
         XCTAssertTrue(tabletFrame.waitForExistence(timeout: 3))
+        assertElement(
+            tabletFrame,
+            isContainedIn: canvas,
+            "SF-0407-006 partially clipped Frame accessibility target"
+        )
         let nodeIdentity = identity.replacingOccurrences(of: "canvas.object.", with: "")
         let selectionContext = application.descendants(matching: .any)["canvas.selection.context.\(nodeIdentity)"]
         XCTAssertTrue(selectionContext.waitForExistence(timeout: 3))

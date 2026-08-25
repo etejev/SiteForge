@@ -186,6 +186,35 @@ final class FileAccessBoundaryTests: XCTestCase {
         XCTAssertEqual(failedCoordinationEvents, [.save])
     }
 
+    // SF-0301-004, SF-0306-004, SF-1504-004
+    func testFoundationCoordinatorRelaysOuterCancellationBeforeCoordinatedCommit() async throws {
+        let url = fixture("Cancellation.siteforge")
+        let original = Data("last committed bytes".utf8)
+        try original.write(to: url)
+        let replacement = Data("cancelled replacement".utf8)
+        let barrier = CoordinatedOperationBarrier()
+
+        let task = Task {
+            try await FoundationProjectFileCoordinator().coordinate(at: url, intent: .save) { coordinatedURL in
+                await barrier.enterAndWait()
+                try Task.checkCancellation()
+                try replacement.write(to: coordinatedURL, options: .atomic)
+            }
+        }
+
+        await barrier.waitUntilEntered()
+        task.cancel()
+        await barrier.release()
+
+        do {
+            try await task.value
+            XCTFail("A cancelled coordinated save must not commit")
+        } catch is CancellationError {
+            // The cancellation crossed the synchronous coordination boundary.
+        }
+        XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
     // SF-1504-003, SF-1504-004, SF-1504-006
     func testFilePresenterReportsChangeMoveAndDeletionWithoutChangingContent() throws {
         let originalURL = fixture("Presented.siteforge")
@@ -387,6 +416,38 @@ private actor FileCoordinatorProbe: ProjectFileCoordinating {
         events.append(intent)
         if let failure { throw failure }
         return try await operation(url)
+    }
+}
+
+private actor CoordinatedOperationBarrier {
+    private var entered = false
+    private var released = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func enterAndWait() async {
+        entered = true
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            if released {
+                continuation.resume()
+            } else {
+                releaseContinuation = continuation
+            }
+        }
+    }
+
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
 

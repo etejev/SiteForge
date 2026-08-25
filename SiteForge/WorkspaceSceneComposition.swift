@@ -95,6 +95,15 @@ struct WorkspaceSceneRoot: View {
             state: context.shellState,
             launchExperience: context.launchExperience
         )
+        .background {
+            // The scene-root bridge both identifies the real document window
+            // and applies its presentation. Keeping those responsibilities on
+            // the same AppKit view prevents launch-order races where the
+            // lifecycle observer sees an unmarked window and permanently
+            // skips an explicit minimum-size request.
+            WorkspaceWindowConfigurator()
+                .frame(width: 0, height: 0)
+        }
         .focusedSceneObject(context.shellState)
         .focusedSceneObject(context.launchExperience)
     }

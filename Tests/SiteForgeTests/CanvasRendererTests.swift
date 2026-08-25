@@ -78,6 +78,67 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(plan.accessibilityElements.map(\.objectID), [base.scene.objects[0].id])
     }
 
+    // SF-0407-003, SF-0407-006 — VoiceOver geometry is the exact visible
+    // object intersection, never the authored offscreen/ancestor-clipped box.
+    func testAccessibilityFramesIntersectObjectClipAndVisibleViewport() throws {
+        let fixture = try makeFixture(count: 1)
+        let clipped = CanvasRenderObject(
+            id: fixture.scene.objects[0].id,
+            frame: WorldRect(
+                origin: WorldPoint(x: -20, y: -10),
+                size: WorldSize(width: 70, height: 60)
+            ),
+            clipRect: WorldRect(
+                origin: WorldPoint(x: 0, y: 5),
+                size: WorldSize(width: 30, height: 25)
+            ),
+            paintOrder: 0,
+            style: .frameSurface,
+            isVisible: true,
+            accessibilityLabel: "Partially clipped frame"
+        )
+        let scene = CanvasRenderSceneSnapshot(
+            identity: fixture.scene.identity,
+            surfaceID: fixture.scene.surfaceID,
+            objects: [clipped]
+        )
+        let plan = try CanvasRendererCore().prepare(
+            scene: scene,
+            overlays: .init(identity: scene.identity, overlays: []),
+            viewport: fixture.viewport
+        )
+
+        let frame = try XCTUnwrap(plan.accessibilityElements.first?.frame)
+        XCTAssertEqual(frame.origin, ViewportPoint(x: 0, y: 5))
+        XCTAssertEqual(frame.size, ViewportSize(width: 30, height: 25))
+
+        let viewportClipped = CanvasRenderObject(
+            id: clipped.id,
+            frame: WorldRect(
+                origin: WorldPoint(x: 980, y: 690),
+                size: WorldSize(width: 80, height: 40)
+            ),
+            clipRect: nil,
+            paintOrder: 0,
+            style: .frameSurface,
+            isVisible: true,
+            accessibilityLabel: "Viewport clipped frame"
+        )
+        let viewportScene = CanvasRenderSceneSnapshot(
+            identity: scene.identity,
+            surfaceID: scene.surfaceID,
+            objects: [viewportClipped]
+        )
+        let viewportPlan = try CanvasRendererCore().prepare(
+            scene: viewportScene,
+            overlays: .init(identity: viewportScene.identity, overlays: []),
+            viewport: fixture.viewport
+        )
+        let viewportFrame = try XCTUnwrap(viewportPlan.accessibilityElements.first?.frame)
+        XCTAssertEqual(viewportFrame.origin, ViewportPoint(x: 980, y: 690))
+        XCTAssertEqual(viewportFrame.size, ViewportSize(width: 20, height: 10))
+    }
+
     // SF-0407-001, SF-0407-005
     func testEditorOverlaysAreStructurallyExcludedFromPreviewSnapshot() throws {
         let fixture = try makeFixture(count: 2)
@@ -326,6 +387,41 @@ final class CanvasRendererTests: XCTestCase {
         ))
     }
 
+    // SF-0201-006, SF-0407-006, SF-1505-006 — a delayed native canvas focus
+    // request cannot override a newer rapid traversal destination.
+    func testCanvasFocusAdoptionRejectsStaleDelayedRequests() {
+        var gate = CanvasFocusAdoptionGate()
+        let first = gate.issue(whenRequested: true)
+        XCTAssertNotNil(first)
+        XCTAssertTrue(gate.accepts(first!))
+
+        XCTAssertNil(gate.issue(whenRequested: false))
+        XCTAssertFalse(gate.accepts(first!))
+
+        let newest = gate.issue(whenRequested: true)
+        XCTAssertNotNil(newest)
+        XCTAssertFalse(gate.accepts(first!))
+        XCTAssertTrue(gate.accepts(newest!))
+
+        gate.cancel()
+        XCTAssertFalse(gate.accepts(newest!))
+    }
+
+    // SF-0201-006, SF-0407-006 — AX reports success only when the production
+    // command callback exists and confirms an actual accepted mutation.
+    func testCanvasAccessibilityActionDispatcherReturnsTruthfulMutationResult() {
+        XCTAssertFalse(CanvasAccessibilityActionDispatcher.perform(nil))
+        XCTAssertFalse(CanvasAccessibilityActionDispatcher.perform { false })
+        XCTAssertTrue(CanvasAccessibilityActionDispatcher.perform { true })
+
+        var mutationCount = 0
+        XCTAssertTrue(CanvasAccessibilityActionDispatcher.perform {
+            mutationCount += 1
+            return true
+        })
+        XCTAssertEqual(mutationCount, 1)
+    }
+
     // SF-0407-007, SF-0407-008
     func testTilesAndCacheAreBoundedWithDeterministicEviction() throws {
         let fixture = try makeFixture(count: 100)
@@ -360,25 +456,147 @@ final class CanvasRendererTests: XCTestCase {
         )
         let encoded = String(decoding: try JSONEncoder().encode(record), as: UTF8.self)
         XCTAssertEqual(record.requirementID, "SF-0407-008")
-        XCTAssertEqual(record.surfaceIdentifier.count, 8)
+        XCTAssertEqual(record.surfaceIdentifier.count, "surface-".count + 24)
+        XCTAssertFalse(record.surfaceIdentifier.contains(fixture.scene.surfaceID.description))
+        XCTAssertEqual(record.failureCategory, DiagnosticErrorCategory.invalidInput.rawValue)
         XCTAssertLessThanOrEqual(record.failureCategory?.count ?? 0, 64)
         XCTAssertFalse(encoded.contains("/Users/"))
         XCTAssertFalse(encoded.contains(fixture.scene.objects[0].accessibilityLabel))
     }
 
-    // SF-0407-007, SF-0407-008
+    // SF-0402-001, SF-0402-003, SF-0402-006, SF-0402-008, SF-0407-006 —
+    // an implicit geometry-less page root is Layers ownership, not a visible
+    // canvas object. Its direct authored children remain page-level selection
+    // candidates after opening an existing project.
+    func testProductionProjectionKeepsStructuralRootOutOfCanvasTraversal() async throws {
+        let documentID = DocumentID(UUID(uuidString: "66666666-1111-4111-8111-111111111111")!)
+        var document = ProjectCreation.blank(id: documentID)
+        var page = try XCTUnwrap(document.pages.first)
+        let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+        let rootIndex = try XCTUnwrap(page.nodes.firstIndex(where: { $0.id == rootID }))
+        let textID = NodeID(UUID(uuidString: "66666666-2222-4222-8222-222222222222")!)
+        page.nodes[rootIndex].childIDs.append(textID)
+        page.nodes.append(DocumentNode(
+            id: textID,
+            kind: .text,
+            name: "Text",
+            parent: .node(rootID),
+            properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(100), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.y"), value: .number(120), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.width"), value: .number(120), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.height"), value: .number(24), origin: .defaulted),
+                .init(key: .init(rawValue: "content.text"), value: .string("Text"), origin: .defaulted),
+            ]
+        ))
+        document.pages[0] = page
+        let viewport = try CanvasViewportState(
+            worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: 1_000, height: 700),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 900)),
+            pixelRatio: .init(2)
+        )
+        let prepared = try await WorkspaceScenePreparationWorker().prepare(
+            WorkspaceScenePreparationRequest(
+                document: document,
+                activePageID: page.id,
+                activeContainerID: nil,
+                viewport: viewport,
+                surfaceID: CanvasRenderSurfaceID(UUID(uuidString: "66666666-3333-4333-8333-333333333333")!)
+            )
+        )
+        let selectionScene = try XCTUnwrap(prepared.selectionScene)
+        let root = try XCTUnwrap(selectionScene.targets.first(where: { $0.id == rootID }))
+        let text = try XCTUnwrap(selectionScene.targets.first(where: { $0.id == textID }))
+        XCTAssertFalse(root.participatesInCanvasTraversal)
+        XCTAssertTrue(text.participatesInCanvasTraversal)
+        XCTAssertNil(text.parentID, "The implicit structural root is transparent to page-level selection scope")
+        XCTAssertEqual(selectionScene.orderedSelectableTargets.map(\.id), [textID])
+        XCTAssertEqual(prepared.renderScene.objects.map(\.id), [textID])
+
+        let plan = try CanvasRendererCore().prepare(
+            scene: prepared.renderScene,
+            overlays: prepared.overlays,
+            viewport: viewport
+        )
+        let registry = SelectionCommandRegistry()
+        var state = SelectionState()
+        _ = try registry.adopt(selectionScene, boundary: .documentAdoption, state: &state)
+        _ = try registry.apply(
+            .init(.replace, targetID: rootID, expectedIdentity: selectionScene.identity, provenance: .layersNavigator),
+            to: &state,
+            scene: selectionScene
+        )
+        let rootOverlay = try SelectionOverlayPlanner().plan(
+            selection: state,
+            scene: selectionScene,
+            renderPlan: plan
+        )
+        XCTAssertTrue(rootOverlay.overlays.isEmpty)
+
+        XCTAssertEqual(
+            try registry.apply(
+                .init(.next, expectedIdentity: selectionScene.identity, provenance: .accessibility),
+                to: &state,
+                scene: selectionScene
+            ),
+            .changed
+        )
+        XCTAssertEqual(state.primaryID, textID)
+        XCTAssertEqual(
+            try registry.apply(
+                .init(.next, expectedIdentity: selectionScene.identity, provenance: .accessibility),
+                to: &state,
+                scene: selectionScene
+            ),
+            .unchanged
+        )
+        XCTAssertEqual(state.primaryID, textID)
+    }
+
+    // SF-0407-006, SF-0407-007, SF-0407-008, SF-1502-001
     @MainActor
-    func testProductionWorkerKeepsMainActorResponsiveAtTenThousandObjects() async throws {
-        let fixture = try makeFixture(count: 10_000)
-        let worker = CanvasRenderWorker()
-        let task = Task(priority: .userInitiated) {
-            try await worker.prepare(scene: fixture.scene, overlays: fixture.overlays, viewport: fixture.viewport)
+    func testProductionSceneProjectionAndRendererKeepMainActorResponsiveWhileWorkIsActive() async throws {
+        let request = try makeWorkspacePreparationRequest(count: 10_000)
+        let barrier = WorkspaceScenePreparationBarrier()
+        let worker = WorkspaceScenePreparationWorker()
+        let preparation = Task(priority: .userInitiated) {
+            try await worker.prepare(
+                request,
+                progress: WorkspaceScenePreparationProgress { completed in
+                    barrier.pauseOnce(at: completed)
+                }
+            )
         }
-        var turns = 0
-        for _ in 0..<20 { turns += 1; await Task.yield() }
-        let plan = try await task.value
-        XCTAssertEqual(turns, 20)
+
+        // The real production projection is held at a deterministic progress
+        // point. Reaching this assertion on MainActor while it is still active
+        // proves the 10k traversal is not executing on MainActor itself.
+        let didPause = await barrier.waitUntilPaused()
+        XCTAssertTrue(didPause)
+        XCTAssertTrue(barrier.isActivelyPaused)
+        var heartbeatTurns = 0
+        for _ in 0..<20 {
+            heartbeatTurns += 1
+            await Task.yield()
+        }
+        XCTAssertEqual(heartbeatTurns, 20)
+        XCTAssertTrue(
+            barrier.isActivelyPaused,
+            "Production projection finished its held checkpoint before MainActor could make progress"
+        )
+        barrier.resume()
+
+        let prepared = try await preparation.value
+        let plan = try await CanvasRenderWorker().prepare(
+            scene: prepared.renderScene,
+            overlays: prepared.overlays,
+            viewport: request.viewport
+        )
+        XCTAssertEqual(prepared.viewportRequest.objects.count, 10_000)
+        XCTAssertEqual(prepared.selectionScene?.targets.count, 10_000)
         XCTAssertEqual(plan.authoredObjects.count, 10_000)
+        XCTAssertEqual(plan.identity, prepared.renderScene.identity)
     }
 
     private struct Fixture {
@@ -428,6 +646,57 @@ final class CanvasRendererTests: XCTestCase {
         return Fixture(scene: scene, overlays: CanvasEditorOverlaySnapshot(identity: identity, overlays: []), viewport: viewport)
     }
 
+    private func makeWorkspacePreparationRequest(count: Int) throws -> WorkspaceScenePreparationRequest {
+        precondition(count > 0)
+        let documentID = DocumentID(UUID(uuidString: "55555555-1111-4111-8111-111111111111")!)
+        let pageID = PageID(UUID(uuidString: "55555555-2222-4222-8222-222222222222")!)
+        let ids = (0..<count).map { NodeID(deterministicUUID(20_000 + $0)) }
+        let rootID = ids[0]
+        func geometry(_ index: Int) -> [NodeProperty] {
+            [
+                .init(key: .init(rawValue: "layout.x"), value: .number(Double((index % 100) * 12))),
+                .init(key: .init(rawValue: "layout.y"), value: .number(Double((index / 100) * 12))),
+                .init(key: .init(rawValue: "layout.width"), value: .number(10)),
+                .init(key: .init(rawValue: "layout.height"), value: .number(10)),
+            ]
+        }
+        let nodes = ids.enumerated().map { index, id in
+            DocumentNode(
+                id: id,
+                kind: .frame,
+                name: index == 0 ? "Root" : "Frame \(index)",
+                parent: index == 0 ? .page(pageID) : .node(rootID),
+                childIDs: index == 0 ? Array(ids.dropFirst()) : [],
+                properties: geometry(index)
+            )
+        }
+        let document = CanonicalDocument(
+            id: documentID,
+            revision: 17,
+            pages: [DocumentPage(
+                id: pageID,
+                name: "Performance",
+                route: .init(rawValue: "/performance"),
+                role: .home,
+                rootNodeIDs: [rootID],
+                nodes: nodes
+            )]
+        )
+        let viewport = try CanvasViewportState(
+            worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: 1_000, height: 700),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 1_400)),
+            pixelRatio: .init(2)
+        )
+        return WorkspaceScenePreparationRequest(
+            document: document,
+            activePageID: pageID,
+            activeContainerID: rootID,
+            viewport: viewport,
+            surfaceID: CanvasRenderSurfaceID(UUID(uuidString: "55555555-3333-4333-8333-333333333333")!)
+        )
+    }
+
     private func deterministicUUID(_ value: Int) -> UUID {
         let suffix = String(format: "%012x", value + 1)
         return UUID(uuidString: "44444444-4444-4444-8444-\(suffix)")!
@@ -462,5 +731,53 @@ final class CanvasRendererTests: XCTestCase {
         for (actualChannel, expectedChannel) in zip(actual, expected) {
             XCTAssertEqual(actualChannel, expectedChannel, accuracy: accuracy, file: file, line: line)
         }
+    }
+}
+
+private final class WorkspaceScenePreparationBarrier: @unchecked Sendable {
+    private let lock = NSLock()
+    private let release = DispatchSemaphore(value: 0)
+    private var didPause = false
+    private var pauseIsActive = false
+    private var pauseWaiter: CheckedContinuation<Bool, Never>?
+
+    func pauseOnce(at completed: Int) {
+        guard completed >= 64 else { return }
+        lock.lock()
+        let shouldPause = !didPause
+        didPause = true
+        pauseIsActive = shouldPause
+        let waiter = pauseWaiter
+        pauseWaiter = nil
+        lock.unlock()
+        guard shouldPause else { return }
+        waiter?.resume(returning: true)
+        _ = release.wait(timeout: .now() + 10)
+        lock.lock()
+        pauseIsActive = false
+        lock.unlock()
+    }
+
+    func waitUntilPaused() async -> Bool {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if didPause {
+                lock.unlock()
+                continuation.resume(returning: true)
+            } else {
+                pauseWaiter = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func resume() {
+        release.signal()
+    }
+
+    var isActivelyPaused: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return pauseIsActive
     }
 }

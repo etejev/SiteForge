@@ -103,6 +103,29 @@ enum WorkspaceMaterialPolicy {
     }
 }
 
+/// Geometry for the explicit minimum-window development/test override. This
+/// is intentionally separate from normal AppKit restoration: only callers
+/// that already confirmed `-SiteForgeWindowSize minimum` may use it.
+enum WorkspaceExplicitWindowPresentation {
+    static func frame(
+        requestedFrameSize: CGSize,
+        currentOrigin: CGPoint,
+        visibleFrame: CGRect
+    ) -> CGRect {
+        let maximumOrigin = CGPoint(
+            x: max(visibleFrame.minX, visibleFrame.maxX - requestedFrameSize.width),
+            y: max(visibleFrame.minY, visibleFrame.maxY - requestedFrameSize.height)
+        )
+        return CGRect(
+            origin: CGPoint(
+                x: min(max(currentOrigin.x, visibleFrame.minX), maximumOrigin.x),
+                y: min(max(currentOrigin.y, visibleFrame.minY), maximumOrigin.y)
+            ),
+            size: requestedFrameSize
+        )
+    }
+}
+
 private struct WorkspaceMaterialOverrides {
     let reduceTransparency: Bool?
     let increasedContrast: Bool?
@@ -211,6 +234,54 @@ struct WorkspaceWindowConfigurator: NSViewRepresentable {
     }
 }
 
+/// A workspace window is identified by a marker installed from the root of the
+/// `WindowGroup`. AppKit also reports native colour panels, sheets, and other
+/// auxiliary windows through the application's key/main-window notifications;
+/// those windows must never inherit the document workspace's size or chrome.
+@MainActor
+enum WorkspaceWindowRolePolicy {
+    static let workspaceIdentifier = NSUserInterfaceItemIdentifier("app.siteforge.workspace")
+    static let didRegisterNotification = Notification.Name("SiteForgeWorkspaceWindowDidRegister")
+
+    static func register(_ window: NSWindow) {
+        window.identifier = workspaceIdentifier
+        NotificationCenter.default.post(name: didRegisterNotification, object: window)
+    }
+
+    static func isWorkspaceDocumentWindow(_ window: NSWindow) -> Bool {
+        window.identifier == workspaceIdentifier
+            && !(window is NSPanel)
+            && window.sheetParent == nil
+            && window.parent == nil
+    }
+}
+
+struct WorkspaceWindowRoleMarker: NSViewRepresentable {
+    func makeNSView(context: Context) -> WorkspaceWindowRoleMarkerView {
+        WorkspaceWindowRoleMarkerView(frame: .zero)
+    }
+
+    func updateNSView(_ view: WorkspaceWindowRoleMarkerView, context: Context) {
+        view.registerWindowIfNeeded()
+    }
+}
+
+@MainActor
+final class WorkspaceWindowRoleMarkerView: NSView {
+    private weak var registeredWindow: NSWindow?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerWindowIfNeeded()
+    }
+
+    func registerWindowIfNeeded() {
+        guard let window, window !== registeredWindow else { return }
+        registeredWindow = window
+        WorkspaceWindowRolePolicy.register(window)
+    }
+}
+
 @MainActor
 final class WorkspaceWindowLifecycleOwner: NSObject {
     private var installed = false
@@ -233,10 +304,17 @@ final class WorkspaceWindowLifecycleOwner: NSObject {
         }
         center.addObserver(
             self,
+            selector: #selector(windowDidBecomeUsable(_:)),
+            name: WorkspaceWindowRolePolicy.didRegisterNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
             selector: #selector(applicationDidFinishLaunching(_:)),
             name: NSApplication.didFinishLaunchingNotification,
             object: nil
         )
+        configureExistingWindows()
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -261,6 +339,10 @@ final class WorkspaceWindowLifecycleOwner: NSObject {
 
     private func configure(_ window: NSWindow) {
         precondition(Thread.isMainThread)
+        guard WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(window) else {
+            diagnostics.record(phase: "configuration-ignored-nonworkspace", windows: [window])
+            return
+        }
         guard window.isVisible, !configured.contains(ObjectIdentifier(window)) else {
             diagnostics.record(phase: "configuration-deferred", windows: [window])
             return
@@ -281,6 +363,24 @@ final class WorkspaceWindowLifecycleOwner: NSObject {
             window.setFrame(WorkspaceMetrics.uiTestWindowFrame(windowFrame: .init(origin: window.frame.origin, size: frameSize), visibleFrame: visibleFrame, placement: placement), display: true, animate: false)
             configured.insert(ObjectIdentifier(window))
             diagnostics.record(phase: "configuration-succeeded-constrained", windows: [window])
+            return
+        }
+        if WorkspaceMetrics.requestedWindowSize(composition: composition) != nil {
+            // This explicit Debug/UI-test mode exercises the production
+            // minimum content geometry. General UI tests continue to use the
+            // normal visible-frame presentation below.
+            window.setFrameAutosaveName("")
+            window.minSize = WorkspaceMetrics.minimumWindowSize
+            let desired = WorkspaceExplicitWindowPresentation.frame(
+                requestedFrameSize: frameSize,
+                currentOrigin: window.frame.origin,
+                visibleFrame: visibleFrame
+            )
+            if !window.frame.isApproximatelyEqual(to: desired) {
+                window.setFrame(desired, display: true, animate: false)
+            }
+            configured.insert(ObjectIdentifier(window))
+            diagnostics.record(phase: "configuration-succeeded-minimum", windows: [window])
             return
         }
         window.minSize = WorkspaceMetrics.minimumWindowSize
@@ -361,6 +461,9 @@ final class WorkspaceWindowConfigurationView: NSView {
             detach()
             configuredWindow = window
             originalWindowMinimumSize = window?.minSize
+            if let window {
+                WorkspaceWindowRolePolicy.register(window)
+            }
             installPlacementObserversIfNeeded()
         }
         scheduleConfiguration()
@@ -418,6 +521,17 @@ final class WorkspaceWindowConfigurationView: NSView {
                 // a hosted test display.
                 window.setFrame(frame, display: true, animate: false)
             }
+        } else if let requestedWindowFrameSize,
+                  let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+            // The scene-root configurator and lifecycle owner can run in
+            // either order. Preserve the explicit minimum override here so a
+            // later SwiftUI update cannot replace it with normal maximized
+            // presentation.
+            applyExplicitRequestedFrame(
+                requestedWindowFrameSize,
+                to: window,
+                visibleFrame: visibleFrame
+            )
         } else {
             // General UI-test composition deliberately shares the production
             // visible-frame policy. Only an explicit named safe-edge request
@@ -481,6 +595,23 @@ final class WorkspaceWindowConfigurationView: NSView {
     private func applyUITestMinimumSize(to window: NSWindow) {
         guard originalWindowMinimumSize != nil else { return }
         window.minSize = WorkspaceMetrics.effectiveMinimumWindowSize()
+    }
+
+    private func applyExplicitRequestedFrame(
+        _ requestedFrameSize: CGSize,
+        to window: NSWindow,
+        visibleFrame: CGRect
+    ) {
+        window.setFrameAutosaveName("")
+        window.minSize = WorkspaceMetrics.minimumWindowSize
+        let desired = WorkspaceExplicitWindowPresentation.frame(
+            requestedFrameSize: requestedFrameSize,
+            currentOrigin: window.frame.origin,
+            visibleFrame: visibleFrame
+        )
+        if !window.frame.isApproximatelyEqual(to: desired) {
+            window.setFrame(desired, display: true, animate: false)
+        }
     }
 
     private func applyNormalPresentationIfNeeded(to window: NSWindow) {

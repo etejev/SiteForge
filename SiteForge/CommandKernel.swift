@@ -702,13 +702,13 @@ enum DiagnosticResult: String, Equatable {
     case cancelled
 }
 
-enum DiagnosticFailureCategory: String, Equatable {
+enum DiagnosticFailureCategory: String, Equatable, Sendable {
     case validation
     case cancellation
     case modelInvariant
 }
 
-struct CommandDiagnosticRecord: Equatable {
+struct CommandDiagnosticRecord: Equatable, Sendable {
     let requirementIDs: [String]
     let commandName: CommandName
     let sanitizedIdentifiers: [String]
@@ -718,8 +718,14 @@ struct CommandDiagnosticRecord: Equatable {
 }
 
 final class CommandDiagnostics {
-    private let salt = UUID()
-    private(set) var records: [CommandDiagnosticRecord] = []
+    private var buffer: BoundedDiagnosticBuffer<CommandDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    var records: [CommandDiagnosticRecord] { buffer.snapshot() }
+    var droppedRecordCount: UInt64 { buffer.droppedRecordCount }
 
     fileprivate func record(
         commandName: CommandName,
@@ -728,7 +734,7 @@ final class CommandDiagnostics {
         result: DiagnosticResult,
         failureCategory: DiagnosticFailureCategory?
     ) {
-        records.append(
+        buffer.append(
             CommandDiagnosticRecord(
                 requirementIDs: ["SF-0203-008", "SF-0306-008", "SF-1607-008"],
                 commandName: commandName,
@@ -741,12 +747,11 @@ final class CommandDiagnostics {
     }
 
     private func sanitize(_ target: CommandTarget) -> String {
-        var hasher = Hasher()
-        hasher.combine(salt)
-        hasher.combine(target.namespace)
-        hasher.combine(target.rawValue)
-        let digest = UInt(bitPattern: hasher.finalize())
-        return "\(target.namespace)-\(String(digest, radix: 16))"
+        DiagnosticStableIdentifier.sanitize(
+            "\(target.namespace):\(target.rawValue)",
+            domain: .command,
+            kind: target.namespace
+        )
     }
 }
 

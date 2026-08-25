@@ -8,16 +8,50 @@ None.
 
 ## IN PROGRESS
 
-- [ ] `SF-AUTHORING-013` Implement bounded ordered fill layers and linear gradients.
-  - Requirements: bounded continuation of `SF-0508-001` through `SF-0508-008` following `SF-AUTHORING-012`.
-  - Plan: retain `DocumentNode.properties` as the only canonical style storage. Introduce stable fill-layer and gradient-stop identities, versioned ordered property encoding, deterministic solid/linear-gradient resolution, and schema-v4 solid-fill migration before wiring one central Design Inspector registry and native renderer/Inspector presentation. Draft previews stay scene-local; each committed layer operation remains a single atomic existing-property transaction with an exact inverse.
-  - Acceptance: applicable Frame, Section, Stack, and Grid selections can add, remove, reorder, enable/disable, and edit solid/linear-gradient layers; gradient stops have finite normalized RGBA/position and deterministic angle/defaults. Renderer, history, persistence/recovery, selection, and accessibility share the committed identities and style.
-  - Current checkpoint evidence (2026-08-24): `testCanonicalFillLayerFoundationValidatesStableOrderAndGradientDefaults`, `testDesignFillLayerRegistryCommitsOrderedLayersWithExactHistoryAndPersistence`, `testDesignFillLayerRegistryRejectsInvalidStaleCancelAndAllInapplicableEdits`, `testAuthoredFillLayerCompositorPreservesOrderDisabledLayersStopsAnglesAndOpacity`, `testFillLayersAreImmutablePlanDataAndExcludeEditorOverlays`, and `testDesignInspectorOrderedFillLayersAccessibilityJourney` each passed as focused selectors (6/6). The registry serializes complete `style.fill.layers.v1` snapshots, atomically retires v4 fill keys on first v1 write, and the native renderer now adopts an immutable ordered layer snapshot for structural surfaces. The visible Inspector has an accessible single-selection layer list with add-solid, add-gradient, enable, reorder, delete, angle, and stop-position controls; every operation routes through the registry. Evidence: `docs/evidence/SF-AUTHORING-013-FILL-LAYERS-CHECKPOINT.md`.
-  - Next machine action: extend the visible layer editor with native colour controls for individual solid layers and gradient stops, then add focused persistence/migration and exact raster pixel coverage before any milestone-wide test gate.
-  - Explicit exclusions: image fills, blend/filter effects, borders, shadows, tokens, broad color-profile work, responsive overrides, preview/export parity, and release acceptance.
-  - Dependencies: `SF-AUTHORING-012`; the separate `SF-TEST-HARNESS-001` runner issue does not change product behavior or block focused model work.
+None.
 
 ## DONE
+
+- [x] `SF-AUDIT-001` Complete the post-milestone implementation audit by fixing
+  every confirmed editable-scope defect before reporting it.
+  - Requirements: bounded corrective evidence for `SF-0201-002`,
+    `SF-0201-003`, `SF-0201-006`, `SF-0201-008`, `SF-0301-004` through
+    `SF-0301-006`, `SF-0303-001`, `SF-0303-005`, `SF-0303-008`,
+    `SF-0405-007`, `SF-0407-006` through `SF-0407-008`, `SF-0503-007`,
+    `SF-0508-001` through `SF-0508-008`, `SF-1502-001`, `SF-1504-004`,
+    `SF-1702-008`, `SF-1802-008`, `SF-1804-008`, `SF-1902-008`, and
+    `SF-2002-008`.
+  - Result: confirmed issues were corrected at their production
+    boundaries: strict fill-v1 and package decoding, explicit fill numeric
+    draft validation, descriptor-bound resource I/O with role/ACL/path-exchange
+    rejection, coordinated cancellation relay, linear Grid row preparation,
+    off-main production scene/renderer projection, bounded/privacy-preserving
+    shared diagnostics, portable checksum output, document-window-only material
+    policy, and minimum-width viewport/Inspector layout. The Codex workflow
+    treats findings as internal work to
+    fix and test rather than a user-facing prioritization handoff.
+  - Focused evidence: the strict fill decode/migration/package selectors and
+    numeric-draft selector passed; the resource/cancellation/Grid/diagnostic
+    integration group passed 8/8; the 10,000-object active-work main-actor
+    heartbeat regression passed; and the portable-checksum regression passed.
+    See `docs/evidence/SF-AUDIT-001-CORRECTIONS.md` for exact selectors and
+    recurring-risk controls. The minimum-window and normal-maximized running-app
+    journeys passed 2/2 and their original-resolution window attachments were
+    reviewed against the visual contract. The selection/geometry follow-up
+    passed 3/3.
+  - Completion gate: final `./sf verify` passed 356 unit/integration plus 41 UI
+    tests (397 total), zero failures, on 2026-08-25. Repository, security,
+    portable-checksum, traceability, architecture, migration, evidence, and
+    fixture-hygiene checks passed.
+
+- [x] `SF-AUTHORING-013` Implement bounded ordered fill layers and linear gradients.
+  - Requirements: bounded continuation of `SF-0508-001` through `SF-0508-008` following `SF-AUTHORING-012`.
+  - Result: `style.fill.layers.v1` provides stable ordered solid and linear-gradient layers and gradient-stop identities for Frame, Section, Stack, and Grid. Central registry transactions cover add, remove, reorder, enable, angle, stop position/order, and native colour edits with exact inverses. Immutable renderer snapshots composite enabled layers in authored order, clip to authored geometry, and apply object opacity once. First v1 write retires legacy schema-v4 fill keys; save/reopen and recovery preserve exact identities and values. Exact shared multiple selections remain editable, mixed stacks expose no borrowed rows, and incompatible objects are counted and skipped.
+  - Verification: focused multi-selection passed; the corrected Inspector accessibility journey passed 1/1 and its original-resolution attachment was reviewed for readable controls, centered artboard geometry, and normal maximized-window presentation. Final `./sf verify` passed 331 unit/integration plus 39 UI tests (370 total), zero failures, on 2026-08-25. Repository, security, traceability, architecture, migration, evidence, and fixture-hygiene checks passed. Evidence: `docs/evidence/SF-AUTHORING-013-FILL-LAYERS-CHECKPOINT.md`.
+  - Post-gate note: the later `SF-AUDIT-001` gate supersedes this 370-test
+    historical result as evidence for the current tree.
+  - Explicit exclusions: image fills, blend/filter effects, borders, shadows, tokens, broad color-profile work, responsive overrides, preview/export parity, OS-level VoiceOver/settings acceptance, cross-hardware performance budgets, and release acceptance. The normative SF-0508 module therefore remains Partial overall.
+  - Dependencies: completed after `SF-AUTHORING-012`. No subsequent feature item is READY; the next bounded slice must be selected from the specification without silently expanding these exclusions.
 
 - [x] `SF-AUTHORING-012` Implement bounded Design Inspector solid-fill and opacity editing.
   - Requirements: bounded evidence for `SF-0508-001` through `SF-0508-008`; the normative module remains Partial because layered fills, gradients, images, blending, filters, broad color-profile behavior, preview/export parity, and release acceptance are deferred.
@@ -69,9 +103,10 @@ None.
 
 ## BLOCKED
 
-- [ ] `SF-TEST-HARNESS-001` Investigate intermittent macOS XCTest accessibility-service loss.
+- [x] `SF-TEST-HARNESS-001` Investigate intermittent macOS XCTest accessibility-service loss.
   - Scope: non-product verification infrastructure only. The 2026-08-24 documentation-inclusive `./sf verify` retry completed its unit/integration checks, then its UI runner lost the AX service: one journey reported a helper connection loss and seven subsequent fresh app launches reported `Not authorized for performing UI testing actions`. The same product tree had already completed the full UI target 38/38 earlier that day, and the three command-routing regressions passed individually and together (3/3). Treat this as a separate runner authorization/connection issue; do not alter product assertions or command behavior to mask it.
   - Evidence: `/var/folders/1s/tc4zxv1124n2py3v1rlrd5dw0000gn/T/SiteForge/TestResults/full-34f78057-3015-4113-b4d4-1ddaa4afc560.xcresult` and matching `.log` (local, non-repository diagnostic output).
+  - Resolution: the owner enabled macOS Automation Mode without per-run authentication. A stale `testmanagerd` instance was terminated once, after which focused UI execution and final `./sf verify` completed normally. The 2026-08-25 gate passed all 39 UI tests, so this environment-specific blocker is closed without changing product behavior or weakening assertions.
 
 - [x] `SF-PRODUCT-UI-001` Establish the full-window launch and final-product visual-system foundation.
   - Requirements: bounded evidence for `SF-0201-002`, `SF-0201-003`, `SF-0201-006`, `SF-0201-008`, `SF-1505-006` through `SF-1505-008`, and `SF-1605-002`, `SF-1605-006` through `SF-1605-008`. These normative requirements remain Partial where later authoring, performance, and release acceptance is unproven.

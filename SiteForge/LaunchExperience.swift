@@ -149,9 +149,16 @@ struct LaunchDiagnosticRecord: Equatable, Sendable {
 }
 
 actor LaunchExperienceDiagnostics {
-    private(set) var records: [LaunchDiagnosticRecord] = []
-    func append(_ record: LaunchDiagnosticRecord) { records.append(record) }
-    func snapshot() -> [LaunchDiagnosticRecord] { records }
+    private var buffer: BoundedDiagnosticBuffer<LaunchDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    var records: [LaunchDiagnosticRecord] { buffer.snapshot() }
+    func append(_ record: LaunchDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [LaunchDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 @MainActor
@@ -485,8 +492,11 @@ final class LaunchExperienceController: ObservableObject {
         let nanos = UInt64(max(0, components.seconds)) * 1_000_000_000
             + UInt64(max(0, components.attoseconds / 1_000_000_000))
         let identifier = lifecycle.session.document.id.description
-        let sanitized = "document-" + SHA256.hash(data: Data(identifier.utf8)).prefix(5)
-            .map { String(format: "%02x", $0) }.joined()
+        let sanitized = DiagnosticStableIdentifier.sanitize(
+            identifier,
+            domain: .launch,
+            kind: "document"
+        )
         await diagnostics.append(LaunchDiagnosticRecord(
             requirementIDs: Self.requirementIDs.sorted(),
             operation: operation,
@@ -494,7 +504,7 @@ final class LaunchExperienceController: ObservableObject {
             sanitizedDocumentID: sanitized,
             durationNanoseconds: nanos,
             result: result,
-            failureCategory: failure.map { String(describing: $0) }
+            failureCategory: failure.map(\.diagnosticCategory)
         ))
     }
 

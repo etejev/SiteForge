@@ -9,11 +9,66 @@ This file records user-visible behavior during development. It is not a substitu
 - Started the bounded ordered-fill and linear-gradient foundation. Structural
   surfaces can now adopt immutable, canonical ordered v1 solid/linear layers
   in the native renderer, while the Design Inspector exposes accessible layer
-  add, enable, reorder, delete, angle, and stop controls. This remains an
-  in-progress checkpoint; image/effect fills and the broader SF-0508 module
-  are still deferred.
+  add, enable, reorder, delete, angle, per-layer/per-stop native colour, and
+  stop-order controls. Historical solid fills migrate on first edit and retain
+  exact layer identities through save/reopen and recovery. Multiple selections
+  with exact shared stacks expose shared editable rows; differing stacks show
+  a truthful mixed state and incompatible objects remain unchanged. This
+  bounded solid/linear-gradient milestone is verified; image/effect fills and
+  the broader SF-0508 module remain deferred.
 
 ### Fixed
+
+- Completed the post-milestone audit correction pass. Strict ordered-fill
+  namespace validation now participates in both the app and Foundation-only
+  model gates; every headless evidence slice includes the shared bounded
+  diagnostic support it consumes. Undo/Redo selection repair now projects the
+  implicit structural root as page-level scope, matching renderer scene
+  preparation and preserving valid selected objects.
+
+- Kept actual authored Layers—not the nonvisual structural Root—in keyboard
+  traversal and exposed semantic selection identity/count in the UI journey.
+  The minimum workspace reactivates its own window before real pointer
+  assertions, preventing unrelated developer-tool occlusion from being
+  mistaken for clipped product controls.
+
+- Hardened the post-fill audit boundaries instead of returning a correction
+  backlog. Current ordered-fill data now rejects unknown, incomplete,
+  duplicate, orphaned, unsupported, non-finite, or out-of-range v1 state at
+  model and package adoption; absent, explicit-empty, legacy-only, and valid-v1
+  states remain distinct, and legacy keys are never revived after migration.
+  Fill angle and stop-position drafts now commit on Return/focus loss, restore
+  on Escape, and retain an accessible validation error instead of silently
+  disappearing.
+
+- Bound project-resource reads and writes to the validated store directory
+  descriptor, rejected unknown resource fields, incorrect package roles, and
+  extended ACLs, and added a deterministic root-path exchange regression.
+  Foundation-coordinated writes now relay outer task cancellation through the
+  commit boundary, while 10,000-child Grid row preparation performs exactly one
+  height read per child.
+
+- Moved production workspace-scene traversal, geometry resolution, renderer
+  projection, selection projection, and viewport-object preparation off the
+  main actor. A deterministic 10,000-object active-work barrier now proves the
+  main actor continues advancing before identity-gated renderer adoption.
+
+- Centralized diagnostics on a fixed-capacity sequence/drop-count buffer with
+  domain-separated opaque identifiers and closed error categories, preventing
+  authored content, complete paths, raw UUIDs, or private error descriptions
+  from becoming retention payloads. Local-alpha checksum manifests now contain
+  only the relocatable archive basename rather than a machine path.
+
+- Restricted workspace material/window configuration to explicitly marked
+  document windows, excluding panels, sheets, child windows, and unrelated
+  auxiliary windows. Viewport controls now use intrinsic layout and the
+  selected Inspector scrolls; fill-layer and gradient-stop rows remain usable
+  at the supported 280-point Inspector width.
+
+- Applied object opacity once to the completed authored fill stack. Multiple
+  enabled fills no longer accumulate object opacity separately per layer;
+  source-over order, disabled layers, gradients, and clipping now have exact
+  production-tile pixel coverage.
 
 - Corrected native command ownership when SwiftUI replaces a workspace state
   inside an existing AppKit window. Save, Selection keyboard/Escape, and Insert

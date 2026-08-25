@@ -178,49 +178,92 @@ private final class CoordinationResultBox<T: Sendable>: @unchecked Sendable {
     func get() -> Result<T, Error>? { lock.withLock { value } }
 }
 
+/// Bridges cancellation from the caller's structured task into the
+/// unstructured task that must execute while NSFileCoordinator owns its
+/// synchronous accessor. Cancellation can arrive before or after the
+/// accessor installs that task, so both states are retained under one lock.
+private final class CoordinationOperationRelay: @unchecked Sendable {
+    private let lock = NSLock()
+    private var operation: Task<Void, Never>?
+    private var cancellationRequested = false
+
+    func install(_ operation: Task<Void, Never>) {
+        let shouldCancel = lock.withLock {
+            self.operation = operation
+            return cancellationRequested
+        }
+        if shouldCancel { operation.cancel() }
+    }
+
+    func cancel() {
+        let operation = lock.withLock {
+            cancellationRequested = true
+            return self.operation
+        }
+        operation?.cancel()
+    }
+
+    func clear() {
+        lock.withLock { operation = nil }
+    }
+}
+
 struct FoundationProjectFileCoordinator: ProjectFileCoordinating {
     func coordinate<T: Sendable>(
         at url: URL,
         intent: FileAccessIntent,
         operation: @escaping @Sendable (URL) async throws -> T
     ) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let coordinator = NSFileCoordinator(filePresenter: nil)
-                var coordinationError: NSError?
-                let result = CoordinationResultBox<T>()
-                let accessor: (URL) -> Void = { coordinatedURL in
-                    let semaphore = DispatchSemaphore(value: 0)
-                    Task {
-                        do { result.set(.success(try await operation(coordinatedURL))) }
-                        catch { result.set(.failure(error)) }
-                        semaphore.signal()
+        let relay = CoordinationOperationRelay()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let coordinator = NSFileCoordinator(filePresenter: nil)
+                    var coordinationError: NSError?
+                    let result = CoordinationResultBox<T>()
+                    let accessor: (URL) -> Void = { coordinatedURL in
+                        let semaphore = DispatchSemaphore(value: 0)
+                        let coordinatedOperation = Task {
+                            defer { semaphore.signal() }
+                            do {
+                                try Task.checkCancellation()
+                                let value = try await operation(coordinatedURL)
+                                try Task.checkCancellation()
+                                result.set(.success(value))
+                            } catch {
+                                result.set(.failure(error))
+                            }
+                        }
+                        relay.install(coordinatedOperation)
+                        semaphore.wait()
+                        relay.clear()
                     }
-                    semaphore.wait()
-                }
-                if intent.isWriting {
-                    coordinator.coordinate(
-                        writingItemAt: url,
-                        options: [],
-                        error: &coordinationError,
-                        byAccessor: accessor
-                    )
-                } else {
-                    coordinator.coordinate(
-                        readingItemAt: url,
-                        options: .withoutChanges,
-                        error: &coordinationError,
-                        byAccessor: accessor
-                    )
-                }
-                if let coordinationError {
-                    continuation.resume(throwing: coordinationError)
-                } else if let result = result.get() {
-                    continuation.resume(with: result)
-                } else {
-                    continuation.resume(throwing: FileAccessFailure.coordinationFailed)
+                    if intent.isWriting {
+                        coordinator.coordinate(
+                            writingItemAt: url,
+                            options: [],
+                            error: &coordinationError,
+                            byAccessor: accessor
+                        )
+                    } else {
+                        coordinator.coordinate(
+                            readingItemAt: url,
+                            options: .withoutChanges,
+                            error: &coordinationError,
+                            byAccessor: accessor
+                        )
+                    }
+                    if let coordinationError {
+                        continuation.resume(throwing: coordinationError)
+                    } else if let result = result.get() {
+                        continuation.resume(with: result)
+                    } else {
+                        continuation.resume(throwing: FileAccessFailure.coordinationFailed)
+                    }
                 }
             }
+        } onCancel: {
+            relay.cancel()
         }
     }
 }

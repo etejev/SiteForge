@@ -7,6 +7,7 @@ BINARY="${TMPDIR%/}/SiteForge/selection-model-evidence"
 
 xcrun swiftc -O -swift-version 6 \
   "$ROOT/SiteForge/StrictDecoding.swift" \
+  "$ROOT/SiteForge/DiagnosticSupport.swift" \
   "$ROOT/SiteForge/DocumentModel.swift" \
   "$ROOT/SiteForge/CanvasViewport.swift" \
   "$ROOT/SiteForge/CanvasRendererCore.swift" \

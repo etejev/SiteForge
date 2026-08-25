@@ -236,39 +236,70 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     let focusValue: (Tab) -> ShellFocus
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 2) {
-            ForEach(tabs) { tab in
-                Button {
-                    selection = tab
-                } label: {
-                    Text(title(tab))
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background(selection == tab ? Color.accentColor.opacity(0.16) : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .overlay {
-                    if selection == tab {
-                        RoundedRectangle(cornerRadius: 5)
-                            .stroke(Color.accentColor.opacity(0.55))
+        HStack(spacing: 3) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(tabs) { tab in
+                        tabButton(tab)
                     }
                 }
-                .focusable()
-                .focused(focus, equals: focusValue(tab))
-                .accessibilityIdentifier("\(identifierPrefix).\(tab.rawValue)")
-                .accessibilityHint(accessibilityDescription(tab) ?? "")
-                .accessibilityAddTraits(selection == tab ? .isSelected : [])
             }
-        }
+
+            Menu {
+                ForEach(tabs) { tab in
+                    Button {
+                        selection = tab
+                        focus.wrappedValue = focusValue(tab)
+                    } label: {
+                        if selection == tab {
+                            Label(title(tab), systemImage: "checkmark")
+                        } else {
+                            Text(title(tab))
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .frame(minWidth: 24, minHeight: 24)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Show all \(identifierPrefix.hasPrefix("navigator") ? "navigator" : "Inspector") tabs")
+            .accessibilityLabel("Show all tabs")
+            .accessibilityIdentifier("\(identifierPrefix).overflow")
         }
         .padding(3)
         .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    @ViewBuilder
+    private func tabButton(_ tab: Tab) -> some View {
+        Button {
+            selection = tab
+        } label: {
+            Text(title(tab))
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(selection == tab ? Color.accentColor.opacity(0.16) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .overlay {
+            if selection == tab {
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(Color.accentColor.opacity(0.55))
+            }
+        }
+        .focusable()
+        .focused(focus, equals: focusValue(tab))
+        .accessibilityIdentifier("\(identifierPrefix).\(tab.rawValue)")
+        .accessibilityHint(accessibilityDescription(tab) ?? "")
+        .accessibilityAddTraits(selection == tab ? .isSelected : [])
     }
 }
 
@@ -696,12 +727,11 @@ private struct CanvasPlaceholderView: View {
     var body: some View {
         VStack(spacing: 0) {
             ViewportControlsView(state: state, focus: focus, tabRouter: tabRouter)
-                // Native canvas views can otherwise receive the header's
-                // proposed height during AppKit composition and paint over
-                // its controls. Reserve an explicit compact header band so
-                // visual controls and the interactive viewport never occupy
-                // the same coordinates.
-                .frame(height: 40)
+                // The header owns its intrinsic one-, two-, or three-row
+                // height. A fixed 40-point band clipped the second empty-state
+                // row and let accessibility expose controls that users could
+                // not see at the supported minimum window size.
+                .fixedSize(horizontal: false, vertical: true)
                 .zIndex(1)
             Divider()
 
@@ -884,127 +914,151 @@ private struct ViewportControlsView: View {
     @State private var focusSceneID = ViewportPresetFocusSceneID()
 
     var body: some View {
-        VStack(spacing: 4) {
-        HStack(spacing: 8) {
-            Label("Preview", systemImage: "display")
-                .font(.caption.weight(.semibold))
-                .accessibilityHint("Preview preset only. Responsive authoring is not available yet.")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Label("Preview", systemImage: "display")
+                    .font(.caption.weight(.semibold))
+                    .fixedSize()
+                    .accessibilityHint("Preview preset only. Responsive authoring is not available yet.")
 
-            NativeViewportPresetControl(
-                selection: $state.viewportPreset,
-                sceneID: focusSceneID,
-                tabRouter: tabRouter,
-                isKeyboardFocusRequested: focus.wrappedValue == .viewportPreset,
-                onNativeFocusChange: { isFocused in
-                    if isFocused {
-                        focus.wrappedValue = .viewportPreset
-                    } else if focus.wrappedValue == .viewportPreset {
-                        focus.wrappedValue = nil
+                NativeViewportPresetControl(
+                    selection: $state.viewportPreset,
+                    sceneID: focusSceneID,
+                    tabRouter: tabRouter,
+                    isKeyboardFocusRequested: focus.wrappedValue == .viewportPreset,
+                    onNativeFocusChange: { isFocused in
+                        if isFocused {
+                            focus.wrappedValue = .viewportPreset
+                        } else if focus.wrappedValue == .viewportPreset {
+                            focus.wrappedValue = nil
+                        }
+                    }
+                )
+                .frame(width: 110)
+                .focusable()
+                .focused(focus, equals: .viewportPreset)
+
+                Text("\(state.viewportPreset.width) px")
+                    .monospacedDigit()
+                    .fixedSize()
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("canvas.viewport.width")
+
+                Spacer(minLength: 4)
+
+                Toggle("Grid", isOn: $state.isWorldGridVisible)
+                    .toggleStyle(.button)
+                    .fixedSize()
+                    .accessibilityIdentifier("canvas.grid.toggle")
+                    .accessibilityLabel("World grid")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("canvas.viewport.primaryControls")
+
+            HStack(spacing: 8) {
+                Button {
+                    state.performViewportCommand(CanvasViewportCommand(.zoomOut))
+                } label: {
+                    Image(systemName: "minus")
+                }
+                .buttonStyle(.bordered)
+                .help("Zoom Out")
+                .accessibilityLabel("Zoom Out")
+                .disabled(state.zoomPercent == 25)
+                .focusable()
+                .focused(focus, equals: .viewportZoomOut)
+                .accessibilityIdentifier("canvas.zoom.out")
+
+                Text("\(state.zoomPercent)%")
+                    .monospacedDigit()
+                    .frame(minWidth: 42)
+                    .accessibilityIdentifier("canvas.zoom.value")
+
+                Button {
+                    state.performViewportCommand(CanvasViewportCommand(.zoomIn))
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.bordered)
+                .help("Zoom In")
+                .accessibilityLabel("Zoom In")
+                .disabled(state.viewportState.zoom == .maximum)
+                .focusable()
+                .focused(focus, equals: .viewportZoomIn)
+                .accessibilityIdentifier("canvas.zoom.in")
+
+                Button("1:1") {
+                    state.performViewportCommand(CanvasViewportCommand(.actualSize))
+                }
+                .buttonStyle(.bordered)
+                .fixedSize()
+                .help("Actual Size")
+                .accessibilityLabel("Actual Size")
+                .focusable()
+                .focused(focus, equals: .viewportReset)
+                .accessibilityIdentifier("canvas.zoom.reset")
+
+                Spacer(minLength: 4)
+
+                Button("Fit Canvas") {
+                    state.performViewportCommand(CanvasViewportCommand(.fitWidth))
+                }
+                .buttonStyle(.bordered)
+                .fixedSize()
+                .help("Fit to Canvas")
+                .accessibilityLabel("Fit to Canvas")
+                .focusable()
+                .focused(focus, equals: .viewportFitCanvas)
+                .accessibilityIdentifier("canvas.zoom.fitCanvas")
+
+                Button("Fit Document") {
+                    state.performViewportCommand(CanvasViewportCommand(.fitDocument))
+                }
+                .buttonStyle(.bordered)
+                .fixedSize()
+                .help("Fit to Document")
+                .accessibilityLabel("Fit to Document")
+                .focusable()
+                .focused(focus, equals: .viewportFit)
+                .accessibilityIdentifier("canvas.zoom.fit")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("canvas.viewport.zoomControls")
+
+            if state.canvasRenderPlan?.authoredObjects.isEmpty == true
+                || state.selectionOutsideActiveArtboard {
+                HStack(spacing: 8) {
+                    if state.canvasRenderPlan?.authoredObjects.isEmpty == true {
+                        Text("Empty canvas")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Insert Frame") {
+                            state.performDefaultInsertion(.frame, provenance: .accessibility)
+                        }
+                        .accessibilityIdentifier("canvas.empty.insert.frame")
+                        .disabled(!state.insertionAvailability(.frame).isEnabled)
+                        Button("Insert Text") {
+                            state.performDefaultInsertion(.text, provenance: .accessibility)
+                        }
+                        .accessibilityIdentifier("canvas.empty.insert.text")
+                        .disabled(!state.insertionAvailability(.text).isEnabled)
+                    }
+                    Spacer(minLength: 4)
+                    if state.selectionOutsideActiveArtboard {
+                        Button("Reveal Selection", systemImage: "viewfinder") {
+                            state.revealSelection()
+                        }
+                        .labelStyle(.titleAndIcon)
+                        .buttonStyle(.bordered)
+                        .fixedSize()
+                        .help("Reveal the selected Desktop geometry without moving it")
+                        .accessibilityLabel("Reveal Selection")
+                        .accessibilityIdentifier("canvas.selection.reveal")
                     }
                 }
-            )
-            .frame(width: 110)
-            .focusable()
-            .focused(focus, equals: .viewportPreset)
-
-            Text("\(state.viewportPreset.width) px")
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("canvas.viewport.width")
-
-            Spacer(minLength: 8)
-
-            Button("−", systemImage: "minus") {
-                state.performViewportCommand(CanvasViewportCommand(.zoomOut))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("canvas.viewport.contextControls")
             }
-            .labelStyle(.titleAndIcon)
-            .buttonStyle(.bordered)
-            .disabled(state.zoomPercent == 25)
-            .focusable()
-            .focused(focus, equals: .viewportZoomOut)
-            .accessibilityIdentifier("canvas.zoom.out")
-
-            Text("\(state.zoomPercent)%")
-                .monospacedDigit()
-                .frame(minWidth: 42)
-                .accessibilityIdentifier("canvas.zoom.value")
-
-            Button("+", systemImage: "plus") {
-                state.performViewportCommand(CanvasViewportCommand(.zoomIn))
-            }
-            .labelStyle(.titleAndIcon)
-            .buttonStyle(.bordered)
-            .disabled(state.viewportState.zoom == .maximum)
-            .focusable()
-            .focused(focus, equals: .viewportZoomIn)
-            .accessibilityIdentifier("canvas.zoom.in")
-
-            Button("1:1", systemImage: "1.magnifyingglass") {
-                state.performViewportCommand(CanvasViewportCommand(.actualSize))
-            }
-            .labelStyle(.titleAndIcon)
-            .buttonStyle(.bordered)
-            .help("Actual Size")
-            .accessibilityLabel("Actual Size")
-            .focusable()
-            .focused(focus, equals: .viewportReset)
-            .accessibilityIdentifier("canvas.zoom.reset")
-
-            Button("Fit Canvas", systemImage: "arrow.left.and.right") {
-                state.performViewportCommand(CanvasViewportCommand(.fitWidth))
-            }
-            .labelStyle(.titleAndIcon)
-            .buttonStyle(.bordered)
-            .help("Fit to Canvas")
-            .accessibilityLabel("Fit to Canvas")
-            .focusable()
-            .focused(focus, equals: .viewportFitCanvas)
-            .accessibilityIdentifier("canvas.zoom.fitCanvas")
-
-            Button("Fit Document", systemImage: "arrow.up.left.and.arrow.down.right") {
-                state.performViewportCommand(CanvasViewportCommand(.fitDocument))
-            }
-            .labelStyle(.titleAndIcon)
-            .buttonStyle(.bordered)
-            .help("Fit to Document")
-            .accessibilityLabel("Fit to Document")
-            .focusable()
-            .focused(focus, equals: .viewportFit)
-            .accessibilityIdentifier("canvas.zoom.fit")
-
-            if state.selectionOutsideActiveArtboard {
-                Button("Reveal Selection", systemImage: "viewfinder") {
-                    state.revealSelection()
-                }
-                .labelStyle(.titleAndIcon)
-                .buttonStyle(.bordered)
-                .help("Reveal the selected Desktop geometry without moving it")
-                .accessibilityLabel("Reveal Selection")
-                .accessibilityIdentifier("canvas.selection.reveal")
-            }
-
-            Toggle("Grid", isOn: $state.isWorldGridVisible)
-                .toggleStyle(.button)
-                .accessibilityIdentifier("canvas.grid.toggle")
-                .accessibilityLabel("World grid")
-        }
-        if state.canvasRenderPlan?.authoredObjects.isEmpty == true {
-            HStack(spacing: 8) {
-                Text("Empty canvas")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("Insert Frame") {
-                    state.performDefaultInsertion(.frame, provenance: .accessibility)
-                }
-                .accessibilityIdentifier("canvas.empty.insert.frame")
-                .disabled(!state.insertionAvailability(.frame).isEnabled)
-                Button("Insert Text") {
-                    state.performDefaultInsertion(.text, provenance: .accessibility)
-                }
-                .accessibilityIdentifier("canvas.empty.insert.text")
-                .disabled(!state.insertionAvailability(.text).isEnabled)
-            }
-        }
         }
         .controlSize(.small)
         .padding(.horizontal, 12)
@@ -1706,23 +1760,26 @@ private struct InspectorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("inspector.empty")
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    Label(state.selectionSummary, systemImage: state.selectionState.count > 1 ? "square.stack.3d.up" : "selection.pin.in.out")
-                        .font(.headline)
-                    Text(state.selectionState.count == 1 ? "Primary selection" : "Multiple selection")
-                        .foregroundStyle(.secondary)
-                    if state.layerTargets.first(where: { $0.id == state.selectionState.primaryID })?.isLocked == true {
-                        Label("Locked — inspection only", systemImage: "lock.fill")
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label(state.selectionSummary, systemImage: state.selectionState.count > 1 ? "square.stack.3d.up" : "selection.pin.in.out")
+                            .font(.headline)
+                        Text(state.selectionState.count == 1 ? "Primary selection" : "Multiple selection")
                             .foregroundStyle(.secondary)
+                        if state.layerTargets.first(where: { $0.id == state.selectionState.primaryID })?.isLocked == true {
+                            Label("Locked — inspection only", systemImage: "lock.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        inspectorDetails
                     }
-                    inspectorDetails
-                    Spacer()
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Inspector selection summary")
+                    .accessibilityValue("\(state.selectionSummary); \(state.transformGeometrySummary)")
+                    .accessibilityIdentifier("inspector.selection.summary")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Inspector selection summary")
-                .accessibilityValue("\(state.selectionSummary); \(state.transformGeometrySummary)")
-                .accessibilityIdentifier("inspector.selection.summary")
+                .accessibilityIdentifier("inspector.selection.scroll")
             }
         }
         .padding(10)
@@ -2013,168 +2070,17 @@ private struct DesignInspectorFieldsView: View {
     }
 }
 
-/// Accessible editor for the canonical `style.fill.layers.v1` list. The
-/// controls intentionally submit value edits to `DesignInspectorCommandRegistry`
-/// through `WorkspaceShellState`; their row state is a document projection,
-/// never a second mutable layer model.
-private struct FillLayerListInspectorView: View {
-    @ObservedObject var state: WorkspaceShellState
-    @State private var angleDrafts: [FillLayerID: String] = [:]
-    @State private var stopDrafts: [GradientStopID: String] = [:]
-
-    private var layers: [CanonicalFillLayer] { state.designInspectorFillLayers() }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Divider()
-            Text("Fill Layers").font(.headline)
-            if let reason = state.designInspectorLayerEditingReason {
-                Text(reason)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("inspector.design.layers.unavailable")
-            } else {
-                ForEach(Array(layers.enumerated()), id: \.element.id) { index, layer in
-                    layerRow(layer, index: index)
-                }
-                HStack(spacing: 7) {
-                    Button("Add Solid") {
-                        _ = state.commitDesignFillLayer(
-                            .addSolid(id: FillLayerID(), color: .legacySurface),
-                            operation: "add solid layer", provenance: .accessibility
-                        )
-                    }
-                    .accessibilityIdentifier("inspector.design.layers.addSolid")
-                    Button("Add Linear Gradient") {
-                        _ = state.commitDesignFillLayer(
-                            .addLinearGradient(
-                                id: FillLayerID(), angleDegrees: 0,
-                                stops: [
-                                    .init(id: GradientStopID(), position: 0, color: .legacySurface),
-                                    .init(id: GradientStopID(), position: 1, color: .init(red: 0.18, green: 0.36, blue: 0.86, alpha: 1)),
-                                ]
-                            ), operation: "add linear gradient", provenance: .accessibility
-                        )
-                    }
-                    .accessibilityIdentifier("inspector.design.layers.addGradient")
-                }
-                .controlSize(.small)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Fill layers")
-        .accessibilityIdentifier("inspector.design.layers")
-    }
-
-    @ViewBuilder
-    private func layerRow(_ layer: CanonicalFillLayer, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Toggle(isOn: Binding(
-                    get: { layer.isEnabled },
-                    set: { enabled in
-                        _ = state.commitDesignFillLayer(.setEnabled(layer.id, enabled), operation: enabled ? "enable fill layer" : "disable fill layer", provenance: .accessibility)
-                    }
-                )) {
-                    Text(layer.kind == .solid ? "Solid fill" : "Linear gradient")
-                        .lineLimit(1)
-                }
-                .toggleStyle(.checkbox)
-                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).enabled")
-                Spacer(minLength: 0)
-                Button("Up") { move(layer, from: index, by: -1) }
-                    .disabled(index == 0)
-                    .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).up")
-                Button("Down") { move(layer, from: index, by: 1) }
-                    .disabled(index + 1 == layers.count)
-                    .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).down")
-                Button("Delete") {
-                    _ = state.commitDesignFillLayer(.remove(layer.id), operation: "remove fill layer", provenance: .accessibility)
-                }
-                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).delete")
-            }
-            if layer.kind == .linearGradient {
-                HStack(spacing: 6) {
-                    TextField("Angle", text: angleBinding(for: layer))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 110)
-                        .onSubmit { commitAngle(layer) }
-                        .accessibilityLabel("Linear gradient angle")
-                        .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).angle")
-                    Text("degrees").font(.caption).foregroundStyle(.secondary)
-                    Button("Add Stop") {
-                        _ = state.commitDesignFillLayer(
-                            .addStop(layer.id, .init(id: GradientStopID(), position: 0.5, color: .legacySurface), at: layer.stops.count),
-                            operation: "add gradient stop", provenance: .accessibility
-                        )
-                    }
-                    .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).addStop")
-                }
-                ForEach(layer.stops, id: \.id) { stop in
-                    HStack(spacing: 6) {
-                        Text("Stop")
-                        TextField("Position", text: stopBinding(for: stop))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 80)
-                            .onSubmit { commitStopPosition(stop, in: layer) }
-                            .accessibilityLabel("Gradient stop position")
-                            .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).stop.\(stop.id.description).position")
-                        Text("%")
-                        Button("Remove Stop") {
-                            _ = state.commitDesignFillLayer(.removeStop(layer.id, stop.id), operation: "remove gradient stop", provenance: .accessibility)
-                        }
-                        .disabled(layer.stops.count <= 2)
-                    }
-                    .font(.caption)
-                }
-            }
-        }
-        .padding(6)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    private func move(_ layer: CanonicalFillLayer, from index: Int, by delta: Int) {
-        let target = index + delta
-        guard layers.indices.contains(target) else { return }
-        _ = state.commitDesignFillLayer(.reorder(layer.id, to: target), operation: "reorder fill layer", provenance: .accessibility)
-    }
-
-    private func angleBinding(for layer: CanonicalFillLayer) -> Binding<String> {
-        Binding(
-            get: { angleDrafts[layer.id] ?? String(format: "%.0f", layer.normalizedAngleDegrees ?? 0) },
-            set: { angleDrafts[layer.id] = $0 }
-        )
-    }
-
-    private func stopBinding(for stop: CanonicalGradientStop) -> Binding<String> {
-        Binding(
-            get: { stopDrafts[stop.id] ?? String(format: "%.0f", stop.position * 100) },
-            set: { stopDrafts[stop.id] = $0 }
-        )
-    }
-
-    private func commitAngle(_ layer: CanonicalFillLayer) {
-        guard let text = angleDrafts[layer.id], let angle = Double(text), angle.isFinite else { return }
-        _ = state.commitDesignFillLayer(.setGradientAngle(layer.id, angle), operation: "edit gradient angle", provenance: .keyboard)
-        angleDrafts.removeValue(forKey: layer.id)
-    }
-
-    private func commitStopPosition(_ stop: CanonicalGradientStop, in layer: CanonicalFillLayer) {
-        guard let text = stopDrafts[stop.id], let percent = Double(text), percent.isFinite, (0...100).contains(percent) else { return }
-        _ = state.commitDesignFillLayer(.setStop(layer.id, stop.id, position: percent / 100, color: stop.color), operation: "edit gradient stop", provenance: .keyboard)
-        stopDrafts.removeValue(forKey: stop.id)
-    }
-}
-
 /// Production AppKit bridge for the system colour experience.  It remains a
 /// real `NSColorWell`/standard `NSColorPanel`, but makes its role, value, and
 /// press semantics stable for VoiceOver, Full Keyboard Access, and UI tests.
 /// The bridge has no knowledge of automation and owns no canonical style.
-private struct NativeDesignColorWell: NSViewRepresentable {
+struct NativeDesignColorWell: NSViewRepresentable {
     let color: CanonicalSolidColor
     let isEnabled: Bool
     let accessibilityValue: String
     let accessibilityHint: String
+    var accessibilityIdentifier = "inspector.design.fillPicker"
+    var accessibilityLabel = "Solid fill color"
     let onCommit: (CanonicalSolidColor) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onCommit: onCommit) }
@@ -2184,8 +2090,8 @@ private struct NativeDesignColorWell: NSViewRepresentable {
         well.target = context.coordinator
         well.action = #selector(Coordinator.colorChanged(_:))
         well.focusRingType = .default
-        well.setAccessibilityIdentifier("inspector.design.fillPicker")
-        well.setAccessibilityLabel("Solid fill color")
+        well.setAccessibilityIdentifier(accessibilityIdentifier)
+        well.setAccessibilityLabel(accessibilityLabel)
         context.coordinator.attach(well)
         return well
     }
@@ -2193,6 +2099,8 @@ private struct NativeDesignColorWell: NSViewRepresentable {
     func updateNSView(_ well: AccessibleDesignColorWell, context: Context) {
         context.coordinator.onCommit = onCommit
         well.isEnabled = isEnabled
+        well.setAccessibilityIdentifier(accessibilityIdentifier)
+        well.setAccessibilityLabel(accessibilityLabel)
         well.setAccessibilityValue(accessibilityValue)
         well.setAccessibilityHelp(accessibilityHint)
         let next = NSColor(
@@ -2242,7 +2150,7 @@ private struct NativeDesignColorWell: NSViewRepresentable {
     }
 }
 
-private final class AccessibleDesignColorWell: NSColorWell {
+final class AccessibleDesignColorWell: NSColorWell {
     var onPanelDeactivated: (() -> Void)?
 
     override var acceptsFirstResponder: Bool { isEnabled }
@@ -3021,16 +2929,9 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.textEditingPresentation = state.textEditingPresentation
         view.accessibilityViewportValue = state.viewportAccessibilityValue
         view.needsDisplay = true
-        if isKeyboardFocused,
-           state.textEditingPresentation == nil,
-           view.window?.firstResponder !== view {
-            DispatchQueue.main.async { [weak view, weak state] in
-                guard let view, let state,
-                      state.textEditingPresentation == nil,
-                      view.window != nil else { return }
-                view.window?.makeFirstResponder(view)
-            }
-        }
+        view.updateKeyboardFocusRequest(
+            isKeyboardFocused && state.textEditingPresentation == nil
+        )
     }
 
     private func configure(_ view: NativeCanvasViewportView) {
@@ -3063,15 +2964,38 @@ private struct NativeCanvasViewport: NSViewRepresentable {
             let constraint: TransformAxisConstraint = delta.dx == 0 ? .vertical : .horizontal
             let operation = TransformOperation.move(delta: delta, constraint: constraint)
             guard state.transformAvailability(operation).isEnabled else { return false }
+            let revision = state.documentSession.document.revision
             state.performTransform(operation, provenance: .keyboard)
-            return true
+            return state.documentSession.document.revision != revision
         }
-        view.onSelectNext = { state.performSelectionCommand(.next, provenance: .keyboard) }
-        view.onSelectPrevious = { state.performSelectionCommand(.previous, provenance: .keyboard) }
-        view.onClearSelection = { state.performSelectionCommand(.clear, provenance: .keyboard) }
+        view.onSelectNext = {
+            let prior = state.selectionState
+            state.performSelectionCommand(.next, provenance: .keyboard)
+            return state.selectionState != prior
+        }
+        view.onSelectPrevious = {
+            let prior = state.selectionState
+            state.performSelectionCommand(.previous, provenance: .keyboard)
+            return state.selectionState != prior
+        }
+        view.onClearSelection = {
+            let prior = state.selectionState
+            state.performSelectionCommand(.clear, provenance: .keyboard)
+            return state.selectionState != prior
+        }
         view.onEscape = { state.performEscape() }
-        view.onInsertFrame = { state.performDefaultInsertion(.frame, provenance: .accessibility) }
-        view.onInsertText = { state.performDefaultInsertion(.text, provenance: .accessibility) }
+        view.onInsertFrame = {
+            guard state.insertionAvailability(.frame).isEnabled else { return false }
+            let revision = state.documentSession.document.revision
+            state.performDefaultInsertion(.frame, provenance: .accessibility)
+            return state.documentSession.document.revision != revision
+        }
+        view.onInsertText = {
+            guard state.insertionAvailability(.text).isEnabled else { return false }
+            let revision = state.documentSession.document.revision
+            state.performDefaultInsertion(.text, provenance: .accessibility)
+            return state.documentSession.document.revision != revision
+        }
         view.onBeginTextEditingAtPoint = {
             state.beginTextEditing(at: $0, provenance: .pointer)
         }
@@ -3089,19 +3013,111 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.onTextCommit = { state.commitTextEditing() }
         view.onTextCancel = { state.cancelTextEditing() }
         view.onCreateGuide = { axis, position in
+            let prior = state.activeGuides
             state.addGuide(axis: axis, position: position, provenance: .pointer)
+            return state.activeGuides != prior
         }
         view.onSelectGuide = { state.selectGuide($0) }
         view.onToggleSnapping = {
+            let prior = state.isSnappingSuppressed
             state.setSnappingSuppressed(!state.isSnappingSuppressed)
+            return state.isSnappingSuppressed != prior
         }
         view.onPan = { state.panViewport(by: $0) }
         view.onMagnify = { factor, anchor in state.magnify(by: factor, around: anchor) }
         view.onResize = { size, scale in state.resizeViewport(to: size, pixelRatio: scale) }
-        view.onZoomIn = { state.performViewportCommand(CanvasViewportCommand(.zoomIn)) }
-        view.onZoomOut = { state.performViewportCommand(CanvasViewportCommand(.zoomOut)) }
-        view.onReset = { state.performViewportCommand(CanvasViewportCommand(.actualSize)) }
+        view.onZoomIn = {
+            let prior = state.viewportState
+            state.performViewportCommand(CanvasViewportCommand(.zoomIn))
+            return state.viewportState != prior
+        }
+        view.onZoomOut = {
+            let prior = state.viewportState
+            state.performViewportCommand(CanvasViewportCommand(.zoomOut))
+            return state.viewportState != prior
+        }
+        view.onReset = {
+            let prior = state.viewportState
+            state.performViewportCommand(CanvasViewportCommand(.actualSize))
+            return state.viewportState != prior
+        }
         view.onTabTraversal = onTabTraversal
+    }
+}
+
+/// A queued native focus adoption is valid only for the newest logical focus
+/// request. SwiftUI reconciliation can otherwise leave a delayed canvas task
+/// alive after a rapid Tab/Shift-Tab traversal has already moved elsewhere.
+struct CanvasFocusAdoptionToken: Equatable, Sendable {
+    fileprivate let generation: UInt64
+}
+
+struct CanvasFocusAdoptionGate: Sendable {
+    private(set) var generation: UInt64 = 0
+
+    mutating func issue(whenRequested requested: Bool) -> CanvasFocusAdoptionToken? {
+        generation &+= 1
+        return requested ? CanvasFocusAdoptionToken(generation: generation) : nil
+    }
+
+    mutating func cancel() { generation &+= 1 }
+
+    func accepts(_ token: CanvasFocusAdoptionToken) -> Bool {
+        token.generation == generation
+    }
+}
+
+enum CanvasAccessibilityActionDispatcher {
+    /// VoiceOver must receive the command's real mutation result. A missing,
+    /// disabled, rejected, or no-op command is not a successful AX action.
+    static func perform(_ action: (() -> Bool)?) -> Bool {
+        action?() ?? false
+    }
+}
+
+enum CanvasAuthoredTextLayerFactory {
+    /// Constructs the same native authored-text layer used by the live
+    /// viewport. Keeping opacity on this production object (instead of only
+    /// on tiled surfaces) ensures glyphs and their authored object share one
+    /// compositing contract.
+    static func makeLayer(
+        for object: CanvasRenderObject,
+        viewport: CanvasViewportState,
+        contentsScale: CGFloat
+    ) -> CATextLayer? {
+        guard object.style == .textPlaceholder,
+              object.isVisible,
+              object.opacity.isFinite,
+              (0...1).contains(object.opacity),
+              let text = object.plainText,
+              !text.isEmpty,
+              let origin = try? viewport.transform.worldToViewport(object.frame.origin) else {
+            return nil
+        }
+        let layout = CanvasTextLayout(
+            viewportObjectRect: CGRect(
+                x: origin.x,
+                y: origin.y,
+                width: object.frame.size.width * viewport.zoom.value,
+                height: object.frame.size.height * viewport.zoom.value
+            ),
+            zoom: viewport.zoom.value,
+            text: text
+        )
+        let layer = CATextLayer()
+        layer.name = "renderer.authored-text.\(object.id.description)"
+        layer.isGeometryFlipped = true
+        layer.frame = layout.glyphBounds
+        layer.string = text
+        layer.font = NSFont.systemFont(ofSize: layout.fontSize)
+        layer.fontSize = layout.fontSize
+        layer.foregroundColor = NSColor.labelColor.cgColor
+        layer.opacity = Float(object.opacity)
+        layer.alignmentMode = .left
+        layer.truncationMode = .end
+        layer.isWrapped = false
+        layer.contentsScale = max(1, contentsScale)
+        return layer
     }
 }
 
@@ -3153,26 +3169,26 @@ private final class NativeCanvasViewportView: NSView {
     var onPointerTransformCommit: (() -> Void)?
     var onPointerTransformCancel: (() -> Void)?
     var onKeyboardMove: ((WorldVector) -> Bool)?
-    var onSelectNext: (() -> Void)?
-    var onSelectPrevious: (() -> Void)?
-    var onClearSelection: (() -> Void)?
+    var onSelectNext: (() -> Bool)?
+    var onSelectPrevious: (() -> Bool)?
+    var onClearSelection: (() -> Bool)?
     var onEscape: (() -> Void)?
-    var onInsertFrame: (() -> Void)?
-    var onInsertText: (() -> Void)?
+    var onInsertFrame: (() -> Bool)?
+    var onInsertText: (() -> Bool)?
     var onBeginTextEditingAtPoint: ((WorldPoint) -> Bool)?
     var onBeginSelectedTextEditing: (() -> Bool)?
     var onTextDraftChange: ((String, TextEditRange, TextEditRange?) -> Void)?
     var onTextCommit: (() -> Void)?
     var onTextCancel: (() -> Void)?
-    var onCreateGuide: ((GuideAxis, Double) -> Void)?
+    var onCreateGuide: ((GuideAxis, Double) -> Bool)?
     var onSelectGuide: ((GuideID?) -> Void)?
-    var onToggleSnapping: (() -> Void)?
+    var onToggleSnapping: (() -> Bool)?
     var onPan: ((ViewportVector) -> Void)?
     var onMagnify: ((Double, ViewportPoint) -> Void)?
     var onResize: ((ViewportSize, Double) -> Void)?
-    var onZoomIn: (() -> Void)?
-    var onZoomOut: (() -> Void)?
-    var onReset: (() -> Void)?
+    var onZoomIn: (() -> Bool)?
+    var onZoomOut: (() -> Bool)?
+    var onReset: (() -> Bool)?
     var onTabTraversal: ((ShellFocusDirection) -> Void)?
     private let contentContainer = CALayer()
     // Text is composed from the same resolved viewport rect as tiles, but it
@@ -3195,6 +3211,7 @@ private final class NativeCanvasViewportView: NSView {
     private var selectionContextBadges: [SelectionContextBadge] = []
     private var transformHandleViews: [String: TransformHandleControlView] = [:]
     private var focusedAccessibilityObjectID: NodeID?
+    private var focusAdoptionGate = CanvasFocusAdoptionGate()
     private var pointerTrackingArea: NSTrackingArea?
     private var transformPointerStart: WorldPoint?
     private var transformDidDrag = false
@@ -3225,6 +3242,22 @@ private final class NativeCanvasViewportView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
+    func updateKeyboardFocusRequest(_ requested: Bool) {
+        guard let token = focusAdoptionGate.issue(whenRequested: requested) else { return }
+        guard window?.firstResponder !== self else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.focusAdoptionGate.accepts(token),
+                  self.textEditingPresentation == nil,
+                  let window = self.window else { return }
+            _ = window.makeFirstResponder(self)
+        }
+    }
+
+    private func cancelPendingKeyboardFocusAdoption() {
+        focusAdoptionGate.cancel()
+    }
+
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
     override func isAccessibilityElement() -> Bool { true }
@@ -3243,33 +3276,53 @@ private final class NativeCanvasViewportView: NSView {
     }
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         [
-            NSAccessibilityCustomAction(name: "Zoom In") { [weak self] in self?.onZoomIn?(); return true },
-            NSAccessibilityCustomAction(name: "Zoom Out") { [weak self] in self?.onZoomOut?(); return true },
-            NSAccessibilityCustomAction(name: "Reset View") { [weak self] in self?.onReset?(); return true },
-            NSAccessibilityCustomAction(name: "Select Next Object") { [weak self] in self?.onSelectNext?(); return true },
-            NSAccessibilityCustomAction(name: "Select Previous Object") { [weak self] in self?.onSelectPrevious?(); return true },
-            NSAccessibilityCustomAction(name: "Clear Selection") { [weak self] in self?.onClearSelection?(); return true },
-            NSAccessibilityCustomAction(name: "Insert Frame at Center") { [weak self] in self?.onInsertFrame?(); return true },
-            NSAccessibilityCustomAction(name: "Insert Text at Center") { [weak self] in self?.onInsertText?(); return true },
+            NSAccessibilityCustomAction(name: "Zoom In") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onZoomIn)
+            },
+            NSAccessibilityCustomAction(name: "Zoom Out") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onZoomOut)
+            },
+            NSAccessibilityCustomAction(name: "Reset View") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onReset)
+            },
+            NSAccessibilityCustomAction(name: "Select Next Object") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onSelectNext)
+            },
+            NSAccessibilityCustomAction(name: "Select Previous Object") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onSelectPrevious)
+            },
+            NSAccessibilityCustomAction(name: "Clear Selection") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onClearSelection)
+            },
+            NSAccessibilityCustomAction(name: "Insert Frame at Center") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onInsertFrame)
+            },
+            NSAccessibilityCustomAction(name: "Insert Text at Center") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onInsertText)
+            },
             NSAccessibilityCustomAction(name: "Edit Selected Text") { [weak self] in
-                self?.onBeginSelectedTextEditing?() ?? false
+                CanvasAccessibilityActionDispatcher.perform(self?.onBeginSelectedTextEditing)
             },
             NSAccessibilityCustomAction(name: "Add Horizontal Guide") { [weak self] in
                 guard let self else { return false }
-                self.onCreateGuide?(.horizontal, self.viewportState.visibleWorldRect.origin.y + 100)
-                return true
+                guard let action = self.onCreateGuide else { return false }
+                return action(.horizontal, self.viewportState.visibleWorldRect.origin.y + 100)
             },
             NSAccessibilityCustomAction(name: "Add Vertical Guide") { [weak self] in
                 guard let self else { return false }
-                self.onCreateGuide?(.vertical, self.viewportState.visibleWorldRect.origin.x + 100)
-                return true
+                guard let action = self.onCreateGuide else { return false }
+                return action(.vertical, self.viewportState.visibleWorldRect.origin.x + 100)
             },
-            NSAccessibilityCustomAction(name: "Toggle Snapping") { [weak self] in self?.onToggleSnapping?(); return true },
+            NSAccessibilityCustomAction(name: "Toggle Snapping") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onToggleSnapping)
+            },
             NSAccessibilityCustomAction(name: "Move Right 1 px") { [weak self] in
-                self?.onKeyboardMove?(WorldVector(dx: 1, dy: 0)) ?? false
+                guard let action = self?.onKeyboardMove else { return false }
+                return action(WorldVector(dx: 1, dy: 0))
             },
             NSAccessibilityCustomAction(name: "Move Down 1 px") { [weak self] in
-                self?.onKeyboardMove?(WorldVector(dx: 0, dy: 1)) ?? false
+                guard let action = self?.onKeyboardMove else { return false }
+                return action(WorldVector(dx: 0, dy: 1))
             },
         ]
     }
@@ -3341,7 +3394,7 @@ private final class NativeCanvasViewportView: NSView {
                ViewportPoint(x: point.x, y: point.y)
            ) {
             window?.makeFirstResponder(self)
-            onCreateGuide?(.vertical, world.x)
+            _ = onCreateGuide?(.vertical, world.x)
             return
         }
         if point.x <= SnappingPolicy.rulerThicknessPoints,
@@ -3350,7 +3403,7 @@ private final class NativeCanvasViewportView: NSView {
                ViewportPoint(x: point.x, y: point.y)
            ) {
             window?.makeFirstResponder(self)
-            onCreateGuide?(.horizontal, world.y)
+            _ = onCreateGuide?(.horizontal, world.y)
             return
         }
         if let guide = nearestGuide(at: point) {
@@ -3436,6 +3489,10 @@ private final class NativeCanvasViewportView: NSView {
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 48 {
+            // Invalidate any delayed SwiftUI-to-AppKit adoption before the
+            // logical traversal request leaves the canvas. Without this, the
+            // older task can run one event later and steal focus back.
+            cancelPendingKeyboardFocusAdoption()
             onTabTraversal?(event.modifierFlags.contains(.shift) ? .reverse : .forward)
             return
         }
@@ -3447,11 +3504,11 @@ private final class NativeCanvasViewportView: NSView {
             if onBeginSelectedTextEditing?() == true { return }
         }
         if event.modifierFlags.contains(.command), event.keyCode == 30 {
-            onSelectNext?()
+            _ = onSelectNext?()
             return
         }
         if event.modifierFlags.contains(.command), event.keyCode == 33 {
-            onSelectPrevious?()
+            _ = onSelectPrevious?()
             return
         }
         let command: CanvasViewportCommandName?
@@ -3751,29 +3808,11 @@ private final class NativeCanvasViewportView: NSView {
             contentContainer.addSublayer(tileLayer)
         }
         for object in plan.authoredObjects where object.style == .textPlaceholder && object.isVisible {
-            guard let text = object.plainText, !text.isEmpty,
-                  let origin = try? rasterViewport.transform.worldToViewport(object.frame.origin) else { continue }
-            let layout = CanvasTextLayout(
-                viewportObjectRect: CGRect(
-                    x: origin.x, y: origin.y,
-                    width: object.frame.size.width * rasterViewport.zoom.value,
-                    height: object.frame.size.height * rasterViewport.zoom.value
-                ),
-                zoom: rasterViewport.zoom.value,
-                text: text
-            )
-            let textLayer = CATextLayer()
-            textLayer.name = "renderer.authored-text.\(object.id.description)"
-            textLayer.isGeometryFlipped = true
-            textLayer.frame = layout.glyphBounds
-            textLayer.string = text
-            textLayer.font = NSFont.systemFont(ofSize: layout.fontSize)
-            textLayer.fontSize = layout.fontSize
-            textLayer.foregroundColor = NSColor.labelColor.cgColor
-            textLayer.alignmentMode = .left
-            textLayer.truncationMode = .end
-            textLayer.isWrapped = false
-            textLayer.contentsScale = Double(window?.backingScaleFactor ?? CGFloat(rasterViewport.pixelRatio.value))
+            guard let textLayer = CanvasAuthoredTextLayerFactory.makeLayer(
+                for: object,
+                viewport: rasterViewport,
+                contentsScale: window?.backingScaleFactor ?? CGFloat(rasterViewport.pixelRatio.value)
+            ) else { continue }
             textContainer.addSublayer(textLayer)
         }
         contentContainer.setAffineTransform(.identity)
@@ -4411,9 +4450,14 @@ final class CanvasContentTileLayer: CALayer {
             context.setAlpha(CGFloat(object.opacity))
             let renderedSurface: NSColor
             if !object.fillLayers.isEmpty {
+                // Composite the authored stack into one transparency group.
+                // The current alpha is applied when that completed group is
+                // drawn back into the tile, rather than once per layer.
+                context.beginTransparencyLayer(auxiliaryInfo: nil)
                 for layer in object.fillLayers where layer.isEnabled {
                     drawAuthoredFillLayer(layer, in: rect, context: context)
                 }
+                context.endTransparencyLayer()
                 renderedSurface = CanvasAuthoredFillCompositor.resolvedColor(
                     layers: object.fillLayers,
                     atNormalizedPoint: (x: 0.5, y: 0.5)

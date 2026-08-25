@@ -15,6 +15,7 @@ sources=(
   Benchmarks/AuthoringEngineRunway/RunwayCanvasBenchmarks.swift
   Benchmarks/AuthoringEngineRunway/RunwayBrowserOracle.swift
   SiteForge/StrictDecoding.swift
+  SiteForge/DiagnosticSupport.swift
   SiteForge/DocumentModel.swift
   SiteForge/CommandKernel.swift
   SiteForge/IdentityBoundFileSystem.swift

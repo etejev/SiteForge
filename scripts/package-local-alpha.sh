@@ -15,7 +15,7 @@ mkdir -p "$OUT"
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || print dev)
 archive="$OUT/SiteForge-$version-unsigned-alpha.zip"
 ditto -c -k --keepParent "$app" "$archive"
-shasum -a 256 "$archive" > "$archive.sha256"
+/bin/zsh "$ROOT/scripts/write-portable-checksum.sh" "$archive"
 
 print "Created local unsigned alpha:"
 print "$archive"

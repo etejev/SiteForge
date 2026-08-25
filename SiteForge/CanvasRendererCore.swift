@@ -387,8 +387,11 @@ struct CanvasRendererCore: Sendable {
         var accessibility: [CanvasAccessibilityElementSnapshot] = []
         accessibility.reserveCapacity(min(CanvasRendererPolicy.maximumAccessibilityElements, painted.count))
         for object in painted where accessibility.count < CanvasRendererPolicy.maximumAccessibilityElements {
-            guard object.isVisible, intersects(object.frame, visible), isInsideClip(object) else { continue }
-            let origin = try transform.worldToViewport(object.frame.origin)
+            guard object.isVisible,
+                  let visibleFrame = clippedFrame(object.frame, to: object.clipRect, visibleWithin: visible) else {
+                continue
+            }
+            let origin = try transform.worldToViewport(visibleFrame.origin)
             accessibility.append(CanvasAccessibilityElementSnapshot(
                 id: accessibilityID(for: object.id),
                 objectID: object.id,
@@ -396,8 +399,8 @@ struct CanvasRendererCore: Sendable {
                 frame: ViewportRect(
                     origin: origin,
                     size: ViewportSize(
-                        width: object.frame.size.width * viewport.zoom.value,
-                        height: object.frame.size.height * viewport.zoom.value
+                        width: visibleFrame.size.width * viewport.zoom.value,
+                        height: visibleFrame.size.height * viewport.zoom.value
                     )
                 ),
                 paintOrder: object.paintOrder
@@ -556,6 +559,26 @@ struct CanvasRendererCore: Sendable {
         lhs.minX < rhs.maxX && lhs.maxX > rhs.minX && lhs.minY < rhs.maxY && lhs.maxY > rhs.minY
     }
 
+    /// Accessibility geometry represents the pixels a user can actually
+    /// reach in this viewport generation. Exposing the authored frame here
+    /// would place VoiceOver targets over clipped ancestors or offscreen
+    /// pasteboard even though those pixels cannot be seen or hit-tested.
+    private func clippedFrame(
+        _ frame: WorldRect,
+        to clip: WorldRect?,
+        visibleWithin visible: WorldRect
+    ) -> WorldRect? {
+        let minX = max(max(frame.minX, clip?.minX ?? frame.minX), visible.minX)
+        let minY = max(max(frame.minY, clip?.minY ?? frame.minY), visible.minY)
+        let maxX = min(min(frame.maxX, clip?.maxX ?? frame.maxX), visible.maxX)
+        let maxY = min(min(frame.maxY, clip?.maxY ?? frame.maxY), visible.maxY)
+        guard maxX > minX, maxY > minY else { return nil }
+        return WorldRect(
+            origin: WorldPoint(x: minX, y: minY),
+            size: WorldSize(width: maxX - minX, height: maxY - minY)
+        )
+    }
+
     private func isInsideClip(_ object: CanvasRenderObject, point: WorldPoint? = nil) -> Bool {
         guard let clip = object.clipRect else { return true }
         return point.map { contains(clip, $0) } ?? intersects(object.frame, clip)
@@ -640,9 +663,15 @@ struct CanvasRenderDiagnosticRecord: Codable, Equatable, Sendable {
 }
 
 actor CanvasRenderDiagnostics {
-    private var records: [CanvasRenderDiagnosticRecord] = []
-    func append(_ record: CanvasRenderDiagnosticRecord) { records.append(record) }
-    func snapshot() -> [CanvasRenderDiagnosticRecord] { records }
+    private var buffer: BoundedDiagnosticBuffer<CanvasRenderDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ record: CanvasRenderDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [CanvasRenderDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 enum CanvasRenderDiagnosticFactory {
@@ -659,7 +688,11 @@ enum CanvasRenderDiagnosticFactory {
         return CanvasRenderDiagnosticRecord(
             requirementID: "SF-0407-008",
             operation: operation,
-            surfaceIdentifier: String(surfaceID.description.prefix(8)),
+            surfaceIdentifier: DiagnosticStableIdentifier.sanitize(
+                surfaceID.description,
+                domain: .canvasRender,
+                kind: "surface"
+            ),
             generation: identity.viewportGeneration,
             durationMilliseconds: max(0, durationMilliseconds),
             invalidation: plan?.invalidation,
@@ -668,7 +701,9 @@ enum CanvasRenderDiagnosticFactory {
             frameCount: 0,
             stallCount: 0,
             result: result,
-            failureCategory: failureCategory.map { String($0.prefix(64)) }
+            failureCategory: failureCategory.map {
+                DiagnosticErrorCategory.closedCategory(forUntrustedValue: $0).rawValue
+            }
         )
     }
 }

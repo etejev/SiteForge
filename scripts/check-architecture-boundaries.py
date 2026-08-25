@@ -8,7 +8,11 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_SLICE = ["SiteForge/StrictDecoding.swift", "SiteForge/DocumentModel.swift"]
+MODEL_SLICE = [
+    "SiteForge/StrictDecoding.swift",
+    "SiteForge/DiagnosticSupport.swift",
+    "SiteForge/DocumentModel.swift",
+]
 ENGINE_SLICE = [
     *MODEL_SLICE,
     "SiteForge/CommandKernel.swift",
@@ -111,6 +115,8 @@ typecheck("drag-drop-contract", DRAG_DROP_MODEL_SLICE)
 project = (ROOT / "SiteForge.xcodeproj/project.pbxproj").read_text()
 if "StrictDecoding.swift in Sources" not in project:
     fail("StrictDecoding.swift must be compiled into the application target with the canonical model.")
+if "DiagnosticSupport.swift in Sources" not in project:
+    fail("DiagnosticSupport.swift must be compiled into the application target with every diagnostic producer.")
 if "WorkspaceSceneComposition.swift in Sources" not in project:
     fail("WorkspaceSceneComposition.swift is not compiled into the application target.")
 if "CanvasViewport.swift in Sources" not in project:

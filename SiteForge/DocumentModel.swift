@@ -628,6 +628,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case cyclicOrUnreachableTree
     case incompatibleChildOwnership
     case invalidStructuralDefaults
+    case invalidFillLayerState
 
     var errorDescription: String? {
         switch self {
@@ -656,7 +657,111 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .cyclicOrUnreachableTree: "The node tree must be acyclic and reachable from the page roots."
         case .incompatibleChildOwnership: "This node kind cannot own authored children."
         case .invalidStructuralDefaults: "Structural containers require their complete bounded default layout contract."
+        case .invalidFillLayerState: "The document contains an invalid canonical fill-layer state."
         }
+    }
+}
+
+/// Headless canonical validation for the versioned fill-layer namespace.
+///
+/// The richer typed projection lives in `TransformModel`, but document
+/// validity cannot depend on that downstream authoring module. This validator
+/// therefore enforces the persisted namespace contract using only canonical
+/// `DocumentNode`/`PropertyValue` types, keeping the smallest model compile
+/// boundary independently usable by migration and architecture checks.
+enum CanonicalFillLayerNamespaceValidator {
+    static let root = "style.fill.layers.v1"
+    static let orderKey = "style.fill.layers.v1.order"
+    private static let supportedKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
+
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { owns($0.key.rawValue) }
+        guard !owned.isEmpty else { return }
+        guard supportedKinds.contains(node.kind) else { throw ModelValidationError.invalidFillLayerState }
+
+        let keys = owned.map(\.key.rawValue)
+        guard Set(keys).count == keys.count else { throw ModelValidationError.invalidFillLayerState }
+        let values = Dictionary(uniqueKeysWithValues: owned.map { ($0.key.rawValue, $0.value) })
+        guard case .string(let order)? = values[orderKey] else {
+            throw ModelValidationError.invalidFillLayerState
+        }
+        let layerIDs = try identifiers(order, allowsEmpty: true)
+        guard Set(layerIDs).count == layerIDs.count else {
+            throw ModelValidationError.invalidFillLayerState
+        }
+
+        var expected: Set<String> = [orderKey]
+        for layerID in layerIDs {
+            let prefix = "\(root).\(layerID)"
+            let kindKey = "\(prefix).kind"
+            let enabledKey = "\(prefix).enabled"
+            expected.formUnion([kindKey, enabledKey])
+            guard case .string(let kind)? = values[kindKey],
+                  case .boolean? = values[enabledKey] else {
+                throw ModelValidationError.invalidFillLayerState
+            }
+            switch kind {
+            case "solid":
+                try validateColor(prefix: prefix, values: values, expected: &expected)
+            case "linearGradient":
+                let angleKey = "\(prefix).angle"
+                let stopsKey = "\(prefix).stops"
+                expected.formUnion([angleKey, stopsKey])
+                guard case .number(let angle)? = values[angleKey],
+                      angle.isFinite, (0..<360).contains(angle),
+                      case .string(let stopOrder)? = values[stopsKey] else {
+                    throw ModelValidationError.invalidFillLayerState
+                }
+                let stopIDs = try identifiers(stopOrder, allowsEmpty: false)
+                guard stopIDs.count >= 2, Set(stopIDs).count == stopIDs.count else {
+                    throw ModelValidationError.invalidFillLayerState
+                }
+                for stopID in stopIDs {
+                    let stopPrefix = "\(prefix).stop.\(stopID)"
+                    let positionKey = "\(stopPrefix).position"
+                    expected.insert(positionKey)
+                    guard case .number(let position)? = values[positionKey],
+                          position.isFinite, (0...1).contains(position) else {
+                        throw ModelValidationError.invalidFillLayerState
+                    }
+                    try validateColor(prefix: stopPrefix, values: values, expected: &expected)
+                }
+            default:
+                throw ModelValidationError.invalidFillLayerState
+            }
+        }
+        guard Set(keys) == expected else { throw ModelValidationError.invalidFillLayerState }
+    }
+
+    private static func validateColor(
+        prefix: String,
+        values: [String: PropertyValue],
+        expected: inout Set<String>
+    ) throws {
+        for channel in ["red", "green", "blue", "alpha"] {
+            let key = "\(prefix).\(channel)"
+            expected.insert(key)
+            guard case .number(let value)? = values[key],
+                  value.isFinite, (0...1).contains(value) else {
+                throw ModelValidationError.invalidFillLayerState
+            }
+        }
+    }
+
+    private static func identifiers(_ value: String, allowsEmpty: Bool) throws -> [String] {
+        if value.isEmpty, allowsEmpty { return [] }
+        let tokens = value.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard !tokens.isEmpty, tokens.allSatisfy({ token in
+            guard !token.isEmpty, let identifier = UUID(uuidString: token) else { return false }
+            return identifier.uuidString.lowercased() == token
+        }) else {
+            throw ModelValidationError.invalidFillLayerState
+        }
+        return tokens
+    }
+
+    private static func owns(_ key: String) -> Bool {
+        key == root || key.hasPrefix("\(root).")
     }
 }
 
@@ -806,6 +911,7 @@ private extension DocumentPage {
             guard Set(keys).count == keys.count else {
                 throw ModelValidationError.duplicatePropertyKey
             }
+            try CanonicalFillLayerNamespaceValidator.validate(node)
             try node.validateStructuralDefaults()
         }
 

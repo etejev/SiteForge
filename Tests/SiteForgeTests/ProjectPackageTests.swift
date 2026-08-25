@@ -309,6 +309,187 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(DesignInspectorCommandRegistry.resolvedFill(for: originallyOmitted).0, nil)
     }
 
+    // SF-0301-004...006, SF-0303-005, SF-0508-001...008 — a retained
+    // schema-v4 package migrates through the real layer registry, then keeps
+    // exact authored identities and ordering across save/reopen and the owned
+    // recovery path. Legacy fill keys are retired by the first v1 write and
+    // must never become a fallback source again.
+    @MainActor
+    func testHistoricalSurfaceMigratesToOrderedLayersAcrossSaveReopenAndRecovery() async throws {
+        let store = ProjectPackageStore()
+        let legacyData = try legacyGolden(
+            named: "schema-v4-legacy-surface",
+            sha256: "3ab14ab513e8932395579540750016e3a73f4742e9d463574c6443b3f4303b12"
+        )
+        let legacy = try await store.decode(legacyData)
+        let page = try XCTUnwrap(legacy.document.pages.only)
+        let nodeID = NodeID(UUID(uuidString: "63000000-0000-0000-0000-000000000004")!)
+        let originalNode = try XCTUnwrap(page.nodes.first(where: { $0.id == nodeID }))
+        let migratedLegacyID = try XCTUnwrap(CanonicalFillLayerCodec.legacySolidLayer(for: originalNode)?.id)
+        let gradientID = FillLayerID(UUID(uuidString: "A3000000-0000-4000-8000-000000000001")!)
+        let startID = GradientStopID(UUID(uuidString: "A3000000-0000-4000-8000-000000000002")!)
+        let endID = GradientStopID(UUID(uuidString: "A3000000-0000-4000-8000-000000000003")!)
+        let startColor = CanonicalSolidColor(red: 0.1, green: 0.2, blue: 0.3, alpha: 0.4)
+        let endColor = CanonicalSolidColor(red: 0.8, green: 0.6, blue: 0.4, alpha: 1)
+        let stops = [
+            CanonicalGradientStop(id: startID, position: 0.2, color: startColor),
+            CanonicalGradientStop(id: endID, position: 0.85, color: endColor),
+        ]
+        let sceneID = CanvasViewportSceneID(UUID(uuidString: "83000000-0000-0000-0000-000000000014")!)
+        let registry = DesignInspectorCommandRegistry()
+        func context(_ document: CanonicalDocument) -> TransformValidationContext {
+            TransformValidationContext(
+                activePageID: page.id,
+                currentSceneID: sceneID,
+                rendererGeneration: 14,
+                selectedNodeIDs: [nodeID],
+                availableNodeIDs: Set(document.pages[0].nodes.map(\.id)),
+                isLifecycleAvailable: true,
+                lifecycleDisabledReason: nil
+            )
+        }
+        func command(_ document: CanonicalDocument, edit: DesignFillLayerEdit) -> DesignFillLayerCommand {
+            .init(
+                identity: .init(
+                    documentID: document.id,
+                    pageID: page.id,
+                    revision: document.revision,
+                    sceneID: sceneID,
+                    rendererGeneration: 14
+                ),
+                orderedNodeIDs: [nodeID],
+                edit: edit,
+                provenance: .automation,
+                cancelled: false
+            )
+        }
+        func node(in package: ProjectPackage) throws -> DocumentNode {
+            try XCTUnwrap(package.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        }
+
+        let session = DocumentSession(document: legacy.document)
+        let addGradient = try registry.prepare(
+            command(session.document, edit: .addLinearGradient(
+                id: gradientID,
+                angleDegrees: 405,
+                stops: stops
+            )),
+            in: session.document,
+            context: context(session.document)
+        )
+        _ = try session.execute(addGradient.documentCommand)
+        let reorder = try registry.prepare(
+            command(session.document, edit: .reorder(gradientID, to: 0)),
+            in: session.document,
+            context: context(session.document)
+        )
+        _ = try session.execute(reorder.documentCommand)
+        let disable = try registry.prepare(
+            command(session.document, edit: .setEnabled(gradientID, false)),
+            in: session.document,
+            context: context(session.document)
+        )
+        _ = try session.execute(disable.documentCommand)
+
+        let expected = [
+            CanonicalFillLayer.linearGradient(
+                id: gradientID,
+                angleDegrees: 45,
+                stops: stops,
+                isEnabled: false
+            ),
+            CanonicalFillLayer.solid(id: migratedLegacyID, color: .legacySurface),
+        ]
+        let migratedNode = try XCTUnwrap(session.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: migratedNode), expected)
+        for key in ["style.fill", "style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"] {
+            XCTAssertNil(migratedNode.insertionProperty(key), "The first v1 write must retire legacy key \(key).")
+        }
+
+        let migratedPackage = ProjectPackage(
+            projectID: legacy.projectID,
+            createdAt: legacy.createdAt,
+            modifiedAt: legacy.modifiedAt,
+            document: session.document,
+            optionalMembers: legacy.optionalMembers,
+            compatibility: legacy.compatibility
+        )
+        let saved = try await store.encode(migratedPackage)
+        let reopened = try await store.decode(saved)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: try node(in: reopened)), expected)
+        let resaved = try await store.encode(reopened)
+        XCTAssertEqual(resaved, saved, "Reopened v1 layer packages must remain byte-deterministic.")
+
+        let recoveryDirectory = try fixtureDirectory().appendingPathComponent("fill-layer-recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(recoveryDirectory)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: legacy.projectID, in: recoveryDirectory)
+        try await store.write(reopened, to: recoveryURL, policy: .recovery(legacy.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(
+            from: recoveryURL,
+            expectedProjectID: legacy.projectID
+        ).package
+        let recoveredNode = try node(in: recovered)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: recoveredNode), expected)
+        XCTAssertNotNil(recoveredNode.insertionProperty(CanonicalFillLayerCodec.orderKey))
+        for key in ["style.fill", "style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"] {
+            XCTAssertNil(recoveredNode.insertionProperty(key), "Recovery must not revive legacy key \(key).")
+        }
+    }
+
+    // SF-0301-004...006, SF-0303-005, SF-0508-001...008 — recomputing the
+    // package member checksum cannot make malformed current fill state valid.
+    // Canonical validation rejects the candidate before lifecycle adoption.
+    func testChecksumValidCurrentPackageRejectsMalformedFillLayerOrder() async throws {
+        let store = ProjectPackageStore()
+        let baseline = package()
+        var document = baseline.document
+        let layer = CanonicalFillLayer.solid(
+            id: FillLayerID(UUID(uuidString: "A3100000-0000-4000-8000-000000000001")!),
+            color: .init(red: 0.2, green: 0.4, blue: 0.6, alpha: 0.8)
+        )
+        document.pages[0].nodes[0].properties.append(contentsOf: CanonicalFillLayerCodec.propertyValues(for: [layer]).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value)
+        })
+        let valid = ProjectPackage(
+            projectID: baseline.projectID,
+            createdAt: baseline.createdAt,
+            modifiedAt: baseline.modifiedAt,
+            document: document,
+            optionalMembers: baseline.optionalMembers,
+            compatibility: baseline.compatibility
+        )
+        var members = try decodeArchive(try await store.encode(valid))
+        let documentMember = try XCTUnwrap(members.first(where: { $0.path == "document.json" }))
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: documentMember.data) as? [String: Any])
+        var documentJSON = try XCTUnwrap(envelope["document"] as? [String: Any])
+        var pages = try XCTUnwrap(documentJSON["pages"] as? [[String: Any]])
+        var page = try XCTUnwrap(pages.first)
+        var nodes = try XCTUnwrap(page["nodes"] as? [[String: Any]])
+        var node = try XCTUnwrap(nodes.first)
+        var properties = try XCTUnwrap(node["properties"] as? [[String: Any]])
+        let orderIndex = try XCTUnwrap(properties.firstIndex { $0["key"] as? String == CanonicalFillLayerCodec.orderKey })
+        var orderProperty = properties[orderIndex]
+        var value = try XCTUnwrap(orderProperty["value"] as? [String: Any])
+        var stringPayload = try XCTUnwrap(value["string"] as? [String: Any])
+        let validOrder = try XCTUnwrap(stringPayload["_0"] as? String)
+        stringPayload["_0"] = validOrder + ","
+        value["string"] = stringPayload
+        orderProperty["value"] = value
+        properties[orderIndex] = orderProperty
+        node["properties"] = properties
+        nodes[0] = node
+        page["nodes"] = nodes
+        pages[0] = page
+        documentJSON["pages"] = pages
+        envelope["document"] = documentJSON
+        let malformedDocument = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+        members = try replacingDocumentAndIntegrity(in: members, with: malformedDocument)
+
+        await XCTAssertThrowsProjectPackageError(.corruptDocument) {
+            try await store.decode(encodeArchive(members))
+        }
+    }
+
     // SF-0301-004, SF-0301-005, SF-1702-004 — a newer canonical payload
     // cannot be relabeled as an older schema and silently discard fields such
     // as guides during migration.

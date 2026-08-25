@@ -271,7 +271,8 @@ final class CanvasViewportTests: XCTestCase {
         let records = await diagnostics.snapshot()
         XCTAssertEqual(records.count, 2)
         XCTAssertTrue(records.allSatisfy { $0.requirementID == "SF-0401-008" })
-        XCTAssertTrue(records.allSatisfy { $0.sceneIdentifier.count == 8 })
+        XCTAssertTrue(records.allSatisfy { $0.sceneIdentifier.count == "scene-".count + 24 })
+        XCTAssertTrue(records.allSatisfy { !$0.sceneIdentifier.contains(state.viewportState.sceneID.description) })
         let encoded = String(data: try! JSONEncoder().encode(records), encoding: .utf8)!
         XCTAssertFalse(encoded.contains(state.documentSession.document.id.description))
         XCTAssertFalse(encoded.contains("/Users/"))

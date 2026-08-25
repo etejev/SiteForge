@@ -675,7 +675,13 @@ struct CanvasViewportDiagnosticRecord: Codable, Equatable, Sendable {
 }
 
 actor CanvasViewportDiagnostics {
-    private var records: [CanvasViewportDiagnosticRecord] = []
-    func append(_ record: CanvasViewportDiagnosticRecord) { records.append(record) }
-    func snapshot() -> [CanvasViewportDiagnosticRecord] { records }
+    private var buffer: BoundedDiagnosticBuffer<CanvasViewportDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ record: CanvasViewportDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [CanvasViewportDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }

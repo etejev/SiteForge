@@ -64,6 +64,11 @@ struct SelectionTargetSnapshot: Equatable, Sendable {
     let isVisible: Bool
     let isLocked: Bool
     let isAvailable: Bool
+    /// True only when the immutable renderer snapshot contains this node.
+    /// Structural ownership nodes may remain directly selectable from Layers,
+    /// but they must never masquerade as visible canvas objects during hit
+    /// testing, keyboard cycling, accessibility traversal, or overlay drawing.
+    let participatesInCanvasTraversal: Bool
 
     init(
         id: NodeID,
@@ -77,7 +82,8 @@ struct SelectionTargetSnapshot: Equatable, Sendable {
         paintOrder: Int,
         isVisible: Bool,
         isLocked: Bool,
-        isAvailable: Bool
+        isAvailable: Bool,
+        participatesInCanvasTraversal: Bool = true
     ) {
         self.id = id
         self.pageID = pageID
@@ -91,6 +97,7 @@ struct SelectionTargetSnapshot: Equatable, Sendable {
         self.isVisible = isVisible
         self.isLocked = isLocked
         self.isAvailable = isAvailable
+        self.participatesInCanvasTraversal = participatesInCanvasTraversal
     }
 
     var isFullyClipped: Bool {
@@ -113,6 +120,7 @@ struct SelectionSceneSnapshot: Equatable, Sendable {
             target.pageID == activePageID
                 && target.parentID == activeContainerID
                 && target.isSelectable
+                && target.participatesInCanvasTraversal
         }.sorted {
             $0.paintOrder == $1.paintOrder
                 ? $0.id.description < $1.id.description
@@ -261,8 +269,7 @@ struct SelectionCommandRegistry: Sendable {
             case .clear:
                 return state.isEmpty ? .disabled("There is no selection to clear.") : .enabled
             case .next, .previous:
-                return scene.orderedSelectableTargets.isEmpty
-                    ? .disabled("There are no selectable objects in the active scope.") : .enabled
+                return .enabled
             case .escape:
                 return state.isEmpty && state.activeContainerID == nil
                     ? .disabled("There is no selection or container scope to exit.") : .enabled
@@ -319,6 +326,9 @@ struct SelectionCommandRegistry: Sendable {
             draft.setSelection([], primary: nil, anchor: nil, provenance: command.provenance)
         case .next, .previous:
             let targets = scene.orderedSelectableTargets
+            if targets.isEmpty {
+                return .unchanged
+            }
             let offset = command.name == .next ? 1 : -1
             let index: Int
             if let primary = draft.primaryID, let current = targets.firstIndex(where: { $0.id == primary }) {
@@ -327,6 +337,9 @@ struct SelectionCommandRegistry: Sendable {
                 index = command.name == .next ? 0 : targets.count - 1
             }
             let id = targets[index].id
+            if draft.orderedIDs == [id] {
+                return .unchanged
+            }
             draft.setSelection([id], primary: id, anchor: id, provenance: command.provenance)
         case .escape:
             if !draft.isEmpty {
@@ -443,7 +456,9 @@ struct SelectionOverlayPlanner: Sendable {
               renderPlan.identity == scene.identity else { throw SelectionCommandError.staleScene }
         let targets = Dictionary(uniqueKeysWithValues: scene.targets.map { ($0.id, $0) })
         let overlays = selection.orderedIDs.compactMap { id -> CanvasEditorOverlay? in
-            guard let target = targets[id], target.isSelectable else { return nil }
+            guard let target = targets[id],
+                  target.isSelectable,
+                  target.participatesInCanvasTraversal else { return nil }
             // Selection validity comes from the scene target. Presentation is
             // bounded separately by the adopted renderer's active artboard
             // clip, so an off-artboard node remains selected without drawing
@@ -519,9 +534,15 @@ struct SelectionDiagnosticRecord: Codable, Equatable, Sendable {
 }
 
 actor SelectionDiagnostics {
-    private var records: [SelectionDiagnosticRecord] = []
-    func append(_ record: SelectionDiagnosticRecord) { records.append(record) }
-    func snapshot() -> [SelectionDiagnosticRecord] { records }
+    private var buffer: BoundedDiagnosticBuffer<SelectionDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ record: SelectionDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [SelectionDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 enum SelectionDiagnosticFactory {
@@ -536,7 +557,13 @@ enum SelectionDiagnosticFactory {
         SelectionDiagnosticRecord(
             requirementID: "SF-0402-008",
             operation: operation.rawValue,
-            sanitizedIdentifiers: state.orderedIDs.prefix(32).map { String($0.description.prefix(8)) },
+            sanitizedIdentifiers: state.orderedIDs.prefix(32).map {
+                DiagnosticStableIdentifier.sanitize(
+                    $0.description,
+                    domain: .selection,
+                    kind: "node"
+                )
+            },
             durationMilliseconds: max(0, durationMilliseconds),
             selectionCount: state.count,
             repairCategory: repair.map(\.rawValue),

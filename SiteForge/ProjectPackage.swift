@@ -205,11 +205,15 @@ struct ProjectPackageDiagnosticRecord: Equatable, Sendable {
 }
 
 actor ProjectPackageDiagnostics {
-    private(set) var records: [ProjectPackageDiagnosticRecord] = []
+    private var buffer: BoundedDiagnosticBuffer<ProjectPackageDiagnosticRecord>
 
-    func append(_ record: ProjectPackageDiagnosticRecord) {
-        records.append(record)
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
     }
+
+    var records: [ProjectPackageDiagnosticRecord] { buffer.snapshot() }
+    func append(_ record: ProjectPackageDiagnosticRecord) { buffer.append(record) }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 enum ProjectPackageWriteInterruption: Sendable {
@@ -699,7 +703,11 @@ private extension ProjectPackageStore {
     }
 
     static func sanitized(_ projectID: ProjectID) -> String {
-        "project-" + checksum(Data(projectID.description.utf8)).prefix(10)
+        DiagnosticStableIdentifier.sanitize(
+            projectID.description,
+            domain: .projectPackage,
+            kind: "project"
+        )
     }
 
     func record(

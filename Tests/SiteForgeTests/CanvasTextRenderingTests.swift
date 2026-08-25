@@ -135,6 +135,72 @@ final class CanvasTextRenderingTests: XCTestCase {
         }
     }
 
+    // SF-0406-001, SF-0406-002, SF-0508-005 — committed plain-text glyphs
+    // use the production CATextLayer path and inherit authored object opacity
+    // exactly like the tiled surface (including fully transparent text).
+    func testProductionAuthoredTextLayerPixelsHonorObjectOpacity() throws {
+        let width = 240
+        let height = 100
+        let viewport = try CanvasViewportState(
+            worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: Double(width), height: Double(height)),
+            contentBounds: .init(
+                origin: .init(x: 0, y: 0),
+                size: .init(width: Double(width), height: Double(height))
+            ),
+            pixelRatio: CanvasPixelRatio(2)
+        )
+        let frame = WorldRect(
+            origin: .init(x: 20, y: 20),
+            size: .init(width: 180, height: 40)
+        )
+
+        var maximumAlpha: [Double: UInt8] = [:]
+        for opacity in [1.0, 0.5, 0.0] {
+            let object = CanvasRenderObject(
+                id: NodeID(),
+                frame: frame,
+                clipRect: nil,
+                paintOrder: 0,
+                style: .textPlaceholder,
+                isVisible: true,
+                accessibilityLabel: "Opacity text",
+                plainText: "SiteForge opacity",
+                opacity: opacity
+            )
+            let layer = try XCTUnwrap(CanvasAuthoredTextLayerFactory.makeLayer(
+                for: object,
+                viewport: viewport,
+                contentsScale: 2
+            ))
+            XCTAssertEqual(layer.opacity, Float(opacity), accuracy: 0.000_001)
+            let pixels = rasterizedTextLayerBytes(layer, width: width, height: height)
+            maximumAlpha[opacity] = stride(from: 3, to: pixels.count, by: 4)
+                .map { pixels[$0] }
+                .max() ?? 0
+            let changed = changedPixels(
+                from: Data(repeating: 0, count: pixels.count),
+                to: pixels,
+                width: width
+            )
+            if opacity == 0 {
+                XCTAssertTrue(changed.isEmpty, "Zero-opacity authored text must paint no glyph pixels.")
+            } else {
+                XCTAssertFalse(changed.isEmpty)
+                XCTAssertTrue(
+                    changed.allSatisfy { layer.frame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: $0.x, y: $0.y)) },
+                    "Authored text pixels escaped the production CATextLayer bounds: \(pixelBounds(changed))"
+                )
+            }
+        }
+
+        let opaque = try XCTUnwrap(maximumAlpha[1.0])
+        let half = try XCTUnwrap(maximumAlpha[0.5])
+        XCTAssertGreaterThan(opaque, 0)
+        XCTAssertEqual(Double(half) / Double(opaque), 0.5, accuracy: 0.08)
+        XCTAssertEqual(maximumAlpha[0.0], 0)
+    }
+
     // SF-0508-001...005, SF-0508-008 — authored RGBA/opacity is composited
     // by the production tile layer. Editor overlays are a different scene and
     // cannot affect these raw authored pixels.
@@ -239,6 +305,101 @@ final class CanvasTextRenderingTests: XCTestCase {
         }
     }
 
+    // SF-0508-001, SF-0508-003, SF-0508-005, SF-0508-008 — the production
+    // tile rasterizes the immutable authored layer order, ignores disabled
+    // layers, and applies object opacity once after source-over compositing.
+    func testAuthoredFillLayerStackAndGradientUseExactProductionTilePixels() throws {
+        let viewport = try CanvasViewportState(
+            worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: 300, height: 120),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 300, height: 120)),
+            pixelRatio: CanvasPixelRatio(2)
+        )
+        let frame = WorldRect(
+            origin: .init(x: 40, y: 30),
+            size: .init(width: 160, height: 60)
+        )
+        let clip = WorldRect(
+            origin: .init(x: 0, y: 0),
+            size: .init(width: 300, height: 120)
+        )
+        func solid(_ uuid: String, _ rgba: [Double], enabled: Bool = true) -> CanvasAuthoredFillLayer {
+            CanvasAuthoredFillLayer(
+                id: UUID(uuidString: uuid)!, kind: .solid,
+                isEnabled: enabled, rgba: rgba, angleDegrees: nil, stops: []
+            )
+        }
+
+        let layered = CanvasRenderObject(
+            id: NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000301")!),
+            frame: frame, clipRect: clip, paintOrder: 0,
+            style: .frameSurface, isVisible: true, accessibilityLabel: "Layered frame",
+            fillLayers: [
+                solid("00000000-0000-0000-0000-000000000302", [1, 0, 0, 1]),
+                solid("00000000-0000-0000-0000-000000000303", [0, 1, 0, 1], enabled: false),
+                solid("00000000-0000-0000-0000-000000000304", [0, 0, 1, 0.5]),
+            ],
+            opacity: 0.5
+        )
+        let layeredPixels = rasterizedBytes(object: layered, viewport: viewport)
+        let layeredCenter = rgba(at: (x: 120, y: 60), in: layeredPixels, width: 300, height: 120)
+        let withoutDisabledLayer = CanvasRenderObject(
+            id: NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000309")!),
+            frame: frame, clipRect: clip, paintOrder: 0,
+            style: .frameSurface, isVisible: true, accessibilityLabel: "Reference layered frame",
+            fillLayers: [
+                solid("00000000-0000-0000-0000-000000000310", [1, 0, 0, 1]),
+                solid("00000000-0000-0000-0000-000000000311", [0, 0, 1, 0.5]),
+            ],
+            opacity: 0.5
+        )
+        let referencePixels = rasterizedBytes(object: withoutDisabledLayer, viewport: viewport)
+        let referenceCenter = rgba(at: (x: 120, y: 60), in: referencePixels, width: 300, height: 120)
+        XCTAssertEqual(
+            [layeredCenter.red, layeredCenter.green, layeredCenter.blue, layeredCenter.alpha],
+            [referenceCenter.red, referenceCenter.green, referenceCenter.blue, referenceCenter.alpha],
+            "A disabled fill layer must have no effect on the production raster."
+        )
+        XCTAssertEqual(Int(layeredCenter.red), 64, accuracy: 4)
+        XCTAssertEqual(Int(layeredCenter.blue), 64, accuracy: 4)
+        XCTAssertEqual(Int(layeredCenter.alpha), 128, accuracy: 3, "Object opacity must apply once to the completed opaque layer stack.")
+        let layeredOutside = rgba(at: (x: 20, y: 60), in: layeredPixels, width: 300, height: 120)
+        XCTAssertEqual(layeredOutside.alpha, 0, "Pixels outside the authored object bounds must remain transparent.")
+
+        let gradient = CanvasAuthoredFillLayer(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000305")!,
+            kind: .linearGradient,
+            isEnabled: true,
+            rgba: nil,
+            angleDegrees: 0,
+            stops: [
+                .init(id: UUID(uuidString: "00000000-0000-0000-0000-000000000306")!, position: 0, rgba: [1, 0, 0, 1]),
+                .init(id: UUID(uuidString: "00000000-0000-0000-0000-000000000307")!, position: 1, rgba: [0, 0, 1, 1]),
+            ]
+        )
+        let gradientObject = CanvasRenderObject(
+            id: NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000308")!),
+            frame: frame, clipRect: clip, paintOrder: 0,
+            style: .frameSurface, isVisible: true, accessibilityLabel: "Gradient frame",
+            fillLayers: [gradient]
+        )
+        let gradientPixels = rasterizedBytes(object: gradientObject, viewport: viewport)
+        let left = rgba(at: (x: 60, y: 60), in: gradientPixels, width: 300, height: 120)
+        let center = rgba(at: (x: 120, y: 60), in: gradientPixels, width: 300, height: 120)
+        let right = rgba(at: (x: 180, y: 60), in: gradientPixels, width: 300, height: 120)
+        XCTAssertEqual(Int(left.red), 223, accuracy: 4)
+        XCTAssertEqual(Int(left.blue), 32, accuracy: 4)
+        XCTAssertEqual(Int(center.red), 127, accuracy: 4)
+        XCTAssertEqual(Int(center.blue), 128, accuracy: 4)
+        XCTAssertEqual(Int(right.red), 32, accuracy: 4)
+        XCTAssertEqual(Int(right.blue), 223, accuracy: 4)
+        for sample in [left, center, right] {
+            XCTAssertEqual(Int(sample.alpha), 255, accuracy: 3)
+        }
+        let gradientOutside = rgba(at: (x: 220, y: 60), in: gradientPixels, width: 300, height: 120)
+        XCTAssertEqual(gradientOutside.alpha, 0, "Pixels outside the authored object bounds must remain transparent.")
+    }
+
     private func rasterizedBytes(object: CanvasRenderObject, viewport: CanvasViewportState) -> Data {
         let width = 300
         let height = 120
@@ -277,6 +438,28 @@ final class CanvasTextRenderingTests: XCTestCase {
             layer.tileOrigin = layer.frame.origin
             container.addSublayer(layer)
             layer.setNeedsDisplay()
+            root.render(in: context)
+        }
+        return Data(bytes)
+    }
+
+    private func rasterizedTextLayerBytes(_ textLayer: CATextLayer, width: Int, height: Int) -> Data {
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { rawBuffer in
+            let context = CGContext(
+                data: rawBuffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )!
+            let root = CALayer()
+            root.frame = CGRect(x: 0, y: 0, width: width, height: height)
+            root.isGeometryFlipped = true
+            root.addSublayer(textLayer)
+            textLayer.setNeedsDisplay()
             root.render(in: context)
         }
         return Data(bytes)

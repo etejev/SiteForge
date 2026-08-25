@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import XCTest
 @testable import SiteForge
@@ -89,9 +90,9 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             WorkspaceMetrics.requestedWindowSize(arguments: ["SiteForge", "-SiteForgeWindowSize", "minimum"]),
             WorkspaceMetrics.minimumWindowSize
         )
-        XCTAssertEqual(
+        XCTAssertNil(
             WorkspaceMetrics.requestedWindowSize(arguments: ["SiteForge", "-SiteForgeUITestMode", "YES"]),
-            WorkspaceMetrics.minimumWindowSize
+            "Generic UI automation must retain normal visible-frame presentation."
         )
         XCTAssertFalse(WorkspaceMetrics.usesDeterministicUITestPlacement(
             composition: DebugTestComposition(
@@ -116,6 +117,28 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             WorkspaceMetrics.minimumWindowSize
         )
         XCTAssertNil(WorkspaceMetrics.requestedWindowSize(arguments: ["SiteForge"]))
+    }
+
+    // SF-0201-002, SF-0201-003, SF-0201-008
+    @MainActor
+    func testWorkspaceWindowRoleExcludesPanelsChildrenAndUnmarkedAuxiliaryWindows() {
+        let workspace = NSWindow()
+        XCTAssertFalse(WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(workspace))
+        WorkspaceWindowRolePolicy.register(workspace)
+        XCTAssertTrue(WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(workspace))
+
+        let panel = NSPanel()
+        WorkspaceWindowRolePolicy.register(panel)
+        XCTAssertFalse(WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(panel))
+
+        let auxiliary = NSWindow()
+        XCTAssertFalse(WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(auxiliary))
+
+        let child = NSWindow()
+        WorkspaceWindowRolePolicy.register(child)
+        workspace.addChildWindow(child, ordered: .above)
+        XCTAssertFalse(WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(child))
+        workspace.removeChildWindow(child)
     }
 
     // SF-0201-002, SF-0201-003, SF-0201-008 — generic UI composition is a
@@ -175,6 +198,27 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             visibleFrame: visible,
             minimumFrameSize: minimumFrame
         ))
+    }
+
+    // SF-0201-002, SF-0201-006, SF-0201-008 — only the explicit minimum
+    // override uses compact geometry; the normal path still consumes the
+    // complete AppKit visible frame (menu bar and Dock remain outside it).
+    func testExplicitMinimumWindowFrameIsClampedWithoutBecomingNormalPresentation() {
+        let visible = CGRect(x: 0, y: 74, width: 1_710, height: 999)
+        let explicit = WorkspaceExplicitWindowPresentation.frame(
+            requestedFrameSize: CGSize(width: 1_100, height: 752),
+            currentOrigin: CGPoint(x: 900, y: 900),
+            visibleFrame: visible
+        )
+        XCTAssertEqual(explicit, CGRect(x: 610, y: 321, width: 1_100, height: 752))
+        XCTAssertEqual(
+            WorkspaceWindowPresentation.initialFrame(
+                visibleFrame: visible,
+                restoredFrame: nil,
+                minimumFrameSize: explicit.size
+            ),
+            visible
+        )
     }
 
     // SF-0201-008, SF-1605-008, SF-1902-008

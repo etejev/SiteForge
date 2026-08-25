@@ -55,12 +55,17 @@ and Components are explicit accessible unavailable destinations until their
 separate storage/definition work exists.
 
 The inspector order is Design, Layout, Content, Interactions, and
-Accessibility. Design provides bounded native `NSColorWell`/standard Colors
-panel, hexadecimal RGBA, and precise percentage `NSStepper` controls for
-applicable structural containers; their picker and text drafts are editor-only
-until a completed transaction. Mixed selection names skipped incompatible
-objects, while all-incompatible selection disables the controls with its
-reason. Layout retains the
+Accessibility. Design provides bounded ordered solid and linear-gradient fill
+editing for applicable structural containers. It exposes native
+`NSColorWell`/standard Colors-panel controls, hexadecimal RGBA, object opacity,
+layer add/enable/reorder/delete, gradient angle, and per-stop colour,
+position/add/remove/reorder controls. Picker and text drafts are editor-only
+until a completed transaction; Return or focus loss commits a valid numeric
+draft, Escape restores the committed value, and invalid input remains visible
+with an accessible explanation. Exact shared multiple-selection stacks expose
+shared editable rows, differing stacks show a truthful mixed state without
+borrowing the primary object's rows, and incompatible objects remain
+unchanged. Layout retains the
 bounded geometry, transform, guide, and snapping controls. For applicable
 Frame, Text, Section, Stack, and Grid selection, Layout exposes native
 locale-aware X, Y, Width, and Height fields. Draft strings are editor-only;
@@ -181,17 +186,23 @@ other private data.
 ## Implemented versus future capability
 
 Implemented now: one full-size native scene/window, project lifecycle states,
-Pages/Layers, the bounded Elements catalogue (Frame/plain Text only), a bounded canvas/renderer/overlay system, selection, insertion,
-transforms, guides, bounded plain-text editing, local drag/reorder, the ordered
-read-only Design/Layout/Accessibility inspector summaries, native unavailable
-Content/Interactions destinations, native materials, and the central command/history/persistence
-boundaries documented in `docs/IMPLEMENTATION_STATUS.md`.
+Pages/Layers, the bounded Elements catalogue (Section, Stack, Grid, Frame, and
+plain Text enabled), a bounded canvas/renderer/overlay system, selection,
+insertion, transforms, guides,
+bounded plain-text editing, local drag/reorder, bounded editable Design
+solid/linear-gradient fill controls, bounded editable Layout fixed-geometry
+controls, the read-only Accessibility summary, native unavailable
+Content/Interactions destinations, native materials, and the central
+command/history/persistence boundaries documented in
+`docs/IMPLEMENTATION_STATUS.md`.
 
-Explicitly future: container/basic/site Element authoring beyond Frame/plain
-Text, Asset storage/import, Component definitions/instances, general property editing, gradients/effects, responsive editing, CMS,
-production typography, asset import/placement, external drag/drop, export,
-publishing, plugins, and release acceptance. Naming these destinations in this
-contract does not make them implemented.
+Explicitly future: container/basic/site Element authoring beyond the currently
+enabled structural/plain-Text set, Asset storage/import, Component
+definitions/instances, general property editing beyond the bounded Design and
+Layout slices, image fills, blend/filter effects, borders, shadows, responsive
+editing, CMS, production typography, asset import/placement, external
+drag/drop, export, publishing, plugins, and release acceptance. Naming these
+destinations in this contract does not make them implemented.
 
 ## Verification evidence
 

@@ -435,9 +435,15 @@ struct TextEditDiagnosticRecord: Equatable, Sendable {
 }
 
 actor TextEditDiagnostics {
-    private var records: [TextEditDiagnosticRecord] = []
-    func append(_ record: TextEditDiagnosticRecord) { records.append(record) }
-    func snapshot() -> [TextEditDiagnosticRecord] { records }
+    private var buffer: BoundedDiagnosticBuffer<TextEditDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ record: TextEditDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [TextEditDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
 }
 
 enum TextEditDiagnosticFactory {
@@ -450,13 +456,24 @@ enum TextEditDiagnosticFactory {
         TextEditDiagnosticRecord(
             requirementIDs: InlineTextCommandRegistry.requirementIDs.sorted(),
             operation: "activate",
-            identities: [nodeID.description, pageID.description],
+            identities: [
+                DiagnosticStableIdentifier.sanitize(
+                    nodeID.description,
+                    domain: .textEditing,
+                    kind: "node"
+                ),
+                DiagnosticStableIdentifier.sanitize(
+                    pageID.description,
+                    domain: .textEditing,
+                    kind: "page"
+                ),
+            ],
             durationMilliseconds: durationMilliseconds,
             originalUTF8Bytes: 0,
             resultUTF8Bytes: nil,
             result: [.staleDocument, .stalePage, .staleRevision, .staleRenderer]
                 .contains(failure) ? .stale : .failure,
-            failureCategory: String(describing: failure)
+            failureCategory: failure.diagnosticCategory
         )
     }
 
@@ -471,15 +488,51 @@ enum TextEditDiagnosticFactory {
             requirementIDs: InlineTextCommandRegistry.requirementIDs.sorted(),
             operation: operation,
             identities: [
-                draft.activation.identity.sessionID.description,
-                draft.activation.identity.nodeID.description,
-                draft.activation.identity.pageID.description,
+                DiagnosticStableIdentifier.sanitize(
+                    draft.activation.identity.sessionID.description,
+                    domain: .textEditing,
+                    kind: "session"
+                ),
+                DiagnosticStableIdentifier.sanitize(
+                    draft.activation.identity.nodeID.description,
+                    domain: .textEditing,
+                    kind: "node"
+                ),
+                DiagnosticStableIdentifier.sanitize(
+                    draft.activation.identity.pageID.description,
+                    domain: .textEditing,
+                    kind: "page"
+                ),
             ],
             durationMilliseconds: durationMilliseconds,
             originalUTF8Bytes: draft.activation.originalText.utf8.count,
             resultUTF8Bytes: result == .success ? draft.text.utf8.count : nil,
             result: result,
-            failureCategory: failure.map { String(describing: $0) }
+            failureCategory: failure.map(\.diagnosticCategory)
         )
+    }
+}
+
+private extension TextEditError {
+    var diagnosticCategory: String {
+        switch self {
+        case .lifecycleUnavailable: "lifecycle-unavailable"
+        case .staleDocument: "stale-document"
+        case .stalePage: "stale-page"
+        case .staleRevision: "stale-revision"
+        case .staleRenderer: "stale-renderer"
+        case .missingNode: "missing-node"
+        case .incompatibleNode: "incompatible-node"
+        case .lockedNode: "locked-node"
+        case .hiddenNode: "hidden-node"
+        case .unavailableNode: "unavailable-node"
+        case .invalidText: "invalid-text"
+        case .textLimitExceeded: "text-limit-exceeded"
+        case .invalidSelection: "invalid-selection"
+        case .activeComposition: "active-composition"
+        case .cancelled: "cancelled"
+        case .revisionExhausted: "revision-exhausted"
+        case .invalidResult: "invalid-result"
+        }
     }
 }

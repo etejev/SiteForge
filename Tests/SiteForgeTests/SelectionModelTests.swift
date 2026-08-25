@@ -44,12 +44,12 @@ final class SelectionModelTests: XCTestCase {
             SelectionTargetSnapshot(
                 id: frameID, pageID: fixture.pageID, parentID: nil, name: "Frame",
                 frame: fixture.targets[0].frame, clipRect: nil, paintOrder: 0,
-                isVisible: true, isLocked: false, isAvailable: true
+                isVisible: true, isLocked: false, isAvailable: true, participatesInCanvasTraversal: true
             ),
             SelectionTargetSnapshot(
                 id: textID, pageID: fixture.pageID, parentID: nil, name: "Text",
                 frame: fixture.targets[1].frame, clipRect: nil, paintOrder: 1,
-                isVisible: true, isLocked: false, isAvailable: true
+                isVisible: true, isLocked: false, isAvailable: true, participatesInCanvasTraversal: true
             ),
         ]
         let scene = SelectionSceneSnapshot(
@@ -79,6 +79,181 @@ final class SelectionModelTests: XCTestCase {
         )
         let text = DocumentNode(id: textID, kind: .text, name: "Text", parent: .page(fixture.pageID))
         XCTAssertEqual(DesignInspectorCommandRegistry.fillValue(nodes: [frame, text]), .mixed)
+    }
+
+    func testRootOverlaySuppression() throws {
+        var fixture = try makeFixture(count: 1)
+        fixture.targets[0] = fixture.targets[0].copy(participatesInCanvasTraversal: false)
+        fixture = fixture.rebuilt()
+        let structuralID = fixture.ids[0]
+        let registry = SelectionCommandRegistry()
+        var state = SelectionState()
+        _ = try registry.adopt(fixture.scene, boundary: .documentAdoption, state: &state)
+
+        let result = try registry.apply(
+            .init(.replace, targetID: structuralID, expectedIdentity: fixture.identity, provenance: .layersNavigator),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(result, .changed)
+        XCTAssertEqual(state.orderedIDs, [structuralID])
+        XCTAssertEqual(state.primaryID, structuralID)
+        XCTAssertEqual(state.anchorID, structuralID)
+        let overlay = try SelectionOverlayPlanner().plan(selection: state, scene: fixture.scene, renderPlan: try renderPlan(fixture))
+        XCTAssertTrue(overlay.overlays.isEmpty)
+    }
+
+    func testAuthoredOverlay() throws {
+        var fixture = try makeFixture(count: 1)
+        let authoredID = fixture.ids[0]
+        let registry = SelectionCommandRegistry()
+        var state = SelectionState()
+        _ = try registry.adopt(fixture.scene, boundary: .documentAdoption, state: &state)
+
+        let result = try registry.apply(
+            .init(.replace, targetID: authoredID, expectedIdentity: fixture.identity, provenance: .pointer),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(result, .changed)
+        XCTAssertEqual(state.orderedIDs, [authoredID])
+        XCTAssertEqual(state.primaryID, authoredID)
+        XCTAssertEqual(state.anchorID, authoredID)
+        let overlay = try SelectionOverlayPlanner().plan(selection: state, scene: fixture.scene, renderPlan: try renderPlan(fixture))
+        XCTAssertEqual(overlay.overlays.map(\.objectID), [authoredID])
+    }
+
+    func testTraversal() throws {
+        var fixture = try makeFixture(count: 3)
+        fixture.targets[0] = fixture.targets[0].copy(participatesInCanvasTraversal: false)
+        fixture = fixture.rebuilt()
+        let authoredID1 = fixture.ids[1]
+        let authoredID2 = fixture.ids[2]
+        let registry = SelectionCommandRegistry()
+        var state = SelectionState()
+        _ = try registry.adopt(fixture.scene, boundary: .documentAdoption, state: &state)
+
+        let selectResult = try registry.apply(
+            .init(.replace, targetID: authoredID1, expectedIdentity: fixture.identity, provenance: .layersNavigator),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(selectResult, .changed)
+        XCTAssertEqual(state.orderedIDs, [authoredID1])
+        XCTAssertEqual(state.primaryID, authoredID1)
+        XCTAssertEqual(state.anchorID, authoredID1)
+
+        let nextResult1 = try registry.apply(
+            .init(.next, targetID: nil, expectedIdentity: fixture.identity, provenance: .keyboard),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(nextResult1, .changed)
+        XCTAssertEqual(state.orderedIDs, [authoredID2])
+        XCTAssertEqual(state.primaryID, authoredID2)
+        XCTAssertEqual(state.anchorID, authoredID2)
+
+        let nextResult2 = try registry.apply(
+            .init(.next, targetID: nil, expectedIdentity: fixture.identity, provenance: .keyboard),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(nextResult2, .changed)
+        XCTAssertEqual(state.orderedIDs, [authoredID1])
+        XCTAssertEqual(state.primaryID, authoredID1)
+        XCTAssertEqual(state.anchorID, authoredID1)
+
+        let previousResult1 = try registry.apply(
+            .init(.previous, targetID: nil, expectedIdentity: fixture.identity, provenance: .keyboard),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(previousResult1, .changed)
+        XCTAssertEqual(state.orderedIDs, [authoredID2])
+        XCTAssertEqual(state.primaryID, authoredID2)
+        XCTAssertEqual(state.anchorID, authoredID2)
+
+        let previousResult2 = try registry.apply(
+            .init(.previous, targetID: nil, expectedIdentity: fixture.identity, provenance: .keyboard),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(previousResult2, .changed)
+        XCTAssertEqual(state.orderedIDs, [authoredID1])
+        XCTAssertEqual(state.primaryID, authoredID1)
+        XCTAssertEqual(state.anchorID, authoredID1)
+    }
+
+    func testZeroEligible() throws {
+        var fixture = try makeFixture(count: 1)
+        fixture.targets[0] = fixture.targets[0].copy(participatesInCanvasTraversal: false)
+        fixture = fixture.rebuilt()
+        let structuralID = fixture.ids[0]
+        let registry = SelectionCommandRegistry()
+        var state = SelectionState()
+        _ = try registry.adopt(fixture.scene, boundary: .documentAdoption, state: &state)
+
+        let selectResult = try registry.apply(
+            .init(.replace, targetID: structuralID, expectedIdentity: fixture.identity, provenance: .layersNavigator),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(selectResult, .changed)
+        XCTAssertEqual(state.orderedIDs, [structuralID])
+        XCTAssertEqual(state.primaryID, structuralID)
+        XCTAssertEqual(state.anchorID, structuralID)
+
+        let nextResult = try registry.apply(
+            .init(.next, targetID: nil, expectedIdentity: fixture.identity, provenance: .keyboard),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(nextResult, .unchanged)
+        XCTAssertEqual(state.orderedIDs, [structuralID])
+        XCTAssertEqual(state.primaryID, structuralID)
+        XCTAssertEqual(state.anchorID, structuralID)
+
+        let previousResult = try registry.apply(
+            .init(.previous, targetID: nil, expectedIdentity: fixture.identity, provenance: .keyboard),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(previousResult, .unchanged)
+        XCTAssertEqual(state.orderedIDs, [structuralID])
+        XCTAssertEqual(state.primaryID, structuralID)
+        XCTAssertEqual(state.anchorID, structuralID)
+    }
+
+    func testOneEligible() throws {
+        var fixture = try makeFixture(count: 1)
+        let authoredID = fixture.ids[0]
+        let registry = SelectionCommandRegistry()
+        var state = SelectionState()
+        _ = try registry.adopt(fixture.scene, boundary: .documentAdoption, state: &state)
+
+        let selectResult = try registry.apply(
+            .init(.replace, targetID: authoredID, expectedIdentity: fixture.identity, provenance: .pointer),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(selectResult, .changed)
+        XCTAssertEqual(state.orderedIDs, [authoredID])
+        XCTAssertEqual(state.primaryID, authoredID)
+        XCTAssertEqual(state.anchorID, authoredID)
+
+        let nextResult = try registry.apply(
+            .init(.next, targetID: nil, expectedIdentity: fixture.identity, provenance: .keyboard),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(nextResult, .unchanged)
+        XCTAssertEqual(state.orderedIDs, [authoredID])
+        XCTAssertEqual(state.primaryID, authoredID)
+        XCTAssertEqual(state.anchorID, authoredID)
+
+        let previousResult = try registry.apply(
+            .init(.previous, targetID: nil, expectedIdentity: fixture.identity, provenance: .keyboard),
+            to: &state, scene: fixture.scene
+        )
+        XCTAssertEqual(previousResult, .unchanged)
+        XCTAssertEqual(state.orderedIDs, [authoredID])
+        XCTAssertEqual(state.primaryID, authoredID)
+        XCTAssertEqual(state.anchorID, authoredID)
+    }
+
+    func testCopyPreservation() throws {
+        var fixture = try makeFixture(count: 1)
+        fixture.targets[0] = fixture.targets[0].copy(participatesInCanvasTraversal: false)
+        let copiedTarget = fixture.targets[0].copy(isVisible: false)
+        XCTAssertEqual(copiedTarget.participatesInCanvasTraversal, false)
     }
 
     // SF-0402-002 through SF-0402-004
@@ -311,7 +486,10 @@ final class SelectionModelTests: XCTestCase {
         )
         let text = String(decoding: try JSONEncoder().encode(record), as: UTF8.self)
         XCTAssertEqual(record.requirementID, "SF-0402-008")
-        XCTAssertTrue(record.sanitizedIdentifiers.allSatisfy { $0.count == 8 })
+        XCTAssertTrue(record.sanitizedIdentifiers.allSatisfy { $0.count == "node-".count + 24 })
+        XCTAssertTrue(record.sanitizedIdentifiers.allSatisfy { identifier in
+            !state.orderedIDs.contains { identifier.contains($0.description) }
+        })
         XCTAssertLessThanOrEqual(record.failureCategory?.count ?? 0, 64)
         XCTAssertFalse(text.contains("/Users/"))
         XCTAssertFalse(text.contains("authored private value"))
@@ -368,10 +546,17 @@ final class SelectionModelTests: XCTestCase {
 }
 
 private extension SelectionTargetSnapshot {
-    func copy(pageID: PageID? = nil, clipRect: WorldRect? = nil, isVisible: Bool? = nil, isAvailable: Bool? = nil) -> Self {
+    func copy(
+        pageID: PageID? = nil,
+        clipRect: WorldRect? = nil,
+        isVisible: Bool? = nil,
+        isAvailable: Bool? = nil,
+        participatesInCanvasTraversal: Bool? = nil
+    ) -> Self {
         .init(id: id, pageID: pageID ?? self.pageID, parentID: parentID, name: name, frame: frame,
             clipRect: clipRect ?? self.clipRect, paintOrder: paintOrder, isVisible: isVisible ?? self.isVisible,
-            isLocked: isLocked, isAvailable: isAvailable ?? self.isAvailable)
+            isLocked: isLocked, isAvailable: isAvailable ?? self.isAvailable,
+            participatesInCanvasTraversal: participatesInCanvasTraversal ?? self.participatesInCanvasTraversal)
     }
 }
 
