@@ -30,6 +30,12 @@ This file records user-visible behavior during development. It is not a substitu
   so the same deterministic renderer math passes the hosted standalone Swift
   architecture compile as well as the Xcode application build.
 
+- Kept the Inspector's native overflow menu pointer-accessible at minimum
+  width, refreshed the accessibility identity when switching between Assets
+  and Components unavailable destinations, and verified deep gradient-stop
+  controls through the shipping Inspector scroll surface instead of assuming
+  every hosted display can show the full layer editor at once.
+
 - Kept actual authored Layers—not the nonvisual structural Root—in keyboard
   traversal and exposed semantic selection identity/count in the UI journey.
   The minimum workspace reactivates its own window before real pointer

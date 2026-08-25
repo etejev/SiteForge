@@ -244,6 +244,11 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
                     }
                 }
             }
+            // The scrolling tab strip is the flexible region. Keep the
+            // trailing native overflow menu allocated at the practical
+            // minimum width instead of allowing long Inspector labels to
+            // consume its pointer target.
+            .frame(minWidth: 0, maxWidth: .infinity)
 
             Menu {
                 ForEach(tabs) { tab in
@@ -265,6 +270,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .layoutPriority(1)
             .help("Show all \(identifierPrefix.hasPrefix("navigator") ? "navigator" : "Inspector") tabs")
             .accessibilityLabel("Show all tabs")
             .accessibilityIdentifier("\(identifierPrefix).overflow")
@@ -450,6 +456,10 @@ private struct FutureNavigatorDestinationView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityLabel("\(tab.title) not available yet")
         .accessibilityIdentifier("navigator.\(tab.rawValue).unavailable")
+        // Assets and Components deliberately share this view type. Give each
+        // destination its own accessibility subtree so a rapid native tab
+        // change cannot retain the prior destination's AX identity.
+        .id(tab)
     }
 }
 
