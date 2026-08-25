@@ -284,7 +284,6 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     private func tabButton(_ tab: Tab) -> some View {
         Button {
             selection = tab
-            focus.wrappedValue = focusValue(tab)
         } label: {
             Text(title(tab))
                 .font(.caption.weight(.semibold))
