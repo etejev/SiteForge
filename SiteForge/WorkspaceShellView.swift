@@ -236,7 +236,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     let focusValue: (Tab) -> ShellFocus
 
     var body: some View {
-        ZStack(alignment: .trailing) {
+        HStack(spacing: 3) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
                     ForEach(tabs) { tab in
@@ -249,7 +249,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
             // minimum width instead of allowing long Inspector labels to
             // consume its pointer target.
             .frame(minWidth: 0, maxWidth: .infinity)
-            .padding(.trailing, 30)
+            .clipped()
 
             Menu {
                 ForEach(tabs) { tab in
@@ -270,7 +270,8 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .fixedSize()
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
             .layoutPriority(1)
             .help("Show all \(identifierPrefix.hasPrefix("navigator") ? "navigator" : "Inspector") tabs")
             .accessibilityLabel("Show all tabs")
