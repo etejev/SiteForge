@@ -184,7 +184,6 @@ struct FillLayerListInspectorView: View {
                         HStack(spacing: 6) {
                             Text("Stop \(stopIndex + 1)")
                                 .font(.caption.weight(.medium))
-                            Spacer(minLength: 0)
                             NativeDesignColorWell(
                                 color: stop.color,
                                 isEnabled: layer.isEnabled,
@@ -197,11 +196,9 @@ struct FillLayerListInspectorView: View {
                                 }
                             )
                             .frame(width: 38, height: 22)
-                        }
-                        HStack(spacing: 5) {
                             TextField("Position", text: stopBinding(for: stop))
                                 .textFieldStyle(.roundedBorder)
-                                .frame(minWidth: 54, maxWidth: .infinity)
+                                .frame(width: 54)
                                 .focused($focusedNumericField, equals: .stop(layer.id, stop.id))
                                 .onSubmit { commitStopPosition(stop, in: layer) }
                                 .accessibilityLabel("Gradient stop position")

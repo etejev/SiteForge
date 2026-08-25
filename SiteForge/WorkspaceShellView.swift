@@ -236,7 +236,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     let focusValue: (Tab) -> ShellFocus
 
     var body: some View {
-        HStack(spacing: 3) {
+        ZStack(alignment: .trailing) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
                     ForEach(tabs) { tab in
@@ -249,6 +249,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
             // minimum width instead of allowing long Inspector labels to
             // consume its pointer target.
             .frame(minWidth: 0, maxWidth: .infinity)
+            .padding(.trailing, 30)
 
             Menu {
                 ForEach(tabs) { tab in
@@ -283,6 +284,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     private func tabButton(_ tab: Tab) -> some View {
         Button {
             selection = tab
+            focus.wrappedValue = focusValue(tab)
         } label: {
             Text(title(tab))
                 .font(.caption.weight(.semibold))
@@ -371,8 +373,12 @@ private struct NavigatorView: View {
                 }
             } else if state.navigatorTab == .elements {
                 ElementsCatalogView(state: state)
-            } else {
-                FutureNavigatorDestinationView(tab: state.navigatorTab)
+            } else if state.navigatorTab == .assets {
+                FutureNavigatorDestinationView(tab: .assets)
+                    .id(NavigatorTab.assets)
+            } else if state.navigatorTab == .components {
+                FutureNavigatorDestinationView(tab: .components)
+                    .id(NavigatorTab.components)
             }
         }
         .padding(10)

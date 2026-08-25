@@ -574,7 +574,15 @@ final class SiteForgeLaunchTests: XCTestCase {
         for identifier in stopColorWellIdentifiers {
             let stopColorWell = application.colorWells[identifier]
             for _ in 0..<6 where !stopColorWell.isHittable {
-                inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
+                let controlFrame = stopColorWell.frame
+                let viewportFrame = inspectorScroll.frame
+                if controlFrame.maxY > viewportFrame.maxY {
+                    inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
+                } else if controlFrame.minY < viewportFrame.minY {
+                    inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
+                } else {
+                    break
+                }
             }
             XCTAssertTrue(waitForHittable(stopColorWell, in: application))
         }
