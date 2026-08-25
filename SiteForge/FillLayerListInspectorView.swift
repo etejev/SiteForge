@@ -139,6 +139,11 @@ struct FillLayerListInspectorView: View {
                     )
                     .frame(width: 38, height: 22)
                 }
+                Button("Delete") {
+                    _ = state.commitDesignFillLayer(.remove(layer.id), operation: "remove fill layer", provenance: .accessibility)
+                }
+                .controlSize(.small)
+                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).delete")
             }
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
@@ -148,10 +153,6 @@ struct FillLayerListInspectorView: View {
                 Button("Down") { move(layer, from: index, by: 1) }
                     .disabled(index + 1 == layers.count)
                     .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).down")
-                Button("Delete") {
-                    _ = state.commitDesignFillLayer(.remove(layer.id), operation: "remove fill layer", provenance: .accessibility)
-                }
-                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).delete")
             }
             .controlSize(.small)
             if layer.kind == .linearGradient {

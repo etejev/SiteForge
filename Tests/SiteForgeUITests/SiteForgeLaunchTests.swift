@@ -611,8 +611,22 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(enabled.isEnabled)
         XCTAssertTrue(reveal(enabled))
         enabled.click()
-        let delete = application.buttons[angle.identifier.replacingOccurrences(of: ".angle", with: ".delete")]
-        XCTAssertTrue(delete.exists && reveal(delete))
+        let deleteIdentifier = angle.identifier.replacingOccurrences(of: ".angle", with: ".delete")
+        for _ in 0..<8 {
+            let liveDelete = application.buttons[deleteIdentifier]
+            if liveDelete.isHittable { break }
+            let controlFrame = liveDelete.frame
+            let viewportFrame = inspectorScroll.frame
+            if controlFrame.maxY > viewportFrame.maxY {
+                inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
+            } else if controlFrame.minY < viewportFrame.minY {
+                inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
+            } else {
+                break
+            }
+        }
+        let delete = application.buttons[deleteIdentifier]
+        XCTAssertTrue(delete.exists && waitForHittable(delete, in: application))
         delete.click()
         XCTAssertTrue(waitForNonexistence(angle, timeout: 3))
 
@@ -1518,8 +1532,12 @@ final class SiteForgeLaunchTests: XCTestCase {
             .firstMatch
         XCTAssertTrue(angle.waitForExistence(timeout: 5))
         let gradientPrefix = angle.identifier.replacingOccurrences(of: ".angle", with: "")
-        let addStop = application.buttons["\(gradientPrefix).addStop"]
+        let addStopIdentifier = "\(gradientPrefix).addStop"
         for _ in 0..<4 {
+            let addStop = application.buttons[addStopIdentifier]
+            for _ in 0..<8 where !addStop.isHittable {
+                inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
+            }
             XCTAssertTrue(waitForHittable(addStop, in: application))
             addStop.click()
         }
@@ -1596,9 +1614,15 @@ final class SiteForgeLaunchTests: XCTestCase {
         assets.click()
         XCTAssertTrue(application.descendants(matching: .any)["navigator.assets.unavailable"].exists)
 
-        let components = application.buttons["navigator.tab.components"]
-        XCTAssertTrue(waitForHittable(components, in: application))
-        components.click()
+        // Components can be beyond the horizontally scrolled tab strip at
+        // the practical minimum width. Use the real, always-visible native
+        // overflow menu rather than assuming its direct tab is on screen.
+        let navigatorOverflow = application.descendants(matching: .any)["navigator.tab.overflow"]
+        XCTAssertTrue(waitForHittable(navigatorOverflow, in: application))
+        navigatorOverflow.click()
+        let componentsMenuItem = application.menuItems["Components"]
+        XCTAssertTrue(componentsMenuItem.waitForExistence(timeout: 3))
+        componentsMenuItem.click()
         XCTAssertTrue(application.descendants(matching: .any)["navigator.components.unavailable"].waitForExistence(timeout: 3))
     }
 
