@@ -566,15 +566,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(stopColorWells.count, 2)
         let inspectorScroll = application.descendants(matching: .any)["inspector.selection.scroll"]
         XCTAssertTrue(inspectorScroll.waitForExistence(timeout: 3))
-        // A normal-height hosted display truthfully requires scrolling the
-        // Design Inspector once a gradient exposes both stop editors. Prove
-        // every real color well is reachable and pointer-operable through
-        // that production scroll surface instead of assuming a tall display.
-        let stopColorWellIdentifiers = stopColorWells.allElementsBoundByIndex.map(\.identifier)
-        for identifier in stopColorWellIdentifiers {
-            let stopColorWell = application.colorWells[identifier]
-            for _ in 0..<6 where !stopColorWell.isHittable {
-                let controlFrame = stopColorWell.frame
+        func reveal(_ element: XCUIElement) -> Bool {
+            for _ in 0..<8 where !element.isHittable {
+                let controlFrame = element.frame
                 let viewportFrame = inspectorScroll.frame
                 if controlFrame.maxY > viewportFrame.maxY {
                     inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
@@ -584,7 +578,16 @@ final class SiteForgeLaunchTests: XCTestCase {
                     break
                 }
             }
-            XCTAssertTrue(waitForHittable(stopColorWell, in: application))
+            return waitForHittable(element, in: application)
+        }
+        // A normal-height hosted display truthfully requires scrolling the
+        // Design Inspector once a gradient exposes both stop editors. Prove
+        // every real color well is reachable and pointer-operable through
+        // that production scroll surface instead of assuming a tall display.
+        let stopColorWellIdentifiers = stopColorWells.allElementsBoundByIndex.map(\.identifier)
+        for identifier in stopColorWellIdentifiers {
+            let stopColorWell = application.colorWells[identifier]
+            XCTAssertTrue(reveal(stopColorWell))
         }
         let stopUpButtons = application.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
@@ -599,26 +602,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertFalse(stopUpButtons.element(boundBy: 0).isEnabled)
         XCTAssertTrue(stopDownButtons.element(boundBy: 0).isEnabled)
         let firstStopDown = stopDownButtons.element(boundBy: 0)
-        for _ in 0..<6 where !firstStopDown.isHittable {
-            inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
-        }
-        XCTAssertTrue(waitForHittable(firstStopDown, in: application))
+        XCTAssertTrue(reveal(firstStopDown))
         firstStopDown.click()
 
         let enabled = application.checkBoxes.matching(NSPredicate(format: "identifier CONTAINS %@", ".enabled"))
             .allElementsBoundByIndex.last ?? application.checkBoxes.firstMatch
         XCTAssertTrue(enabled.waitForExistence(timeout: 5))
         XCTAssertTrue(enabled.isEnabled)
-        for _ in 0..<6 where !enabled.isHittable {
-            inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
-        }
-        XCTAssertTrue(waitForHittable(enabled, in: application))
+        XCTAssertTrue(reveal(enabled))
         enabled.click()
         let delete = application.buttons[angle.identifier.replacingOccurrences(of: ".angle", with: ".delete")]
-        for _ in 0..<6 where !delete.isHittable {
-            inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
-        }
-        XCTAssertTrue(delete.exists && waitForHittable(delete, in: application))
+        XCTAssertTrue(delete.exists && reveal(delete))
         delete.click()
         XCTAssertTrue(waitForNonexistence(angle, timeout: 3))
 
@@ -630,9 +624,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         // solid layer. Adding another solid appends a distinct authored row;
         // it must not replace or hide the existing layer.
         XCTAssertEqual(solidColorWells.count, 1)
+        XCTAssertTrue(reveal(addSolid))
         addSolid.click()
         XCTAssertEqual(solidColorWells.count, 2)
-        XCTAssertTrue(solidColorWells.allElementsBoundByIndex.allSatisfy(\.isHittable))
+        for solidColorWell in solidColorWells.allElementsBoundByIndex {
+            XCTAssertTrue(reveal(solidColorWell))
+        }
         attachWindowScreenshot(application, named: "SF-AUTHORING-013 ordered fill layers")
     }
 

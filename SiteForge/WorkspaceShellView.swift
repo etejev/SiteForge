@@ -237,6 +237,8 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
 
     var body: some View {
         HStack(spacing: 3) {
+            overflowMenu
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
                     ForEach(tabs) { tab in
@@ -245,40 +247,42 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
                 }
             }
             // The scrolling tab strip is the flexible region. Keep the
-            // trailing native overflow menu allocated at the practical
-            // minimum width instead of allowing long Inspector labels to
-            // consume its pointer target.
+            // leading native overflow menu allocated at the practical
+            // minimum width, away from a hosted display's potentially
+            // clipped trailing edge.
             .frame(minWidth: 0, maxWidth: .infinity)
             .clipped()
-
-            Menu {
-                ForEach(tabs) { tab in
-                    Button {
-                        selection = tab
-                        focus.wrappedValue = focusValue(tab)
-                    } label: {
-                        if selection == tab {
-                            Label(title(tab), systemImage: "checkmark")
-                        } else {
-                            Text(title(tab))
-                        }
-                    }
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .frame(minWidth: 24, minHeight: 24)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 28, height: 28)
-            .contentShape(Rectangle())
-            .layoutPriority(1)
-            .help("Show all \(identifierPrefix.hasPrefix("navigator") ? "navigator" : "Inspector") tabs")
-            .accessibilityLabel("Show all tabs")
-            .accessibilityIdentifier("\(identifierPrefix).overflow")
         }
         .padding(3)
         .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private var overflowMenu: some View {
+        Menu {
+            ForEach(tabs) { tab in
+                Button {
+                    selection = tab
+                    focus.wrappedValue = focusValue(tab)
+                } label: {
+                    if selection == tab {
+                        Label(title(tab), systemImage: "checkmark")
+                    } else {
+                        Text(title(tab))
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .frame(minWidth: 24, minHeight: 24)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 28, height: 28)
+        .contentShape(Rectangle())
+        .layoutPriority(1)
+        .help("Show all \(identifierPrefix.hasPrefix("navigator") ? "navigator" : "Inspector") tabs")
+        .accessibilityLabel("Show all tabs")
+        .accessibilityIdentifier("\(identifierPrefix).overflow")
     }
 
     @ViewBuilder
@@ -452,14 +456,17 @@ private struct FutureNavigatorDestinationView: View {
     let tab: NavigatorTab
 
     var body: some View {
-        ContentUnavailableView {
-            Label("\(tab.title) Not Available Yet", systemImage: tab == .assets ? "photo.on.rectangle" : "square.stack.3d.up")
-        } description: {
-            Text(tab == .assets
-                 ? "Asset storage and import are planned for a later SiteForge milestone."
-                 : "Component definitions and instances are planned for a later SiteForge milestone.")
+        VStack {
+            ContentUnavailableView {
+                Label("\(tab.title) Not Available Yet", systemImage: tab == .assets ? "photo.on.rectangle" : "square.stack.3d.up")
+            } description: {
+                Text(tab == .assets
+                     ? "Asset storage and import are planned for a later SiteForge milestone."
+                     : "Component definitions and instances are planned for a later SiteForge milestone.")
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("\(tab.title) not available yet")
         .accessibilityIdentifier("navigator.\(tab.rawValue).unavailable")
         // Assets and Components deliberately share this view type. Give each
