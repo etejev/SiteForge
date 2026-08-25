@@ -151,11 +151,18 @@ enum CanvasAuthoredFillCompositor {
     private static func composite(source: [Double], over destination: [Double]?) -> [Double] {
         guard let destination else { return source }
         let sourceAlpha = source[3], destinationAlpha = destination[3]
-        let outputAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha)
+        let inverseSourceAlpha = 1 - sourceAlpha
+        let destinationContribution = destinationAlpha * inverseSourceAlpha
+        let outputAlpha = sourceAlpha + destinationContribution
         guard outputAlpha > 0 else { return [0, 0, 0, 0] }
-        return (0..<3).map { channel in
-            (source[channel] * sourceAlpha + destination[channel] * destinationAlpha * (1 - sourceAlpha)) / outputAlpha
-        } + [outputAlpha]
+        var result = [Double](repeating: 0, count: 4)
+        for channel in 0..<3 {
+            let sourceContribution = source[channel] * sourceAlpha
+            let backgroundContribution = destination[channel] * destinationContribution
+            result[channel] = (sourceContribution + backgroundContribution) / outputAlpha
+        }
+        result[3] = outputAlpha
+        return result
     }
 }
 

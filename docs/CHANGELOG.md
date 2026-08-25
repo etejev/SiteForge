@@ -26,6 +26,10 @@ This file records user-visible behavior during development. It is not a substitu
   implicit structural root as page-level scope, matching renderer scene
   preparation and preserving valid selected objects.
 
+- Decomposed native fill alpha compositing into explicit typed channel steps
+  so the same deterministic renderer math passes the hosted standalone Swift
+  architecture compile as well as the Xcode application build.
+
 - Kept actual authored Layers—not the nonvisual structural Root—in keyboard
   traversal and exposed semantic selection identity/count in the UI journey.
   The minimum workspace reactivates its own window before real pointer
