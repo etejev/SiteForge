@@ -8,6 +8,9 @@ prioritization list. Focused integration and running-app visual review passed;
 the final 2026-08-25 `./sf verify` passed 356 unit/integration tests plus 41 UI
 tests (397 total), zero failures, with repository/security/traceability/
 architecture/migration/evidence checks green.
+Hosted Actions `32917355488` subsequently passed the same 356 unit/integration
+plus 41 UI test gate at `3c90e33`, including the compact-window Inspector and
+navigator accessibility corrections.
 
 `SF-AUTHORING-013` remains a **VERIFIED BOUNDED** historical milestone. Its
 broader deferred scope is unchanged. No next feature item is READY; select the

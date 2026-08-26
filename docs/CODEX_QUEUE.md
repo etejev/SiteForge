@@ -42,7 +42,9 @@ None.
   - Completion gate: final `./sf verify` passed 356 unit/integration plus 41 UI
     tests (397 total), zero failures, on 2026-08-25. Repository, security,
     portable-checksum, traceability, architecture, migration, evidence, and
-    fixture-hygiene checks passed.
+    fixture-hygiene checks passed. Hosted Actions `32917355488` at `3c90e33`
+    passed the same 397-test gate after the compact-window accessibility
+    follow-up.
 
 - [x] `SF-AUTHORING-013` Implement bounded ordered fill layers and linear gradients.
   - Requirements: bounded continuation of `SF-0508-001` through `SF-0508-008` following `SF-AUTHORING-012`.

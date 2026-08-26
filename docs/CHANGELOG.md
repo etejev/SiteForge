@@ -4,6 +4,11 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
+- Closed the `SF-AUDIT-001` hosted compact-window follow-up by keeping native
+  fill-layer deletion and colour-well actions reachable at the supported
+  Inspector width, preserving distinct navigator destinations, and validating
+  all 356 unit/integration and 41 UI tests in hosted Actions `32917355488`.
+
 ### Added
 
 - Started the bounded ordered-fill and linear-gradient foundation. Structural
