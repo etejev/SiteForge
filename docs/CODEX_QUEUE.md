@@ -39,13 +39,15 @@ None.
     unstyled, border/radius, shadow, undo/redo, and practical-minimum Inspector
     attachments were visually reviewed. Evidence:
     `docs/evidence/SF-AUTHORING-014-BOX-APPEARANCE.md`.
-  - Hosted follow-up: Actions `32931557907` passed all repository and
-    unit/integration checks plus 42/43 UI journeys. Its only failure was the
-    practical-minimum Inspector journey retaining a stale accessibility proxy
-    while scrolling to the real Border control. The journey now re-queries the
-    live native control and scrolls from measured control/viewport geometry;
-    its unchanged visibility, hittability, and label assertions pass 1/1
-    locally. Hosted rerun is pending.
+  - Hosted follow-up: Actions `32931557907` and `32933185609` passed all
+    repository and unit/integration checks plus 42/43 UI journeys. Retained
+    screenshot/frame evidence proved the practical-minimum journey's supported
+    1100-point window was left-aligned on the 1024-point hosted display, placing
+    the Inspector's trailing Add controls beyond the physical screen; vertical
+    scrolling could not expose that horizontal edge. This explicitly named
+    compact pointer journey now uses the established right-edge test placement
+    and live measured scrolling. Production and generic window policy are
+    unchanged; hosted rerun is pending.
 
 ## DONE
 

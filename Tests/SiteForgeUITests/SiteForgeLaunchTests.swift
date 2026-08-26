@@ -583,6 +583,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     func testDesignInspectorBoxAppearanceControlsRemainReachableAtPracticalMinimum() throws {
         let application = launchScenario("workspace", extraArguments: [
             "-SiteForgeWindowSize", "minimum",
+            "-SiteForgeUITestWindowAlignment", TestWindowAlignment.right.rawValue,
         ])
         let shell = application.descendants(matching: .any)["workspace.shell"]
         XCTAssertTrue(shell.waitForExistence(timeout: 5))

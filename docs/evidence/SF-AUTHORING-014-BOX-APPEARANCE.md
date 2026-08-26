@@ -44,13 +44,15 @@ reviewed. They show a normal maximized workspace, readable and unclipped native
 controls, aligned authored/selection geometry, visible radius/border/shadow,
 and no ghost, fixture, or debug content.
 
-Hosted Actions `32931557907` passed all repository/unit gates and 42/43 UI
-journeys. The practical-minimum journey alone stopped after a transient stale
-accessibility proxy reported the Border control hittable during scroll and then
-resolved it offscreen. The corrected journey re-queries the shipping control
-and derives scroll direction from its live frame relative to the Inspector
-viewport; the unchanged visibility, hittability, and label assertions pass 1/1
-locally. A hosted rerun is required before final acceptance.
+Hosted Actions `32931557907` and `32933185609` passed all repository/unit gates
+and 42/43 UI journeys. The latter retained exact frame and screenshot evidence:
+the supported 1100-point compact window was left-aligned on the 1024-point
+hosted screen, while the Inspector's trailing Add control occupied x=1041…1090.
+Vertical scrolling therefore could not make the real pointer target hittable.
+The explicitly named compact journey now requests the established right-edge
+test placement, re-queries the shipping control, and derives vertical scrolling
+from its live frame. Production and generic test-window behavior are unchanged.
+A hosted rerun is required before final acceptance.
 
 ## Explicit limitations
 

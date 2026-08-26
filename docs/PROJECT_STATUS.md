@@ -7,10 +7,11 @@ border/radius/single-shadow Design Inspector slice for SF-0506-001 through
 SF-0506-008. Canonical transactions, immutable renderer adoption, native
 controls, focused package/recovery coverage, and running-app visual evidence
 passed; final `./sf verify` passed 360 unit/integration plus 43 UI tests (403
-total), zero failures. Actions `32931557907` passed repository/unit checks and
-42/43 UI tests, isolating a stale accessibility proxy in the compact Inspector
-scroll journey rather than a product-control failure. Its live-requery,
-measured-scroll correction passes the exact journey locally; hosted acceptance
+total), zero failures. Actions `32931557907` and `32933185609` passed
+repository/unit checks and 42/43 UI tests. Retained evidence showed the
+1100-point compact window left-aligned on a 1024-point hosted display, placing
+the Inspector's trailing controls offscreen. The explicitly right-aligned,
+live-requery correction preserves production/generic policy; hosted acceptance
 is pending.
 `SF-AUDIT-001` remains complete within its bounded corrective scope.
 Strict fill/package adoption, descriptor-bound resource I/O, cancellation,
