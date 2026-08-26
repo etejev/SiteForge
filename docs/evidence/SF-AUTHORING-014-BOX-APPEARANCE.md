@@ -44,6 +44,14 @@ reviewed. They show a normal maximized workspace, readable and unclipped native
 controls, aligned authored/selection geometry, visible radius/border/shadow,
 and no ghost, fixture, or debug content.
 
+Hosted Actions `32931557907` passed all repository/unit gates and 42/43 UI
+journeys. The practical-minimum journey alone stopped after a transient stale
+accessibility proxy reported the Border control hittable during scroll and then
+resolved it offscreen. The corrected journey re-queries the shipping control
+and derives scroll direction from its live frame relative to the Inspector
+viewport; the unchanged visibility, hittability, and label assertions pass 1/1
+locally. A hosted rerun is required before final acceptance.
+
 ## Explicit limitations
 
 Margin and padding authoring, independent/logical border edges, per-corner

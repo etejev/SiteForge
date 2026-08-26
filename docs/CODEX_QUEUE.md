@@ -8,11 +8,7 @@ None.
 
 ## IN PROGRESS
 
-None.
-
-## DONE
-
-- [x] `SF-AUTHORING-014` Implement bounded Design Inspector border, uniform
+- [ ] `SF-AUTHORING-014` Implement bounded Design Inspector border, uniform
   corner-radius, and single-shadow authoring.
   - Requirements: bounded production evidence for `SF-0506-001` through
     `SF-0506-008`; the normative module remains Partial for spacing/margin,
@@ -43,6 +39,15 @@ None.
     unstyled, border/radius, shadow, undo/redo, and practical-minimum Inspector
     attachments were visually reviewed. Evidence:
     `docs/evidence/SF-AUTHORING-014-BOX-APPEARANCE.md`.
+  - Hosted follow-up: Actions `32931557907` passed all repository and
+    unit/integration checks plus 42/43 UI journeys. Its only failure was the
+    practical-minimum Inspector journey retaining a stale accessibility proxy
+    while scrolling to the real Border control. The journey now re-queries the
+    live native control and scrolls from measured control/viewport geometry;
+    its unchanged visibility, hittability, and label assertions pass 1/1
+    locally. Hosted rerun is pending.
+
+## DONE
 
 - [x] `SF-AUDIT-001` Complete the post-milestone implementation audit by fixing
   every confirmed editable-scope defect before reporting it.

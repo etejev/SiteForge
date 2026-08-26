@@ -592,15 +592,33 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.buttons["inspector.tab.design"].click()
         let inspector = application.scrollViews["inspector.selection.scroll"]
         XCTAssertTrue(inspector.waitForExistence(timeout: 5))
+        func reveal(_ identifier: String) -> XCUIElement {
+            for _ in 0..<12 {
+                let liveControl = application.descendants(matching: .any)[identifier]
+                let controlFrame = liveControl.frame
+                let viewportFrame = inspector.frame.insetBy(dx: 0, dy: 4)
+                if liveControl.exists,
+                   controlFrame.minY >= viewportFrame.minY,
+                   controlFrame.maxY <= viewportFrame.maxY {
+                    XCTAssertTrue(waitForHittable(liveControl, in: application), identifier)
+                    return application.descendants(matching: .any)[identifier]
+                }
+                if controlFrame.maxY > viewportFrame.maxY {
+                    inspector.scroll(byDeltaX: 0, deltaY: -120)
+                } else if controlFrame.minY < viewportFrame.minY {
+                    inspector.scroll(byDeltaX: 0, deltaY: 120)
+                } else {
+                    break
+                }
+            }
+            return application.descendants(matching: .any)[identifier]
+        }
         for identifier in [
             "inspector.design.borderToggle",
             "inspector.design.cornerRadiusToggle",
             "inspector.design.shadowToggle",
         ] {
-            let control = application.descendants(matching: .any)[identifier]
-            for _ in 0..<12 where !control.isHittable {
-                inspector.scroll(byDeltaX: 0, deltaY: -120)
-            }
+            let control = reveal(identifier)
             XCTAssertTrue(control.isHittable, identifier)
             XCTAssertFalse(control.label.isEmpty, identifier)
         }
