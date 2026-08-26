@@ -52,7 +52,8 @@ Vertical scrolling therefore could not make the real pointer target hittable.
 The explicitly named compact journey now requests the established right-edge
 test placement, re-queries the shipping control, and derives vertical scrolling
 from its live frame. Production and generic test-window behavior are unchanged.
-A hosted rerun is required before final acceptance.
+Actions `32934689112` passed the complete 360 unit/integration plus 43 UI test
+gate (403 total) at `65571dc`, closing hosted acceptance.
 
 ## Explicit limitations
 

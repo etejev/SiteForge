@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-26.
 
-Current work: `SF-AUTHORING-014` is locally verified as the bounded uniform
+Current work: `SF-AUTHORING-014` is verified as the bounded uniform
 border/radius/single-shadow Design Inspector slice for SF-0506-001 through
 SF-0506-008. Canonical transactions, immutable renderer adoption, native
 controls, focused package/recovery coverage, and running-app visual evidence
@@ -11,8 +11,8 @@ total), zero failures. Actions `32931557907` and `32933185609` passed
 repository/unit checks and 42/43 UI tests. Retained evidence showed the
 1100-point compact window left-aligned on a 1024-point hosted display, placing
 the Inspector's trailing controls offscreen. The explicitly right-aligned,
-live-requery correction preserves production/generic policy; hosted acceptance
-is pending.
+live-requery correction preserves production/generic policy. Actions
+`32934689112` passed the complete 403-test gate at `65571dc`.
 `SF-AUDIT-001` remains complete within its bounded corrective scope.
 Strict fill/package adoption, descriptor-bound resource I/O, cancellation,
 linear Grid preparation, off-main scene projection, bounded redacted

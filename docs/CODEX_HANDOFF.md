@@ -2,7 +2,7 @@
 
 ## Current checkpoint
 
-`SF-AUTHORING-014` is **LOCALLY VERIFIED**. The current tree implements the bounded
+`SF-AUTHORING-014` is **VERIFIED AND DONE**. The current tree implements the bounded
 uniform border, uniform corner radius, and one drop-shadow Design Inspector
 slice through canonical `style.box.v1` properties, the shared transaction
 registry, immutable renderer snapshots, native controls, package/recovery, and
@@ -10,8 +10,8 @@ focused actual-app evidence. Do not expand this into margins/padding,
 independent borders, per-corner radii, multiple/inner shadows, clipping UI, or
 preview/export work. Focused acceptance passed 7/7 and the authoritative
 `./sf verify` passed 360 unit/integration plus 43 UI tests (403 total), zero
-failures. Commit/push/hosted-CI proceed under the owner's existing milestone
-authorization.
+failures. Hosted Actions `32934689112` passed the same complete gate at
+`65571dc` after the compact-window pointer placement correction.
 
 `SF-AUDIT-001` is **VERIFIED AND DONE**. Confirmed audit defects were fixed at
 their production boundaries rather than returned to the owner as a
@@ -75,8 +75,7 @@ no subsequent feature item is READY.
 
 ## Next task
 
-No item after SF-AUTHORING-014 is READY. After hosted acceptance, create another
-queue item only when its requirements
+No item after SF-AUTHORING-014 is READY. Create another queue item only when its requirements
 and exclusions are explicit. Do not silently expand deferred SF-0506/SF-0508
 capability or represent the product as release-complete.
 

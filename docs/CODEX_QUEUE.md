@@ -8,7 +8,11 @@ None.
 
 ## IN PROGRESS
 
-- [ ] `SF-AUTHORING-014` Implement bounded Design Inspector border, uniform
+None.
+
+## DONE
+
+- [x] `SF-AUTHORING-014` Implement bounded Design Inspector border, uniform
   corner-radius, and single-shadow authoring.
   - Requirements: bounded production evidence for `SF-0506-001` through
     `SF-0506-008`; the normative module remains Partial for spacing/margin,
@@ -47,9 +51,8 @@ None.
     scrolling could not expose that horizontal edge. This explicitly named
     compact pointer journey now uses the established right-edge test placement
     and live measured scrolling. Production and generic window policy are
-    unchanged; hosted rerun is pending.
-
-## DONE
+    unchanged. Actions `32934689112` passed the complete 360 unit/integration
+    plus 43 UI test gate (403 total) at `65571dc`.
 
 - [x] `SF-AUDIT-001` Complete the post-milestone implementation audit by fixing
   every confirmed editable-scope defect before reporting it.
