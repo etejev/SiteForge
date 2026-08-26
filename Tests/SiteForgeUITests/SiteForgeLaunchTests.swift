@@ -641,7 +641,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(reveal(addSolid))
         addSolid.click()
         XCTAssertEqual(solidColorWells.count, 2)
-        for solidColorWell in solidColorWells.allElementsBoundByIndex {
+        let solidColorWellIdentifiers = solidColorWells.allElementsBoundByIndex.map(\.identifier)
+        for identifier in solidColorWellIdentifiers {
+            let solidColorWell = application.colorWells[identifier]
             XCTAssertTrue(reveal(solidColorWell))
         }
         attachWindowScreenshot(application, named: "SF-AUTHORING-013 ordered fill layers")
