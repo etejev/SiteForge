@@ -113,6 +113,14 @@ struct FillLayerListInspectorView: View {
     private func layerRow(_ layer: CanonicalFillLayer, index: Int) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
+                Button("Delete", systemImage: "trash") {
+                    _ = state.commitDesignFillLayer(.remove(layer.id), operation: "remove fill layer", provenance: .accessibility)
+                }
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 28, minHeight: 24)
+                .controlSize(.small)
+                .accessibilityLabel("Delete fill layer")
+                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).delete")
                 Toggle(isOn: Binding(
                     get: { layer.isEnabled },
                     set: { enabled in
@@ -139,14 +147,6 @@ struct FillLayerListInspectorView: View {
                     )
                     .frame(width: 38, height: 22)
                 }
-                Button("Delete", systemImage: "trash") {
-                    _ = state.commitDesignFillLayer(.remove(layer.id), operation: "remove fill layer", provenance: .accessibility)
-                }
-                .labelStyle(.iconOnly)
-                .frame(minWidth: 28, minHeight: 24)
-                .controlSize(.small)
-                .accessibilityLabel("Delete fill layer")
-                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).delete")
             }
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
