@@ -12,6 +12,38 @@ None.
 
 ## DONE
 
+- [x] `SF-AUTHORING-014` Implement bounded Design Inspector border, uniform
+  corner-radius, and single-shadow authoring.
+  - Requirements: bounded production evidence for `SF-0506-001` through
+    `SF-0506-008`; the normative module remains Partial for spacing/margin,
+    independent/logical edges, per-corner radii, layered shadows, clipping UI,
+    corner smoothing, preview/export parity, scale acceptance, and release
+    acceptance.
+  - Plan: add one typed canonical box-style namespace for applicable Frame,
+    Section, Stack, and Grid nodes; compile native Inspector drafts through one
+    identity-gated transaction registry; snapshot the resolved border, uniform
+    radius, and one shadow into immutable renderer objects; composite shadow,
+    clipped fills, and border deterministically while keeping selection chrome
+    separate; prove invalid/cancel/stale/mixed/history/package/recovery behavior
+    and the actual maximized/minimum-width running-app workflow before one
+    authoritative verification gate.
+  - Explicit exclusions: margin/padding editing, per-edge borders, per-corner
+    radius, ordered multiple shadows, inner shadows, corner smoothing,
+    responsive overrides, image/effect work, preview/export parity, and release
+    acceptance.
+  - Result: typed `style.box.v1` properties and one identity-gated registry now
+    author an optional border, uniform corner radius, and one drop shadow for
+    Frame, Section, Stack, and Grid. Immutable renderer snapshots composite
+    shadow, radius-clipped fills, and border while interaction geometry and
+    editor chrome remain separate.
+  - Verification: focused registry/history, package/recovery, raster/tile, and
+    two actual-app Inspector journeys passed 7/7. The authoritative
+    `./sf verify` passed 360 unit/integration plus 43 UI tests (403 total), zero
+    failures, on 2026-08-26; all repository gates passed. Original-resolution
+    unstyled, border/radius, shadow, undo/redo, and practical-minimum Inspector
+    attachments were visually reviewed. Evidence:
+    `docs/evidence/SF-AUTHORING-014-BOX-APPEARANCE.md`.
+
 - [x] `SF-AUDIT-001` Complete the post-milestone implementation audit by fixing
   every confirmed editable-scope defect before reporting it.
   - Requirements: bounded corrective evidence for `SF-0201-002`,

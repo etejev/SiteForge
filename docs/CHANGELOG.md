@@ -11,6 +11,12 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Added native Design Inspector authoring for a uniform border (colour, width,
+  and solid/dashed/dotted style), uniform corner radius, and one production
+  drop shadow on Frame, Section, Stack, and Grid. These edits are canonical,
+  atomic, undoable, persistent, accessibility-labelled, and rendered without
+  changing selection or hit-test geometry.
+
 - Started the bounded ordered-fill and linear-gradient foundation. Structural
   surfaces can now adopt immutable, canonical ordered v1 solid/linear layers
   in the native renderer, while the Design Inspector exposes accessible layer

@@ -1893,8 +1893,14 @@ private struct DesignInspectorFieldsView: View {
     @ObservedObject var state: WorkspaceShellState
     @FocusState private var hexFocused: Bool
     @FocusState private var opacityFocused: Bool
+    @FocusState private var borderWidthFocused: Bool
+    @FocusState private var radiusFocused: Bool
+    @FocusState private var shadowFocused: Bool
     @State private var hexDraft = ""
     @State private var opacityDraft = ""
+    @State private var borderWidthDraft = ""
+    @State private var radiusDraft = ""
+    @State private var shadowDraft = ""
     @State private var message: String?
 
     /// Includes the current revision and is used to reject a command queued
@@ -1976,6 +1982,7 @@ private struct DesignInspectorFieldsView: View {
             if let message { Text(message).font(.caption).foregroundStyle(.red).accessibilityIdentifier("inspector.design.validation") }
             Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("inspector.design.announcement")
             FillLayerListInspectorView(state: state)
+            boxStyleControls
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Design appearance")
@@ -2011,6 +2018,16 @@ private struct DesignInspectorFieldsView: View {
         case .mixed, .unavailable: opacityDraft = ""
         }
         message = nil
+        switch state.designInspectorBoxStyleValue() {
+        case .single(let style, _):
+            borderWidthDraft = style.border.map { String(format: "%.1f", $0.width) } ?? ""
+            radiusDraft = style.cornerRadius.map { String(format: "%.1f", $0) } ?? ""
+            if let shadow = style.shadow {
+                shadowDraft = String(format: "%.0f, %.0f, %.0f, %.0f", shadow.offsetX, shadow.offsetY, shadow.blur, shadow.spread)
+            } else { shadowDraft = "" }
+        case .mixed, .unavailable:
+            borderWidthDraft = ""; radiusDraft = ""; shadowDraft = ""
+        }
     }
 
     /// The command registry commits synchronously so undo/redo and renderer
@@ -2090,6 +2107,114 @@ private struct DesignInspectorFieldsView: View {
     private func unavailableHint(_ value: DesignInspectorOpacityValue) -> String {
         if case .unavailable(let reason) = value { return reason }
         return ""
+    }
+
+    @ViewBuilder private var boxStyleControls: some View {
+        let value = state.designInspectorBoxStyleValue()
+        let style: CanonicalBoxStyle? = if case .single(let style, _) = value { style } else { nil }
+        let enabled: Bool = if case .unavailable = value { false } else { true }
+        Divider()
+        Text("Border, Radius & Shadow").font(.headline)
+        HStack(spacing: 7) {
+            NativeDesignColorWell(
+                color: style?.border?.color ?? CanonicalSolidColor(red: 0.18, green: 0.20, blue: 0.24, alpha: 1),
+                isEnabled: enabled,
+                accessibilityValue: style?.border?.color.hexadecimalRGBA ?? "No border",
+                accessibilityHint: "Choose the authored border color.",
+                accessibilityIdentifier: "inspector.design.borderColor",
+                accessibilityLabel: "Border color",
+                onCommit: { color in
+                    let width = style?.border?.width ?? 1
+                    _ = state.commitDesignBoxStyle(.border(.init(color: color, width: width, style: style?.border?.style ?? .solid)), operation: "border", provenance: .picker)
+                }
+            ).frame(width: 38, height: 24)
+            TextField("Border width", text: $borderWidthDraft)
+                .textFieldStyle(.roundedBorder).focused($borderWidthFocused).disabled(!enabled)
+                .onSubmit { commitBorder(style) }
+                .onChange(of: borderWidthFocused) { old, current in if old && !current { commitBorder(style, provenance: .focusLoss) } }
+                .accessibilityLabel("Border width in points")
+                .accessibilityIdentifier("inspector.design.borderWidth")
+            Picker("Style", selection: Binding(
+                get: { style?.border?.style ?? .solid },
+                set: { newValue in
+                    let border = CanonicalBorder(color: style?.border?.color ?? .legacySurface, width: style?.border?.width ?? 1, style: newValue)
+                    _ = state.commitDesignBoxStyle(.border(border), operation: "border style", provenance: .picker)
+                }
+            )) { ForEach(CanonicalBorderStyle.allCases, id: \.rawValue) { Text($0.rawValue.capitalized).tag($0) } }
+                .labelsHidden().disabled(!enabled)
+                .accessibilityLabel("Border style")
+                .accessibilityIdentifier("inspector.design.borderStyle")
+            Button(style?.border == nil ? "Add" : "Remove") {
+                if style?.border == nil {
+                    _ = state.commitDesignBoxStyle(.border(.init(color: .init(red: 0.18, green: 0.20, blue: 0.24, alpha: 1), width: 1, style: .solid)), operation: "border", provenance: .picker)
+                } else { _ = state.commitDesignBoxStyle(.border(nil), operation: "border removal", provenance: .picker) }
+                resetDrafts()
+            }.disabled(!enabled).accessibilityIdentifier("inspector.design.borderToggle")
+        }
+        HStack(spacing: 7) {
+            Text("Radius").frame(width: 52, alignment: .leading)
+            TextField("Uniform radius", text: $radiusDraft)
+                .textFieldStyle(.roundedBorder).focused($radiusFocused).disabled(!enabled)
+                .onSubmit { commitRadius() }
+                .onChange(of: radiusFocused) { old, current in if old && !current { commitRadius(provenance: .focusLoss) } }
+                .accessibilityLabel("Uniform corner radius in points")
+                .accessibilityIdentifier("inspector.design.cornerRadius")
+            Button(style?.cornerRadius == nil ? "Add" : "Remove") {
+                _ = state.commitDesignBoxStyle(.cornerRadius(style?.cornerRadius == nil ? 8 : nil), operation: "corner radius", provenance: .picker)
+                resetDrafts()
+            }.disabled(!enabled).accessibilityIdentifier("inspector.design.cornerRadiusToggle")
+        }
+        HStack(spacing: 7) {
+            NativeDesignColorWell(
+                color: style?.shadow?.color ?? CanonicalSolidColor(red: 0, green: 0, blue: 0, alpha: 0.25),
+                isEnabled: enabled,
+                accessibilityValue: style?.shadow?.color.hexadecimalRGBA ?? "No shadow",
+                accessibilityHint: "Choose the authored shadow color.",
+                accessibilityIdentifier: "inspector.design.shadowColor",
+                accessibilityLabel: "Shadow color",
+                onCommit: { color in
+                    let old = style?.shadow ?? .init(color: color, offsetX: 0, offsetY: 8, blur: 18, spread: 0)
+                    _ = state.commitDesignBoxStyle(.shadow(.init(color: color, offsetX: old.offsetX, offsetY: old.offsetY, blur: old.blur, spread: old.spread)), operation: "shadow", provenance: .picker)
+                }
+            ).frame(width: 38, height: 24)
+            TextField("X, Y, Blur, Spread", text: $shadowDraft)
+                .textFieldStyle(.roundedBorder).focused($shadowFocused).disabled(!enabled)
+                .onSubmit { commitShadow(style) }
+                .onChange(of: shadowFocused) { old, current in if old && !current { commitShadow(style, provenance: .focusLoss) } }
+                .accessibilityLabel("Shadow X, Y, blur, and spread in points")
+                .accessibilityIdentifier("inspector.design.shadowValues")
+            Button(style?.shadow == nil ? "Add" : "Remove") {
+                let next: CanonicalShadow? = style?.shadow == nil ? .init(color: .init(red: 0, green: 0, blue: 0, alpha: 0.25), offsetX: 0, offsetY: 8, blur: 18, spread: 0) : nil
+                _ = state.commitDesignBoxStyle(.shadow(next), operation: "shadow", provenance: .picker)
+                resetDrafts()
+            }.disabled(!enabled).accessibilityIdentifier("inspector.design.shadowToggle")
+        }
+        switch value {
+        case .mixed(let applicable, let skipped): Text("Mixed box appearance across \(applicable) compatible objects; \(skipped) incompatible unchanged.").font(.caption2).foregroundStyle(.secondary)
+        case .unavailable(let reason): Text(reason).font(.caption2).foregroundStyle(.secondary)
+        case .single(_, let origin): Text(origin == .authored ? "Authored box appearance" : "Defaulted box appearance").font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func commitBorder(_ style: CanonicalBoxStyle?, provenance: DesignInspectorProvenance = .keyboard) {
+        guard let width = Double(borderWidthDraft), width.isFinite, (0...100).contains(width) else { message = DesignBoxStyleError.invalidValue.localizedDescription; return }
+        let border = CanonicalBorder(color: style?.border?.color ?? .init(red: 0.18, green: 0.20, blue: 0.24, alpha: 1), width: width, style: style?.border?.style ?? .solid)
+        guard state.commitDesignBoxStyle(.border(width == 0 ? nil : border), operation: "border", provenance: provenance) else { message = state.lastDesignInspectorAnnouncement; return }
+        resetDrafts()
+    }
+
+    private func commitRadius(provenance: DesignInspectorProvenance = .keyboard) {
+        guard let radius = Double(radiusDraft), radius.isFinite, (0...10_000).contains(radius) else { message = DesignBoxStyleError.invalidValue.localizedDescription; return }
+        guard state.commitDesignBoxStyle(.cornerRadius(radius), operation: "corner radius", provenance: provenance) else { message = state.lastDesignInspectorAnnouncement; return }
+        resetDrafts()
+    }
+
+    private func commitShadow(_ style: CanonicalBoxStyle?, provenance: DesignInspectorProvenance = .keyboard) {
+        let values = shadowDraft.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.compactMap(Double.init)
+        guard values.count == 4 else { message = DesignBoxStyleError.invalidValue.localizedDescription; return }
+        let shadow = CanonicalShadow(color: style?.shadow?.color ?? .init(red: 0, green: 0, blue: 0, alpha: 0.25), offsetX: values[0], offsetY: values[1], blur: values[2], spread: values[3])
+        guard shadow.isValid, state.commitDesignBoxStyle(.shadow(shadow), operation: "shadow", provenance: provenance) else { message = state.lastDesignInspectorAnnouncement; return }
+        resetDrafts()
     }
 }
 
@@ -4441,21 +4566,54 @@ final class CanvasContentTileLayer: CALayer {
             // the paint boundary, so always clip to its frame as well as any
             // ancestor/content clip. This keeps committed text truthful to
             // the same visible and hit-testable bounds as every other object.
-            var effectiveClip = rect
+            var ancestorClip = bounds
             if let clip = object.clipRect,
                let clipOrigin = try? viewportState.transform.worldToViewport(clip.origin) {
-                effectiveClip = effectiveClip.intersection(CGRect(
+                ancestorClip = ancestorClip.intersection(CGRect(
                     x: clipOrigin.x - tileOrigin.x,
                     y: clipOrigin.y - tileOrigin.y,
                     width: clip.size.width * viewportState.zoom.value,
                     height: clip.size.height * viewportState.zoom.value
                 ))
             }
-            guard !effectiveClip.isNull, !effectiveClip.isEmpty else {
+            guard !ancestorClip.isNull, !ancestorClip.isEmpty else {
                 context.restoreGState()
                 continue
             }
-            context.clip(to: effectiveClip)
+            context.clip(to: ancestorClip)
+            let radius = min(
+                CGFloat(object.cornerRadius * viewportState.zoom.value),
+                min(rect.width, rect.height) / 2
+            )
+            let objectPath = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+            if let shadow = object.shadow, let color = nsColor(shadow.rgba) {
+                context.saveGState()
+                // Clip the opaque shadow source out of the authored interior.
+                // This leaves a true exterior drop shadow even when the
+                // object's own fill is translucent or absent.
+                let exclusion = CGMutablePath()
+                exclusion.addRect(ancestorClip)
+                exclusion.addPath(objectPath)
+                context.addPath(exclusion)
+                context.clip(using: .evenOdd)
+                context.setShadow(
+                    offset: CGSize(
+                        width: shadow.offsetX * viewportState.zoom.value,
+                        height: shadow.offsetY * viewportState.zoom.value
+                    ),
+                    blur: shadow.blur * viewportState.zoom.value,
+                    color: color.cgColor
+                )
+                let spread = shadow.spread * viewportState.zoom.value
+                let shadowRect = rect.insetBy(dx: -spread, dy: -spread)
+                let shadowRadius = max(0, radius + spread)
+                context.addPath(CGPath(roundedRect: shadowRect, cornerWidth: shadowRadius, cornerHeight: shadowRadius, transform: nil))
+                context.setFillColor(NSColor.black.cgColor)
+                context.fillPath()
+                context.restoreGState()
+            }
+            context.addPath(objectPath)
+            context.clip()
             let fallback: NSColor = switch object.style {
             case .canvas: .underPageBackgroundColor
             case .page: .controlAccentColor.withAlphaComponent(0.16)
@@ -4496,12 +4654,27 @@ final class CanvasContentTileLayer: CALayer {
                 context.setFillColor(fallback.cgColor)
                 context.fill(rect)
             }
-            let baseStroke = object.style == .frameSurface
-                ? NSColor.separatorColor.withAlphaComponent(0.85)
-                : NSColor.separatorColor
-            context.setStrokeColor(baseStroke.cgColor)
-            context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
-            context.stroke(rect)
+            if let border = object.border, let color = nsColor(border.rgba), border.width > 0 {
+                context.saveGState()
+                context.addPath(objectPath)
+                context.setStrokeColor(color.cgColor)
+                context.setLineWidth(border.width * viewportState.zoom.value)
+                switch border.style {
+                case .solid: context.setLineDash(phase: 0, lengths: [])
+                case .dashed: context.setLineDash(phase: 0, lengths: [6, 4].map { $0 * viewportState.zoom.value })
+                case .dotted: context.setLineDash(phase: 0, lengths: [1, 3].map { $0 * viewportState.zoom.value })
+                }
+                context.strokePath()
+                context.restoreGState()
+            } else {
+                let baseStroke = object.style == .frameSurface
+                    ? NSColor.separatorColor.withAlphaComponent(0.85)
+                    : NSColor.separatorColor
+                context.setStrokeColor(baseStroke.cgColor)
+                context.setLineWidth(1 / max(1, viewportState.pixelRatio.value))
+                context.addPath(objectPath)
+                context.strokePath()
+            }
             if [.frameSurface, .sectionSurface, .stackSurface, .gridSurface].contains(object.style), let name = object.displayName {
                 drawFrameName(
                     name,

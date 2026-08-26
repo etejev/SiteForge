@@ -1274,6 +1274,91 @@ final class TransformModelTests: XCTestCase {
         XCTAssertEqual(FillLayerNumericDraftValidator.percentage("101"), .failure(.outsidePercentageRange))
         XCTAssertEqual(FillLayerNumericDraftValidator.percentage("invalid"), .failure(.notFinite))
     }
+
+    // SF-0506-001...006/008 — the bounded box appearance uses one typed,
+    // identity-gated property transaction and exact CommandRegistry inverse.
+    func testDesignBoxStyleRegistryCommitsValidatesMixesPersistsAndUndoRedo() throws {
+        var fixture = makeFixture(selectedIDs: [NodeID]())
+        fixture.document.pages[0].nodes[2].kind = .text
+        let registry = DesignBoxStyleCommandRegistry()
+        let border = CanonicalBorder(
+            color: .init(red: 0.2, green: 0.4, blue: 0.8, alpha: 1),
+            width: 3, style: .dashed
+        )
+        let shadow = CanonicalShadow(
+            color: .init(red: 0, green: 0, blue: 0, alpha: 0.3),
+            offsetX: 2, offsetY: 8, blur: 16, spread: 1
+        )
+        func command(_ document: CanonicalDocument, ids: [NodeID], edit: DesignBoxStyleEdit, cancelled: Bool = false) -> DesignBoxStyleCommand {
+            .init(
+                identity: .init(
+                    documentID: document.id, pageID: fixture.pageID,
+                    revision: document.revision, sceneID: fixture.sceneID,
+                    rendererGeneration: fixture.rendererGeneration
+                ), orderedNodeIDs: ids, edit: edit, provenance: .automation,
+                cancelled: cancelled
+            )
+        }
+        let mixed = try registry.prepare(
+            command(fixture.document, ids: [fixture.nodeID, fixture.secondNodeID], edit: .border(border)),
+            in: fixture.document,
+            context: fixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID])
+        )
+        XCTAssertEqual(mixed.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(mixed.skippedNodeIDs, [fixture.secondNodeID])
+        XCTAssertFalse(mixed.skippedReasons.values.joined().contains(fixture.nodeID.description))
+
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(mixed.documentCommand)
+        let radius = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .cornerRadius(14)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )
+        _ = try session.execute(radius.documentCommand)
+        let shadowEdit = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .shadow(shadow)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )
+        _ = try session.execute(shadowEdit.documentCommand)
+
+        func currentStyle() throws -> CanonicalBoxStyle {
+            let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+            return try XCTUnwrap(DesignBoxStyleCommandRegistry.resolvedStyle(for: node))
+        }
+        XCTAssertEqual(try currentStyle(), .init(border: border, cornerRadius: 14, shadow: shadow))
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        let propertyIDs = session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!.properties
+            .filter { $0.key.rawValue.hasPrefix(DesignBoxStyleCommandRegistry.namespace) }.map(\.id)
+        try session.undo()
+        XCTAssertNil(try currentStyle().shadow)
+        try session.redo()
+        XCTAssertEqual(try currentStyle().shadow, shadow)
+        let reopenedIDs = session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!.properties
+            .filter { $0.key.rawValue.hasPrefix(DesignBoxStyleCommandRegistry.namespace) }.map(\.id)
+        XCTAssertEqual(propertyIDs, reopenedIDs)
+
+        let invalid = CanonicalShadow(color: shadow.color, offsetX: 0, offsetY: 0, blur: -.infinity, spread: 0)
+        XCTAssertThrowsError(try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .shadow(invalid)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
+        let zeroBorder = CanonicalBorder(color: border.color, width: 0, style: .solid)
+        XCTAssertThrowsError(try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .border(zeroBorder)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .cornerRadius(8), cancelled: true),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )) { XCTAssertEqual($0 as? DesignBoxStyleError, .cancelled) }
+        let stale = DesignBoxStyleCommand(
+            identity: .init(documentID: DocumentID(), pageID: fixture.pageID, revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .border(nil), provenance: .automation, cancelled: false
+        )
+        XCTAssertThrowsError(try registry.prepare(stale, in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? DesignBoxStyleError, .stale)
+        }
+    }
 }
 
 private struct TransformFixture {

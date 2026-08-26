@@ -298,6 +298,40 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(compositor.dirtyWorldRegions.isEmpty)
     }
 
+    // SF-0506-003/007/008 — shadow pixels may cross a tile boundary, but the
+    // object's semantic geometry remains its authored frame.
+    func testAuthoredShadowExpandsRasterTilesAndDirtyRegionsWithoutExpandingInteractionGeometry() throws {
+        let fixture = try makeFixture(count: 1)
+        let base = fixture.scene.objects[0]
+        let styled = CanvasRenderObject(
+            id: base.id,
+            frame: .init(origin: .init(x: 240, y: 40), size: .init(width: 10, height: 10)),
+            clipRect: base.clipRect,
+            paintOrder: base.paintOrder,
+            style: base.style,
+            isVisible: true,
+            accessibilityLabel: base.accessibilityLabel,
+            shadow: .init(rgba: [0, 0, 0, 0.4], offsetX: 30, offsetY: 0, blur: 8, spread: 0)
+        )
+        let scene = CanvasRenderSceneSnapshot(
+            identity: fixture.scene.identity,
+            surfaceID: fixture.scene.surfaceID,
+            objects: [styled]
+        )
+        let plan = try CanvasRendererCore().prepare(
+            scene: scene,
+            overlays: .init(identity: scene.identity, overlays: []),
+            viewport: fixture.viewport
+        )
+        XCTAssertTrue(plan.tiles.first(where: { $0.id.column == 1 && $0.id.row == 0 })?.objectIDs.contains(styled.id) == true)
+        XCTAssertEqual(plan.accessibilityElements.first?.objectID, styled.id)
+        XCTAssertEqual(plan.accessibilityElements.first?.frame.size, .init(width: 10, height: 10))
+        XCTAssertEqual(CanvasRendererCore().hitTest(.init(x: 245, y: 45), in: plan), styled.id)
+        XCTAssertNil(CanvasRendererCore().hitTest(.init(x: 275, y: 45), in: plan))
+        XCTAssertEqual(plan.dirtyWorldRegions.first?.minX, 232)
+        XCTAssertEqual(plan.dirtyWorldRegions.first?.maxX, 288)
+    }
+
     // SF-0407-004, SF-0407-008
     func testInvalidNonfiniteDuplicateOversizedAndIncompatibleInputsAreRejected() throws {
         let fixture = try makeFixture(count: 2)

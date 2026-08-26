@@ -29,6 +29,31 @@ enum CanvasPaintStyle: String, Codable, Hashable, Sendable {
     case canvas, page, container, frameSurface, sectionSurface, stackSurface, gridSurface, imagePlaceholder, textPlaceholder
 }
 
+enum CanvasBorderStyle: String, Codable, Hashable, Sendable { case solid, dashed, dotted }
+
+struct CanvasAuthoredBorder: Codable, Hashable, Sendable {
+    let rgba: [Double]
+    let width: Double
+    let style: CanvasBorderStyle
+    var isValid: Bool { rgba.count == 4 && rgba.allSatisfy { $0.isFinite && (0...1).contains($0) } && width.isFinite && width > 0 && width <= 100 }
+}
+
+struct CanvasAuthoredShadow: Codable, Hashable, Sendable {
+    let rgba: [Double]
+    let offsetX: Double
+    let offsetY: Double
+    let blur: Double
+    let spread: Double
+    var isValid: Bool {
+        rgba.count == 4 && rgba.allSatisfy { $0.isFinite && (0...1).contains($0) }
+            && [offsetX, offsetY, blur, spread].allSatisfy(\.isFinite)
+            && (-10_000...10_000).contains(offsetX)
+            && (-10_000...10_000).contains(offsetY)
+            && (0...1_000).contains(blur)
+            && (-1_000...1_000).contains(spread)
+    }
+}
+
 /// Immutable, renderer-facing fill data. This is derived from the canonical
 /// `style.fill.layers.v1` properties while building a scene snapshot; it is
 /// never edited by the renderer and therefore cannot race geometry adoption.
@@ -185,6 +210,9 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     /// legacy scene input, where `fillRGBA` retains compatibility only.
     let fillLayers: [CanvasAuthoredFillLayer]
     let opacity: Double
+    let border: CanvasAuthoredBorder?
+    let cornerRadius: Double
+    let shadow: CanvasAuthoredShadow?
 
     init(
         id: NodeID,
@@ -198,7 +226,10 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         displayName: String? = nil,
         fillRGBA: [Double]? = nil,
         fillLayers: [CanvasAuthoredFillLayer] = [],
-        opacity: Double = 1
+        opacity: Double = 1,
+        border: CanvasAuthoredBorder? = nil,
+        cornerRadius: Double = 0,
+        shadow: CanvasAuthoredShadow? = nil
     ) {
         self.id = id
         self.frame = frame
@@ -212,6 +243,9 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.fillRGBA = fillRGBA
         self.fillLayers = fillLayers
         self.opacity = opacity
+        self.border = border
+        self.cornerRadius = cornerRadius
+        self.shadow = shadow
     }
 }
 
@@ -477,6 +511,8 @@ struct CanvasRendererCore: Sendable {
                   object.frame.size.height <= CanvasRendererPolicy.maximumRasterDimension,
                   object.clipRect?.isValid != false, !object.accessibilityLabel.isEmpty,
                   object.opacity.isFinite, (0...1).contains(object.opacity),
+                  object.cornerRadius.isFinite, object.cornerRadius >= 0,
+                  object.border?.isValid != false, object.shadow?.isValid != false,
                   (object.fillRGBA == nil || (object.fillRGBA?.count == 4 && object.fillRGBA!.allSatisfy({ $0.isFinite && (0...1).contains($0) }))),
                   object.fillLayers.allSatisfy(\.isValid) else {
                 throw CanvasRendererError.invalidObject(object.id)
@@ -519,7 +555,9 @@ struct CanvasRendererCore: Sendable {
                         height: tileHeight / scale / viewport.zoom.value
                     )
                 )
-                let objectIDs = objects.filter { $0.isVisible && intersects($0.frame, worldFrame) && isInsideClip($0) }.map(\.id)
+                let objectIDs = objects.filter {
+                    $0.isVisible && intersects(rasterBounds(for: $0), worldFrame) && isInsideClip($0)
+                }.map(\.id)
                 let bytes = Int(tileWidth * tileHeight * 4)
                 tiles.append(CanvasRenderTile(
                     id: CanvasRenderTileID(column: column, row: row),
@@ -532,6 +570,22 @@ struct CanvasRendererCore: Sendable {
         let total = tiles.reduce(0) { $0 + $1.estimatedBytes }
         guard total <= CanvasRendererPolicy.maximumCacheBytes else { throw CanvasRendererError.cacheLimitExceeded }
         return tiles
+    }
+
+    /// Shadows expand raster adoption and invalidation only. Canonical,
+    /// selection, hit-test, Inspector, and accessibility geometry remains the
+    /// authored object frame.
+    private func rasterBounds(for object: CanvasRenderObject) -> WorldRect {
+        guard let shadow = object.shadow else { return object.frame }
+        let expansion = shadow.blur + shadow.spread
+        let minimumX = min(object.frame.minX, object.frame.minX + shadow.offsetX) - expansion
+        let minimumY = min(object.frame.minY, object.frame.minY + shadow.offsetY) - expansion
+        let maximumX = max(object.frame.maxX, object.frame.maxX + shadow.offsetX) + expansion
+        let maximumY = max(object.frame.maxY, object.frame.maxY + shadow.offsetY) + expansion
+        return WorldRect(
+            origin: WorldPoint(x: minimumX, y: minimumY),
+            size: WorldSize(width: maximumX - minimumX, height: maximumY - minimumY)
+        )
     }
 
     private func invalidation(previous: CanvasRenderSceneSnapshot?, next: CanvasRenderSceneSnapshot) -> CanvasInvalidationKind {
@@ -548,13 +602,13 @@ struct CanvasRendererCore: Sendable {
         invalidation: CanvasInvalidationKind
     ) -> [WorldRect] {
         guard invalidation == .dirtyRegions, let previous else {
-            return invalidation == .compositorOnly ? [] : next.objects.map(\.frame)
+            return invalidation == .compositorOnly ? [] : next.objects.map { rasterBounds(for: $0) }
         }
         let old = Dictionary(uniqueKeysWithValues: previous.objects.map { ($0.id, $0) })
         let new = Dictionary(uniqueKeysWithValues: next.objects.map { ($0.id, $0) })
         return Set(old.keys).union(new.keys).sorted { $0.description < $1.description }.flatMap { id -> [WorldRect] in
             guard old[id] != new[id] else { return [] }
-            return [old[id]?.frame, new[id]?.frame].compactMap { $0 }
+            return [old[id], new[id]].compactMap { $0 }.map { rasterBounds(for: $0) }
         }
     }
 

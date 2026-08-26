@@ -1,15 +1,20 @@
 # SiteForge Project Status
 
-Last updated: 2026-08-25.
+Last updated: 2026-08-26.
 
-Current work: `SF-AUDIT-001` is complete within its bounded corrective scope.
+Current work: `SF-AUTHORING-014` is locally verified as the bounded uniform
+border/radius/single-shadow Design Inspector slice for SF-0506-001 through
+SF-0506-008. Canonical transactions, immutable renderer adoption, native
+controls, focused package/recovery coverage, and running-app visual evidence
+passed; final `./sf verify` passed 360 unit/integration plus 43 UI tests (403
+total), zero failures. Hosted acceptance follows the authorized milestone push.
+`SF-AUDIT-001` remains complete within its bounded corrective scope.
 Strict fill/package adoption, descriptor-bound resource I/O, cancellation,
 linear Grid preparation, off-main scene projection, bounded redacted
 diagnostics, portable checksums, workspace-window role, minimum layout, and
 selection lifecycle repair have focused regressions. The minimum and normal
-maximized running-app states were reviewed against the visual contract. Final
-`./sf verify` passed 356 unit/integration plus 41 UI tests (397 total), zero
-failures, with all repository gates green. No next feature item is READY.
+maximized running-app states were reviewed against the visual contract. No
+subsequent feature item is READY.
 
 Milestone 0 feature work and the final audit-correction pass are complete within their verified scope. The bounded authoring runway is accepted; `SF-AUTHORING-001` through `SF-AUTHORING-009` supply the production viewport, deterministic layout, native renderer, undo-neutral selection, transactional frame/plain-text insertion, move/resize transforms, snapping/guides, inline plain-text editing, and bounded local drag-and-drop foundations for Milestone 1. `SF-PRODUCT-UI-001` adds a full-window native launch/shell visual-system foundation; `SF-PRODUCT-UI-002` adds truthful Pages/Layers/Elements/Assets/Components navigation; `SF-PRODUCT-UI-003` aligns the Inspector and visible-canvas foundations; `SF-AUTHORING-010` makes the first structural Elements—Section, Stack, and Grid—real canonical authoring operations; and `SF-AUTHORING-011` adds bounded native fixed-geometry Inspector editing through the existing canonical transaction path. The final audit records the residual security, migration, accessibility, and product-scope boundaries; this is not a claim that SiteForge is a complete Framer/Webflow replacement.
 

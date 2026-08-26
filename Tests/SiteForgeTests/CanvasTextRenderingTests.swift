@@ -400,6 +400,48 @@ final class CanvasTextRenderingTests: XCTestCase {
         XCTAssertEqual(gradientOutside.alpha, 0, "Pixels outside the authored object bounds must remain transparent.")
     }
 
+    // SF-0506-003/005/008 — production raster composition is shadow, rounded
+    // clipped fill, then authored border. Editor overlays are not in this tile.
+    func testBorderRadiusAndShadowUseProductionTileCompositionWithoutGeometryDrift() throws {
+        let viewport = try CanvasViewportState(
+            worldOrigin: .init(x: 0, y: 0), viewportSize: .init(width: 300, height: 120),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 300, height: 120)),
+            pixelRatio: .init(2)
+        )
+        let frame = WorldRect(origin: .init(x: 60, y: 24), size: .init(width: 120, height: 64))
+        let object = CanvasRenderObject(
+            id: NodeID(), frame: frame, clipRect: viewport.contentBounds, paintOrder: 0,
+            style: .frameSurface, isVisible: true, accessibilityLabel: "Styled frame",
+            fillRGBA: [0.9, 0.9, 0.95, 1],
+            border: .init(rgba: [0.1, 0.2, 0.8, 1], width: 4, style: .solid),
+            cornerRadius: 16,
+            shadow: .init(rgba: [0, 0, 0, 0.35], offsetX: 0, offsetY: 8, blur: 8, spread: 1)
+        )
+        let pixels = rasterizedBytes(object: object, viewport: viewport)
+        let center = rgba(at: (x: 120, y: 64), in: pixels, width: 300, height: 120)
+        XCTAssertGreaterThan(center.alpha, 240, "Rounded clipping must retain the authored centre fill.")
+        let border = rgba(at: (x: 62, y: 60), in: pixels, width: 300, height: 120)
+        XCTAssertGreaterThan(border.blue, border.red, "The authored blue border must win at the edge.")
+        let roundedCorner = rgba(at: (x: 60, y: 96), in: pixels, width: 300, height: 120)
+        XCTAssertLessThan(roundedCorner.alpha, center.alpha, "Uniform radius must clip the object corner.")
+        let withoutShadow = CanvasRenderObject(
+            id: object.id, frame: object.frame, clipRect: object.clipRect, paintOrder: object.paintOrder,
+            style: object.style, isVisible: true, accessibilityLabel: object.accessibilityLabel,
+            fillRGBA: object.fillRGBA, opacity: object.opacity, border: object.border,
+            cornerRadius: object.cornerRadius
+        )
+        let shadowOnlyPixels = changedPixels(
+            from: rasterizedBytes(object: withoutShadow, viewport: viewport),
+            to: pixels, width: 300
+        )
+        let objectBitmapRect = CGRect(x: 60, y: 120 - 24 - 64, width: 120, height: 64)
+        XCTAssertTrue(
+            shadowOnlyPixels.contains { !objectBitmapRect.contains(CGPoint(x: $0.x, y: $0.y)) },
+            "The production shadow must paint beyond the authored object without changing its frame."
+        )
+        XCTAssertEqual(object.frame, frame)
+    }
+
     private func rasterizedBytes(object: CanvasRenderObject, viewport: CanvasViewportState) -> Data {
         let width = 300
         let height = 120

@@ -191,7 +191,8 @@ plain Text enabled), a bounded canvas/renderer/overlay system, selection,
 insertion, transforms, guides,
 bounded plain-text editing, local drag/reorder, bounded editable Design
 solid/linear-gradient fill controls, bounded editable Layout fixed-geometry
-controls, the read-only Accessibility summary, native unavailable
+controls, bounded uniform border/radius/single-shadow Design controls, the
+read-only Accessibility summary, native unavailable
 Content/Interactions destinations, native materials, and the central
 command/history/persistence boundaries documented in
 `docs/IMPLEMENTATION_STATUS.md`.
@@ -199,7 +200,8 @@ command/history/persistence boundaries documented in
 Explicitly future: container/basic/site Element authoring beyond the currently
 enabled structural/plain-Text set, Asset storage/import, Component
 definitions/instances, general property editing beyond the bounded Design and
-Layout slices, image fills, blend/filter effects, borders, shadows, responsive
+Layout slices, image fills, blend/filter effects, independent borders,
+per-corner radii, multiple/inner shadows, responsive
 editing, CMS, production typography, asset import/placement, external
 drag/drop, export, publishing, plugins, and release acceptance. Naming these
 destinations in this contract does not make them implemented.

@@ -535,6 +535,78 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-012 cancel undo")
     }
 
+    // SF-0506-001...006/008 — the real Design Inspector authors a border,
+    // uniform corner radius, and one shadow through native controls.
+    func testDesignInspectorBorderRadiusShadowUndoRedoAccessibilityJourney() throws {
+        let application = launchWorkspace(windowAlignment: .right)
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        let insert = application.buttons["canvas.empty.insert.frame"]
+        XCTAssertTrue(waitForHittable(insert, in: application)); insert.click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-014 unstyled selection")
+        application.buttons["inspector.tab.design"].click()
+        let inspector = application.scrollViews["inspector.selection.scroll"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 5))
+        func reveal(_ identifier: String) -> XCUIElement {
+            let element = application.descendants(matching: .any)[identifier]
+            for _ in 0..<12 where !element.isHittable { inspector.scroll(byDeltaX: 0, deltaY: -140) }
+            return element
+        }
+        let borderToggle = reveal("inspector.design.borderToggle")
+        XCTAssertTrue(borderToggle.isHittable); borderToggle.click()
+        let borderWidth = reveal("inspector.design.borderWidth")
+        XCTAssertTrue(borderWidth.isEnabled)
+        borderWidth.click(); borderWidth.typeKey("a", modifierFlags: .command); borderWidth.typeText("4"); borderWidth.typeKey(.return, modifierFlags: [])
+        let radiusToggle = reveal("inspector.design.cornerRadiusToggle")
+        XCTAssertTrue(radiusToggle.isHittable); radiusToggle.click()
+        let radius = reveal("inspector.design.cornerRadius")
+        radius.click(); radius.typeKey("a", modifierFlags: .command); radius.typeText("18"); radius.typeKey(.return, modifierFlags: [])
+        attachWindowScreenshot(application, named: "SF-AUTHORING-014 border radius")
+        let shadowToggle = reveal("inspector.design.shadowToggle")
+        XCTAssertTrue(shadowToggle.isHittable); shadowToggle.click()
+        let shadow = reveal("inspector.design.shadowValues")
+        shadow.click(); shadow.typeKey("a", modifierFlags: .command); shadow.typeText("2, 10, 20, 1"); shadow.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.design.announcement"], containing: "shadow committed"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-014 shadow")
+        let beforeCancel = shadow.value as? String
+        shadow.click(); shadow.typeKey("a", modifierFlags: .command); shadow.typeText("invalid"); shadow.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(shadow.value as? String, beforeCancel)
+        application.typeKey("z", modifierFlags: .command)
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue((canvas.value as? String)?.contains("rendered objects 1") == true)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-014 undo redo")
+    }
+
+    // SF-0506-006/008 — the shipping Design controls remain readable and
+    // scroll-reachable at the supported practical minimum; no hidden test
+    // control substitutes for the native Inspector.
+    func testDesignInspectorBoxAppearanceControlsRemainReachableAtPracticalMinimum() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeWindowSize", "minimum",
+        ])
+        let shell = application.descendants(matching: .any)["workspace.shell"]
+        XCTAssertTrue(shell.waitForExistence(timeout: 5))
+        XCTAssertEqual(shell.frame.width, 1_100, accuracy: 2)
+        let insert = application.buttons["canvas.empty.insert.frame"]
+        XCTAssertTrue(waitForHittable(insert, in: application)); insert.click()
+        application.buttons["inspector.tab.design"].click()
+        let inspector = application.scrollViews["inspector.selection.scroll"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 5))
+        for identifier in [
+            "inspector.design.borderToggle",
+            "inspector.design.cornerRadiusToggle",
+            "inspector.design.shadowToggle",
+        ] {
+            let control = application.descendants(matching: .any)[identifier]
+            for _ in 0..<12 where !control.isHittable {
+                inspector.scroll(byDeltaX: 0, deltaY: -120)
+            }
+            XCTAssertTrue(control.isHittable, identifier)
+            XCTAssertFalse(control.label.isEmpty, identifier)
+        }
+        attachWindowScreenshot(application, named: "SF-AUTHORING-014 practical minimum inspector")
+    }
+
     // SF-0508-001 through SF-0508-006 — visible, keyboard/accessibility
     // discoverable v1 layer controls must drive the same canonical registry
     // as the established native colour and opacity controls.

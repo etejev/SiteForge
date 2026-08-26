@@ -436,6 +436,94 @@ final class ProjectPackageTests: XCTestCase {
         }
     }
 
+    // SF-0506-001/004/005/008 — box appearance is optional for historical
+    // packages and becomes deterministic canonical state only after an edit.
+    // Real package and owned-recovery paths preserve it exactly.
+    @MainActor
+    func testBoxAppearancePersistsAcrossPackageReopenAndOwnedRecovery() async throws {
+        let baseline = package()
+        let page = try XCTUnwrap(baseline.document.pages.first)
+        let node = try XCTUnwrap(page.nodes.first(where: {
+            [.frame, .section, .stack, .grid].contains($0.kind)
+        }))
+        let sceneID = CanvasViewportSceneID(UUID(uuidString: "84000000-0000-4000-8000-000000000014")!)
+        let rendererGeneration: UInt64 = 14
+        func context(_ document: CanonicalDocument) -> TransformValidationContext {
+            .init(
+                activePageID: page.id,
+                currentSceneID: sceneID,
+                rendererGeneration: rendererGeneration,
+                selectedNodeIDs: [node.id],
+                availableNodeIDs: Set(document.pages[0].nodes.map(\.id)),
+                isLifecycleAvailable: true,
+                lifecycleDisabledReason: nil
+            )
+        }
+        func command(_ document: CanonicalDocument, _ edit: DesignBoxStyleEdit) -> DesignBoxStyleCommand {
+            .init(
+                identity: .init(
+                    documentID: document.id, pageID: page.id,
+                    revision: document.revision, sceneID: sceneID,
+                    rendererGeneration: rendererGeneration
+                ),
+                orderedNodeIDs: [node.id], edit: edit,
+                provenance: .automation, cancelled: false
+            )
+        }
+        let expected = CanonicalBoxStyle(
+            border: .init(
+                color: .init(red: 0.12, green: 0.24, blue: 0.72, alpha: 1),
+                width: 3, style: .dotted
+            ),
+            cornerRadius: 18,
+            shadow: .init(
+                color: .init(red: 0, green: 0, blue: 0, alpha: 0.3),
+                offsetX: 2, offsetY: 10, blur: 20, spread: 1
+            )
+        )
+        let registry = DesignBoxStyleCommandRegistry()
+        let session = DocumentSession(document: baseline.document)
+        for edit in [
+            DesignBoxStyleEdit.border(expected.border),
+            .cornerRadius(expected.cornerRadius),
+            .shadow(expected.shadow),
+        ] {
+            let prepared = try registry.prepare(
+                command(session.document, edit),
+                in: session.document,
+                context: context(session.document)
+            )
+            _ = try session.execute(prepared.documentCommand)
+        }
+
+        let store = ProjectPackageStore()
+        let authored = ProjectPackage(
+            projectID: baseline.projectID,
+            createdAt: baseline.createdAt,
+            modifiedAt: baseline.modifiedAt,
+            document: session.document,
+            optionalMembers: baseline.optionalMembers,
+            compatibility: baseline.compatibility
+        )
+        let encoded = try await store.encode(authored)
+        let reopened = try await store.decode(encoded)
+        let reopenedNode = try XCTUnwrap(reopened.document.pages[0].nodes.first(where: { $0.id == node.id }))
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: reopenedNode), expected)
+        let resaved = try await store.encode(reopened)
+        XCTAssertEqual(resaved, encoded)
+
+        let recoveryDirectory = try fixtureDirectory().appendingPathComponent("box-appearance-recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(recoveryDirectory)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: baseline.projectID, in: recoveryDirectory)
+        try await store.write(reopened, to: recoveryURL, policy: .recovery(baseline.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(
+            from: recoveryURL,
+            expectedProjectID: baseline.projectID
+        ).package
+        let recoveredNode = try XCTUnwrap(recovered.document.pages[0].nodes.first(where: { $0.id == node.id }))
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: recoveredNode), expected)
+    }
+
     // SF-0301-004...006, SF-0303-005, SF-0508-001...008 — recomputing the
     // package member checksum cannot make malformed current fill state valid.
     // Canonical validation rejects the candidate before lifecycle adoption.

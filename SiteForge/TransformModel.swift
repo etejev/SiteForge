@@ -41,6 +41,198 @@ struct CanonicalSolidColor: Equatable, Sendable {
     }
 }
 
+// SF-0506-001...008 — bounded canonical border, uniform radius, and one
+// production shadow. Presentation drafts never enter this representation.
+enum CanonicalBorderStyle: String, CaseIterable, Sendable { case solid, dashed, dotted }
+
+struct CanonicalBorder: Equatable, Sendable {
+    let color: CanonicalSolidColor
+    let width: Double
+    let style: CanonicalBorderStyle
+    var isValid: Bool { color.isValid && width.isFinite && width > 0 && width <= 100 }
+}
+
+struct CanonicalShadow: Equatable, Sendable {
+    let color: CanonicalSolidColor
+    let offsetX: Double
+    let offsetY: Double
+    let blur: Double
+    let spread: Double
+    var isValid: Bool {
+        color.isValid && [offsetX, offsetY, blur, spread].allSatisfy(\.isFinite)
+            && (-10_000...10_000).contains(offsetX)
+            && (-10_000...10_000).contains(offsetY)
+            && (0...1_000).contains(blur)
+            && (-1_000...1_000).contains(spread)
+    }
+}
+
+struct CanonicalBoxStyle: Equatable, Sendable {
+    let border: CanonicalBorder?
+    let cornerRadius: Double?
+    let shadow: CanonicalShadow?
+    var isValid: Bool {
+        (border?.isValid ?? true)
+            && (cornerRadius.map { $0.isFinite && (0...10_000).contains($0) } ?? true)
+            && (shadow?.isValid ?? true)
+    }
+}
+
+enum DesignBoxStyleValue: Equatable, Sendable {
+    case unavailable(String)
+    case single(CanonicalBoxStyle, PropertyOrigin)
+    case mixed(applicableCount: Int, skippedCount: Int)
+}
+
+enum DesignBoxStyleEdit: Sendable {
+    case border(CanonicalBorder?)
+    case cornerRadius(Double?)
+    case shadow(CanonicalShadow?)
+}
+
+struct DesignBoxStyleCommand: Sendable {
+    let identity: DesignInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let edit: DesignBoxStyleEdit
+    let provenance: DesignInspectorProvenance
+    let cancelled: Bool
+}
+
+enum DesignBoxStyleError: Error, LocalizedError, Equatable, Sendable {
+    case stale, cancelled, invalidValue, unavailable(String), noApplicableTargets, noChanges
+    var errorDescription: String? {
+        switch self {
+        case .stale: "The border, radius, or shadow edit is stale; committed appearance is unchanged."
+        case .cancelled: "The appearance draft was cancelled; committed appearance is unchanged."
+        case .invalidValue: "Enter a finite border, radius, or shadow value within the supported range."
+        case .unavailable(let reason): reason
+        case .noApplicableTargets: "The selection has no object that supports border, radius, or shadow."
+        case .noChanges: "The appearance already has that value."
+        }
+    }
+}
+
+struct DesignBoxStyleCommandRegistry: Sendable {
+    static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-0506-%03d", $0) })
+    static let applicableKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
+    static let namespace = "style.box.v1."
+
+    static func resolvedStyle(for node: DocumentNode) -> CanonicalBoxStyle? {
+        guard applicableKinds.contains(node.kind) else { return nil }
+        func number(_ key: String) -> Double? { node.insertionNumberProperty(namespace + key) }
+        func color(_ prefix: String) -> CanonicalSolidColor? {
+            guard let r = number(prefix + ".red"), let g = number(prefix + ".green"),
+                  let b = number(prefix + ".blue"), let a = number(prefix + ".alpha") else { return nil }
+            let value = CanonicalSolidColor(red: r, green: g, blue: b, alpha: a)
+            return value.isValid ? value : nil
+        }
+        let border: CanonicalBorder? = {
+            guard let width = number("border.width"), width > 0,
+                  let value = color("border.color"),
+                  let raw = node.insertionStringProperty(namespace + "border.style"),
+                  let style = CanonicalBorderStyle(rawValue: raw) else { return nil }
+            let result = CanonicalBorder(color: value, width: width, style: style)
+            return result.isValid ? result : nil
+        }()
+        let radius = number("radius.uniform").flatMap { $0.isFinite && (0...10_000).contains($0) ? $0 : nil }
+        let shadow: CanonicalShadow? = {
+            guard let value = color("shadow.color"), let x = number("shadow.offsetX"),
+                  let y = number("shadow.offsetY"), let blur = number("shadow.blur"),
+                  let spread = number("shadow.spread") else { return nil }
+            let result = CanonicalShadow(color: value, offsetX: x, offsetY: y, blur: blur, spread: spread)
+            return result.isValid ? result : nil
+        }()
+        return CanonicalBoxStyle(border: border, cornerRadius: radius, shadow: shadow)
+    }
+
+    static func selectionValue(nodes: [DocumentNode]) -> DesignBoxStyleValue {
+        guard !nodes.isEmpty else { return .unavailable("Select a Frame, Section, Stack, or Grid to edit border, radius, and shadow.") }
+        let applicable = nodes.filter { applicableKinds.contains($0.kind) }
+        guard !applicable.isEmpty else { return .unavailable("The selected objects do not support box appearance.") }
+        let values = applicable.compactMap(resolvedStyle)
+        guard let first = values.first, values.dropFirst().allSatisfy({ $0 == first }) else {
+            return .mixed(applicableCount: applicable.count, skippedCount: nodes.count - applicable.count)
+        }
+        let origin = applicable.flatMap(\.properties).contains { $0.key.rawValue.hasPrefix(namespace) } ? PropertyOrigin.authored : .defaulted
+        return .single(first, origin)
+    }
+
+    func prepare(_ command: DesignBoxStyleCommand, in document: CanonicalDocument, context: TransformValidationContext) throws -> PreparedDesignInspectorEdit {
+        guard !command.cancelled else { throw DesignBoxStyleError.cancelled }
+        guard context.isLifecycleAvailable else { throw DesignBoxStyleError.unavailable(context.lifecycleDisabledReason ?? "Appearance editing is unavailable.") }
+        guard command.identity.documentID == document.id, command.identity.revision == document.revision,
+              command.identity.pageID == context.activePageID, command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration,
+              command.orderedNodeIDs == context.selectedNodeIDs, !command.orderedNodeIDs.isEmpty else { throw DesignBoxStyleError.stale }
+        guard Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count,
+              let page = document.pages.first(where: { $0.id == command.identity.pageID }) else { throw DesignBoxStyleError.stale }
+        var applicable: [NodeID] = [], skipped: [NodeID] = [], reasons: [NodeID: String] = [:], changes: [DocumentCommand] = []
+        for id in command.orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw DesignBoxStyleError.stale }
+            guard context.availableNodeIDs.contains(id), !node.selectionBooleanProperty("hidden"), !node.selectionBooleanProperty("locked") else {
+                throw DesignBoxStyleError.unavailable("A selected object is unavailable, hidden, or locked.")
+            }
+            guard Self.applicableKinds.contains(node.kind), var style = Self.resolvedStyle(for: node) else {
+                skipped.append(id); reasons[id] = "This object kind does not support box appearance."; continue
+            }
+            switch command.edit {
+            case .border(let value):
+                if let value, !value.isValid { throw DesignBoxStyleError.invalidValue }
+                style = .init(border: value, cornerRadius: style.cornerRadius, shadow: style.shadow)
+            case .cornerRadius(let value):
+                if let value, (!value.isFinite || !(0...10_000).contains(value)) { throw DesignBoxStyleError.invalidValue }
+                style = .init(border: style.border, cornerRadius: value, shadow: style.shadow)
+            case .shadow(let value):
+                if let value, !value.isValid { throw DesignBoxStyleError.invalidValue }
+                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: value)
+            }
+            guard style.isValid else { throw DesignBoxStyleError.invalidValue }
+            applicable.append(id)
+            let desired = Self.propertyValues(for: style)
+            let owned = node.properties.filter { $0.key.rawValue.hasPrefix(Self.namespace) }
+            let byKey = Dictionary(uniqueKeysWithValues: owned.map { ($0.key.rawValue, $0) })
+            for key in desired.keys.sorted() {
+                guard let value = desired[key] else { continue }
+                let old = byKey[key]
+                if old?.value != value || old?.origin != .authored {
+                    changes.append(.setProperty(.init(pageID: page.id, nodeID: id, property: .init(id: old?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored))))
+                }
+            }
+            for old in owned where desired[old.key.rawValue] == nil {
+                changes.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: old.id)))
+            }
+        }
+        guard !applicable.isEmpty else { throw DesignBoxStyleError.noApplicableTargets }
+        guard !changes.isEmpty else { throw DesignBoxStyleError.noChanges }
+        let batch: DocumentCommand = .batch(changes)
+        guard CommandRegistry().availability(for: batch, in: document).isEnabled else { throw DesignBoxStyleError.stale }
+        return .init(applicableNodeIDs: applicable, skippedNodeIDs: skipped, skippedReasons: reasons, documentCommand: batch)
+    }
+
+    static func propertyValues(for style: CanonicalBoxStyle) -> [String: PropertyValue] {
+        var result: [String: PropertyValue] = [:]
+        if let border = style.border {
+            result[namespace + "border.width"] = .number(border.width)
+            result[namespace + "border.style"] = .string(border.style.rawValue)
+            set(border.color, prefix: namespace + "border.color", into: &result)
+        }
+        if let radius = style.cornerRadius { result[namespace + "radius.uniform"] = .number(radius) }
+        if let shadow = style.shadow {
+            result[namespace + "shadow.offsetX"] = .number(shadow.offsetX)
+            result[namespace + "shadow.offsetY"] = .number(shadow.offsetY)
+            result[namespace + "shadow.blur"] = .number(shadow.blur)
+            result[namespace + "shadow.spread"] = .number(shadow.spread)
+            set(shadow.color, prefix: namespace + "shadow.color", into: &result)
+        }
+        return result
+    }
+
+    private static func set(_ color: CanonicalSolidColor, prefix: String, into values: inout [String: PropertyValue]) {
+        values[prefix + ".red"] = .number(color.red); values[prefix + ".green"] = .number(color.green)
+        values[prefix + ".blue"] = .number(color.blue); values[prefix + ".alpha"] = .number(color.alpha)
+    }
+}
+
 // SF-0508-001...008 — canonical ordered fill-layer foundation. Layer and
 // stop identities belong to the document representation; previews and picker
 // drafts deliberately do not. The property codec/registry adoption follows in

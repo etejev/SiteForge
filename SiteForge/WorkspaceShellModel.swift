@@ -723,6 +723,20 @@ actor WorkspaceScenePreparationWorker {
                     )
                 }
             }
+            let boxStyle = DesignBoxStyleCommandRegistry.resolvedStyle(for: node)
+            let border = boxStyle?.border.map {
+                CanvasAuthoredBorder(
+                    rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha],
+                    width: $0.width,
+                    style: CanvasBorderStyle(rawValue: $0.style.rawValue) ?? .solid
+                )
+            }
+            let shadow = boxStyle?.shadow.map {
+                CanvasAuthoredShadow(
+                    rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha],
+                    offsetX: $0.offsetX, offsetY: $0.offsetY, blur: $0.blur, spread: $0.spread
+                )
+            }
             renderObjects.append(CanvasRenderObject(
                 id: node.id,
                 frame: frame,
@@ -735,7 +749,10 @@ actor WorkspaceScenePreparationWorker {
                 displayName: node.kind == .text ? nil : node.name,
                 fillRGBA: nil,
                 fillLayers: fillLayers,
-                opacity: DesignInspectorCommandRegistry.resolvedOpacity(for: node)?.0 ?? 1
+                opacity: DesignInspectorCommandRegistry.resolvedOpacity(for: node)?.0 ?? 1,
+                border: border,
+                cornerRadius: boxStyle?.cornerRadius ?? 0,
+                shadow: shadow
             ))
         }
 
@@ -914,6 +931,7 @@ final class WorkspaceShellState: ObservableObject {
     private let transformRegistry = TransformCommandRegistry()
     private let geometryInspectorRegistry = GeometryInspectorCommandRegistry()
     private let designInspectorRegistry = DesignInspectorCommandRegistry()
+    private let designBoxStyleRegistry = DesignBoxStyleCommandRegistry()
     private let snapResolver = SnapResolver()
     private let guideRegistry = GuideCommandRegistry()
     private let renderSurfaceID = CanvasRenderSurfaceID()
@@ -1285,6 +1303,49 @@ final class WorkspaceShellState: ObservableObject {
 
     func designInspectorOpacityValue() -> DesignInspectorOpacityValue {
         DesignInspectorCommandRegistry.opacityValue(nodes: selectedCanonicalNodes)
+    }
+
+    func designInspectorBoxStyleValue() -> DesignBoxStyleValue {
+        DesignBoxStyleCommandRegistry.selectionValue(nodes: selectedCanonicalNodes)
+    }
+
+    @discardableResult
+    func commitDesignBoxStyle(_ edit: DesignBoxStyleEdit, operation: String, provenance: DesignInspectorProvenance = .keyboard) -> Bool {
+        guard let pageID = effectiveSelectedPageID,
+              let plan = canvasRenderPlan,
+              plan.identity.documentID == documentSession.document.id,
+              plan.identity.revision == documentSession.document.revision else {
+            lastDesignInspectorAnnouncement = DesignBoxStyleError.stale.localizedDescription
+            return false
+        }
+        do {
+            let prepared = try designBoxStyleRegistry.prepare(.init(
+                identity: .init(
+                    documentID: documentSession.document.id, pageID: pageID,
+                    revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+                    rendererGeneration: plan.identity.sceneGeneration
+                ),
+                orderedNodeIDs: selectionState.orderedIDs,
+                edit: edit,
+                provenance: provenance,
+                cancelled: false
+            ), in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.documentCommand)
+            let applied = prepared.applicableNodeIDs.count, skipped = prepared.skippedNodeIDs.count
+            lastDesignInspectorAnnouncement = skipped == 0
+                ? "Design \(operation) committed for \(applied) object\(applied == 1 ? "" : "s")"
+                : "Design \(operation) committed for \(applied) object\(applied == 1 ? "" : "s"); skipped \(skipped) incompatible object\(skipped == 1 ? "" : "s")"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
+        } catch let error as DesignBoxStyleError {
+            lastDesignInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        } catch {
+            lastDesignInspectorAnnouncement = "Design \(operation) could not commit; appearance is unchanged"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        }
     }
 
     /// A scene-facing projection of canonical v1 layers across the complete

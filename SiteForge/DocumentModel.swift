@@ -629,6 +629,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case incompatibleChildOwnership
     case invalidStructuralDefaults
     case invalidFillLayerState
+    case invalidBoxStyleState
 
     var errorDescription: String? {
         switch self {
@@ -658,6 +659,65 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .incompatibleChildOwnership: "This node kind cannot own authored children."
         case .invalidStructuralDefaults: "Structural containers require their complete bounded default layout contract."
         case .invalidFillLayerState: "The document contains an invalid canonical fill-layer state."
+        case .invalidBoxStyleState: "The document contains an invalid canonical border, radius, or shadow state."
+        }
+    }
+}
+
+/// SF-0506-001/004 — strict headless validation for the bounded v1 box-style
+/// namespace. Partial components and unknown keys are rejected before package
+/// adoption; absence remains the deterministic default.
+enum CanonicalBoxStyleNamespaceValidator {
+    static let root = "style.box.v1."
+    private static let supportedKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
+    private static let borderKeys: Set<String> = [
+        "border.width", "border.style", "border.color.red", "border.color.green",
+        "border.color.blue", "border.color.alpha",
+    ]
+    private static let shadowKeys: Set<String> = [
+        "shadow.offsetX", "shadow.offsetY", "shadow.blur", "shadow.spread",
+        "shadow.color.red", "shadow.color.green", "shadow.color.blue", "shadow.color.alpha",
+    ]
+    private static let radiusKey = "radius.uniform"
+
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
+        guard !owned.isEmpty else { return }
+        guard supportedKinds.contains(node.kind) else { throw ModelValidationError.invalidBoxStyleState }
+        let suffixes = owned.map { String($0.key.rawValue.dropFirst(root.count)) }
+        guard Set(suffixes).count == suffixes.count else { throw ModelValidationError.invalidBoxStyleState }
+        let allowed = borderKeys.union(shadowKeys).union([radiusKey])
+        guard Set(suffixes).isSubset(of: allowed) else { throw ModelValidationError.invalidBoxStyleState }
+        let values = Dictionary(uniqueKeysWithValues: owned.map { (String($0.key.rawValue.dropFirst(root.count)), $0.value) })
+        if !borderKeys.isDisjoint(with: suffixes) {
+            guard borderKeys.isSubset(of: suffixes), case .number(let width)? = values["border.width"],
+                  width.isFinite, width > 0, width <= 100, case .string(let style)? = values["border.style"],
+                  ["solid", "dashed", "dotted"].contains(style) else { throw ModelValidationError.invalidBoxStyleState }
+            try validateColor("border.color", values: values)
+        }
+        if let value = values[radiusKey] {
+            guard case .number(let radius) = value, radius.isFinite, (0...10_000).contains(radius) else { throw ModelValidationError.invalidBoxStyleState }
+        }
+        if !shadowKeys.isDisjoint(with: suffixes) {
+            guard shadowKeys.isSubset(of: suffixes) else { throw ModelValidationError.invalidBoxStyleState }
+            for key in ["shadow.offsetX", "shadow.offsetY", "shadow.blur", "shadow.spread"] {
+                guard case .number(let value)? = values[key], value.isFinite else { throw ModelValidationError.invalidBoxStyleState }
+            }
+            guard case .number(let x)? = values["shadow.offsetX"], (-10_000...10_000).contains(x),
+                  case .number(let y)? = values["shadow.offsetY"], (-10_000...10_000).contains(y),
+                  case .number(let blur)? = values["shadow.blur"], (0...1_000).contains(blur),
+                  case .number(let spread)? = values["shadow.spread"], (-1_000...1_000).contains(spread) else {
+                throw ModelValidationError.invalidBoxStyleState
+            }
+            try validateColor("shadow.color", values: values)
+        }
+    }
+
+    private static func validateColor(_ prefix: String, values: [String: PropertyValue]) throws {
+        for channel in ["red", "green", "blue", "alpha"] {
+            guard case .number(let value)? = values["\(prefix).\(channel)"], value.isFinite, (0...1).contains(value) else {
+                throw ModelValidationError.invalidBoxStyleState
+            }
         }
     }
 }
@@ -912,6 +972,7 @@ private extension DocumentPage {
                 throw ModelValidationError.duplicatePropertyKey
             }
             try CanonicalFillLayerNamespaceValidator.validate(node)
+            try CanonicalBoxStyleNamespaceValidator.validate(node)
             try node.validateStructuralDefaults()
         }
 
