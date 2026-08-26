@@ -121,18 +121,6 @@ struct FillLayerListInspectorView: View {
                 .controlSize(.small)
                 .accessibilityLabel("Delete fill layer")
                 .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).delete")
-                Toggle(isOn: Binding(
-                    get: { layer.isEnabled },
-                    set: { enabled in
-                        _ = state.commitDesignFillLayer(.setEnabled(layer.id, enabled), operation: enabled ? "enable fill layer" : "disable fill layer", provenance: .accessibility)
-                    }
-                )) {
-                    Text(layer.kind == .solid ? "Solid fill" : "Linear gradient")
-                        .lineLimit(1)
-                }
-                .toggleStyle(.checkbox)
-                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).enabled")
-                Spacer(minLength: 0)
                 if layer.kind == .solid, let color = layer.solidColor {
                     NativeDesignColorWell(
                         color: color,
@@ -147,6 +135,18 @@ struct FillLayerListInspectorView: View {
                     )
                     .frame(width: 38, height: 22)
                 }
+                Toggle(isOn: Binding(
+                    get: { layer.isEnabled },
+                    set: { enabled in
+                        _ = state.commitDesignFillLayer(.setEnabled(layer.id, enabled), operation: enabled ? "enable fill layer" : "disable fill layer", provenance: .accessibility)
+                    }
+                )) {
+                    Text(layer.kind == .solid ? "Solid fill" : "Linear gradient")
+                        .lineLimit(1)
+                }
+                .toggleStyle(.checkbox)
+                .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).enabled")
+                Spacer(minLength: 0)
             }
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
