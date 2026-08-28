@@ -1,6 +1,11 @@
 import CryptoKit
 import Foundation
 
+/// Canonical v1 structural-layout tokens shared by model validation,
+/// deterministic layout resolution, and the Inspector command registry.
+enum ContainerLayoutAxis: String, CaseIterable, Sendable { case vertical, horizontal }
+enum ContainerLayoutAlignment: String, CaseIterable, Sendable { case start, center, end, stretch }
+
 protocol StableIdentifierDomain: Sendable {
     static var diagnosticNamespace: String { get }
 }
@@ -1108,22 +1113,48 @@ private extension DocumentPage {
 
 private extension DocumentNode {
     func validateStructuralDefaults() throws {
-        let values = Dictionary(uniqueKeysWithValues: properties.map { ($0.key.rawValue, $0.value) })
-        func number(_ key: String, equals expected: Double) -> Bool {
-            guard case .number(let value)? = values[key] else { return false }
-            return value == expected
+        let propertiesByKey = Dictionary(uniqueKeysWithValues: properties.map { ($0.key.rawValue, $0) })
+        func numberValue(_ key: String) -> Double? {
+            guard let property = propertiesByKey[key], case .number(let value) = property.value else { return nil }
+            return value
+        }
+        func number(_ key: String, range: ClosedRange<Double>) -> Bool {
+            guard let value = numberValue(key) else { return false }
+            return value.isFinite && range.contains(value)
         }
         func string(_ key: String, equals expected: String) -> Bool {
-            guard case .string(let value)? = values[key] else { return false }
+            guard let property = propertiesByKey[key], case .string(let value) = property.value else { return false }
             return value == expected
+        }
+        func string(_ key: String, allowed: Set<String>) -> Bool {
+            guard let property = propertiesByKey[key], case .string(let value) = property.value else { return false }
+            return allowed.contains(value)
         }
         switch kind {
         case .section:
-            guard string("layout.container.kind", equals: "section"), number("layout.padding", equals: 48), string("layout.axis", equals: "vertical") else { throw ModelValidationError.invalidStructuralDefaults }
+            guard string("layout.container.kind", equals: "section"),
+                  number("layout.padding", range: 0...10_000),
+                  string("layout.axis", equals: "vertical") else {
+                throw ModelValidationError.invalidStructuralDefaults
+            }
         case .stack:
-            guard string("layout.container.kind", equals: "stack"), string("layout.axis", equals: "vertical"), number("layout.padding", equals: 24), number("layout.gap", equals: 24), string("layout.align", equals: "start") else { throw ModelValidationError.invalidStructuralDefaults }
+            guard string("layout.container.kind", equals: "stack"),
+                  string("layout.axis", allowed: ["vertical", "horizontal"]),
+                  number("layout.padding", range: 0...10_000),
+                  number("layout.gap", range: 0...10_000),
+                  string("layout.align", allowed: ["start", "center", "end", "stretch"]) else {
+                throw ModelValidationError.invalidStructuralDefaults
+            }
         case .grid:
-            guard string("layout.container.kind", equals: "grid"), number("layout.padding", equals: 24), number("layout.gap", equals: 24), number("layout.grid.columns", equals: 2), string("layout.grid.placement", equals: "row-major") else { throw ModelValidationError.invalidStructuralDefaults }
+            guard string("layout.container.kind", equals: "grid"),
+                  number("layout.padding", range: 0...10_000),
+                  number("layout.gap", range: 0...10_000),
+                  number("layout.grid.columns", range: 1...64),
+                  numberValue("layout.grid.columns")?.rounded(.towardZero)
+                    == numberValue("layout.grid.columns"),
+                  string("layout.grid.placement", equals: "row-major") else {
+                throw ModelValidationError.invalidStructuralDefaults
+            }
         case .frame, .text, .image, .component: break
         }
     }

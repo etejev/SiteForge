@@ -691,6 +691,85 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(ResponsiveGeometryResolver.geometry(for: recoveredNode, breakpoint: .mobile)?.size.width, 320)
     }
 
+    // SF-0502-001/005; SF-0503-001/005; SF-0506-001/005 — authored
+    // container layout values and stable property identities use the real
+    // package and owned-recovery boundaries.
+    @MainActor
+    func testContainerLayoutPersistsAcrossPackageReopenAndOwnedRecovery() async throws {
+        var document = ProjectCreation.blank()
+        let page = try XCTUnwrap(document.pages.first)
+        let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+        let stackID = NodeID(UUID(uuidString: "89000000-0000-4000-8000-000000000017")!)
+        var stack = DocumentNode(
+            id: stackID, kind: .stack, name: "Stack", parent: .node(rootID),
+            properties: [
+                NodeProperty(key: .init(rawValue: "layout.x"), value: .number(80), origin: .authored),
+                NodeProperty(key: .init(rawValue: "layout.y"), value: .number(80), origin: .authored),
+                NodeProperty(key: .init(rawValue: "layout.width"), value: .number(480), origin: .defaulted),
+                NodeProperty(key: .init(rawValue: "layout.height"), value: .number(260), origin: .defaulted),
+            ]
+        )
+        applyStructuralDefaultsForPackageTest(kind: .stack, node: &stack)
+        document.pages[0].nodes[0].childIDs.append(stackID)
+        document.pages[0].nodes.append(stack)
+        let sceneID = CanvasViewportSceneID(UUID(uuidString: "89000000-0000-4000-8000-000000000018")!)
+        let registry = ContainerLayoutCommandRegistry()
+        let session = DocumentSession(document: document)
+        func commit(_ field: ContainerLayoutField, _ value: ContainerLayoutValue) throws {
+            let context = TransformValidationContext(
+                activePageID: page.id, currentSceneID: sceneID,
+                rendererGeneration: 17, selectedNodeIDs: [stackID],
+                availableNodeIDs: [stackID], isLifecycleAvailable: true,
+                lifecycleDisabledReason: nil
+            )
+            let command = ContainerLayoutCommand(
+                identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                    pageID: page.id, revision: session.document.revision,
+                    sceneID: sceneID, rendererGeneration: 17),
+                orderedNodeIDs: [stackID], field: field, value: value,
+                provenance: .automation, cancelled: false
+            )
+            _ = try session.execute(try registry.prepare(command, in: session.document, context: context).documentCommand)
+        }
+        try commit(.axis, .axis(.horizontal))
+        try commit(.gap, .number(18))
+        try commit(.padding, .number(30))
+        try commit(.alignment, .alignment(.center))
+
+        let expectedIDs = session.document.pages[0].nodes.first { $0.id == stackID }!.properties
+            .filter { ["layout.axis", "layout.gap", "layout.padding", "layout.align"].contains($0.key.rawValue) }
+            .map(\.id)
+        let baseline = package()
+        let authored = ProjectPackage(
+            projectID: baseline.projectID, createdAt: baseline.createdAt,
+            modifiedAt: baseline.modifiedAt, document: session.document,
+            optionalMembers: baseline.optionalMembers, compatibility: baseline.compatibility
+        )
+        let store = ProjectPackageStore()
+        let encoded = try await store.encode(authored)
+        let reopened = try await store.decode(encoded)
+        let reopenedNode = try XCTUnwrap(reopened.document.pages[0].nodes.first { $0.id == stackID })
+        XCTAssertEqual(reopenedNode.insertionStringProperty("layout.axis"), "horizontal")
+        XCTAssertEqual(reopenedNode.insertionNumberProperty("layout.gap"), 18)
+        XCTAssertEqual(reopenedNode.insertionNumberProperty("layout.padding"), 30)
+        XCTAssertEqual(reopenedNode.insertionStringProperty("layout.align"), "center")
+        XCTAssertEqual(reopenedNode.properties.filter {
+            ["layout.axis", "layout.gap", "layout.padding", "layout.align"].contains($0.key.rawValue)
+        }.map(\.id), expectedIDs)
+
+        let recoveryDirectory = try fixtureDirectory().appendingPathComponent("container-layout-recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(recoveryDirectory)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: baseline.projectID, in: recoveryDirectory)
+        try await store.write(reopened, to: recoveryURL, policy: .recovery(baseline.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(
+            from: recoveryURL, expectedProjectID: baseline.projectID
+        ).package
+        let recoveredNode = try XCTUnwrap(recovered.document.pages[0].nodes.first { $0.id == stackID })
+        XCTAssertEqual(recoveredNode.insertionStringProperty("layout.axis"), "horizontal")
+        XCTAssertEqual(recoveredNode.insertionNumberProperty("layout.gap"), 18)
+        XCTAssertEqual(recoveredNode.insertionStringProperty("layout.align"), "center")
+    }
+
     // SF-0301-004...006, SF-0303-005, SF-0508-001...008 — recomputing the
     // package member checksum cannot make malformed current fill state valid.
     // Canonical validation rejects the candidate before lifecycle adoption.
@@ -1202,4 +1281,22 @@ private func XCTAssertThrowsProjectPackageError<T>(
     } catch {
         XCTAssertEqual(error as? ProjectPackageError, expected, file: file, line: line)
     }
+}
+
+private func applyStructuralDefaultsForPackageTest(kind: NodeKind, node: inout DocumentNode) {
+    let values: [(String, PropertyValue)] = switch kind {
+    case .section:
+        [("layout.container.kind", .string("section")), ("layout.padding", .number(48)), ("layout.axis", .string("vertical"))]
+    case .stack:
+        [("layout.container.kind", .string("stack")), ("layout.axis", .string("vertical")),
+         ("layout.padding", .number(24)), ("layout.gap", .number(24)), ("layout.align", .string("start"))]
+    case .grid:
+        [("layout.container.kind", .string("grid")), ("layout.padding", .number(24)),
+         ("layout.gap", .number(24)), ("layout.grid.columns", .number(2)),
+         ("layout.grid.placement", .string("row-major"))]
+    case .frame, .text, .image, .component: []
+    }
+    node.properties.append(contentsOf: values.map {
+        NodeProperty(key: .init(rawValue: $0.0), value: $0.1, origin: .defaulted)
+    })
 }

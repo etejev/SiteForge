@@ -1828,6 +1828,11 @@ private struct InspectorView: View {
                 .foregroundStyle(.secondary)
             GeometryInspectorFieldsView(state: state)
                 .id(state.geometryInspectorSelectionKey)
+            if state.hasContainerLayoutSelection {
+                Divider()
+                ContainerLayoutInspectorView(state: state)
+                    .id("container:\(state.geometryInspectorSelectionKey)")
+            }
             Divider()
             guideAndSnappingDetails
         case .accessibility:
@@ -2741,6 +2746,284 @@ private struct GeometryInspectorFieldsView: View {
     private func restoreDrafts() {
         drafts.removeAll()
         validationMessage = nil
+    }
+}
+
+/// Scene-local drafts and native controls for canonical Section/Stack/Grid
+/// layout properties. Every committed path converges on the typed registry in
+/// `WorkspaceShellState`; incomplete strings never enter the document model.
+private struct ContainerLayoutInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @FocusState private var focusedField: ContainerLayoutField?
+    @State private var drafts: [ContainerLayoutField: String] = [:]
+    @State private var validationMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Container Layout").font(.headline)
+                Spacer()
+                Text("Base")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Base container layout values")
+            }
+            numericRow(.padding)
+            numericRow(.gap)
+            numericRow(.columns)
+            axisRow
+            alignmentRow
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("inspector.layout.container.validation")
+            }
+            Text(state.lastContainerLayoutAnnouncement)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.layout.container.announcement")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Container layout")
+        .accessibilityIdentifier("inspector.layout.container")
+        .onExitCommand {
+            guard let cancelledField = focusedField else { return }
+            drafts.removeAll()
+            validationMessage = nil
+            focusedField = nil
+            state.cancelContainerLayoutDraft(field: cancelledField)
+        }
+    }
+
+    @ViewBuilder
+    private func numericRow(_ field: ContainerLayoutField) -> some View {
+        let selection = state.containerLayoutValue(for: field)
+        let availability = state.containerLayoutAvailability(for: field)
+        if case .unavailable = selection {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(field.title).frame(width: 62, alignment: .leading)
+                    TextField(field.title, text: numericBinding(field, selection: selection))
+                        .textFieldStyle(.roundedBorder)
+                        .monospacedDigit()
+                        .focused($focusedField, equals: field)
+                        .disabled(!availability.isEnabled)
+                        .onSubmit { commitNumeric(field, provenance: .keyboard) }
+                        .onChange(of: focusedField) { previous, current in
+                            if previous == field, current != field {
+                                DispatchQueue.main.async {
+                                    guard focusedField != field else { return }
+                                    commitNumeric(field, provenance: .focusLoss)
+                                }
+                            }
+                        }
+                        .accessibilityLabel("Container \(field.title.lowercased())")
+                        .accessibilityValue(accessibilityValue(selection))
+                        .accessibilityHint(availability.disabledReason
+                            ?? "Enter a value and press Return. Escape cancels the draft.")
+                        .accessibilityIdentifier("inspector.layout.container.\(field.rawValue)")
+                    Button("Reset") { reset(field) }
+                        .buttonStyle(.borderless)
+                        .disabled(!availability.isEnabled || !canReset(selection))
+                        .accessibilityLabel("Reset \(field.title) to default")
+                        .accessibilityIdentifier("inspector.layout.container.\(field.rawValue).reset")
+                }
+                subsetLabel(selection)
+            }
+        }
+    }
+
+    private var axisRow: some View {
+        let selection = state.containerLayoutValue(for: .axis)
+        let availability = state.containerLayoutAvailability(for: .axis)
+        return Group {
+            if case .unavailable = selection {
+                EmptyView()
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Picker("Direction", selection: axisBinding(selection)) {
+                            ForEach(ContainerLayoutAxis.allCases, id: \.self) { axis in
+                                Text(axis.rawValue.capitalized).tag(axis as ContainerLayoutAxis?)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(!availability.isEnabled)
+                        .accessibilityLabel("Stack direction")
+                        .accessibilityValue(accessibilityValue(selection))
+                        .accessibilityIdentifier("inspector.layout.container.axis")
+                        Button("Reset") { reset(.axis) }
+                            .buttonStyle(.borderless)
+                            .disabled(!availability.isEnabled || !canReset(selection))
+                            .accessibilityLabel("Reset Direction to default")
+                            .accessibilityIdentifier("inspector.layout.container.axis.reset")
+                    }
+                    subsetLabel(selection)
+                }
+            }
+        }
+    }
+
+    private var alignmentRow: some View {
+        let selection = state.containerLayoutValue(for: .alignment)
+        let availability = state.containerLayoutAvailability(for: .alignment)
+        return Group {
+            if case .unavailable = selection {
+                EmptyView()
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Alignment", selection: alignmentBinding(selection)) {
+                        ForEach(ContainerLayoutAlignment.allCases, id: \.self) { alignment in
+                            Text(alignment.rawValue.capitalized).tag(alignment as ContainerLayoutAlignment?)
+                        }
+                    }
+                    .accessibilityLabel("Stack cross-axis alignment")
+                    .disabled(!availability.isEnabled)
+                    .accessibilityValue(accessibilityValue(selection))
+                    .accessibilityIdentifier("inspector.layout.container.alignment")
+                    HStack {
+                        subsetLabel(selection)
+                        Spacer()
+                        Button("Reset") { reset(.alignment) }
+                            .buttonStyle(.borderless)
+                            .disabled(!availability.isEnabled || !canReset(selection))
+                            .accessibilityLabel("Reset Alignment to default")
+                            .accessibilityIdentifier("inspector.layout.container.alignment.reset")
+                    }
+                }
+            }
+        }
+    }
+
+    private func numericBinding(_ field: ContainerLayoutField, selection: ContainerLayoutInspectorValue) -> Binding<String> {
+        Binding(
+            get: { drafts[field] ?? displayNumber(selection) },
+            set: { drafts[field] = $0; validationMessage = nil }
+        )
+    }
+
+    private func axisBinding(_ selection: ContainerLayoutInspectorValue) -> Binding<ContainerLayoutAxis?> {
+        Binding(
+            get: {
+                guard case .single(.axis(let value), _, _, _) = selection else { return nil }
+                return value
+            },
+            set: { value in
+                guard let value else { return }
+                commit(.axis, value: .axis(value), operation: "direction", provenance: .picker)
+            }
+        )
+    }
+
+    private func alignmentBinding(_ selection: ContainerLayoutInspectorValue) -> Binding<ContainerLayoutAlignment?> {
+        Binding(
+            get: {
+                guard case .single(.alignment(let value), _, _, _) = selection else { return nil }
+                return value
+            },
+            set: { value in
+                guard let value else { return }
+                commit(.alignment, value: .alignment(value), operation: "alignment", provenance: .picker)
+            }
+        )
+    }
+
+    private func commitNumeric(
+        _ field: ContainerLayoutField,
+        provenance: ContainerLayoutProvenance
+    ) {
+        let selection = state.containerLayoutValue(for: field)
+        let text = drafts[field] ?? displayNumber(selection)
+        switch GeometryInspectorNumberParser.parse(text) {
+        case .success(let value):
+            let canonical = ContainerLayoutValue.number(value)
+            do { try ContainerLayoutCommandRegistry.validate(canonical, field: field) }
+            catch {
+                validationMessage = field == .columns
+                    ? "Columns must be a whole number from 1 through 64."
+                    : "\(field.title) must be from 0 through 10,000."
+                return
+            }
+            commit(field, value: canonical, operation: field.title.lowercased(), provenance: provenance)
+        case .failure:
+            validationMessage = "Enter a complete finite number for \(field.title.lowercased())."
+        }
+    }
+
+    private func commit(
+        _ field: ContainerLayoutField,
+        value: ContainerLayoutValue,
+        operation: String,
+        provenance: ContainerLayoutProvenance
+    ) {
+        if state.commitContainerLayout(field: field, value: value, provenance: provenance) {
+            drafts.removeValue(forKey: field)
+            validationMessage = nil
+        } else {
+            validationMessage = state.containerLayoutFailure?.localizedDescription
+                ?? "The \(operation) edit could not commit."
+        }
+    }
+
+    private func reset(_ field: ContainerLayoutField) {
+        if state.commitContainerLayout(field: field, value: nil, provenance: .pointer) {
+            drafts.removeValue(forKey: field)
+            validationMessage = nil
+        } else {
+            validationMessage = state.containerLayoutFailure?.localizedDescription
+        }
+    }
+
+    private func displayNumber(_ selection: ContainerLayoutInspectorValue) -> String {
+        guard case .single(.number(let value), _, _, _) = selection else { return "" }
+        return GeometryInspectorNumberParser.format(value)
+    }
+
+    private func accessibilityValue(_ selection: ContainerLayoutInspectorValue) -> String {
+        switch selection {
+        case .single(let value, let origin, let applicable, let skipped):
+            let display: String = switch value {
+            case .number(let number): GeometryInspectorNumberParser.format(number)
+            case .axis(let axis): axis.rawValue
+            case .alignment(let alignment): alignment.rawValue
+            }
+            let subset = skipped == 0 ? "" : "; applies to \(applicable), skips \(skipped)"
+            return "\(display); \(origin == .authored ? "authored" : "defaulted")\(subset)"
+        case .mixed(let applicable, let skipped):
+            return "Mixed values; applies to \(applicable), skips \(skipped)"
+        case .unavailable(let reason): return reason
+        }
+    }
+
+    @ViewBuilder
+    private func subsetLabel(_ selection: ContainerLayoutInspectorValue) -> some View {
+        switch selection {
+        case .single(_, let origin, let applicable, let skipped):
+            Text(subsetText(origin: origin, applicable: applicable, skipped: skipped))
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        case .mixed(let applicable, let skipped):
+            Text("Mixed · \(applicable) applicable\(skipped > 0 ? " · \(skipped) skipped" : "")")
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        case .unavailable:
+            EmptyView()
+        }
+    }
+
+    private func subsetText(origin: PropertyOrigin, applicable: Int, skipped: Int) -> String {
+        let provenance = origin == .authored ? "Authored" : "Default"
+        guard applicable > 1 || skipped > 0 else { return provenance }
+        return "\(provenance) · \(applicable) applicable\(skipped > 0 ? " · \(skipped) skipped" : "")"
+    }
+
+    private func canReset(_ selection: ContainerLayoutInspectorValue) -> Bool {
+        switch selection {
+        case .single(_, let origin, _, _): origin == .authored
+        case .mixed: true
+        case .unavailable: false
+        }
     }
 }
 

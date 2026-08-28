@@ -626,6 +626,66 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(renderer.hitTest(.init(x: 30, y: 40), in: plan), nodeID)
     }
 
+    // SF-0502-003 / SF-0503-003 / SF-0506-003 — one resolved structural
+    // geometry map feeds immutable renderer, selection, hit testing, and AX.
+    func testContainerLayoutProjectionSharesResolvedChildGeometryAcrossCanvasSystems() async throws {
+        var document = ProjectCreation.blank()
+        var page = try XCTUnwrap(document.pages.first)
+        let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+        let rootIndex = try XCTUnwrap(page.nodes.firstIndex { $0.id == rootID })
+        func geometry(_ x: Double, _ y: Double, _ width: Double, _ height: Double) -> [NodeProperty] {
+            [("layout.x", x), ("layout.y", y), ("layout.width", width), ("layout.height", height)].map {
+                .init(key: .init(rawValue: $0.0), value: .number($0.1), origin: .authored)
+            }
+        }
+        func structural(_ kind: NodeKind) -> [NodeProperty] {
+            let values: [(String, PropertyValue)] = switch kind {
+            case .section: [("layout.container.kind", .string("section")), ("layout.padding", .number(64)), ("layout.axis", .string("vertical"))]
+            case .stack: [("layout.container.kind", .string("stack")), ("layout.axis", .string("horizontal")), ("layout.padding", .number(20)), ("layout.gap", .number(12)), ("layout.align", .string("center"))]
+            case .grid: [("layout.container.kind", .string("grid")), ("layout.padding", .number(16)), ("layout.gap", .number(8)), ("layout.grid.columns", .number(2)), ("layout.grid.placement", .string("row-major"))]
+            case .frame, .text, .image, .component: []
+            }
+            return values.map { .init(key: .init(rawValue: $0.0), value: $0.1, origin: .authored) }
+        }
+        let sectionID = NodeID(), stackID = NodeID(), gridID = NodeID()
+        let childIDs = (0..<6).map { _ in NodeID() }
+        var section = DocumentNode(id: sectionID, kind: .section, name: "Section", parent: .node(rootID), properties: geometry(20, 20, 900, 360) + structural(.section))
+        var stack = DocumentNode(id: stackID, kind: .stack, name: "Stack", parent: .node(rootID), properties: geometry(20, 420, 500, 180) + structural(.stack))
+        var grid = DocumentNode(id: gridID, kind: .grid, name: "Grid", parent: .node(rootID), properties: geometry(540, 420, 420, 300) + structural(.grid))
+        section.childIDs = [childIDs[0]]
+        stack.childIDs = [childIDs[1], childIDs[2]]
+        grid.childIDs = [childIDs[3], childIDs[4], childIDs[5]]
+        let parents = [sectionID, stackID, stackID, gridID, gridID, gridID]
+        let children = childIDs.enumerated().map { index, id in
+            DocumentNode(id: id, kind: .frame, name: "Child \(index)", parent: .node(parents[index]),
+                properties: geometry(900, 900, 80 + Double(index * 5), 40 + Double(index * 4)))
+        }
+        page.nodes[rootIndex].childIDs += [sectionID, stackID, gridID]
+        page.nodes += [section, stack, grid] + children
+        document.pages[0] = page
+        XCTAssertNoThrow(try document.validate())
+        let resolved = page.resolvedStructuralGeometry()
+        let viewport = try CanvasViewportState(viewportSize: .init(width: 1_000, height: 800),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_000, height: 800)), pixelRatio: .init(2))
+        let prepared = try await WorkspaceScenePreparationWorker().prepare(.init(
+            document: document, activePageID: page.id, activeContainerID: nil,
+            viewport: viewport, surfaceID: CanvasRenderSurfaceID()
+        ))
+        let renderer = CanvasRendererCore()
+        let plan = try renderer.prepare(scene: prepared.renderScene, overlays: prepared.overlays, viewport: viewport)
+        for childID in childIDs {
+            let expected = try XCTUnwrap(resolved[childID]?.frame)
+            let object = try XCTUnwrap(plan.authoredObjects.first { $0.id == childID })
+            let target = try XCTUnwrap(prepared.selectionScene?.targets.first { $0.id == childID })
+            let accessibility = try XCTUnwrap(plan.accessibilityElements.first { $0.objectID == childID })
+            XCTAssertEqual(object.frame, expected)
+            XCTAssertEqual(target.frame, expected)
+            XCTAssertEqual(accessibility.frame.origin, try viewport.transform.worldToViewport(expected.origin))
+            XCTAssertEqual(renderer.hitTest(.init(x: expected.minX + 1, y: expected.minY + 1), in: plan), childID)
+        }
+        XCTAssertEqual(page.nodes.first { $0.id == gridID }?.childIDs, Array(childIDs[3...5]))
+    }
+
     // SF-0407-006, SF-0407-007, SF-0407-008, SF-1502-001
     @MainActor
     func testProductionSceneProjectionAndRendererKeepMainActorResponsiveWhileWorkIsActive() async throws {

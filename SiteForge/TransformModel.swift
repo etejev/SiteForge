@@ -1823,6 +1823,316 @@ struct TransformCommandRegistry: Sendable {
     }
 }
 
+// SF-0502-001...008 / SF-0503-001...008 / SF-0506-001...008 — bounded
+// structural-container layout authoring. The existing schema-v4 properties
+// remain authoritative; Inspector drafts compile through this registry and
+// never become a second layout source.
+enum ContainerLayoutField: String, CaseIterable, Sendable {
+    case padding, gap, axis, alignment, columns
+
+    var title: String {
+        switch self {
+        case .padding: "Padding"
+        case .gap: "Gap"
+        case .axis: "Direction"
+        case .alignment: "Alignment"
+        case .columns: "Columns"
+        }
+    }
+
+    var propertyKey: String {
+        switch self {
+        case .padding: "layout.padding"
+        case .gap: "layout.gap"
+        case .axis: "layout.axis"
+        case .alignment: "layout.align"
+        case .columns: "layout.grid.columns"
+        }
+    }
+}
+
+enum ContainerLayoutValue: Equatable, Sendable {
+    case number(Double)
+    case axis(ContainerLayoutAxis)
+    case alignment(ContainerLayoutAlignment)
+
+    var propertyValue: PropertyValue {
+        switch self {
+        case .number(let value): .number(value)
+        case .axis(let value): .string(value.rawValue)
+        case .alignment(let value): .string(value.rawValue)
+        }
+    }
+}
+
+enum ContainerLayoutInspectorValue: Equatable, Sendable {
+    case unavailable(String)
+    case single(ContainerLayoutValue, PropertyOrigin, applicableCount: Int, skippedCount: Int)
+    case mixed(applicableCount: Int, skippedCount: Int)
+}
+
+enum ContainerLayoutProvenance: String, Sendable {
+    case pointer, keyboard, focusLoss = "focus-loss", picker, accessibility, automation
+}
+
+struct ContainerLayoutCommand: Sendable {
+    let identity: GeometryInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let field: ContainerLayoutField
+    let value: ContainerLayoutValue?
+    let provenance: ContainerLayoutProvenance
+    let cancelled: Bool
+}
+
+struct PreparedContainerLayoutEdit: Sendable {
+    let identity: GeometryInspectorOperationIdentity
+    let field: ContainerLayoutField
+    let applicableNodeIDs: [NodeID]
+    let skippedNodeIDs: [NodeID]
+    let documentCommand: DocumentCommand
+}
+
+enum ContainerLayoutError: Error, Equatable, LocalizedError, Sendable {
+    case cancelled, staleDocument, staleRevision, staleRenderer, selectionMismatch
+    case duplicateTarget, emptySelection, pageUnavailable, missingTarget
+    case lockedTarget, hiddenTarget, unavailableTarget, invalidValue
+    case noApplicableTargets, noChanges, revisionExhausted, lifecycleUnavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .cancelled: "The container-layout draft was cancelled; committed layout is unchanged."
+        case .staleDocument, .staleRevision, .staleRenderer, .selectionMismatch:
+            "The container-layout edit is stale; reselect the container and try again."
+        case .duplicateTarget: "The container-layout selection contains a duplicate object."
+        case .emptySelection: "Select a Section, Stack, or Grid to edit layout."
+        case .pageUnavailable, .missingTarget: "A selected container is no longer on the active page."
+        case .lockedTarget: "Unlock the selected container before editing its layout."
+        case .hiddenTarget: "Show the selected container before editing its layout."
+        case .unavailableTarget: "The selected container is unavailable in the current scene."
+        case .invalidValue: "Enter a supported finite container-layout value."
+        case .noApplicableTargets: "The selection has no object that supports this layout control."
+        case .noChanges: "The selected containers already use that layout value."
+        case .revisionExhausted: "The document cannot accept another revision."
+        case .lifecycleUnavailable(let reason): reason
+        }
+    }
+}
+
+struct ContainerLayoutCommandRegistry: Sendable {
+    static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-0502-%03d", $0) })
+        .union((1...8).map { String(format: "SF-0503-%03d", $0) })
+        .union((1...8).map { String(format: "SF-0506-%03d", $0) })
+
+    static func supports(_ field: ContainerLayoutField, kind: NodeKind) -> Bool {
+        switch (kind, field) {
+        case (.section, .padding): true
+        case (.stack, .padding), (.stack, .gap), (.stack, .axis), (.stack, .alignment): true
+        case (.grid, .padding), (.grid, .gap), (.grid, .columns): true
+        default: false
+        }
+    }
+
+    static func defaultValue(for field: ContainerLayoutField, kind: NodeKind) -> ContainerLayoutValue? {
+        switch (kind, field) {
+        case (.section, .padding): .number(48)
+        case (.stack, .padding), (.stack, .gap), (.grid, .padding), (.grid, .gap): .number(24)
+        case (.stack, .axis): .axis(.vertical)
+        case (.stack, .alignment): .alignment(.start)
+        case (.grid, .columns): .number(2)
+        default: nil
+        }
+    }
+
+    static func resolvedValue(_ field: ContainerLayoutField, node: DocumentNode) -> ContainerLayoutValue? {
+        guard supports(field, kind: node.kind) else { return nil }
+        switch field {
+        case .padding, .gap, .columns:
+            return node.insertionNumberProperty(field.propertyKey).map(ContainerLayoutValue.number)
+        case .axis:
+            return node.insertionStringProperty(field.propertyKey)
+                .flatMap(ContainerLayoutAxis.init(rawValue:)).map(ContainerLayoutValue.axis)
+        case .alignment:
+            return node.insertionStringProperty(field.propertyKey)
+                .flatMap(ContainerLayoutAlignment.init(rawValue:)).map(ContainerLayoutValue.alignment)
+        }
+    }
+
+    func value(
+        for field: ContainerLayoutField,
+        in document: CanonicalDocument,
+        context: TransformValidationContext
+    ) -> ContainerLayoutInspectorValue {
+        guard let page = document.pages.first(where: { $0.id == context.activePageID }) else {
+            return .unavailable("The active page is unavailable.")
+        }
+        let selected = context.selectedNodeIDs.compactMap { id in page.nodes.first(where: { $0.id == id }) }
+        let applicable = selected.filter { Self.supports(field, kind: $0.kind) }
+        guard !applicable.isEmpty else {
+            return .unavailable("The selection does not support \(field.title.lowercased()).")
+        }
+        let values = applicable.compactMap { node -> (ContainerLayoutValue, PropertyOrigin)? in
+            guard let value = Self.resolvedValue(field, node: node),
+                  let property = node.insertionProperty(field.propertyKey) else { return nil }
+            return (value, property.origin)
+        }
+        guard values.count == applicable.count, let first = values.first else {
+            return .unavailable("The selected containers have invalid canonical layout state.")
+        }
+        if values.dropFirst().allSatisfy({ $0.0 == first.0 && $0.1 == first.1 }) {
+            return .single(first.0, first.1, applicableCount: applicable.count, skippedCount: selected.count - applicable.count)
+        }
+        return .mixed(applicableCount: applicable.count, skippedCount: selected.count - applicable.count)
+    }
+
+    func prepare(
+        _ command: ContainerLayoutCommand,
+        in document: CanonicalDocument,
+        context: TransformValidationContext,
+        cancellation: TransformCancellation = .never
+    ) throws -> PreparedContainerLayoutEdit {
+        guard !command.cancelled, !cancellation.isCancelled() else { throw ContainerLayoutError.cancelled }
+        guard context.isLifecycleAvailable else {
+            throw ContainerLayoutError.lifecycleUnavailable(context.lifecycleDisabledReason ?? "Layout editing is unavailable during the current document operation.")
+        }
+        guard command.identity.documentID == document.id else { throw ContainerLayoutError.staleDocument }
+        guard command.identity.revision == document.revision else { throw ContainerLayoutError.staleRevision }
+        guard document.revision < UInt64.max else { throw ContainerLayoutError.revisionExhausted }
+        guard command.identity.pageID == context.activePageID,
+              let page = document.pages.first(where: { $0.id == context.activePageID }) else {
+            throw ContainerLayoutError.pageUnavailable
+        }
+        guard command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration else {
+            throw ContainerLayoutError.staleRenderer
+        }
+        guard !command.orderedNodeIDs.isEmpty else { throw ContainerLayoutError.emptySelection }
+        guard Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count else { throw ContainerLayoutError.duplicateTarget }
+        guard command.orderedNodeIDs == context.selectedNodeIDs else { throw ContainerLayoutError.selectionMismatch }
+        if let value = command.value { try Self.validate(value, field: command.field) }
+
+        var applicable: [NodeID] = []
+        var skipped: [NodeID] = []
+        var mutations: [DocumentCommand] = []
+        for id in command.orderedNodeIDs {
+            guard !cancellation.isCancelled() else { throw ContainerLayoutError.cancelled }
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw ContainerLayoutError.missingTarget }
+            guard Self.supports(command.field, kind: node.kind) else { skipped.append(id); continue }
+            guard !node.insertionBooleanProperty("locked") else { throw ContainerLayoutError.lockedTarget }
+            guard !node.insertionBooleanProperty("hidden") else { throw ContainerLayoutError.hiddenTarget }
+            guard context.availableNodeIDs.contains(id) else { throw ContainerLayoutError.unavailableTarget }
+            guard let property = node.insertionProperty(command.field.propertyKey),
+                  let defaultValue = Self.defaultValue(for: command.field, kind: node.kind) else {
+                throw ContainerLayoutError.invalidValue
+            }
+            let nextValue = command.value ?? defaultValue
+            let nextOrigin: PropertyOrigin = command.value == nil ? .defaulted : .authored
+            if property.value == nextValue.propertyValue, property.origin == nextOrigin { continue }
+            applicable.append(id)
+            mutations.append(.setProperty(.init(
+                pageID: page.id,
+                nodeID: id,
+                property: .init(id: property.id, key: property.key, value: nextValue.propertyValue, origin: nextOrigin)
+            )))
+        }
+        guard !applicable.isEmpty else {
+            if skipped.count == command.orderedNodeIDs.count { throw ContainerLayoutError.noApplicableTargets }
+            throw ContainerLayoutError.noChanges
+        }
+        let documentCommand = DocumentCommand.batch(mutations)
+        guard CommandRegistry().availability(for: documentCommand, in: document).isEnabled else {
+            throw ContainerLayoutError.invalidValue
+        }
+        return .init(identity: command.identity, field: command.field,
+                     applicableNodeIDs: applicable, skippedNodeIDs: skipped,
+                     documentCommand: documentCommand)
+    }
+
+    static func validate(_ value: ContainerLayoutValue, field: ContainerLayoutField) throws {
+        switch (field, value) {
+        case (.padding, .number(let number)), (.gap, .number(let number)):
+            guard number.isFinite, (0...10_000).contains(number) else { throw ContainerLayoutError.invalidValue }
+        case (.columns, .number(let number)):
+            guard number.isFinite, number.rounded(.towardZero) == number, (1...64).contains(number) else {
+                throw ContainerLayoutError.invalidValue
+            }
+        case (.axis, .axis), (.alignment, .alignment): break
+        default: throw ContainerLayoutError.invalidValue
+        }
+    }
+}
+
+enum ContainerLayoutDiagnosticResult: String, Codable, Sendable {
+    case success, failure, cancelled, stale
+}
+
+struct ContainerLayoutDiagnosticRecord: Codable, Equatable, Sendable {
+    let requirementIDs: [String]
+    let operationType: String
+    let provenance: String
+    let sanitizedIdentifiers: [String]
+    let durationMilliseconds: Double
+    let parentRevision: UInt64
+    let resultRevision: UInt64?
+    let affectedObjectCount: Int
+    let result: ContainerLayoutDiagnosticResult
+    let failureCategory: String?
+}
+
+actor ContainerLayoutDiagnostics {
+    private var buffer: BoundedDiagnosticBuffer<ContainerLayoutDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ record: ContainerLayoutDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [ContainerLayoutDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
+}
+
+enum ContainerLayoutDiagnosticFactory {
+    static func make(
+        command: ContainerLayoutCommand,
+        durationMilliseconds: Double,
+        resultRevision: UInt64?,
+        result: ContainerLayoutDiagnosticResult,
+        failure: ContainerLayoutError?
+    ) -> ContainerLayoutDiagnosticRecord {
+        ContainerLayoutDiagnosticRecord(
+            requirementIDs: ContainerLayoutCommandRegistry.requirementIDs.sorted(),
+            operationType: "container-layout.\(command.field.rawValue)",
+            provenance: command.provenance.rawValue,
+            sanitizedIdentifiers: command.orderedNodeIDs.map {
+                DiagnosticStableIdentifier.sanitize(
+                    $0.description,
+                    domain: .containerLayout,
+                    kind: "node"
+                )
+            },
+            durationMilliseconds: max(0, durationMilliseconds),
+            parentRevision: command.identity.revision,
+            resultRevision: resultRevision,
+            affectedObjectCount: command.orderedNodeIDs.count,
+            result: result,
+            failureCategory: failure.map(Self.failureCategory)
+        )
+    }
+
+    private static func failureCategory(_ error: ContainerLayoutError) -> String {
+        switch error {
+        case .cancelled: "cancelled"
+        case .staleDocument, .staleRevision, .staleRenderer, .selectionMismatch: "stale-identity"
+        case .duplicateTarget, .emptySelection, .pageUnavailable, .missingTarget: "invalid-target"
+        case .lockedTarget, .hiddenTarget, .unavailableTarget: "unavailable-target"
+        case .invalidValue: "invalid-value"
+        case .noApplicableTargets: "no-applicable-target"
+        case .noChanges: "no-change"
+        case .revisionExhausted: "revision-exhausted"
+        case .lifecycleUnavailable: "lifecycle-unavailable"
+        }
+    }
+}
+
 struct TransformPreview: Equatable, Sendable {
     let identity: TransformOperationIdentity
     let operation: TransformOperation

@@ -1532,6 +1532,177 @@ final class TransformModelTests: XCTestCase {
             XCTAssertEqual($0 as? TypographyCommandError, .stale)
         }
     }
+
+    // SF-0502-001...006 / SF-0503-001...006 / SF-0506-001...006
+    func testContainerLayoutRegistryValidatesMixesResetsAndPreservesExactHistory() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        var stack = fixture.document.pages[0].nodes[1]
+        stack.kind = .stack
+        applyStructuralDefaults(for: .stack, to: &stack)
+        var grid = fixture.document.pages[0].nodes[2]
+        grid.kind = .grid
+        applyStructuralDefaults(for: .grid, to: &grid)
+        fixture.document.pages[0].nodes[1] = stack
+        fixture.document.pages[0].nodes[2] = grid
+        fixture.selectedIDs = [stack.id, grid.id]
+        let registry = ContainerLayoutCommandRegistry()
+
+        func command(
+            _ document: CanonicalDocument,
+            field: ContainerLayoutField,
+            value: ContainerLayoutValue?,
+            ids: [NodeID]? = nil,
+            cancelled: Bool = false,
+            revision: UInt64? = nil,
+            documentID: DocumentID? = nil,
+            pageID: PageID? = nil,
+            sceneID: CanvasViewportSceneID? = nil,
+            rendererGeneration: UInt64? = nil
+        ) -> ContainerLayoutCommand {
+            .init(identity: .init(
+                editID: GeometryInspectorEditID(), documentID: documentID ?? document.id,
+                pageID: pageID ?? fixture.pageID, revision: revision ?? document.revision,
+                sceneID: sceneID ?? fixture.sceneID,
+                rendererGeneration: rendererGeneration ?? fixture.rendererGeneration
+            ), orderedNodeIDs: ids ?? fixture.selectedIDs, field: field,
+            value: value, provenance: .automation, cancelled: cancelled)
+        }
+
+        XCTAssertEqual(
+            registry.value(for: .padding, in: fixture.document, context: fixture.context),
+            .single(.number(24), .defaulted, applicableCount: 2, skippedCount: 0)
+        )
+        XCTAssertEqual(
+            registry.value(for: .axis, in: fixture.document, context: fixture.context),
+            .single(.axis(.vertical), .defaulted, applicableCount: 1, skippedCount: 1)
+        )
+
+        let padding = try registry.prepare(
+            command(fixture.document, field: .padding, value: .number(36)),
+            in: fixture.document, context: fixture.context
+        )
+        XCTAssertEqual(padding.applicableNodeIDs, fixture.selectedIDs)
+        XCTAssertTrue(padding.skippedNodeIDs.isEmpty)
+        let originalIDs = fixture.document.pages[0].nodes[1...2].compactMap {
+            $0.insertionProperty("layout.padding")?.id
+        }
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(padding.documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[1...2].compactMap {
+            $0.insertionNumberProperty("layout.padding")
+        }, [36, 36])
+        XCTAssertEqual(session.document.pages[0].nodes[1...2].compactMap {
+            $0.insertionProperty("layout.padding")?.origin
+        }, [.authored, .authored])
+        try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes[1...2].compactMap {
+            $0.insertionNumberProperty("layout.padding")
+        }, [24, 24])
+        XCTAssertEqual(session.document.pages[0].nodes[1...2].compactMap {
+            $0.insertionProperty("layout.padding")?.id
+        }, originalIDs)
+        try session.redo()
+
+        let currentFixture = fixture.with(document: session.document)
+        let axis = try registry.prepare(
+            command(session.document, field: .axis, value: .axis(.horizontal), ids: fixture.selectedIDs),
+            in: session.document, context: currentFixture.context(selectedIDs: fixture.selectedIDs)
+        )
+        XCTAssertEqual(axis.applicableNodeIDs, [stack.id])
+        XCTAssertEqual(axis.skippedNodeIDs, [grid.id])
+        _ = try session.execute(axis.documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionStringProperty("layout.axis"), "horizontal")
+
+        let resetFixture = fixture.with(document: session.document)
+        let reset = try registry.prepare(
+            command(session.document, field: .padding, value: nil, ids: fixture.selectedIDs),
+            in: session.document, context: resetFixture.context(selectedIDs: fixture.selectedIDs)
+        )
+        _ = try session.execute(reset.documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[1...2].compactMap {
+            $0.insertionNumberProperty("layout.padding")
+        }, [24, 24])
+        XCTAssertEqual(session.document.pages[0].nodes[1...2].compactMap {
+            $0.insertionProperty("layout.padding")?.origin
+        }, [.defaulted, .defaulted])
+        XCTAssertNoThrow(try session.document.validate())
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .columns, value: .number(0)),
+            in: fixture.document, context: fixture.context
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .invalidValue) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .gap, value: .number(.nan)),
+            in: fixture.document, context: fixture.context
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .invalidValue) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .padding, value: .number(12), cancelled: true),
+            in: fixture.document, context: fixture.context
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .cancelled) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .padding, value: .number(12), revision: fixture.document.revision + 1),
+            in: fixture.document, context: fixture.context
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .staleRevision) }
+
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .padding, value: .number(12),
+                    documentID: DocumentID()),
+            in: fixture.document, context: fixture.context
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .staleDocument) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .padding, value: .number(12),
+                    sceneID: CanvasViewportSceneID()),
+            in: fixture.document, context: fixture.context
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .staleRenderer) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .padding, value: .number(12),
+                    rendererGeneration: fixture.rendererGeneration + 1),
+            in: fixture.document, context: fixture.context
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .staleRenderer) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .padding, value: .number(12), ids: [stack.id, stack.id]),
+            in: fixture.document, context: fixture.context(selectedIDs: [stack.id, stack.id])
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .duplicateTarget) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .padding, value: .number(12), ids: [stack.id]),
+            in: fixture.document, context: fixture.context(selectedIDs: [grid.id])
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .selectionMismatch) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(fixture.document, field: .padding, value: .number(12), ids: [stack.id]),
+            in: fixture.document,
+            context: fixture.context(selectedIDs: [stack.id], availableIDs: [grid.id])
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .unavailableTarget) }
+
+        var lockedDocument = fixture.document
+        lockedDocument.pages[0].nodes[1].properties.append(booleanProperty("locked", true))
+        XCTAssertThrowsError(try registry.prepare(
+            command(lockedDocument, field: .padding, value: .number(12), ids: [stack.id]),
+            in: lockedDocument,
+            context: fixture.with(document: lockedDocument).context(selectedIDs: [stack.id])
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .lockedTarget) }
+
+        var hiddenDocument = fixture.document
+        hiddenDocument.pages[0].nodes[1].properties.append(booleanProperty("hidden", true))
+        XCTAssertThrowsError(try registry.prepare(
+            command(hiddenDocument, field: .padding, value: .number(12), ids: [stack.id]),
+            in: hiddenDocument,
+            context: fixture.with(document: hiddenDocument).context(selectedIDs: [stack.id])
+        )) { XCTAssertEqual($0 as? ContainerLayoutError, .hiddenTarget) }
+
+        let diagnosticCommand = command(fixture.document, field: .padding, value: .number(72))
+        let record = ContainerLayoutDiagnosticFactory.make(
+            command: diagnosticCommand,
+            durationMilliseconds: 0.25,
+            resultRevision: fixture.document.revision + 1,
+            result: .success,
+            failure: nil
+        )
+        XCTAssertEqual(record.operationType, "container-layout.padding")
+        XCTAssertEqual(record.requirementIDs, ContainerLayoutCommandRegistry.requirementIDs.sorted())
+        XCTAssertFalse(String(describing: record).contains(stack.id.description))
+        XCTAssertFalse(String(describing: record).contains("/Users/"))
+    }
 }
 
 private struct TransformFixture {

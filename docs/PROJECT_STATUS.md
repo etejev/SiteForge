@@ -2,7 +2,22 @@
 
 Last updated: 2026-08-28.
 
-Current work: `SF-AUTHORING-016` is verified and complete as the bounded
+`SF-AUTHORING-017` is verified and complete as the bounded production
+structural-layout authoring slice for SF-0502, SF-0503, and uniform structural
+spacing under SF-0506. Schema-v4 layout properties remain the sole canonical
+source; one identity-gated registry and native Layout controls author Section
+padding, Stack direction/gap/padding/alignment, and Grid columns/gap/padding.
+The shared resolver preserves stable identity/order and keeps bounded resolved
+children within their container without rewriting canonical child geometry.
+Focused model/renderer/package coverage passed 5/5, actual-app acceptance
+passed 2/2, `./sf test half` passed 371/371, and the mapped full suite passed
+419/419 with zero failures. Final `./sf verify` passed 372 unit/integration plus
+47 UI tests (419 total), zero failures, with every repository gate green.
+Original-resolution maximized and practical-minimum states passed visual
+review. The normative modules remain Partial for the explicit deferred scope
+recorded in the milestone evidence.
+
+`SF-AUTHORING-016` remains verified and complete as the bounded
 responsive geometry-authoring slice for SF-0601-001 through SF-0601-008 and
 SF-0602-001 through SF-0602-008. Stable Desktop, Tablet, and Mobile identities
 resolve deterministic non-overlapping widths. Native Layout fields author and
@@ -15,7 +30,7 @@ total), zero failures, with all repository gates green. Both normative modules
 remain Partial for custom breakpoint management, responsive style/typography/
 content/visibility, comparison panes, orientation/safe areas, container
 queries, fluid typography, component responsiveness, preview/export parity,
-performance budgets, and release acceptance. No subsequent item is READY.
+performance budgets, and release acceptance.
 
 `SF-AUTHORING-015` remains verified and complete as the bounded plain-Text
 typography slice for SF-0507-001 through SF-0507-008. The authoritative gate

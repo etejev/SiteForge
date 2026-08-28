@@ -73,15 +73,22 @@ specific system-fallback status. The committed tile renderer and live inline
 editor consume one `CanvasTextLayout` metric snapshot; caret and marked-text
 state remain editor-only. Font import, variable axes, rich-text spans, advanced
 paragraphs, responsive overrides, and preview/export parity are unavailable
-rather than simulated. Layout retains the
-bounded geometry, transform, guide, and snapping controls. For applicable
-Frame, Text, Section, Stack, and Grid selection, Layout exposes native
-locale-aware X, Y, Width, and Height fields. Draft strings are editor-only;
-Return and focus loss submit one canonical fixed-geometry transaction, while
-Escape restores the displayed committed value. Mixed values and inapplicable
-selected kinds are named explicitly. Sizing modes, constraints, aspect ratio,
-automatic sizing, responsive overrides, and broad property editing remain
-unavailable. Accessibility is a read-only selection summary. Content and
+rather than simulated. Layout retains the bounded geometry, structural layout,
+transform, guide, and snapping controls. For applicable Frame, Text, Section,
+Stack, and Grid selection, Layout exposes native locale-aware X, Y, Width, and
+Height fields, including truthful Desktop-base and Tablet/Mobile override
+provenance. Section exposes uniform padding; Stack exposes vertical/horizontal
+direction, uniform padding and gap, and start/center/end/stretch cross-axis
+alignment; Grid exposes uniform padding and gap plus bounded row-major column
+count. Draft strings are editor-only; Return and focus loss submit one
+identity-gated canonical transaction, while Escape preserves the displayed
+committed value. Reset removes responsive geometry overrides or restores a
+container's canonical v1 default without writing a visually equivalent
+authored value. Mixed and partially applicable selections identify the exact
+affected subset. Sizing modes, constraints, aspect ratio, automatic sizing,
+responsive container-layout overrides, advanced Stack/Grid behavior, and broad
+property editing remain unavailable. Accessibility is a read-only selection
+summary. Content and
 Interactions are intentionally
 selectable native unavailable surfaces: each states why it cannot operate and
 what later canonical milestone is required. They expose no simulated editable

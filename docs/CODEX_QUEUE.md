@@ -12,6 +12,31 @@ None.
 
 ## DONE
 
+- [x] `SF-AUTHORING-017` Implement production Section, Stack, and Grid layout
+  controls.
+  - Requirements: bounded production evidence for `SF-0502-001` through
+    `SF-0502-008`, `SF-0503-001` through `SF-0503-008`, and the spacing portion
+    of `SF-0506-001` through `SF-0506-008`; these normative modules remain
+    Partial outside this structural-layout authoring slice.
+  - Result: native Layout controls author/reset Section padding; Stack axis,
+    uniform padding/gap, and start/center/end/stretch alignment; and Grid
+    columns, uniform padding/gap, and deterministic row-major placement. One
+    identity-gated registry supplies exact history and truthful mixed/applicable
+    results. The shared resolver preserves stable child identity/order and
+    proportionally fits oversized insertion defaults inside bounded container
+    content boxes without rewriting canonical child geometry.
+  - Evidence: five focused model/renderer/package selectors and two actual-app
+    journeys passed; `./sf test half` passed 371/371. Final `./sf verify` passed
+    372 unit/integration plus 47 UI tests (419 total), zero failures, with every
+    repository gate green on 2026-08-28. Original-resolution maximized and
+    practical-minimum states passed visual review. See
+    `docs/evidence/SF-AUTHORING-017-STRUCTURAL-LAYOUT.md`.
+  - Explicit exclusions: responsive container-layout overrides, per-side or
+    logical padding, separate row/column gaps, wrapping, advanced distribution,
+    non-row-major auto-flow, explicit/minmax/fractional tracks, named areas,
+    responsive content/visibility, custom breakpoints, component layout,
+    container queries, preview/export parity, and release acceptance.
+
 - [x] `SF-AUTHORING-016` Implement responsive breakpoint geometry overrides and
   live device authoring.
   - Requirements: bounded production evidence for `SF-0601-001` through

@@ -2,6 +2,22 @@
 
 ## Current checkpoint
 
+`SF-AUTHORING-017` is **VERIFIED AND DONE**. The current tree retains existing
+schema-v4 layout properties as the only canonical source and implements one
+identity-gated container-layout registry, native Layout Inspector controls,
+and one shared Section/Stack/Grid resolver. Focused registry/history/
+diagnostic, resolver, renderer-geometry, and package/recovery evidence passed
+5/5; actual-app maximized/practical-minimum acceptance passed 2/2; `./sf test
+half` passed 371/371; and the mapped full suite passed 419/419 with zero
+failures. Final `./sf verify` passed 372 unit/integration plus 47 UI tests (419
+total), zero failures, with every repository gate green. Original-resolution
+evidence passed visual review after the shared
+resolver was corrected to keep oversized insertion-default children within
+bounded Stack/Grid content boxes without changing canonical geometry.
+Responsive container-layout overrides are deliberately deferred because the
+existing responsive cascade currently owns geometry only; do not introduce a
+parallel cascade.
+
 `SF-AUTHORING-016` is **VERIFIED AND DONE**. The current tree implements the
 bounded responsive geometry-authoring slice through stable Desktop, Tablet,
 and Mobile identities, deterministic width resolution, Desktop-base
@@ -101,10 +117,10 @@ broader deferred scope is unchanged.
 
 ## Next task
 
-No item after SF-AUTHORING-016 is READY. Create another queue item only when
-its requirements and exclusions are explicit. Do not silently expand deferred
-responsive, typography, box-appearance, or fill capability or represent the
-product as release-complete.
+No queue item is READY. Establish the next specification-backed bounded slice
+before implementation; do not silently expand SF-AUTHORING-017 into responsive
+container properties, advanced Stack/Grid semantics, preview/export, or
+release acceptance.
 
 ## Stop/escalate conditions
 
@@ -113,4 +129,4 @@ product choice with broad downstream effect or an incompatible migration.
 Do not commit generated artifacts, local result bundles, secrets, or machine
 paths. External signing, notarization, publication, credentials, or a genuinely
 unavailable external dependency remain owner boundaries. Do not begin a
-feature beyond SF-AUTHORING-016 until a READY queue item defines its scope.
+feature beyond SF-AUTHORING-017 until a READY queue item defines its scope.

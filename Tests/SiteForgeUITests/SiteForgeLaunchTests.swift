@@ -1994,6 +1994,166 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachScreenshot(named: "SF-AUTHORING-010 nested section stack grid")
     }
 
+    // SF-0502-001...006/008; SF-0503-001...006/008; SF-0506-001...006/008
+    @MainActor
+    func testStructuralLayoutInspectorReflowsSectionStackAndGridJourney() throws {
+        let fixture = legacyFixtureURL(named: "schema-v1-empty")
+        let project = fixtureRoot.appendingPathComponent("structural-layout-native-save.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: fixture)
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0", timeout: 5))
+
+        func selectLayer(_ name: String) {
+            application.buttons["navigator.tab.layers"].click()
+            let row = application.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", name
+            )).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 3), "Missing \(name) Layers row")
+            row.click()
+        }
+        func insertFrame(expectedCount: Int) {
+            application.menuBars.menuBarItems["Insert"].click()
+            let insert = application.menuItems["Insert Frame at Center"]
+            XCTAssertTrue(insert.waitForExistence(timeout: 2)); insert.click()
+            XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects \(expectedCount)", timeout: 5))
+        }
+        func reveal(_ element: XCUIElement) {
+            let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
+            for _ in 0..<6 where !element.isHittable { scroll.scroll(byDeltaX: 0, deltaY: -240) }
+            XCTAssertTrue(element.isHittable, "Inspector control \(element.identifier) must remain reachable")
+        }
+        func replace(_ field: XCUIElement, with text: String) {
+            reveal(field)
+            field.doubleClick(); field.typeKey("a", modifierFlags: .command)
+            field.typeText(text); field.typeKey(.return, modifierFlags: [])
+        }
+
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.section"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        insertFrame(expectedCount: 2)
+        selectLayer("Section")
+        application.buttons["inspector.tab.layout"].click()
+        let padding = application.textFields["inspector.layout.container.padding"]
+        XCTAssertTrue(padding.waitForExistence(timeout: 3))
+        XCTAssertTrue((padding.value as? String)?.contains("48") == true)
+        let sectionChildBefore = canvasObject(named: "Frame", in: application).frame
+        replace(padding, with: "72")
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Padding committed", timeout: 3))
+        let sectionChildAfter = canvasObject(named: "Frame", in: application).frame
+        XCTAssertGreaterThan(sectionChildAfter.minX, sectionChildBefore.minX)
+        XCTAssertGreaterThan(sectionChildAfter.minY, sectionChildBefore.minY)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-017 section padding")
+        padding.click(); padding.typeKey("a", modifierFlags: .command)
+        padding.typeText("invalid"); padding.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.layout.container.validation"]
+            .waitForExistence(timeout: 3))
+        padding.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.padding"], containing: "72"))
+
+        selectLayer("Section")
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.stack"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        insertFrame(expectedCount: 4)
+        selectLayer("Stack"); insertFrame(expectedCount: 5)
+        selectLayer("Stack")
+        application.buttons["inspector.tab.layout"].click()
+        let axis = application.descendants(matching: .any)["inspector.layout.container.axis"]
+        reveal(axis)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack vertical default")
+        let horizontal = axis.radioButtons["Horizontal"]
+        XCTAssertTrue(horizontal.waitForExistence(timeout: 3)); horizontal.click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Direction committed", timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack horizontal")
+        let gap = application.textFields["inspector.layout.container.gap"]
+        replace(gap, with: "36")
+        let alignment = application.descendants(matching: .any)["inspector.layout.container.alignment"]
+        reveal(alignment)
+        XCTAssertTrue(alignment.waitForExistence(timeout: 3)); alignment.click()
+        let center = alignment.menuItems["Center"]
+        XCTAssertTrue(center.waitForExistence(timeout: 3)); center.click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Alignment committed", timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack gap alignment")
+
+        selectLayer("Section")
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.grid"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 6", timeout: 5))
+        insertFrame(expectedCount: 7)
+        selectLayer("Grid"); insertFrame(expectedCount: 8)
+        selectLayer("Grid"); insertFrame(expectedCount: 9)
+        selectLayer("Grid")
+        application.buttons["inspector.tab.layout"].click()
+        let columns = application.textFields["inspector.layout.container.columns"]
+        XCTAssertTrue(columns.waitForExistence(timeout: 3))
+        reveal(columns)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid two columns sparse row")
+        replace(columns, with: "3")
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Columns committed", timeout: 3))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 9", timeout: 5))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid three columns")
+
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "2", timeout: 3))
+        XCTAssertTrue(application.buttons["toolbar.redo"].isEnabled)
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "3", timeout: 3))
+        let reset = application.buttons["inspector.layout.container.columns.reset"]
+        reveal(reset); XCTAssertTrue(reset.isEnabled); reset.click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "2", timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid reset default")
+
+        application.menuBars.menuBarItems["File"].click()
+        let save = application.menuItems["Save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 3)); XCTAssertTrue(save.isEnabled); save.click()
+        XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 5))
+        terminateAndWait(application)
+
+        let reopenRecoveryDirectory = fixtureRoot.appendingPathComponent("structural-layout-reopen-recovery", isDirectory: true)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: reopenRecoveryDirectory)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 9", timeout: 5))
+        selectLayer("Section")
+        application.buttons["inspector.tab.layout"].click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.padding"], containing: "72"))
+        selectLayer("Stack")
+        application.buttons["inspector.tab.layout"].click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.axis"], containing: "horizontal"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.gap"], containing: "36"))
+        selectLayer("Grid")
+        application.buttons["inspector.tab.layout"].click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "2"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-017 save reopen")
+    }
+
+    // SF-0502-006, SF-0503-006, SF-0506-006
+    @MainActor
+    func testStructuralLayoutControlsRemainReachableAtPracticalMinimum() throws {
+        let application = launchWorkspace(windowAlignment: .right)
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.stack"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        application.buttons["inspector.tab.layout"].click()
+
+        let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
+        let identifiers = [
+            "inspector.layout.container.padding",
+            "inspector.layout.container.gap",
+            "inspector.layout.container.axis",
+            "inspector.layout.container.alignment",
+        ]
+        for identifier in identifiers {
+            let control = application.descendants(matching: .any)[identifier]
+            XCTAssertTrue(control.waitForExistence(timeout: 3), "Missing compact control \(identifier)")
+            for _ in 0..<6 where !control.isHittable {
+                scroll.scroll(byDeltaX: 0, deltaY: -220)
+            }
+            XCTAssertTrue(control.isHittable, "Compact control \(identifier) must be reachable")
+        }
+        attachWindowScreenshot(application, named: "SF-AUTHORING-017 practical minimum inspector")
+    }
+
     // SF-0201-002, SF-0201-006, SF-0201-008, SF-1505-006 through SF-1505-008
     @MainActor
     func testInspectorProvidesTruthfulUnavailableContentAndInteractionsDestinations() throws {

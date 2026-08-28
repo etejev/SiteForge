@@ -542,6 +542,23 @@ enum GridRowOffsetResolver {
 }
 
 extension DocumentPage {
+    /// Fits authored main-axis lengths into a bounded container without changing
+    /// canonical child geometry. Values are preserved while they fit; overflow
+    /// is reduced proportionally so resolved/rendered children cannot escape the
+    /// container merely because their insertion defaults are larger than a cell.
+    private func fittedMainAxisLengths(_ lengths: [Double], available: Double) -> [Double] {
+        guard !lengths.isEmpty else { return [] }
+        let bounded = lengths.map { max(1, $0) }
+        let total = bounded.reduce(0, +)
+        guard total > available else { return bounded }
+        let minimumTotal = Double(bounded.count)
+        guard available > minimumTotal else {
+            return Array(repeating: max(1, available / Double(bounded.count)), count: bounded.count)
+        }
+        let scale = available / total
+        return bounded.map { max(1, $0 * scale) }
+    }
+
     func resolvedStructuralGeometry() -> [NodeID: InsertionGeometry] {
         let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
         var result = Dictionary(uniqueKeysWithValues: nodes.compactMap { node in
@@ -551,15 +568,55 @@ extension DocumentPage {
             guard let parentGeometry = result[parent.id] else { continue }
             let children = parent.childIDs.compactMap { nodesByID[$0] }
             switch parent.kind {
-            case .stack:
-                let padding = parent.insertionNumberProperty("layout.padding") ?? 24
-                let gap = parent.insertionNumberProperty("layout.gap") ?? 24
-                var cursor = parentGeometry.origin.y + padding
-                for child in children {
+            case .section, .stack:
+                let padding = parent.insertionNumberProperty("layout.padding") ?? (parent.kind == .section ? 48 : 24)
+                let gap = parent.kind == .section ? 0 : (parent.insertionNumberProperty("layout.gap") ?? 24)
+                let axis = parent.kind == .section
+                    ? ContainerLayoutAxis.vertical
+                    : ContainerLayoutAxis(rawValue: parent.insertionStringProperty("layout.axis") ?? "vertical") ?? .vertical
+                let alignment = parent.kind == .section
+                    ? ContainerLayoutAlignment.start
+                    : ContainerLayoutAlignment(rawValue: parent.insertionStringProperty("layout.align") ?? "start") ?? .start
+                let contentWidth = max(1, parentGeometry.size.width - (2 * padding))
+                let contentHeight = max(1, parentGeometry.size.height - (2 * padding))
+                let availableMain = max(
+                    1,
+                    (axis == .vertical ? contentHeight : contentWidth) - Double(max(0, children.count - 1)) * gap
+                )
+                let mainLengths = fittedMainAxisLengths(
+                    children.map { child in
+                        guard let geometry = result[child.id] else { return 1 }
+                        return axis == .vertical ? geometry.size.height : geometry.size.width
+                    },
+                    available: availableMain
+                )
+                var cursor = axis == .vertical
+                    ? parentGeometry.origin.y + padding
+                    : parentGeometry.origin.x + padding
+                for (childIndex, child) in children.enumerated() {
                     guard var geometry = result[child.id] else { continue }
-                    geometry = .init(origin: .init(x: parentGeometry.origin.x + padding, y: cursor), size: geometry.size)
+                    if axis == .vertical {
+                        let width = alignment == .stretch ? contentWidth : min(geometry.size.width, contentWidth)
+                        let x: Double = switch alignment {
+                        case .start, .stretch: parentGeometry.origin.x + padding
+                        case .center: parentGeometry.origin.x + padding + (contentWidth - width) / 2
+                        case .end: parentGeometry.origin.x + padding + contentWidth - width
+                        }
+                        let height = mainLengths[childIndex]
+                        geometry = .init(origin: .init(x: x, y: cursor), size: .init(width: width, height: height))
+                        cursor += geometry.size.height + gap
+                    } else {
+                        let height = alignment == .stretch ? contentHeight : min(geometry.size.height, contentHeight)
+                        let y: Double = switch alignment {
+                        case .start, .stretch: parentGeometry.origin.y + padding
+                        case .center: parentGeometry.origin.y + padding + (contentHeight - height) / 2
+                        case .end: parentGeometry.origin.y + padding + contentHeight - height
+                        }
+                        let width = mainLengths[childIndex]
+                        geometry = .init(origin: .init(x: cursor, y: y), size: .init(width: width, height: height))
+                        cursor += geometry.size.width + gap
+                    }
                     result[child.id] = geometry
-                    cursor += geometry.size.height + gap
                 }
             case .grid:
                 let padding = parent.insertionNumberProperty("layout.padding") ?? 24
@@ -567,13 +624,18 @@ extension DocumentPage {
                 let columns = max(1, Int(parent.insertionNumberProperty("layout.grid.columns") ?? 2))
                 let usableWidth = max(1, parentGeometry.size.width - (2 * padding) - (Double(columns - 1) * gap))
                 let cellWidth = usableWidth / Double(columns)
-                let rowOffsets = GridRowOffsetResolver.resolve(
-                    childCount: children.count,
-                    columns: columns,
-                    startY: parentGeometry.origin.y + padding,
-                    gap: gap
-                ) { index in
-                    result[children[index].id]?.size.height
+                let rowCount = children.isEmpty ? 0 : (children.count + columns - 1) / columns
+                var authoredRowHeights = Array(repeating: 1.0, count: rowCount)
+                for (index, child) in children.enumerated() {
+                    authoredRowHeights[index / columns] = max(authoredRowHeights[index / columns], result[child.id]?.size.height ?? 1)
+                }
+                let availableHeight = max(1, parentGeometry.size.height - (2 * padding) - Double(max(0, rowCount - 1)) * gap)
+                let rowHeights = fittedMainAxisLengths(authoredRowHeights, available: availableHeight)
+                var rowOffsets = Array(repeating: parentGeometry.origin.y + padding, count: rowCount)
+                if rowCount > 1 {
+                    for row in 1..<rowCount {
+                        rowOffsets[row] = rowOffsets[row - 1] + rowHeights[row - 1] + gap
+                    }
                 }
                 for (index, child) in children.enumerated() {
                     guard var geometry = result[child.id] else { continue }
@@ -584,11 +646,11 @@ extension DocumentPage {
                             x: parentGeometry.origin.x + padding + Double(column) * (cellWidth + gap),
                             y: rowOffsets[row]
                         ),
-                        size: .init(width: cellWidth, height: geometry.size.height)
+                        size: .init(width: cellWidth, height: rowHeights[row])
                     )
                     result[child.id] = geometry
                 }
-            case .frame, .section, .text, .image, .component: break
+            case .frame, .text, .image, .component: break
             }
         }
         return result

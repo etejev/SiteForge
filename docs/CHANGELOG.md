@@ -11,6 +11,16 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Added native structural layout controls: Section padding; Stack
+  direction, padding, gap, and cross-axis alignment; and Grid columns, padding,
+  and gap now route through one identity-gated transaction registry and shared
+  child-geometry resolver. Draft validation, mixed/applicable subsets, Reset,
+  Undo/Redo, package reopen, recovery, and redacted diagnostics preserve stable
+  object/property identity. Oversized insertion-default children now resolve
+  inside bounded Stack/Grid content boxes without rewriting canonical child
+  geometry. Responsive container-layout overrides and advanced Stack/Grid
+  behavior remain explicitly deferred.
+
 - Added live Desktop, Tablet, and Mobile geometry authoring in the Layout
   Inspector. Desktop remains the base source; Tablet and Mobile fields expose
   inherited or authored provenance, commit isolated X/Y/Width/Height overrides,

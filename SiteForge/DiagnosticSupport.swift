@@ -69,6 +69,7 @@ struct BoundedDiagnosticBuffer<Record: Sendable>: Sendable {
 enum DiagnosticIdentifierDomain: String, Sendable {
     case canvasRender = "canvas-render"
     case command = "command"
+    case containerLayout = "container-layout"
     case document = "document"
     case dragDrop = "drag-drop"
     case geometryInspector = "geometry-inspector"

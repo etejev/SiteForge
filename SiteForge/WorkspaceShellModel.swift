@@ -927,6 +927,8 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var lastTransformAnnouncement = "Transform inactive"
     @Published private(set) var geometryInspectorFailure: GeometryInspectorError?
     @Published private(set) var lastGeometryInspectorAnnouncement = "Layout Inspector inactive"
+    @Published private(set) var containerLayoutFailure: ContainerLayoutError?
+    @Published private(set) var lastContainerLayoutAnnouncement = "Container layout inactive"
     @Published private(set) var designInspectorFailure: DesignInspectorError?
     @Published private(set) var lastDesignInspectorAnnouncement = "Design Inspector inactive"
     @Published private(set) var snapResolution: SnapResolution?
@@ -965,6 +967,7 @@ final class WorkspaceShellState: ObservableObject {
     private let textEditingRegistry = InlineTextCommandRegistry()
     private let transformRegistry = TransformCommandRegistry()
     private let geometryInspectorRegistry = GeometryInspectorCommandRegistry()
+    private let containerLayoutRegistry = ContainerLayoutCommandRegistry()
     private let designInspectorRegistry = DesignInspectorCommandRegistry()
     private let designBoxStyleRegistry = DesignBoxStyleCommandRegistry()
     private let typographyRegistry = TypographyCommandRegistry()
@@ -978,6 +981,7 @@ final class WorkspaceShellState: ObservableObject {
     let textEditingDiagnostics = TextEditDiagnostics()
     let transformDiagnostics = TransformDiagnostics()
     let geometryInspectorDiagnostics = GeometryInspectorDiagnostics()
+    let containerLayoutDiagnostics = ContainerLayoutDiagnostics()
     let snapDiagnostics = SnapDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
     private let announcementPoster: AccessibilityAnnouncementPoster
@@ -1356,6 +1360,134 @@ final class WorkspaceShellState: ObservableObject {
     var geometryInspectorSelectionKey: String {
         selectionState.orderedIDs.map(\.description).joined(separator: ",")
             + ":\(documentSession.document.revision)"
+    }
+
+    var hasContainerLayoutSelection: Bool {
+        selectedCanonicalNodes.contains { [.section, .stack, .grid].contains($0.kind) }
+    }
+
+    func containerLayoutValue(for field: ContainerLayoutField) -> ContainerLayoutInspectorValue {
+        containerLayoutRegistry.value(
+            for: field,
+            in: documentSession.document,
+            context: transformValidationContext
+        )
+    }
+
+    func containerLayoutAvailability(for field: ContainerLayoutField) -> TransformAvailability {
+        guard let plan = canvasRenderPlan, let pageID = effectiveSelectedPageID else {
+            return .disabled("Wait for the canvas, then select a Section, Stack, or Grid.")
+        }
+        let sample: ContainerLayoutValue = switch field {
+        case .padding, .gap: .number(0)
+        case .columns: .number(1)
+        case .axis: .axis(.vertical)
+        case .alignment: .alignment(.start)
+        }
+        do {
+            _ = try containerLayoutRegistry.prepare(.init(
+                identity: .init(editID: GeometryInspectorEditID(), documentID: documentSession.document.id,
+                    pageID: pageID, revision: documentSession.document.revision,
+                    sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration),
+                orderedNodeIDs: selectionState.orderedIDs, field: field, value: sample,
+                provenance: .automation, cancelled: false
+            ), in: documentSession.document, context: transformValidationContext)
+            return .enabled
+        } catch ContainerLayoutError.noChanges {
+            return .enabled
+        } catch {
+            return .disabled(error.localizedDescription)
+        }
+    }
+
+    @discardableResult
+    func commitContainerLayout(
+        field: ContainerLayoutField,
+        value: ContainerLayoutValue?,
+        provenance: ContainerLayoutProvenance
+    ) -> Bool {
+        guard let plan = canvasRenderPlan, let pageID = effectiveSelectedPageID else { return false }
+        let started = DispatchTime.now().uptimeNanoseconds
+        let command = ContainerLayoutCommand(
+            identity: .init(editID: GeometryInspectorEditID(), documentID: documentSession.document.id,
+                pageID: pageID, revision: documentSession.document.revision,
+                sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration),
+            orderedNodeIDs: selectionState.orderedIDs,
+            field: field,
+            value: value,
+            provenance: provenance,
+            cancelled: false
+        )
+        do {
+            let prepared = try containerLayoutRegistry.prepare(
+                command, in: documentSession.document, context: transformValidationContext
+            )
+            _ = try documentSession.execute(prepared.documentCommand)
+            containerLayoutFailure = nil
+            let reset = value == nil ? " reset to default" : " committed"
+            let skipped = prepared.skippedNodeIDs.isEmpty
+                ? ""
+                : "; \(prepared.skippedNodeIDs.count) incompatible selection\(prepared.skippedNodeIDs.count == 1 ? "" : "s") unchanged"
+            lastContainerLayoutAnnouncement = "\(field.title)\(reset) for \(prepared.applicableNodeIDs.count) container\(prepared.applicableNodeIDs.count == 1 ? "" : "s")\(skipped)"
+            announcementPoster.post(lastContainerLayoutAnnouncement)
+            recordContainerLayoutDiagnostic(command, started: started, result: .success, failure: nil)
+            return true
+        } catch let error as ContainerLayoutError {
+            containerLayoutFailure = error
+            lastContainerLayoutAnnouncement = error.localizedDescription
+            announcementPoster.post(lastContainerLayoutAnnouncement)
+            let result: ContainerLayoutDiagnosticResult = error == .cancelled ? .cancelled
+                : [.staleDocument, .staleRevision, .staleRenderer, .selectionMismatch].contains(error) ? .stale : .failure
+            recordContainerLayoutDiagnostic(command, started: started, result: result, failure: error)
+            return false
+        } catch {
+            containerLayoutFailure = .staleRevision
+            lastContainerLayoutAnnouncement = ContainerLayoutError.staleRevision.localizedDescription
+            announcementPoster.post(lastContainerLayoutAnnouncement)
+            recordContainerLayoutDiagnostic(command, started: started, result: .stale, failure: .staleRevision)
+            return false
+        }
+    }
+
+    private func recordContainerLayoutDiagnostic(
+        _ command: ContainerLayoutCommand,
+        started: UInt64,
+        result: ContainerLayoutDiagnosticResult,
+        failure: ContainerLayoutError?
+    ) {
+        let record = ContainerLayoutDiagnosticFactory.make(
+            command: command,
+            durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000,
+            resultRevision: result == .success ? documentSession.document.revision : nil,
+            result: result,
+            failure: failure
+        )
+        Task { await containerLayoutDiagnostics.append(record) }
+    }
+
+    func cancelContainerLayoutDraft(field: ContainerLayoutField) {
+        containerLayoutFailure = nil
+        lastContainerLayoutAnnouncement = "Container layout draft cancelled; committed layout is unchanged"
+        announcementPoster.post(lastContainerLayoutAnnouncement)
+        guard let plan = canvasRenderPlan, let pageID = effectiveSelectedPageID else { return }
+        let command = ContainerLayoutCommand(
+            identity: .init(
+                editID: GeometryInspectorEditID(), documentID: documentSession.document.id,
+                pageID: pageID, revision: documentSession.document.revision,
+                sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration
+            ),
+            orderedNodeIDs: selectionState.orderedIDs,
+            field: field,
+            value: nil,
+            provenance: .keyboard,
+            cancelled: true
+        )
+        recordContainerLayoutDiagnostic(
+            command,
+            started: DispatchTime.now().uptimeNanoseconds,
+            result: .cancelled,
+            failure: .cancelled
+        )
     }
 
     private var selectedCanonicalNodes: [DocumentNode] {

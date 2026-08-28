@@ -91,6 +91,98 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(gridResolved[gridChildren[0].id]?.size.width, 84)
     }
 
+    // SF-0502-003 / SF-0503-003 — authored controls and renderer adoption use
+    // the same deterministic resolved child frames and stable child ordering.
+    func testStructuralResolverAppliesSectionPaddingStackAxisAlignmentAndSparseGrid() throws {
+        let fixture = makeFixture()
+        let registry = InsertionCommandRegistry()
+        func prepared(_ kind: InsertionKind, id: NodeID) throws -> PreparedInsertion {
+            try registry.prepare(command(kind, fixture: fixture, nodeID: id), in: fixture.document, context: fixture.context)
+        }
+        let sectionID = NodeID(), stackID = NodeID(), gridID = NodeID()
+        var section = try prepared(.section, id: sectionID).node
+        var stack = try prepared(.stack, id: stackID).node
+        var grid = try prepared(.grid, id: gridID).node
+        let children = (0..<5).map { _ in NodeID() }
+
+        func set(_ node: inout DocumentNode, _ key: String, _ value: PropertyValue) {
+            let index = node.properties.firstIndex { $0.key.rawValue == key }!
+            let property = node.properties[index]
+            node.properties[index] = .init(id: property.id, key: property.key, value: value, origin: .authored)
+        }
+        set(&section, "layout.padding", .number(60))
+        set(&stack, "layout.axis", .string("horizontal"))
+        set(&stack, "layout.padding", .number(20))
+        set(&stack, "layout.gap", .number(10))
+        set(&stack, "layout.align", .string("end"))
+        set(&grid, "layout.padding", .number(10))
+        set(&grid, "layout.gap", .number(10))
+        set(&grid, "layout.grid.columns", .number(3))
+
+        section.childIDs = [children[0]]
+        stack.childIDs = [children[1], children[2]]
+        grid.childIDs = [children[3], children[4]]
+        var document = fixture.document
+        document.pages[0].nodes[0].childIDs = [sectionID, stackID, gridID, fixture.textParentID]
+        document.pages[0].nodes += [section, stack, grid]
+        document.pages[0].nodes += [
+            DocumentNode(id: children[0], kind: .frame, name: "Section child", parent: .node(sectionID), properties: geometryProperties(children[0], x: 900, y: 900, width: 80, height: 30)),
+            DocumentNode(id: children[1], kind: .frame, name: "Stack one", parent: .node(stackID), properties: geometryProperties(children[1], x: 900, y: 900, width: 40, height: 30)),
+            DocumentNode(id: children[2], kind: .frame, name: "Stack two", parent: .node(stackID), properties: geometryProperties(children[2], x: 900, y: 900, width: 60, height: 50)),
+            DocumentNode(id: children[3], kind: .frame, name: "Grid one", parent: .node(gridID), properties: geometryProperties(children[3], x: 900, y: 900, width: 40, height: 30)),
+            DocumentNode(id: children[4], kind: .frame, name: "Grid two", parent: .node(gridID), properties: geometryProperties(children[4], x: 900, y: 900, width: 40, height: 50)),
+        ]
+        XCTAssertNoThrow(try document.validate())
+
+        let resolved = document.pages[0].resolvedStructuralGeometry()
+        XCTAssertEqual(resolved[children[0]]?.origin, .init(x: section.insertionGeometry!.origin.x + 60, y: section.insertionGeometry!.origin.y + 60))
+        XCTAssertEqual(resolved[children[1]]?.origin.x, stack.insertionGeometry!.origin.x + 20)
+        XCTAssertEqual(resolved[children[2]]?.origin.x, stack.insertionGeometry!.origin.x + 20 + 40 + 10)
+        XCTAssertEqual(resolved[children[1]]?.origin.y, stack.insertionGeometry!.origin.y + stack.insertionGeometry!.size.height - 20 - 30)
+        XCTAssertEqual(resolved[children[2]]?.origin.y, stack.insertionGeometry!.origin.y + stack.insertionGeometry!.size.height - 20 - 50)
+        XCTAssertEqual(resolved[children[3]]?.origin.y, resolved[children[4]]?.origin.y)
+        XCTAssertEqual(resolved[children[3]]?.size.width, resolved[children[4]]?.size.width)
+        XCTAssertEqual(document.pages[0].nodes.first { $0.id == gridID }?.childIDs, [children[3], children[4]])
+    }
+
+    // SF-0502-003 / SF-0503-003 / SF-0506-003 — insertion-size children
+    // resolve inside bounded Stack/Grid content boxes without rewriting their
+    // canonical authored frames.
+    func testStructuralResolverFitsDefaultChildrenInsideBoundedContainers() throws {
+        let fixture = makeFixture()
+        let stackID = NodeID(), gridID = NodeID()
+        var stack = try prepare(.stack, fixture: fixture, nodeID: stackID).node
+        var grid = try prepare(.grid, fixture: fixture, nodeID: gridID).node
+        let stackChildren = [NodeID(), NodeID()]
+        let gridChildren = [NodeID(), NodeID(), NodeID()]
+        stack.childIDs = stackChildren
+        grid.childIDs = gridChildren
+
+        var document = fixture.document
+        document.pages[0].nodes[0].childIDs = [stackID, gridID, fixture.textParentID]
+        document.pages[0].nodes += [stack, grid]
+        document.pages[0].nodes += stackChildren.map {
+            DocumentNode(id: $0, kind: .frame, name: "Stack child", parent: .node(stackID), properties: geometryProperties($0, x: 900, y: 900, width: 240, height: 160))
+        }
+        document.pages[0].nodes += gridChildren.map {
+            DocumentNode(id: $0, kind: .frame, name: "Grid child", parent: .node(gridID), properties: geometryProperties($0, x: 900, y: 900, width: 240, height: 160))
+        }
+
+        let resolved = document.pages[0].resolvedStructuralGeometry()
+        for (containerID, childIDs) in [(stackID, stackChildren), (gridID, gridChildren)] {
+            let container = try XCTUnwrap(resolved[containerID])
+            for childID in childIDs {
+                let child = try XCTUnwrap(resolved[childID])
+                XCTAssertGreaterThanOrEqual(child.origin.x, container.origin.x)
+                XCTAssertGreaterThanOrEqual(child.origin.y, container.origin.y)
+                XCTAssertLessThanOrEqual(child.origin.x + child.size.width, container.origin.x + container.size.width)
+                XCTAssertLessThanOrEqual(child.origin.y + child.size.height, container.origin.y + container.size.height)
+            }
+        }
+        XCTAssertEqual(document.pages[0].nodes.first { $0.id == stackChildren[0] }?.insertionGeometry?.size, .init(width: 240, height: 160))
+        XCTAssertEqual(document.pages[0].nodes.first { $0.id == gridChildren[0] }?.insertionGeometry?.size, .init(width: 240, height: 160))
+    }
+
     // SF-0407-007, SF-0503-007, SF-1601-007
     func testGridRowOffsetsReadEveryLargeFixtureChildExactlyOnce() {
         let childCount = 10_000
