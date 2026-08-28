@@ -233,6 +233,156 @@ struct DesignBoxStyleCommandRegistry: Sendable {
     }
 }
 
+// SF-0507-001...008 — bounded canonical plain-text typography. Installed
+// font availability is deliberately not serialized: the authored family is
+// stable intent, while AppKit resolves that intent (or a deterministic system
+// fallback) into an immutable renderer/editor snapshot.
+enum TypographyInspectorValue: Equatable, Sendable {
+    case unavailable(String)
+    case single(CanonicalTypography, PropertyOrigin)
+    case mixed(applicableCount: Int, skippedCount: Int)
+}
+
+enum TypographyEdit: Sendable {
+    case reset
+    case family(String?)
+    case weight(CanonicalFontWeight?)
+    case size(Double?)
+    case lineHeight(Double?)
+    case tracking(Double?)
+    case alignment(CanonicalTextAlignment?)
+}
+
+struct TypographyCommand: Sendable {
+    let identity: DesignInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let edit: TypographyEdit
+    let provenance: DesignInspectorProvenance
+    let cancelled: Bool
+}
+
+enum TypographyCommandError: Error, LocalizedError, Equatable, Sendable {
+    case stale, cancelled, invalidValue, unavailable(String), noApplicableTargets, noChanges
+    var errorDescription: String? {
+        switch self {
+        case .stale: "The typography edit is stale; committed text style is unchanged."
+        case .cancelled: "The typography draft was cancelled; committed text style is unchanged."
+        case .invalidValue: "Enter a valid font family and finite typography values within the supported ranges."
+        case .unavailable(let reason): reason
+        case .noApplicableTargets: "The selection has no plain Text object that supports typography."
+        case .noChanges: "Typography already has that value."
+        }
+    }
+}
+
+struct TypographyCommandRegistry: Sendable {
+    static let requirementIDs = Set((1...8).map { String(format: "SF-0507-%03d", $0) })
+    static let namespace = CanonicalTypography.namespace
+
+    static func resolvedTypography(for node: DocumentNode) -> CanonicalTypography? {
+        guard node.kind == .text else { return nil }
+        func string(_ suffix: String) -> String? { node.insertionStringProperty(namespace + suffix) }
+        func number(_ suffix: String) -> Double? { node.insertionNumberProperty(namespace + suffix) }
+        let fallback = CanonicalTypography.defaultValue
+        let value = CanonicalTypography(
+            family: string("family") ?? fallback.family,
+            weight: string("weight").flatMap(CanonicalFontWeight.init(rawValue:)) ?? fallback.weight,
+            size: number("size") ?? fallback.size,
+            lineHeight: number("lineHeight") ?? fallback.lineHeight,
+            tracking: number("tracking") ?? fallback.tracking,
+            alignment: string("alignment").flatMap(CanonicalTextAlignment.init(rawValue:)) ?? fallback.alignment
+        )
+        return value.isValid ? value : nil
+    }
+
+    static func selectionValue(nodes: [DocumentNode]) -> TypographyInspectorValue {
+        guard !nodes.isEmpty else { return .unavailable("Select plain Text to edit typography.") }
+        let applicable = nodes.filter { $0.kind == .text }
+        guard !applicable.isEmpty else { return .unavailable("Typography applies only to plain Text in this milestone.") }
+        let values = applicable.compactMap(resolvedTypography)
+        guard values.count == applicable.count, let first = values.first,
+              values.dropFirst().allSatisfy({ $0 == first }) else {
+            return .mixed(applicableCount: applicable.count, skippedCount: nodes.count - applicable.count)
+        }
+        let origin: PropertyOrigin = applicable.flatMap(\.properties).contains { $0.key.rawValue.hasPrefix(namespace) && $0.origin == .authored } ? .authored : .defaulted
+        return .single(first, origin)
+    }
+
+    func prepare(_ command: TypographyCommand, in document: CanonicalDocument, context: TransformValidationContext) throws -> PreparedDesignInspectorEdit {
+        guard !command.cancelled else { throw TypographyCommandError.cancelled }
+        guard context.isLifecycleAvailable else { throw TypographyCommandError.unavailable(context.lifecycleDisabledReason ?? "Typography editing is unavailable.") }
+        guard command.identity.documentID == document.id,
+              command.identity.pageID == context.activePageID,
+              command.identity.revision == document.revision,
+              command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration,
+              command.orderedNodeIDs == context.selectedNodeIDs,
+              !command.orderedNodeIDs.isEmpty,
+              Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count,
+              let page = document.pages.first(where: { $0.id == command.identity.pageID }) else {
+            throw TypographyCommandError.stale
+        }
+        var applicable: [NodeID] = [], skipped: [NodeID] = [], reasons: [NodeID: String] = [:]
+        var changes: [DocumentCommand] = []
+        for id in command.orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw TypographyCommandError.stale }
+            guard context.availableNodeIDs.contains(id), !node.selectionBooleanProperty("hidden"), !node.selectionBooleanProperty("locked") else {
+                throw TypographyCommandError.unavailable("A selected object is unavailable, hidden, or locked.")
+            }
+            guard node.kind == .text, var style = Self.resolvedTypography(for: node) else {
+                skipped.append(id); reasons[id] = "This object kind does not support typography."; continue
+            }
+            if case .reset = command.edit {
+                applicable.append(id)
+                changes.append(contentsOf: node.properties
+                    .filter { $0.key.rawValue.hasPrefix(Self.namespace) }
+                    .map { .removeProperty(.init(pageID: page.id, nodeID: id, propertyID: $0.id)) })
+                continue
+            }
+            let key: String
+            let value: PropertyValue?
+            switch command.edit {
+            case .reset:
+                preconditionFailure("Reset is handled before scalar typography edits.")
+            case .family(let next):
+                key = "family"; value = next.map(PropertyValue.string)
+                if let next { style = .init(family: next, weight: style.weight, size: style.size, lineHeight: style.lineHeight, tracking: style.tracking, alignment: style.alignment) }
+            case .weight(let next):
+                key = "weight"; value = next.map { .string($0.rawValue) }
+                if let next { style = .init(family: style.family, weight: next, size: style.size, lineHeight: style.lineHeight, tracking: style.tracking, alignment: style.alignment) }
+            case .size(let next):
+                key = "size"; value = next.map(PropertyValue.number)
+                if let next { style = .init(family: style.family, weight: style.weight, size: next, lineHeight: style.lineHeight, tracking: style.tracking, alignment: style.alignment) }
+            case .lineHeight(let next):
+                key = "lineHeight"; value = next.map(PropertyValue.number)
+                if let next { style = .init(family: style.family, weight: style.weight, size: style.size, lineHeight: next, tracking: style.tracking, alignment: style.alignment) }
+            case .tracking(let next):
+                key = "tracking"; value = next.map(PropertyValue.number)
+                if let next { style = .init(family: style.family, weight: style.weight, size: style.size, lineHeight: style.lineHeight, tracking: next, alignment: style.alignment) }
+            case .alignment(let next):
+                key = "alignment"; value = next.map { .string($0.rawValue) }
+                if let next { style = .init(family: style.family, weight: style.weight, size: style.size, lineHeight: style.lineHeight, tracking: style.tracking, alignment: next) }
+            }
+            guard style.isValid else { throw TypographyCommandError.invalidValue }
+            applicable.append(id)
+            let fullKey = Self.namespace + key
+            let old = node.properties.first { $0.key.rawValue == fullKey }
+            if let value {
+                if old?.value != value || old?.origin != .authored {
+                    changes.append(.setProperty(.init(pageID: page.id, nodeID: id, property: .init(id: old?.id ?? PropertyID(), key: .init(rawValue: fullKey), value: value, origin: .authored))))
+                }
+            } else if let old {
+                changes.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: old.id)))
+            }
+        }
+        guard !applicable.isEmpty else { throw TypographyCommandError.noApplicableTargets }
+        guard !changes.isEmpty else { throw TypographyCommandError.noChanges }
+        let batch: DocumentCommand = .batch(changes)
+        guard CommandRegistry().availability(for: batch, in: document).isEnabled else { throw TypographyCommandError.stale }
+        return .init(applicableNodeIDs: applicable, skippedNodeIDs: skipped, skippedReasons: reasons, documentCommand: batch)
+    }
+}
+
 // SF-0508-001...008 — canonical ordered fill-layer foundation. Layer and
 // stop identities belong to the document representation; previews and picker
 // drafts deliberately do not. The property codec/registry adoption follows in

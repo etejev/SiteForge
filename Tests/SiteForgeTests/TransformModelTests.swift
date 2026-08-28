@@ -1359,6 +1359,100 @@ final class TransformModelTests: XCTestCase {
             XCTAssertEqual($0 as? DesignBoxStyleError, .stale)
         }
     }
+
+    func testTypographyRegistryValidatesMixesResetsPersistsAndUndoRedo() throws {
+        var fixture = makeFixture(selectedIDs: [NodeID]())
+        fixture.document.pages[0].nodes[1].kind = .text
+        fixture.document.pages[0].nodes[2].kind = .frame
+        let registry = TypographyCommandRegistry()
+        func command(
+            _ document: CanonicalDocument,
+            ids: [NodeID],
+            edit: TypographyEdit,
+            cancelled: Bool = false,
+            documentID: DocumentID? = nil
+        ) -> TypographyCommand {
+            .init(identity: .init(
+                documentID: documentID ?? document.id, pageID: fixture.pageID,
+                revision: document.revision, sceneID: fixture.sceneID,
+                rendererGeneration: fixture.rendererGeneration
+            ), orderedNodeIDs: ids, edit: edit, provenance: .automation, cancelled: cancelled)
+        }
+        let mixed = try registry.prepare(
+            command(fixture.document, ids: [fixture.nodeID, fixture.secondNodeID], edit: .family("Menlo")),
+            in: fixture.document,
+            context: fixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID])
+        )
+        XCTAssertEqual(mixed.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(mixed.skippedNodeIDs, [fixture.secondNodeID])
+        XCTAssertFalse(mixed.skippedReasons.values.joined().contains(fixture.nodeID.description))
+
+        var compatibleDocument = fixture.document
+        compatibleDocument.pages[0].nodes[2].kind = .text
+        let compatibleFixture = fixture.with(document: compatibleDocument)
+        let compatible = try registry.prepare(
+            command(compatibleDocument, ids: [fixture.nodeID, fixture.secondNodeID], edit: .size(19)),
+            in: compatibleDocument,
+            context: compatibleFixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID])
+        )
+        XCTAssertEqual(compatible.applicableNodeIDs, [fixture.nodeID, fixture.secondNodeID])
+        XCTAssertTrue(compatible.skippedNodeIDs.isEmpty)
+        let compatibleSession = DocumentSession(document: compatibleDocument)
+        _ = try compatibleSession.execute(compatible.documentCommand)
+        XCTAssertEqual(
+            compatibleSession.document.pages[0].nodes.filter { $0.id == fixture.nodeID || $0.id == fixture.secondNodeID }
+                .compactMap(TypographyCommandRegistry.resolvedTypography).map(\.size),
+            [19, 19]
+        )
+        try compatibleSession.undo()
+        XCTAssertEqual(
+            compatibleSession.document.pages[0].nodes.filter { $0.id == fixture.nodeID || $0.id == fixture.secondNodeID }
+                .compactMap(TypographyCommandRegistry.resolvedTypography).map(\.size),
+            [14, 14]
+        )
+        try compatibleSession.redo()
+
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(mixed.documentCommand)
+        for (edit, expected) in [
+            (TypographyEdit.weight(.bold), CanonicalTypography(family: "Menlo", weight: .bold, size: 14, lineHeight: 17, tracking: 0, alignment: .leading)),
+            (.size(24), CanonicalTypography(family: "Menlo", weight: .bold, size: 24, lineHeight: 17, tracking: 0, alignment: .leading)),
+            (.lineHeight(30), CanonicalTypography(family: "Menlo", weight: .bold, size: 24, lineHeight: 30, tracking: 0, alignment: .leading)),
+            (.tracking(1.5), CanonicalTypography(family: "Menlo", weight: .bold, size: 24, lineHeight: 30, tracking: 1.5, alignment: .leading)),
+            (.alignment(.center), CanonicalTypography(family: "Menlo", weight: .bold, size: 24, lineHeight: 30, tracking: 1.5, alignment: .center)),
+        ] {
+            let prepared = try registry.prepare(command(session.document, ids: [fixture.nodeID], edit: edit), in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))
+            _ = try session.execute(prepared.documentCommand)
+            let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+            XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: node), expected)
+        }
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
+        let propertyIDs = session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!.properties
+            .filter { $0.key.rawValue.hasPrefix(TypographyCommandRegistry.namespace) }.map(\.id)
+        try session.undo(); try session.redo()
+        XCTAssertEqual(propertyIDs, session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!.properties
+            .filter { $0.key.rawValue.hasPrefix(TypographyCommandRegistry.namespace) }.map(\.id))
+
+        let reset = try registry.prepare(command(session.document, ids: [fixture.nodeID], edit: .reset), in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))
+        _ = try session.execute(reset.documentCommand)
+        XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!), .defaultValue)
+        try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!.properties
+            .filter { $0.key.rawValue.hasPrefix(TypographyCommandRegistry.namespace) }.map(\.id), propertyIDs)
+
+        for edit in [TypographyEdit.size(.nan), .size(0), .lineHeight(.infinity), .tracking(101), .family(" bad "), .family("Bad\nFamily")] {
+            XCTAssertThrowsError(try registry.prepare(command(session.document, ids: [fixture.nodeID], edit: edit), in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+                XCTAssertEqual($0 as? TypographyCommandError, .invalidValue)
+            }
+        }
+        XCTAssertThrowsError(try registry.prepare(command(session.document, ids: [fixture.nodeID], edit: .size(18), cancelled: true), in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? TypographyCommandError, .cancelled)
+        }
+        XCTAssertThrowsError(try registry.prepare(command(session.document, ids: [fixture.nodeID], edit: .size(18), documentID: DocumentID()), in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? TypographyCommandError, .stale)
+        }
+    }
 }
 
 private struct TransformFixture {

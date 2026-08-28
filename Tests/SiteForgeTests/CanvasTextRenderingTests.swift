@@ -135,6 +135,47 @@ final class CanvasTextRenderingTests: XCTestCase {
         }
     }
 
+    func testCanonicalTypographySharesRendererAndInlineMetricsAcrossZoomAndAlignment() throws {
+        for zoom in [0.25, 1.0, 8.0] {
+            for alignment in [CanvasTextAlignment.leading, .center, .trailing] {
+                let typography = CanvasTypography(
+                    authoredFamily: "Menlo", resolvedFamily: "Menlo", weight: "bold",
+                    size: 18, lineHeight: 26, tracking: 1.25,
+                    alignment: alignment, usesFallback: false
+                )
+                let rect = CGRect(x: -48, y: 72, width: 240 * zoom, height: 96 * zoom)
+                let committed = CanvasTextLayout(
+                    viewportObjectRect: rect, zoom: zoom,
+                    text: "Typography\nparity", typography: typography
+                )
+                let editor = InlineCanvasTextView()
+                editor.string = "Typography\nparity"
+                editor.frame = rect
+                editor.applyCanvasTextLayout(committed)
+                XCTAssertEqual(editor.frame, committed.viewportObjectRect)
+                XCTAssertEqual(editor.font?.fontName, committed.font.fontName)
+                XCTAssertEqual(editor.font?.pointSize ?? 0, committed.fontSize, accuracy: 0.000_001)
+                XCTAssertEqual(editor.textContainerInset, committed.textContainerInset)
+                XCTAssertEqual(editor.alignment, committed.alignment)
+                XCTAssertEqual(editor.typingAttributes[.kern] as? CGFloat, committed.tracking)
+                XCTAssertTrue(committed.isInsideObjectRect)
+                XCTAssertEqual(committed.lineHeight, min(max(committed.fontSize * 0.5, 26 * zoom), rect.height), accuracy: 0.000_001)
+            }
+        }
+
+        let fallback = CanvasTypography(
+            authoredFamily: "Unavailable SiteForge Test Font", resolvedFamily: "System",
+            weight: "regular", size: 14, lineHeight: 17, tracking: 0,
+            alignment: .leading, usesFallback: true
+        )
+        let fallbackLayout = CanvasTextLayout(
+            viewportObjectRect: CGRect(x: 0, y: 0, width: 180, height: 48),
+            zoom: 1, text: "Fallback", typography: fallback
+        )
+        XCTAssertEqual(fallback.authoredFamily, "Unavailable SiteForge Test Font")
+        XCTAssertEqual(fallbackLayout.font.familyName, NSFont.systemFont(ofSize: 14).familyName)
+    }
+
     // SF-0406-001, SF-0406-002, SF-0508-005 — committed plain-text glyphs
     // use the production CATextLayer path and inherit authored object opacity
     // exactly like the tiled surface (including fully transparent text).

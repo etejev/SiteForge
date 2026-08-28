@@ -11,6 +11,13 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Added production typography controls for plain Text in the Design Inspector:
+  font family with deterministic missing-font fallback, four bounded weights,
+  size, explicit line height, tracking, leading/center/trailing alignment, and
+  Reset. The native inline editor and committed canvas now share the same
+  typography metrics, while edits remain atomic, undoable, persistent, and
+  accessible through native fields and pickers.
+
 - Added native Design Inspector authoring for a uniform border (colour, width,
   and solid/dashed/dotted style), uniform corner radius, and one production
   drop shadow on Frame, Section, Stack, and Grid. These edits are canonical,

@@ -150,6 +150,21 @@ struct InlineTextEditorPresentation: Equatable, Sendable {
     let text: String
     let selection: TextEditRange
     let frame: WorldRect
+    let typography: CanvasTypography?
+
+    init(
+        identity: TextEditOperationIdentity,
+        text: String,
+        selection: TextEditRange,
+        frame: WorldRect,
+        typography: CanvasTypography? = nil
+    ) {
+        self.identity = identity
+        self.text = text
+        self.selection = selection
+        self.frame = frame
+        self.typography = typography
+    }
 }
 
 enum InlineTextEditingPolicy {

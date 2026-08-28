@@ -1896,11 +1896,16 @@ private struct DesignInspectorFieldsView: View {
     @FocusState private var borderWidthFocused: Bool
     @FocusState private var radiusFocused: Bool
     @FocusState private var shadowFocused: Bool
+    @FocusState private var typographyFocusedField: TypographyDraftField?
     @State private var hexDraft = ""
     @State private var opacityDraft = ""
     @State private var borderWidthDraft = ""
     @State private var radiusDraft = ""
     @State private var shadowDraft = ""
+    @State private var fontFamilyDraft = ""
+    @State private var fontSizeDraft = ""
+    @State private var lineHeightDraft = ""
+    @State private var trackingDraft = ""
     @State private var message: String?
 
     /// Includes the current revision and is used to reject a command queued
@@ -1982,6 +1987,7 @@ private struct DesignInspectorFieldsView: View {
             if let message { Text(message).font(.caption).foregroundStyle(.red).accessibilityIdentifier("inspector.design.validation") }
             Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("inspector.design.announcement")
             FillLayerListInspectorView(state: state)
+            typographyControls
             boxStyleControls
         }
         .accessibilityElement(children: .contain)
@@ -2027,6 +2033,15 @@ private struct DesignInspectorFieldsView: View {
             } else { shadowDraft = "" }
         case .mixed, .unavailable:
             borderWidthDraft = ""; radiusDraft = ""; shadowDraft = ""
+        }
+        switch state.typographyInspectorValue() {
+        case .single(let typography, _):
+            fontFamilyDraft = typography.family
+            fontSizeDraft = Self.formatTypographyNumber(typography.size)
+            lineHeightDraft = Self.formatTypographyNumber(typography.lineHeight)
+            trackingDraft = Self.formatTypographyNumber(typography.tracking)
+        case .mixed, .unavailable:
+            fontFamilyDraft = ""; fontSizeDraft = ""; lineHeightDraft = ""; trackingDraft = ""
         }
     }
 
@@ -2107,6 +2122,143 @@ private struct DesignInspectorFieldsView: View {
     private func unavailableHint(_ value: DesignInspectorOpacityValue) -> String {
         if case .unavailable(let reason) = value { return reason }
         return ""
+    }
+
+    private enum TypographyDraftField: Hashable { case family, size, lineHeight, tracking }
+
+    @ViewBuilder private var typographyControls: some View {
+        let value = state.typographyInspectorValue()
+        let typography: CanonicalTypography? = if case .single(let style, _) = value { style } else { nil }
+        let enabled: Bool = if case .unavailable = value { false } else { true }
+        Divider()
+        HStack {
+            Text("Typography").font(.headline)
+            Spacer()
+            Button("Reset") { commitTypography(.reset, operation: "reset") }
+                .disabled(!enabled)
+                .accessibilityIdentifier("inspector.design.typography.reset")
+        }
+        TextField("Font family", text: $fontFamilyDraft)
+            .textFieldStyle(.roundedBorder).disabled(!enabled)
+            .focused($typographyFocusedField, equals: .family)
+            .onSubmit { commitFontFamily() }
+            .onChange(of: typographyFocusedField) { old, current in
+                if old == .family && current != .family { commitFontFamily(provenance: .focusLoss) }
+            }
+            .accessibilityLabel("Font family")
+            .accessibilityValue(typographyAccessibility(value, component: "family"))
+            .accessibilityHint(typographyHint(value))
+            .accessibilityIdentifier("inspector.design.typography.family")
+        HStack(spacing: 7) {
+            Picker("Weight", selection: Binding(
+                get: { typography?.weight ?? .regular },
+                set: { commitTypography(.weight($0), operation: "weight", provenance: .picker) }
+            )) {
+                ForEach(CanonicalFontWeight.allCases, id: \.rawValue) { Text($0.rawValue.capitalized).tag($0) }
+            }
+            .disabled(!enabled)
+            .accessibilityIdentifier("inspector.design.typography.weight")
+            Picker("Alignment", selection: Binding(
+                get: { typography?.alignment ?? .leading },
+                set: { commitTypography(.alignment($0), operation: "alignment", provenance: .picker) }
+            )) {
+                ForEach(CanonicalTextAlignment.allCases, id: \.rawValue) { Text($0.rawValue.capitalized).tag($0) }
+            }
+            .labelsHidden().disabled(!enabled)
+            .accessibilityLabel("Paragraph alignment")
+            .accessibilityIdentifier("inspector.design.typography.alignment")
+        }
+        HStack(alignment: .top, spacing: 7) {
+            typographyNumberField("Size", text: $fontSizeDraft, field: .size, value: typography?.size)
+            typographyNumberField("Line height", text: $lineHeightDraft, field: .lineHeight, value: typography?.lineHeight)
+            typographyNumberField("Tracking", text: $trackingDraft, field: .tracking, value: typography?.tracking)
+        }
+        Text(typographyProvenance(value))
+            .font(.caption2).foregroundStyle(.secondary)
+            .accessibilityIdentifier("inspector.design.typography.status")
+        if let fallback = state.typographyResolutionStatus {
+            Text(fallback).font(.caption2).foregroundStyle(.orange)
+                .accessibilityIdentifier("inspector.design.typography.fallback")
+        }
+    }
+
+    private func typographyNumberField(
+        _ label: String,
+        text: Binding<String>,
+        field: TypographyDraftField,
+        value: Double?
+    ) -> some View {
+        let available: Bool = if case .unavailable = state.typographyInspectorValue() { false } else { true }
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            TextField(label, text: text)
+                .textFieldStyle(.roundedBorder).monospacedDigit().disabled(!available)
+                .focused($typographyFocusedField, equals: field)
+                .onSubmit { commitTypographyNumber(field) }
+                .onChange(of: typographyFocusedField) { old, current in
+                    if old == field && current != field { commitTypographyNumber(field, provenance: .focusLoss) }
+                }
+                .accessibilityLabel(label)
+                .accessibilityValue(value.map(Self.formatTypographyNumber) ?? "Mixed or unavailable")
+                .accessibilityIdentifier("inspector.design.typography.\(String(describing: field))")
+        }
+    }
+
+    private func commitFontFamily(provenance: DesignInspectorProvenance = .keyboard) {
+        let value = fontFamilyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value == fontFamilyDraft else {
+            message = TypographyCommandError.invalidValue.localizedDescription; return
+        }
+        commitTypography(.family(value), operation: "font family", provenance: provenance)
+    }
+
+    private func commitTypographyNumber(_ field: TypographyDraftField, provenance: DesignInspectorProvenance = .keyboard) {
+        let draft: String = switch field { case .size: fontSizeDraft; case .lineHeight: lineHeightDraft; case .tracking: trackingDraft; case .family: fontFamilyDraft }
+        guard let number = Double(draft), number.isFinite else {
+            message = TypographyCommandError.invalidValue.localizedDescription; return
+        }
+        let edit: TypographyEdit = switch field { case .size: .size(number); case .lineHeight: .lineHeight(number); case .tracking: .tracking(number); case .family: .family(draft) }
+        commitTypography(edit, operation: String(describing: field), provenance: provenance)
+    }
+
+    private func commitTypography(
+        _ edit: TypographyEdit,
+        operation: String,
+        provenance: DesignInspectorProvenance = .keyboard
+    ) {
+        guard state.commitTypography(edit, operation: operation, provenance: provenance) else {
+            message = state.lastDesignInspectorAnnouncement
+            return
+        }
+        message = nil
+        scheduleDraftRefresh(for: selectionIdentityKey)
+    }
+
+    private static func formatTypographyNumber(_ value: Double) -> String {
+        value.rounded() == value ? String(Int(value)) : String(format: "%.2f", value)
+    }
+
+    private func typographyHint(_ value: TypographyInspectorValue) -> String {
+        if case .unavailable(let reason) = value { return reason }
+        return "Edit typography for the selected plain Text object. Missing fonts use the system fallback without changing the authored family."
+    }
+
+    private func typographyAccessibility(_ value: TypographyInspectorValue, component: String) -> String {
+        switch value {
+        case .single(let style, let origin):
+            let detail = component == "family" ? style.family : "Typography"
+            return "\(detail), \(origin == .authored ? "authored" : "defaulted")"
+        case .mixed: return "Mixed values"
+        case .unavailable(let reason): return reason
+        }
+    }
+
+    private func typographyProvenance(_ value: TypographyInspectorValue) -> String {
+        switch value {
+        case .single(let style, let origin): return "\(origin == .authored ? "Authored" : "Defaulted") · \(style.family) · \(Self.formatTypographyNumber(style.size)) pt"
+        case .mixed(let applicable, let skipped): return "Mixed typography · \(applicable) editable, \(skipped) skipped"
+        case .unavailable(let reason): return reason
+        }
     }
 
     @ViewBuilder private var boxStyleControls: some View {
@@ -3250,20 +3402,26 @@ enum CanvasAuthoredTextLayerFactory {
                 height: object.frame.size.height * viewport.zoom.value
             ),
             zoom: viewport.zoom.value,
-            text: text
+            text: text,
+            typography: object.typography
         )
         let layer = CATextLayer()
         layer.name = "renderer.authored-text.\(object.id.description)"
         layer.isGeometryFlipped = true
         layer.frame = layout.glyphBounds
-        layer.string = text
-        layer.font = NSFont.systemFont(ofSize: layout.fontSize)
+        layer.string = NSAttributedString(string: text, attributes: [
+            .font: layout.font,
+            .foregroundColor: NSColor.labelColor,
+            .kern: layout.tracking,
+            .paragraphStyle: layout.paragraphStyle,
+        ])
+        layer.font = layout.font
         layer.fontSize = layout.fontSize
         layer.foregroundColor = NSColor.labelColor.cgColor
         layer.opacity = Float(object.opacity)
-        layer.alignmentMode = .left
+        layer.alignmentMode = switch layout.alignment { case .center: .center; case .right: .right; default: .left }
         layer.truncationMode = .end
-        layer.isWrapped = false
+        layer.isWrapped = true
         layer.contentsScale = max(1, contentsScale)
         return layer
     }
@@ -4225,7 +4383,12 @@ private final class NativeCanvasViewportView: NSView {
             element.setAccessibilityRole(.group)
             element.setAccessibilityFrame(NSRect(
                 x: screenOrigin.x,
-                y: screenOrigin.y,
+                // SiteForge canvas coordinates are top-left/Y-down while AX
+                // screen rectangles use a bottom-left origin. The converted
+                // point is the authored top-left, so lower the AX origin by
+                // the exact authored height rather than introducing a second
+                // geometry source.
+                y: screenOrigin.y - item.frame.size.height,
                 width: item.frame.size.width,
                 height: item.frame.size.height
             ))
@@ -4246,7 +4409,7 @@ private final class NativeCanvasViewportView: NSView {
             element.setAccessibilityRole(.staticText)
             element.setAccessibilityFrame(NSRect(
                 x: screenOrigin.x,
-                y: screenOrigin.y,
+                y: screenOrigin.y - badge.placement.frame.height,
                 width: badge.placement.frame.width,
                 height: badge.placement.frame.height
             ))
@@ -4311,7 +4474,8 @@ private final class NativeCanvasViewportView: NSView {
                 height: presentation.frame.size.height * viewportState.zoom.value
             ),
             zoom: viewportState.zoom.value,
-            text: presentation.text
+            text: presentation.text,
+            typography: presentation.typography
         )
         // The editor and editor-only selection outline consume the exact same
         // object rectangle. Text insets and baseline are supplied by the
@@ -4451,10 +4615,19 @@ final class InlineCanvasTextView: NSTextView {
     }
 
     func applyCanvasTextLayout(_ layout: CanvasTextLayout) {
-        let nextFont = NSFont.systemFont(ofSize: layout.fontSize)
-        if font?.pointSize != nextFont.pointSize { font = nextFont }
+        font = layout.font
         textContainerInset = layout.textContainerInset
         textContainer?.lineFragmentPadding = 0
+        alignment = layout.alignment
+        typingAttributes = [
+            .font: layout.font,
+            .foregroundColor: NSColor.labelColor,
+            .kern: layout.tracking,
+            .paragraphStyle: layout.paragraphStyle,
+        ]
+        if textStorage?.length ?? 0 > 0 {
+            textStorage?.setAttributes(typingAttributes, range: NSRange(location: 0, length: textStorage?.length ?? 0))
+        }
     }
 
     override func setAccessibilityFocused(_ focused: Bool) {
@@ -4812,23 +4985,43 @@ struct CanvasTextLayout: Equatable {
     let lineFragmentRect: CGRect
     let glyphBounds: CGRect
     let fontSize: CGFloat
+    let font: NSFont
+    let lineHeight: CGFloat
+    let tracking: CGFloat
+    let alignment: NSTextAlignment
+    let paragraphStyle: NSParagraphStyle
 
-    init(viewportObjectRect: CGRect, zoom: Double, text: String) {
+    init(viewportObjectRect: CGRect, zoom: Double, text: String, typography: CanvasTypography? = nil) {
         self.viewportObjectRect = viewportObjectRect
         let scale = max(0.000_001, CGFloat(zoom))
         let insetX = Self.baseHorizontalInset * scale
         let usableWidth = max(0, viewportObjectRect.width - insetX * 2)
         let usableHeight = max(0, viewportObjectRect.height)
-        let scaledFont = max(9, Self.baseFontSize * scale)
+        let authoredSize = CGFloat(typography?.size ?? Double(Self.baseFontSize))
+        let scaledFont = max(1, authoredSize * scale)
         fontSize = min(scaledFont, max(1, usableHeight))
+        let authoredLineHeight = CGFloat(typography?.lineHeight ?? 17)
+        lineHeight = min(max(fontSize * 0.5, authoredLineHeight * scale), max(1, usableHeight))
+        tracking = CGFloat(typography?.tracking ?? 0) * scale
+        alignment = switch typography?.alignment ?? .leading {
+        case .leading: .left
+        case .center: .center
+        case .trailing: .right
+        }
+        font = Self.resolveFont(typography, size: fontSize)
 
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingTail
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.alignment = alignment
+        paragraph.minimumLineHeight = lineHeight
+        paragraph.maximumLineHeight = lineHeight
+        paragraphStyle = paragraph.copy() as! NSParagraphStyle
         let measured = NSAttributedString(
             string: text.isEmpty ? " " : text,
             attributes: [
-                .font: NSFont.systemFont(ofSize: fontSize),
-                .paragraphStyle: paragraph,
+                .font: font,
+                .kern: tracking,
+                .paragraphStyle: paragraphStyle,
             ]
         ).boundingRect(
             with: CGSize(width: usableWidth, height: .greatestFiniteMagnitude),
@@ -4847,6 +5040,27 @@ struct CanvasTextLayout: Equatable {
             height: max(0, glyphY - viewportObjectRect.minY)
         )
         lineFragmentRect = glyphBounds
+    }
+
+    private static func resolveFont(_ typography: CanvasTypography?, size: CGFloat) -> NSFont {
+        guard let typography else { return .systemFont(ofSize: size) }
+        let weight: NSFont.Weight = switch typography.weight {
+        case "medium": .medium
+        case "semibold": .semibold
+        case "bold": .bold
+        default: .regular
+        }
+        if typography.authoredFamily == CanonicalTypography.defaultFamily || typography.usesFallback {
+            return .systemFont(ofSize: size, weight: weight)
+        }
+        let managerWeight: Int = switch typography.weight {
+        case "medium": 6
+        case "semibold": 9
+        case "bold": 10
+        default: 5
+        }
+        return NSFontManager.shared.font(withFamily: typography.resolvedFamily, traits: [], weight: managerWeight, size: size)
+            ?? .systemFont(ofSize: size, weight: weight)
     }
 
     var isInsideObjectRect: Bool {

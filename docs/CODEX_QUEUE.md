@@ -12,6 +12,37 @@ None.
 
 ## DONE
 
+- [x] `SF-AUTHORING-015` Implement bounded production typography controls and
+  consistent text rendering.
+  - Requirements: bounded evidence for `SF-0507-001` through `SF-0507-008`.
+    The normative module remains Partial for imported/web fonts, licensing,
+    variable axes, rich-text ranges, lists/links, advanced paragraphs,
+    responsive overrides, tokens, preview/export parity, scale acceptance, and
+    release acceptance.
+  - Plan: add one typed versioned canonical typography namespace for plain Text;
+    resolve installed families and deterministic fallback without changing
+    authored intent; compile family, weight, size, line-height, tracking, and
+    alignment drafts through one identity-gated transaction registry; snapshot
+    the resolved metrics into immutable render objects shared by committed tile
+    text and the native inline editor; prove strict validation, mixed/applicable
+    subsets, exact history, package/recovery, accessibility, compact layout, and
+    running-app visual parity before one authoritative verification gate.
+  - Explicit exclusions: font import/licensing, variable axes, rich-text spans,
+    lists, links, advanced paragraph controls, vertical/path text, responsive
+    typography, design tokens, preview/export parity, and release acceptance.
+  - Result: strict `style.typography.v1` properties and one identity-gated
+    registry now author plain-Text family, bounded weight, size, explicit line
+    height, tracking, and leading/center/trailing alignment. Installed-font
+    resolution preserves authored intent while exposing deterministic system
+    fallback; committed tiles and the live native editor share one metric and
+    geometry contract.
+  - Verification: focused registry/history, render/layout, package/recovery,
+    and actual-app Save/reopen coverage passed 4/4. The authoritative
+    `./sf verify` passed 363 unit/integration plus 44 UI tests (407 total), zero
+    failures, on 2026-08-28; all repository gates passed. Six original-resolution
+    maximized-window states were visually reviewed. Evidence:
+    `docs/evidence/SF-AUTHORING-015-TYPOGRAPHY.md`.
+
 - [x] `SF-AUTHORING-014` Implement bounded Design Inspector border, uniform
   corner-radius, and single-shadow authoring.
   - Requirements: bounded production evidence for `SF-0506-001` through

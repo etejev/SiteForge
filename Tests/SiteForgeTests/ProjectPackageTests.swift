@@ -524,6 +524,98 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: recoveredNode), expected)
     }
 
+    // SF-0507-001/004/005/008 — typography remains canonical through the
+    // production package and owned-recovery paths. Editor caret, selection,
+    // fallback availability, and draft state have no serialized counterpart.
+    @MainActor
+    func testTypographyPersistsAcrossPackageReopenAndOwnedRecovery() async throws {
+        var document = ProjectCreation.blank()
+        let page = try XCTUnwrap(document.pages.first)
+        let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+        let nodeID = NodeID(UUID(uuidString: "85000000-0000-4000-8000-000000000015")!)
+        document.pages[0].nodes[0].childIDs.append(nodeID)
+        document.pages[0].nodes.append(DocumentNode(
+            id: nodeID,
+            kind: .text,
+            name: "Text",
+            parent: .node(rootID),
+            properties: [
+                NodeProperty(key: PropertyKey(rawValue: "content.text"), value: .string("Typography"), origin: .authored),
+                NodeProperty(key: PropertyKey(rawValue: "layout.x"), value: .number(40), origin: .authored),
+                NodeProperty(key: PropertyKey(rawValue: "layout.y"), value: .number(56), origin: .authored),
+                NodeProperty(key: PropertyKey(rawValue: "layout.width"), value: .number(260), origin: .authored),
+                NodeProperty(key: PropertyKey(rawValue: "layout.height"), value: .number(80), origin: .authored),
+            ]
+        ))
+        let sceneID = CanvasViewportSceneID(UUID(uuidString: "86000000-0000-4000-8000-000000000015")!)
+        let rendererGeneration: UInt64 = 15
+        let registry = TypographyCommandRegistry()
+        let session = DocumentSession(document: document)
+        let context = TransformValidationContext(
+            activePageID: page.id,
+            currentSceneID: sceneID,
+            rendererGeneration: rendererGeneration,
+            selectedNodeIDs: [nodeID],
+            availableNodeIDs: Set(document.pages[0].nodes.map(\.id)),
+            isLifecycleAvailable: true,
+            lifecycleDisabledReason: nil
+        )
+        func command(_ edit: TypographyEdit) -> TypographyCommand {
+            .init(
+                identity: .init(
+                    documentID: session.document.id,
+                    pageID: page.id,
+                    revision: session.document.revision,
+                    sceneID: sceneID,
+                    rendererGeneration: rendererGeneration
+                ),
+                orderedNodeIDs: [nodeID],
+                edit: edit,
+                provenance: .automation,
+                cancelled: false
+            )
+        }
+        for edit in [
+            TypographyEdit.family("Unavailable SiteForge Test Font"),
+            .weight(.semibold), .size(26), .lineHeight(34), .tracking(1.25), .alignment(.trailing),
+        ] {
+            let prepared = try registry.prepare(command(edit), in: session.document, context: context)
+            _ = try session.execute(prepared.documentCommand)
+        }
+        let expected = CanonicalTypography(
+            family: "Unavailable SiteForge Test Font", weight: .semibold,
+            size: 26, lineHeight: 34, tracking: 1.25, alignment: .trailing
+        )
+
+        let baseline = package()
+        let authored = ProjectPackage(
+            projectID: baseline.projectID,
+            createdAt: baseline.createdAt,
+            modifiedAt: baseline.modifiedAt,
+            document: session.document,
+            optionalMembers: baseline.optionalMembers,
+            compatibility: baseline.compatibility
+        )
+        let store = ProjectPackageStore()
+        let encoded = try await store.encode(authored)
+        let reopened = try await store.decode(encoded)
+        let reopenedNode = try XCTUnwrap(reopened.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: reopenedNode), expected)
+        let resaved = try await store.encode(reopened)
+        XCTAssertEqual(resaved, encoded)
+
+        let recoveryDirectory = try fixtureDirectory().appendingPathComponent("typography-recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(recoveryDirectory)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: baseline.projectID, in: recoveryDirectory)
+        try await store.write(reopened, to: recoveryURL, policy: .recovery(baseline.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(
+            from: recoveryURL,
+            expectedProjectID: baseline.projectID
+        ).package
+        let recoveredNode = try XCTUnwrap(recovered.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: recoveredNode), expected)
+    }
+
     // SF-0301-004...006, SF-0303-005, SF-0508-001...008 — recomputing the
     // package member checksum cannot make malformed current fill state valid.
     // Canonical validation rejects the candidate before lifecycle adoption.

@@ -626,6 +626,93 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-014 practical minimum inspector")
     }
 
+    // SF-0507-001...008 — the shipping Design Inspector authors canonical
+    // typography and the same metrics drive committed and live inline text.
+    func testDesignInspectorTypographyInlineUndoRedoAccessibilityJourney() throws {
+        let fixture = legacyFixtureURL(named: "schema-v4-legacy-surface")
+        let project = fixtureRoot.appendingPathComponent("typography-native-save.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: fixture)
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        application.buttons["canvas.empty.insert.text"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["inspector.tab.design"].click()
+        let inspector = application.scrollViews["inspector.selection.scroll"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 5))
+        func reveal(_ identifier: String) -> XCUIElement {
+            let element = application.descendants(matching: .any)[identifier]
+            for _ in 0..<14 where !element.isHittable { inspector.scroll(byDeltaX: 0, deltaY: -120) }
+            return element
+        }
+        let family = reveal("inspector.design.typography.family")
+        let size = reveal("inspector.design.typography.size")
+        let lineHeight = reveal("inspector.design.typography.lineHeight")
+        let tracking = reveal("inspector.design.typography.tracking")
+        XCTAssertTrue(family.isHittable && size.isEnabled && lineHeight.isEnabled && tracking.isEnabled)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-015 default typography")
+
+        family.click(); family.typeKey("a", modifierFlags: .command); family.typeText("Menlo"); family.typeKey(.return, modifierFlags: [])
+        size.click(); size.typeKey("a", modifierFlags: .command); size.typeText("22"); size.typeKey(.return, modifierFlags: [])
+        lineHeight.click(); lineHeight.typeKey("a", modifierFlags: .command); lineHeight.typeText("30"); lineHeight.typeKey(.return, modifierFlags: [])
+        tracking.click(); tracking.typeKey("a", modifierFlags: .command); tracking.typeText("1.5"); tracking.typeKey(.return, modifierFlags: [])
+        let weight = reveal("inspector.design.typography.weight")
+        weight.click(); application.menuItems["Bold"].click()
+        let alignment = reveal("inspector.design.typography.alignment")
+        alignment.click()
+        alignment.menuItems["Center"].click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.design.announcement"], containing: "Typography"))
+        XCTAssertTrue(waitForValue(family, containing: "Menlo"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-015 authored family size tracking")
+
+        let beforeInvalid = size.value as? String
+        size.click(); size.typeKey("a", modifierFlags: .command); size.typeText("invalid"); size.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(size.value as? String, beforeInvalid)
+        application.typeKey("z", modifierFlags: .command)
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(family, containing: "Menlo"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-015 undo redo preservation")
+
+        application.menuBars.menuBarItems["Selection"].click()
+        application.menuItems["Edit Selected Text"].click()
+        let editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let objectFrame = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "canvas.object."))
+            .firstMatch.frame
+        XCTAssertEqual(editor.frame.minX, objectFrame.minX, accuracy: 1)
+        XCTAssertEqual(editor.frame.minY, objectFrame.minY, accuracy: 1)
+        XCTAssertEqual(editor.frame.width, objectFrame.width, accuracy: 1)
+        XCTAssertEqual(editor.frame.height, objectFrame.height, accuracy: 1)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-015 live inline typography parity")
+        editor.typeKey(.escape, modifierFlags: [])
+
+        family.click(); family.typeKey("a", modifierFlags: .command)
+        family.typeText("Unavailable SiteForge Test Font"); family.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(family, containing: "Unavailable SiteForge Test Font"))
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.design.typography.fallback"].waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-015 deterministic font fallback")
+
+        application.menuBars.menuBarItems["File"].click()
+        let save = application.menuItems["Save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 3)); XCTAssertTrue(save.isEnabled); save.click()
+        XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 5))
+        terminateAndWait(application)
+
+        let reopenRecoveryDirectory = fixtureRoot.appendingPathComponent("typography-reopen-recovery", isDirectory: true)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: reopenRecoveryDirectory)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        application.buttons["navigator.tab.layers"].click()
+        let reopenedText = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text"
+        )).firstMatch
+        XCTAssertTrue(reopenedText.waitForExistence(timeout: 5)); reopenedText.click()
+        application.buttons["inspector.tab.design"].click()
+        let reopenedFamily = application.textFields["inspector.design.typography.family"]
+        XCTAssertTrue(waitForValue(reopenedFamily, containing: "Unavailable SiteForge Test Font"))
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.design.typography.fallback"].waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-015 save reopen preservation")
+    }
+
     // SF-0508-001 through SF-0508-006 — visible, keyboard/accessibility
     // discoverable v1 layer controls must drive the same canonical registry
     // as the established native colour and opacity controls.

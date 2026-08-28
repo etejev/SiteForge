@@ -52,7 +52,7 @@ SNAPPING_MODEL_SLICE = list(dict.fromkeys(
     TRANSFORM_MODEL_SLICE + ["SiteForge/SnappingGuideModel.swift"]
 ))
 INLINE_TEXT_MODEL_SLICE = list(dict.fromkeys(
-    INSERTION_MODEL_SLICE + ["SiteForge/InlineTextEditingModel.swift"]
+    INSERTION_MODEL_SLICE + CANVAS_RENDERER_SLICE + ["SiteForge/InlineTextEditingModel.swift"]
 ))
 DRAG_DROP_MODEL_SLICE = list(dict.fromkeys(
     ENGINE_SLICE + ["SiteForge/CanvasViewport.swift", "SiteForge/DragDropModel.swift"]

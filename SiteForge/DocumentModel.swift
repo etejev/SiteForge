@@ -234,6 +234,43 @@ enum NodeKind: String, Codable, CaseIterable, Sendable {
     }
 }
 
+// SF-0507-001...008 — typography is canonical document data, so its closed
+// value types live in the headless model boundary. Installed-font resolution
+// remains an AppKit concern and is deliberately not serialized.
+enum CanonicalFontWeight: String, CaseIterable, Sendable {
+    case regular, medium, semibold, bold
+}
+
+enum CanonicalTextAlignment: String, CaseIterable, Sendable {
+    case leading, center, trailing
+}
+
+struct CanonicalTypography: Equatable, Sendable {
+    static let namespace = "style.typography.v1."
+    static let defaultFamily = "System"
+    static let defaultValue = CanonicalTypography(
+        family: defaultFamily, weight: .regular, size: 14,
+        lineHeight: 17, tracking: 0, alignment: .leading
+    )
+    let family: String
+    let weight: CanonicalFontWeight
+    let size: Double
+    let lineHeight: Double
+    let tracking: Double
+    let alignment: CanonicalTextAlignment
+
+    var isValid: Bool {
+        let trimmed = family.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed == family && family.utf8.count <= 128
+            && family.rangeOfCharacter(from: .controlCharacters) == nil
+            && [size, lineHeight, tracking].allSatisfy(\.isFinite)
+            && (1...1_000).contains(size)
+            && (1...2_000).contains(lineHeight)
+            && lineHeight >= size * 0.5
+            && (-100...100).contains(tracking)
+    }
+}
+
 struct PageRoute: Codable, Equatable, Hashable, RawRepresentable, Sendable {
     let rawValue: String
 
@@ -630,6 +667,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case invalidStructuralDefaults
     case invalidFillLayerState
     case invalidBoxStyleState
+    case invalidTypographyState
 
     var errorDescription: String? {
         switch self {
@@ -660,6 +698,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .invalidStructuralDefaults: "Structural containers require their complete bounded default layout contract."
         case .invalidFillLayerState: "The document contains an invalid canonical fill-layer state."
         case .invalidBoxStyleState: "The document contains an invalid canonical border, radius, or shadow state."
+        case .invalidTypographyState: "The document contains invalid canonical typography state."
         }
     }
 }
@@ -719,6 +758,53 @@ enum CanonicalBoxStyleNamespaceValidator {
                 throw ModelValidationError.invalidBoxStyleState
             }
         }
+    }
+}
+
+enum CanonicalTypographyNamespaceValidator {
+    static let root = CanonicalTypography.namespace
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
+        guard !owned.isEmpty else { return }
+        guard node.kind == .text else { throw ModelValidationError.invalidTypographyState }
+        let suffixes = owned.map { String($0.key.rawValue.dropFirst(root.count)) }
+        let allowed: Set<String> = ["family", "weight", "size", "lineHeight", "tracking", "alignment"]
+        guard Set(suffixes).count == suffixes.count, Set(suffixes).isSubset(of: allowed) else {
+            throw ModelValidationError.invalidTypographyState
+        }
+        let values = Dictionary(uniqueKeysWithValues: owned.map { (String($0.key.rawValue.dropFirst(root.count)), $0.value) })
+        if case .string(let family)? = values["family"] {
+            guard !family.isEmpty,
+                  family == family.trimmingCharacters(in: .whitespacesAndNewlines),
+                  family.utf8.count <= 128,
+                  family.rangeOfCharacter(from: .controlCharacters) == nil else {
+                throw ModelValidationError.invalidTypographyState
+            }
+        } else if values["family"] != nil { throw ModelValidationError.invalidTypographyState }
+        if case .string(let weight)? = values["weight"] {
+            guard CanonicalFontWeight(rawValue: weight) != nil else { throw ModelValidationError.invalidTypographyState }
+        } else if values["weight"] != nil { throw ModelValidationError.invalidTypographyState }
+        if case .string(let alignment)? = values["alignment"] {
+            guard CanonicalTextAlignment(rawValue: alignment) != nil else { throw ModelValidationError.invalidTypographyState }
+        } else if values["alignment"] != nil { throw ModelValidationError.invalidTypographyState }
+        for key in ["size", "lineHeight", "tracking"] where values[key] != nil {
+            guard case .number(let number)? = values[key], number.isFinite else { throw ModelValidationError.invalidTypographyState }
+            switch key {
+            case "size": guard (1...1_000).contains(number) else { throw ModelValidationError.invalidTypographyState }
+            case "lineHeight": guard (1...2_000).contains(number) else { throw ModelValidationError.invalidTypographyState }
+            default: guard (-100...100).contains(number) else { throw ModelValidationError.invalidTypographyState }
+            }
+        }
+        let fallback = CanonicalTypography.defaultValue
+        let typography = CanonicalTypography(
+            family: { if case .string(let value)? = values["family"] { value } else { fallback.family } }(),
+            weight: { if case .string(let value)? = values["weight"] { CanonicalFontWeight(rawValue: value) ?? fallback.weight } else { fallback.weight } }(),
+            size: { if case .number(let value)? = values["size"] { value } else { fallback.size } }(),
+            lineHeight: { if case .number(let value)? = values["lineHeight"] { value } else { fallback.lineHeight } }(),
+            tracking: { if case .number(let value)? = values["tracking"] { value } else { fallback.tracking } }(),
+            alignment: { if case .string(let value)? = values["alignment"] { CanonicalTextAlignment(rawValue: value) ?? fallback.alignment } else { fallback.alignment } }()
+        )
+        guard typography.isValid else { throw ModelValidationError.invalidTypographyState }
     }
 }
 
@@ -973,6 +1059,7 @@ private extension DocumentPage {
             }
             try CanonicalFillLayerNamespaceValidator.validate(node)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
+            try CanonicalTypographyNamespaceValidator.validate(node)
             try node.validateStructuralDefaults()
         }
 

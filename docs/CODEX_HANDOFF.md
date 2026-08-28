@@ -2,6 +2,18 @@
 
 ## Current checkpoint
 
+`SF-AUTHORING-015` is **VERIFIED AND DONE**. The current tree implements
+bounded production plain-Text typography through strict canonical properties,
+one identity-gated transaction registry, immutable renderer snapshots, shared
+committed/inline text metrics, native Design controls, package/recovery, and a
+fresh-process Save/close/reopen journey. Focused acceptance passed 4/4 and six
+original-resolution screenshots passed visual review. The authoritative
+`./sf verify` passed 363 unit/integration plus 44 UI tests (407 total), zero
+failures, with all repository gates green. Do not expand the slice
+into font import, variable axes, rich text, automatic sizing, responsive
+typography, tokens, or preview/export work. No subsequent feature item is READY;
+the remaining action is the authorized commit/push/hosted-CI boundary.
+
 `SF-AUTHORING-014` is **VERIFIED AND DONE**. The current tree implements the bounded
 uniform border, uniform corner radius, and one drop-shadow Design Inspector
 slice through canonical `style.box.v1` properties, the shared transaction
@@ -24,8 +36,7 @@ plus 41 UI test gate at `3c90e33`, including the compact-window Inspector and
 navigator accessibility corrections.
 
 `SF-AUTHORING-013` remains a **VERIFIED BOUNDED** historical milestone. Its
-broader deferred scope is unchanged. SF-AUTHORING-014 is the sole active item;
-no subsequent feature item is READY.
+broader deferred scope is unchanged. No subsequent feature item is READY.
 
 ## Authoritative files
 

@@ -65,7 +65,15 @@ draft, Escape restores the committed value, and invalid input remains visible
 with an accessible explanation. Exact shared multiple-selection stacks expose
 shared editable rows, differing stacks show a truthful mixed state without
 borrowing the primary object's rows, and incompatible objects remain
-unchanged. Layout retains the
+unchanged. For plain Text, Design also exposes one non-wrapping native
+Typography group: editable family, regular/medium/semibold/bold weight, size,
+explicit line height, tracking, leading/center/trailing alignment, provenance,
+and Reset. Missing installed fonts preserve the authored family and show a
+specific system-fallback status. The committed tile renderer and live inline
+editor consume one `CanvasTextLayout` metric snapshot; caret and marked-text
+state remain editor-only. Font import, variable axes, rich-text spans, advanced
+paragraphs, responsive overrides, and preview/export parity are unavailable
+rather than simulated. Layout retains the
 bounded geometry, transform, guide, and snapping controls. For applicable
 Frame, Text, Section, Stack, and Grid selection, Layout exposes native
 locale-aware X, Y, Width, and Height fields. Draft strings are editor-only;

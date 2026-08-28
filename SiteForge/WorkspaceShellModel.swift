@@ -1,4 +1,5 @@
 import Combine
+import AppKit
 import os
 import SwiftUI
 
@@ -737,6 +738,26 @@ actor WorkspaceScenePreparationWorker {
                     offsetX: $0.offsetX, offsetY: $0.offsetY, blur: $0.blur, spread: $0.spread
                 )
             }
+            let typography: CanvasTypography? = TypographyCommandRegistry.resolvedTypography(for: node).map { authored in
+                let installed = Set(NSFontManager.shared.availableFontFamilies)
+                let systemFamily = NSFont.systemFont(ofSize: CGFloat(authored.size)).familyName ?? "System"
+                let resolvedFamily: String
+                let usesFallback: Bool
+                if authored.family == CanonicalTypography.defaultFamily {
+                    resolvedFamily = systemFamily; usesFallback = false
+                } else if installed.contains(authored.family) {
+                    resolvedFamily = authored.family; usesFallback = false
+                } else {
+                    resolvedFamily = systemFamily; usesFallback = true
+                }
+                return CanvasTypography(
+                    authoredFamily: authored.family, resolvedFamily: resolvedFamily,
+                    weight: authored.weight.rawValue, size: authored.size,
+                    lineHeight: authored.lineHeight, tracking: authored.tracking,
+                    alignment: CanvasTextAlignment(rawValue: authored.alignment.rawValue) ?? .leading,
+                    usesFallback: usesFallback
+                )
+            }
             renderObjects.append(CanvasRenderObject(
                 id: node.id,
                 frame: frame,
@@ -752,7 +773,8 @@ actor WorkspaceScenePreparationWorker {
                 opacity: DesignInspectorCommandRegistry.resolvedOpacity(for: node)?.0 ?? 1,
                 border: border,
                 cornerRadius: boxStyle?.cornerRadius ?? 0,
-                shadow: shadow
+                shadow: shadow,
+                typography: typography
             ))
         }
 
@@ -932,6 +954,7 @@ final class WorkspaceShellState: ObservableObject {
     private let geometryInspectorRegistry = GeometryInspectorCommandRegistry()
     private let designInspectorRegistry = DesignInspectorCommandRegistry()
     private let designBoxStyleRegistry = DesignBoxStyleCommandRegistry()
+    private let typographyRegistry = TypographyCommandRegistry()
     private let snapResolver = SnapResolver()
     private let guideRegistry = GuideCommandRegistry()
     private let renderSurfaceID = CanvasRenderSurfaceID()
@@ -1307,6 +1330,55 @@ final class WorkspaceShellState: ObservableObject {
 
     func designInspectorBoxStyleValue() -> DesignBoxStyleValue {
         DesignBoxStyleCommandRegistry.selectionValue(nodes: selectedCanonicalNodes)
+    }
+
+    func typographyInspectorValue() -> TypographyInspectorValue {
+        TypographyCommandRegistry.selectionValue(nodes: selectedCanonicalNodes)
+    }
+
+    var typographyResolutionStatus: String? {
+        let selected = Set(selectionState.orderedIDs)
+        let missing = canvasRenderPlan?.authoredObjects.compactMap { object -> String? in
+            guard selected.contains(object.id), let typography = object.typography,
+                  typography.usesFallback else { return nil }
+            return typography.authoredFamily
+        } ?? []
+        guard !missing.isEmpty else { return nil }
+        return "Font unavailable: \(missing.sorted().joined(separator: ", ")). Using the system fallback; authored family is preserved."
+    }
+
+    @discardableResult
+    func commitTypography(_ edit: TypographyEdit, operation: String, provenance: DesignInspectorProvenance = .keyboard) -> Bool {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan,
+              plan.identity.documentID == documentSession.document.id,
+              plan.identity.revision == documentSession.document.revision else {
+            lastDesignInspectorAnnouncement = TypographyCommandError.stale.localizedDescription
+            return false
+        }
+        do {
+            let prepared = try typographyRegistry.prepare(.init(
+                identity: .init(documentID: documentSession.document.id, pageID: pageID,
+                    revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+                    rendererGeneration: plan.identity.sceneGeneration),
+                orderedNodeIDs: selectionState.orderedIDs, edit: edit,
+                provenance: provenance, cancelled: false
+            ), in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.documentCommand)
+            let applied = prepared.applicableNodeIDs.count, skipped = prepared.skippedNodeIDs.count
+            lastDesignInspectorAnnouncement = skipped == 0
+                ? "Typography \(operation) committed for \(applied) object\(applied == 1 ? "" : "s")"
+                : "Typography \(operation) committed for \(applied) object\(applied == 1 ? "" : "s"); skipped \(skipped) incompatible object\(skipped == 1 ? "" : "s")"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
+        } catch let error as TypographyCommandError {
+            lastDesignInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        } catch {
+            lastDesignInspectorAnnouncement = "Typography \(operation) could not commit; text style is unchanged"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        }
     }
 
     @discardableResult
@@ -1708,15 +1780,16 @@ final class WorkspaceShellState: ObservableObject {
 
     var textEditingPresentation: InlineTextEditorPresentation? {
         guard let draft = textEditingSession.draft else { return nil }
-        let currentFrame = canvasRenderPlan?.authoredObjects.first(where: {
+        let renderObject = canvasRenderPlan?.authoredObjects.first(where: {
             $0.id == draft.activation.identity.nodeID
-        })?.frame
-        guard let frame = currentFrame ?? retainedTextEditingFrame else { return nil }
+        })
+        guard let frame = renderObject?.frame ?? retainedTextEditingFrame else { return nil }
         return InlineTextEditorPresentation(
             identity: draft.activation.identity,
             text: draft.text,
             selection: draft.selection,
-            frame: frame
+            frame: frame,
+            typography: renderObject?.typography
         )
     }
 

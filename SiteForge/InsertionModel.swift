@@ -422,6 +422,15 @@ struct InsertionCommandRegistry: Sendable {
         }
         if let text = command.text {
             properties.append(property(command.nodeID, "content.text", .string(text), .defaulted))
+            let typography = CanonicalTypography.defaultValue
+            properties += [
+                property(command.nodeID, CanonicalTypography.namespace + "family", .string(typography.family), .defaulted),
+                property(command.nodeID, CanonicalTypography.namespace + "weight", .string(typography.weight.rawValue), .defaulted),
+                property(command.nodeID, CanonicalTypography.namespace + "size", .number(typography.size), .defaulted),
+                property(command.nodeID, CanonicalTypography.namespace + "lineHeight", .number(typography.lineHeight), .defaulted),
+                property(command.nodeID, CanonicalTypography.namespace + "tracking", .number(typography.tracking), .defaulted),
+                property(command.nodeID, CanonicalTypography.namespace + "alignment", .string(typography.alignment.rawValue), .defaulted),
+            ]
         }
         return DocumentNode(
             id: command.nodeID,

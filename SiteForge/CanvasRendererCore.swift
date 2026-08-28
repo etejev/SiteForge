@@ -54,6 +54,25 @@ struct CanvasAuthoredShadow: Codable, Hashable, Sendable {
     }
 }
 
+enum CanvasTextAlignment: String, Codable, Hashable, Sendable { case leading, center, trailing }
+
+struct CanvasTypography: Codable, Hashable, Sendable {
+    let authoredFamily: String
+    let resolvedFamily: String
+    let weight: String
+    let size: Double
+    let lineHeight: Double
+    let tracking: Double
+    let alignment: CanvasTextAlignment
+    let usesFallback: Bool
+    var isValid: Bool {
+        !authoredFamily.isEmpty && !resolvedFamily.isEmpty
+            && [size, lineHeight, tracking].allSatisfy(\.isFinite)
+            && (1...1_000).contains(size) && (1...2_000).contains(lineHeight)
+            && lineHeight >= size * 0.5 && (-100...100).contains(tracking)
+    }
+}
+
 /// Immutable, renderer-facing fill data. This is derived from the canonical
 /// `style.fill.layers.v1` properties while building a scene snapshot; it is
 /// never edited by the renderer and therefore cannot race geometry adoption.
@@ -213,6 +232,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     let border: CanvasAuthoredBorder?
     let cornerRadius: Double
     let shadow: CanvasAuthoredShadow?
+    let typography: CanvasTypography?
 
     init(
         id: NodeID,
@@ -229,7 +249,8 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         opacity: Double = 1,
         border: CanvasAuthoredBorder? = nil,
         cornerRadius: Double = 0,
-        shadow: CanvasAuthoredShadow? = nil
+        shadow: CanvasAuthoredShadow? = nil,
+        typography: CanvasTypography? = nil
     ) {
         self.id = id
         self.frame = frame
@@ -246,6 +267,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.border = border
         self.cornerRadius = cornerRadius
         self.shadow = shadow
+        self.typography = typography
     }
 }
 
