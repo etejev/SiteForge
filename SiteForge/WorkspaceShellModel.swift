@@ -205,6 +205,10 @@ enum ViewportPreset: String, CaseIterable, Identifiable {
         case .mobile: 390
         }
     }
+
+    var responsiveBreakpoint: ResponsiveBreakpoint {
+        switch self { case .desktop: .desktop; case .tablet: .tablet; case .mobile: .mobile }
+    }
 }
 
 enum ShellRegion: String, CaseIterable {
@@ -621,6 +625,14 @@ struct WorkspaceScenePreparationRequest: Sendable {
     let activeContainerID: NodeID?
     let viewport: CanvasViewportState
     let surfaceID: CanvasRenderSurfaceID
+    let breakpoint: ResponsiveBreakpoint
+
+    init(document: CanonicalDocument, activePageID: PageID?, activeContainerID: NodeID?,
+         viewport: CanvasViewportState, surfaceID: CanvasRenderSurfaceID,
+         breakpoint: ResponsiveBreakpoint = .desktop) {
+        self.document = document; self.activePageID = activePageID; self.activeContainerID = activeContainerID
+        self.viewport = viewport; self.surfaceID = surfaceID; self.breakpoint = breakpoint
+    }
 }
 
 struct WorkspaceScenePreparationResult: Sendable {
@@ -679,7 +691,8 @@ actor WorkspaceScenePreparationWorker {
             // Structural roots intentionally have no authored geometry and
             // never receive a fabricated fallback rectangle.
             guard let authoredGeometry = node.insertionGeometry else { continue }
-            let frame = (resolvedGeometry[node.id] ?? authoredGeometry).frame
+            let baseFrame = (resolvedGeometry[node.id] ?? authoredGeometry).frame
+            let frame = ResponsiveGeometryResolver.frame(for: node, base: baseFrame, breakpoint: request.breakpoint)
             let style: CanvasPaintStyle = switch node.kind {
             case .frame:
                 if case .page(let pageID) = node.parent, pageID == request.activePageID {
@@ -1305,8 +1318,39 @@ final class WorkspaceShellState: ObservableObject {
         geometryInspectorRegistry.value(
             for: field,
             in: documentSession.document,
-            context: transformValidationContext
+            context: transformValidationContext,
+            breakpoint: viewportPreset.responsiveBreakpoint
         )
+    }
+
+    func geometryInspectorResponsiveSource(for field: GeometryInspectorField) -> String? {
+        if viewportPreset.responsiveBreakpoint == .desktop {
+            if case .single(_, let origin) = geometryInspectorValue(for: field) {
+                return origin == .authored ? "authored at Desktop" : "defaulted at Desktop"
+            }
+            return geometryInspectorValue(for: field) == .mixed ? "Mixed Desktop values" : nil
+        }
+        guard let pageID = effectiveSelectedPageID,
+              let page = documentSession.document.pages.first(where: { $0.id == pageID }) else { return nil }
+        let nodes = selectionState.orderedIDs.compactMap { id in page.nodes.first(where: { $0.id == id }) }
+            .filter { GeometryInspectorCommandRegistry.supportsFixedGeometry($0.kind) }
+        guard !nodes.isEmpty else { return nil }
+        let sources = nodes.compactMap {
+            ResponsiveGeometryResolver.value(for: field, node: $0, breakpoint: viewportPreset.responsiveBreakpoint)?.2
+        }
+        guard sources.count == nodes.count, let first = sources.first,
+              sources.dropFirst().allSatisfy({ $0 == first }) else { return "Mixed breakpoint sources" }
+        return first.label
+    }
+
+    var hasGeometryOverridesAtCurrentBreakpoint: Bool {
+        let breakpoint = viewportPreset.responsiveBreakpoint
+        guard breakpoint != .desktop else { return false }
+        return selectedCanonicalNodes.contains { node in
+            GeometryInspectorField.allCases.contains {
+                node.insertionProperty(ResponsiveGeometryResolver.key($0, breakpoint: breakpoint)) != nil
+            }
+        }
     }
 
     var geometryInspectorSelectionKey: String {
@@ -1600,7 +1644,8 @@ final class WorkspaceShellState: ObservableObject {
             orderedNodeIDs: selectionState.orderedIDs,
             field: field,
             value: field.requiresPositiveValue ? TransformPolicy.minimumDimension : 0,
-            provenance: .automation
+            provenance: .automation,
+            breakpoint: viewportPreset.responsiveBreakpoint
         )
         do {
             _ = try geometryInspectorRegistry.prepare(
@@ -1631,7 +1676,8 @@ final class WorkspaceShellState: ObservableObject {
             orderedNodeIDs: selectionState.orderedIDs,
             field: field,
             value: value,
-            provenance: provenance
+            provenance: provenance,
+            breakpoint: viewportPreset.responsiveBreakpoint
         )
         let started = DispatchTime.now().uptimeNanoseconds
         do {
@@ -1668,6 +1714,34 @@ final class WorkspaceShellState: ObservableObject {
         } catch {
             return false
         }
+    }
+
+    @discardableResult
+    func resetGeometryOverrides(provenance: GeometryInspectorProvenance = .keyboard) -> Bool {
+        guard viewportPreset != .desktop, let plan = canvasRenderPlan, let pageID = effectiveSelectedPageID else { return false }
+        let commands = GeometryInspectorField.allCases.map { field in
+            GeometryInspectorCommand(identity: .init(editID: GeometryInspectorEditID(), documentID: documentSession.document.id,
+                pageID: pageID, revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+                rendererGeneration: plan.identity.sceneGeneration), orderedNodeIDs: selectionState.orderedIDs,
+                field: field, value: 0, provenance: provenance,
+                breakpoint: viewportPreset.responsiveBreakpoint, removesOverride: true)
+        }
+        do {
+            let prepared = try commands.compactMap { command -> DocumentCommand? in
+                do { return try geometryInspectorRegistry.prepare(command, in: documentSession.document,
+                    context: transformValidationContext).documentCommand }
+                catch GeometryInspectorError.noApplicableTargets { return nil }
+            }
+            guard !prepared.isEmpty else { throw GeometryInspectorError.noApplicableTargets }
+            _ = try documentSession.execute(.batch(prepared))
+            geometryInspectorFailure = nil
+            lastGeometryInspectorAnnouncement = "Removed \(viewportPreset.title) geometry overrides; values now inherit from Desktop"
+            announcementPoster.post(lastGeometryInspectorAnnouncement)
+            return true
+        } catch let error as GeometryInspectorError {
+            geometryInspectorFailure = error; lastGeometryInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastGeometryInspectorAnnouncement); return false
+        } catch { return false }
     }
 
     func cancelGeometryInspectorDraft() {
@@ -2439,12 +2513,26 @@ final class WorkspaceShellState: ObservableObject {
                 reason = nil
             }
         }
+        let rendererAvailableIDs = Set(selectionScene?.targets.filter(\.isAvailable).map(\.id) ?? [])
+        let selectedCanonicalIDs: Set<NodeID>
+        if let pageID = effectiveSelectedPageID,
+           let page = documentSession.document.pages.first(where: { $0.id == pageID }) {
+            // Viewport clipping controls hit-test/accessibility virtualization,
+            // not canonical editability. A retained active-page selection may
+            // author or reset breakpoint geometry while temporarily outside a
+            // narrower artboard without creating a fabricated visible target.
+            selectedCanonicalIDs = Set(selectionState.orderedIDs.filter { id in
+                page.nodes.contains(where: { $0.id == id })
+            })
+        } else {
+            selectedCanonicalIDs = []
+        }
         return TransformValidationContext(
             activePageID: effectiveSelectedPageID ?? PageID(),
             currentSceneID: canvasRenderPlan?.identity.sceneID ?? CanvasViewportSceneID(),
             rendererGeneration: canvasRenderPlan?.identity.sceneGeneration ?? UInt64.max,
             selectedNodeIDs: selectionState.orderedIDs,
-            availableNodeIDs: Set(selectionScene?.targets.filter(\.isAvailable).map(\.id) ?? []),
+            availableNodeIDs: rendererAvailableIDs.union(selectedCanonicalIDs),
             isLifecycleAvailable: lifecycleAvailable,
             lifecycleDisabledReason: reason
         )
@@ -3538,7 +3626,8 @@ final class WorkspaceShellState: ObservableObject {
             activePageID: effectiveSelectedPageID,
             activeContainerID: selectionState.activeContainerID,
             viewport: viewportState,
-            surfaceID: renderSurfaceID
+            surfaceID: renderSurfaceID,
+            breakpoint: viewportPreset.responsiveBreakpoint
         )
         let expectedIdentity = CanvasRenderRequestIdentity(
             documentID: request.document.id,

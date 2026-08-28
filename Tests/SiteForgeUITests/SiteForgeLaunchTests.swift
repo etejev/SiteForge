@@ -404,6 +404,66 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
     }
 
+    // SF-0601-001...006/008; SF-0602-001...006/008
+    func testResponsiveBreakpointGeometryAuthoringUndoResetAndAccessibilityJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        application.buttons["canvas.empty.insert.frame"].click()
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["inspector.tab.layout"].click()
+        let preset = application.descendants(matching: .any)["canvas.viewport.preset"]
+        let xField = application.textFields["inspector.layout.x"]
+        XCTAssertTrue(xField.waitForExistence(timeout: 5))
+        XCTAssertTrue((xField.value as? String)?.contains("Desktop") == true)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-016 Desktop base inherited geometry")
+
+        preset.click(); application.menuItems["Tablet"].click()
+        XCTAssertTrue(waitForValue(preset, containing: "Tablet"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Inherited from Desktop"))
+        let tabletX = application.textFields["inspector.layout.x"]
+        XCTAssertTrue(tabletX.waitForExistence(timeout: 3))
+        XCTAssertTrue(tabletX.isEnabled, "An inherited responsive value must remain editable when its selected node is clipped by the artboard.")
+        tabletX.doubleClick()
+        tabletX.typeKey("a", modifierFlags: .command); tabletX.typeText("48"); tabletX.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Authored for Tablet"))
+        XCTAssertTrue(application.buttons["inspector.layout.resetBreakpointOverrides"].isEnabled)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-016 Tablet authored override")
+
+        preset.click(); application.menuItems["Mobile"].click()
+        XCTAssertTrue(waitForValue(preset, containing: "Mobile"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Inherited from Desktop"))
+        let width = application.textFields["inspector.layout.width"]
+        XCTAssertTrue(width.waitForExistence(timeout: 3))
+        XCTAssertTrue(width.isEnabled)
+        width.doubleClick()
+        width.typeKey("a", modifierFlags: .command); width.typeText("320"); width.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Authored for Mobile"))
+        let mobileX = application.textFields["inspector.layout.x"]
+        XCTAssertTrue(mobileX.isEnabled)
+        mobileX.doubleClick()
+        mobileX.typeKey("a", modifierFlags: .command); mobileX.typeText("24"); mobileX.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Authored for Mobile"))
+        XCTAssertFalse((application.descendants(matching: .any)["status.selectionPath"].value as? String)?
+            .contains("outside Mobile artboard") == true)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-016 Mobile authored override")
+
+        let reset = application.buttons["inspector.layout.resetBreakpointOverrides"]
+        XCTAssertTrue(reset.isHittable); reset.click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Inherited from Desktop"))
+        XCTAssertFalse(application.buttons["inspector.layout.resetBreakpointOverrides"].isEnabled)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-016 Mobile reset inheritance")
+
+        preset.click(); application.menuItems["Tablet"].click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Authored for Tablet"))
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Authored for Mobile") ||
+            application.buttons["toolbar.redo"].isEnabled)
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(preset, containing: "Tablet"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-016 responsive undo redo")
+    }
+
     // SF-0508-001...006 — real native Design controls, not an accessibility-only mock.
     func testDesignInspectorSolidFillOpacityKeyboardUndoRedoJourney() throws {
         // The native opacity stepper is a genuine trailing Inspector control.

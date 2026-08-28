@@ -656,6 +656,85 @@ final class TransformModelTests: XCTestCase {
         XCTAssertFalse(record.sanitizedIdentifiers.joined().contains(fixture.nodeID.description))
         XCTAssertFalse(String(describing: record).contains("/Users/"))
     }
+
+    // SF-0601-001...006, SF-0601-008; SF-0602-001...006, SF-0602-008
+    func testResponsiveGeometryOverridesResolveAtomicallyResetAndRoundTrip() throws {
+        var fixture = makeFixture()
+        let registry = GeometryInspectorCommandRegistry()
+        XCTAssertEqual(ResponsiveBreakpoint.resolving(width: 1_440), .desktop)
+        XCTAssertEqual(ResponsiveBreakpoint.resolving(width: 768), .tablet)
+        XCTAssertEqual(ResponsiveBreakpoint.resolving(width: 390), .mobile)
+        XCTAssertEqual(ResponsiveBreakpoint.resolving(width: 1_023.9), .tablet)
+        XCTAssertEqual(ResponsiveBreakpoint.resolving(width: 599.9), .mobile)
+        XCTAssertEqual(Set(ResponsiveBreakpoint.allCases.map(\.id)).count, 3)
+
+        var tablet = fixture.inspectorCommand(field: .x, value: 84, breakpoint: .tablet)
+        let prepared = try registry.prepare(tablet, in: fixture.document, context: fixture.context)
+        XCTAssertEqual(prepared.breakpoint, .tablet)
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(prepared.documentCommand)
+        fixture.document = session.document
+        let node = fixture.document.pages[0].nodes.first { $0.id == fixture.nodeID }!
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .x, node: node, breakpoint: .desktop)?.0, 10)
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .x, node: node, breakpoint: .tablet)?.0, 84)
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .x, node: node, breakpoint: .mobile)?.0, 10)
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .x, node: node, breakpoint: .tablet)?.2, .override(.tablet))
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(fixture.document)), fixture.document)
+
+        _ = try session.undo()
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == fixture.nodeID }?
+            .insertionProperty(ResponsiveGeometryResolver.key(.x, breakpoint: .tablet)))
+        _ = try session.redo()
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .x,
+            node: session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!, breakpoint: .tablet)?.0, 84)
+
+        fixture.document = session.document
+        tablet = fixture.inspectorCommand(field: .x, value: 0, breakpoint: .tablet, removesOverride: true)
+        let reset = try registry.prepare(tablet, in: fixture.document, context: fixture.context)
+        _ = try session.execute(reset.documentCommand)
+        let resetNode = session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .x, node: resetNode, breakpoint: .tablet)?.0, 10)
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .x, node: resetNode, breakpoint: .tablet)?.2, .baseDesktop)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 2)
+    }
+
+    func testResponsiveGeometryRejectsStaleCancelledAndPreservesIndependentBreakpoints() throws {
+        var fixture = makeFixture()
+        let registry = GeometryInspectorCommandRegistry()
+        var mobile = fixture.inspectorCommand(field: .width, value: 180, breakpoint: .mobile)
+        XCTAssertThrowsError(try registry.prepare(
+            fixture.inspectorCommand(field: .width, value: 180, revision: fixture.document.revision + 1,
+                breakpoint: .mobile), in: fixture.document, context: fixture.context
+        )) { XCTAssertEqual($0 as? GeometryInspectorError, .staleRevision) }
+        XCTAssertThrowsError(try registry.prepare(mobile, in: fixture.document, context: fixture.context,
+            cancellation: .init { true })) { XCTAssertEqual($0 as? GeometryInspectorError, .cancelled) }
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(try registry.prepare(mobile, in: fixture.document, context: fixture.context).documentCommand)
+        fixture.document = session.document
+        let tablet = fixture.inspectorCommand(field: .width, value: 300, breakpoint: .tablet)
+        _ = try session.execute(try registry.prepare(tablet, in: fixture.document, context: fixture.context).documentCommand)
+        let node = session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .width, node: node, breakpoint: .desktop)?.0, 120)
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .width, node: node, breakpoint: .tablet)?.0, 300)
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .width, node: node, breakpoint: .mobile)?.0, 180)
+
+        var malformed = session.document
+        malformed.pages[0].nodes[1].properties.append(NodeProperty(
+            key: .init(rawValue: ResponsiveGeometryResolver.key(.height, breakpoint: .mobile)),
+            value: .string("not-a-number"), origin: .authored
+        ))
+        XCTAssertThrowsError(try malformed.validate()) {
+            XCTAssertEqual($0 as? ModelValidationError, .invalidResponsiveGeometryState)
+        }
+
+        mobile = fixture.inspectorCommand(field: .width, value: 200, breakpoint: .mobile)
+        let record = GeometryInspectorDiagnosticFactory.make(
+            command: mobile, durationMilliseconds: 0.1,
+            resultRevision: nil, result: .stale, failure: .staleRevision
+        )
+        XCTAssertEqual(record.requirementIDs, GeometryInspectorCommandRegistry.responsiveRequirementIDs.sorted())
+        XCTAssertFalse(String(describing: record).contains(fixture.nodeID.description))
+    }
     // SF-0508-001...006, SF-0508-008 — canonical RGBA channels preserve
     // legacy defaults and never store a display hexadecimal string.
     func testDesignSolidFillAndOpacityResolveCommitUndoAndPersist() throws {
@@ -1508,7 +1587,9 @@ private struct TransformFixture {
     func inspectorCommand(
         field: GeometryInspectorField,
         value: Double,
-        revision: UInt64? = nil
+        revision: UInt64? = nil,
+        breakpoint: ResponsiveBreakpoint = .desktop,
+        removesOverride: Bool = false
     ) -> GeometryInspectorCommand {
         GeometryInspectorCommand(
             identity: .init(
@@ -1522,7 +1603,9 @@ private struct TransformFixture {
             orderedNodeIDs: selectedIDs,
             field: field,
             value: value,
-            provenance: .automation
+            provenance: .automation,
+            breakpoint: breakpoint,
+            removesOverride: removesOverride
         )
     }
 

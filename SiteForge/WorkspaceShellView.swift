@@ -939,10 +939,10 @@ private struct ViewportControlsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Label("Preview", systemImage: "display")
+                Label("Breakpoint", systemImage: "display")
                     .font(.caption.weight(.semibold))
                     .fixedSize()
-                    .accessibilityHint("Preview preset only. Responsive authoring is not available yet.")
+                    .accessibilityHint("Selects the responsive geometry breakpoint authored by the Layout Inspector.")
 
                 NativeViewportPresetControl(
                     selection: $state.viewportPreset,
@@ -2587,6 +2587,25 @@ private struct GeometryInspectorFieldsView: View {
             ForEach(GeometryInspectorField.allCases, id: \.self) { field in
                 fieldRow(field)
             }
+            HStack(spacing: 8) {
+                Text("Breakpoint")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(state.viewportPreset.title)
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("inspector.layout.breakpoint")
+            }
+            if state.viewportPreset != .desktop {
+                Button("Reset \(state.viewportPreset.title) Overrides") {
+                    _ = state.resetGeometryOverrides(provenance: .pointer)
+                    restoreDrafts()
+                }
+                .disabled(!state.hasGeometryOverridesAtCurrentBreakpoint)
+                .accessibilityLabel("Reset \(state.viewportPreset.title) geometry overrides")
+                .accessibilityHint("Remove authored geometry at this breakpoint and inherit Desktop values.")
+                .accessibilityIdentifier("inspector.layout.resetBreakpointOverrides")
+            }
             if let applicability = state.geometryInspectorApplicabilityMessage {
                 Text(applicability)
                     .font(.caption)
@@ -2643,11 +2662,11 @@ private struct GeometryInspectorFieldsView: View {
                 }
                 .disabled(!availability.isEnabled)
                 .accessibilityLabel("\(field.title) geometry")
-                .accessibilityValue(accessibilityValue(for: value))
+                .accessibilityValue(accessibilityValue(for: value, field: field))
                 .accessibilityHint(availability.disabledReason ?? "Enter a finite value and press Return to commit. Escape restores the committed value.")
                 .accessibilityIdentifier("inspector.layout.\(field.rawValue)")
-            provenanceLabel(for: value)
-                .frame(width: 64, alignment: .trailing)
+            provenanceLabel(for: value, field: field)
+                .frame(width: 104, alignment: .trailing)
         }
     }
 
@@ -2665,12 +2684,16 @@ private struct GeometryInspectorFieldsView: View {
     }
 
     @ViewBuilder
-    private func provenanceLabel(for value: GeometryInspectorValue) -> some View {
+    private func provenanceLabel(for value: GeometryInspectorValue, field: GeometryInspectorField) -> some View {
         switch value {
         case .single(_, let origin):
-            Text(origin == .authored ? "Authored" : "Default")
+            Text(state.geometryInspectorResponsiveSource(for: field)
+                 ?? (origin == .authored ? "Authored" : "Default"))
                 .font(.caption2).foregroundStyle(.secondary)
-                .accessibilityLabel(origin == .authored ? "Authored value" : "Defaulted value")
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .accessibilityLabel(state.geometryInspectorResponsiveSource(for: field)
+                    ?? (origin == .authored ? "Authored value" : "Defaulted value"))
         case .mixed:
             Text("Mixed").font(.caption2).foregroundStyle(.secondary)
                 .accessibilityLabel("Mixed values")
@@ -2687,10 +2710,10 @@ private struct GeometryInspectorFieldsView: View {
         }
     }
 
-    private func accessibilityValue(for value: GeometryInspectorValue) -> String {
+    private func accessibilityValue(for value: GeometryInspectorValue, field: GeometryInspectorField) -> String {
         switch value {
         case .single(let value, let origin):
-            "\(GeometryInspectorNumberParser.format(value)); \(origin == .authored ? "authored" : "defaulted")"
+            "\(GeometryInspectorNumberParser.format(value)); \(state.geometryInspectorResponsiveSource(for: field) ?? (origin == .authored ? "authored" : "defaulted"))"
         case .mixed: "Mixed values"
         case .unavailable(let reason): reason
         }

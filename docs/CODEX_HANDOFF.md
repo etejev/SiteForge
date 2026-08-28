@@ -2,6 +2,22 @@
 
 ## Current checkpoint
 
+`SF-AUTHORING-016` is **VERIFIED AND DONE**. The current tree implements the
+bounded responsive geometry-authoring slice through stable Desktop, Tablet,
+and Mobile identities, deterministic width resolution, Desktop-base
+inheritance, isolated Tablet/Mobile X/Y/Width/Height overrides, one
+identity-gated transaction registry, and one immutable resolved geometry used
+by renderer, selection, hit testing, accessibility, inline text, packages,
+recovery, and history. Focused acceptance passed 5/5 and five
+original-resolution maximized-window states passed visual review. The
+authoritative `./sf verify` passed 367 unit/integration plus 45 UI tests (412
+total), zero failures, with every repository gate green. Do not expand this
+slice into custom breakpoint management, responsive styling/content/
+visibility, comparison panes, safe-area simulation, container queries,
+component responsiveness, preview/export parity, or release acceptance. No
+subsequent feature item is READY; the remaining action is the authorized
+commit/push/hosted-CI boundary.
+
 `SF-AUTHORING-015` is **VERIFIED AND DONE**. The current tree implements
 bounded production plain-Text typography through strict canonical properties,
 one identity-gated transaction registry, immutable renderer snapshots, shared
@@ -11,8 +27,7 @@ original-resolution screenshots passed visual review. The authoritative
 `./sf verify` passed 363 unit/integration plus 44 UI tests (407 total), zero
 failures, with all repository gates green. Do not expand the slice
 into font import, variable axes, rich text, automatic sizing, responsive
-typography, tokens, or preview/export work. No subsequent feature item is READY;
-the remaining action is the authorized commit/push/hosted-CI boundary.
+typography, tokens, or preview/export work.
 
 `SF-AUTHORING-014` is **VERIFIED AND DONE**. The current tree implements the bounded
 uniform border, uniform corner radius, and one drop-shadow Design Inspector
@@ -36,7 +51,7 @@ plus 41 UI test gate at `3c90e33`, including the compact-window Inspector and
 navigator accessibility corrections.
 
 `SF-AUTHORING-013` remains a **VERIFIED BOUNDED** historical milestone. Its
-broader deferred scope is unchanged. No subsequent feature item is READY.
+broader deferred scope is unchanged.
 
 ## Authoritative files
 
@@ -86,9 +101,10 @@ broader deferred scope is unchanged. No subsequent feature item is READY.
 
 ## Next task
 
-No item after SF-AUTHORING-014 is READY. Create another queue item only when its requirements
-and exclusions are explicit. Do not silently expand deferred SF-0506/SF-0508
-capability or represent the product as release-complete.
+No item after SF-AUTHORING-016 is READY. Create another queue item only when
+its requirements and exclusions are explicit. Do not silently expand deferred
+responsive, typography, box-appearance, or fill capability or represent the
+product as release-complete.
 
 ## Stop/escalate conditions
 
@@ -97,4 +113,4 @@ product choice with broad downstream effect or an incompatible migration.
 Do not commit generated artifacts, local result bundles, secrets, or machine
 paths. External signing, notarization, publication, credentials, or a genuinely
 unavailable external dependency remain owner boundaries. Do not begin a
-feature beyond SF-AUTHORING-014 until a READY queue item defines its scope.
+feature beyond SF-AUTHORING-016 until a READY queue item defines its scope.

@@ -1274,6 +1274,96 @@ enum GeometryInspectorField: String, CaseIterable, Hashable, Sendable {
     }
 }
 
+enum ResponsiveBreakpointIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "responsive-breakpoint"
+}
+typealias BreakpointID = StableIdentifier<ResponsiveBreakpointIdentifierDomain>
+
+/// Product-owned v1 breakpoints. Ranges are non-overlapping and resolve by
+/// viewport width; the current scene preset is never canonical document state.
+enum ResponsiveBreakpoint: String, CaseIterable, Codable, Sendable {
+    case desktop, tablet, mobile
+
+    var id: BreakpointID {
+        let raw: String = switch self {
+        case .desktop: "60000000-0000-4000-8000-000000000001"
+        case .tablet: "60000000-0000-4000-8000-000000000002"
+        case .mobile: "60000000-0000-4000-8000-000000000003"
+        }
+        return BreakpointID(UUID(uuidString: raw)!)
+    }
+
+    var title: String { rawValue.capitalized }
+    var rangeDescription: String {
+        switch self { case .desktop: "1024 points and wider"; case .tablet: "600–1023 points"; case .mobile: "below 600 points" }
+    }
+
+    static func resolving(width: Double) -> ResponsiveBreakpoint {
+        guard width.isFinite else { return .desktop }
+        if width < 600 { return .mobile }
+        if width < 1024 { return .tablet }
+        return .desktop
+    }
+}
+
+enum ResponsiveGeometrySource: Equatable, Sendable {
+    case baseDesktop
+    case override(ResponsiveBreakpoint)
+
+    var label: String {
+        switch self { case .baseDesktop: "Inherited from Desktop"; case .override(let value): "Authored for \(value.title)" }
+    }
+}
+
+enum ResponsiveGeometryResolver {
+    static let namespace = "responsive.geometry.v1"
+
+    static func key(_ field: GeometryInspectorField, breakpoint: ResponsiveBreakpoint) -> String {
+        "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).\(field.rawValue)"
+    }
+
+    static func value(
+        for field: GeometryInspectorField,
+        node: DocumentNode,
+        breakpoint: ResponsiveBreakpoint
+    ) -> (Double, PropertyOrigin, ResponsiveGeometrySource)? {
+        if breakpoint != .desktop,
+           let property = node.insertionProperty(key(field, breakpoint: breakpoint)),
+           case .number(let value) = property.value, value.isFinite {
+            return (value, property.origin, .override(breakpoint))
+        }
+        guard let property = node.insertionProperty(field.propertyKey),
+              case .number(let value) = property.value, value.isFinite else { return nil }
+        return (value, property.origin, .baseDesktop)
+    }
+
+    static func geometry(for node: DocumentNode, breakpoint: ResponsiveBreakpoint) -> InsertionGeometry? {
+        guard let x = value(for: .x, node: node, breakpoint: breakpoint)?.0,
+              let y = value(for: .y, node: node, breakpoint: breakpoint)?.0,
+              let width = value(for: .width, node: node, breakpoint: breakpoint)?.0,
+              let height = value(for: .height, node: node, breakpoint: breakpoint)?.0 else { return nil }
+        return InsertionGeometry(origin: .init(x: x, y: y), size: .init(width: width, height: height))
+    }
+
+    static func frame(
+        for node: DocumentNode,
+        base: WorldRect,
+        breakpoint: ResponsiveBreakpoint
+    ) -> WorldRect {
+        guard breakpoint != .desktop else { return base }
+        func override(_ field: GeometryInspectorField, fallback: Double) -> Double {
+            let key = key(field, breakpoint: breakpoint)
+            guard let property = node.insertionProperty(key), case .number(let value) = property.value,
+                  GeometryInspectorCommandRegistry.isValid(value, for: field) else { return fallback }
+            return value
+        }
+        return WorldRect(
+            origin: .init(x: override(.x, fallback: base.origin.x), y: override(.y, fallback: base.origin.y)),
+            size: .init(width: override(.width, fallback: base.size.width), height: override(.height, fallback: base.size.height))
+        )
+    }
+}
+
 enum GeometryInspectorIdentifierDomain: StableIdentifierDomain {
     static let diagnosticNamespace = "geometry-inspector"
 }
@@ -1301,6 +1391,8 @@ struct GeometryInspectorCommand: Equatable, Sendable {
     let field: GeometryInspectorField
     let value: Double
     let provenance: GeometryInspectorProvenance
+    var breakpoint: ResponsiveBreakpoint = .desktop
+    var removesOverride = false
 }
 
 enum GeometryInspectorError: Error, Equatable, LocalizedError, Sendable {
@@ -1351,6 +1443,8 @@ struct PreparedGeometryInspectorEdit: Equatable, Sendable {
     /// contract. UI presents this count explicitly instead of coercing them.
     let skippedNodeIDs: [NodeID]
     let documentCommand: DocumentCommand
+    let breakpoint: ResponsiveBreakpoint
+    let removesOverride: Bool
 }
 
 enum GeometryInspectorValue: Equatable, Sendable {
@@ -1364,6 +1458,12 @@ struct GeometryInspectorCommandRegistry: Sendable {
         "SF-0403-001", "SF-0403-002", "SF-0403-003", "SF-0403-004",
         "SF-0403-005", "SF-0403-006", "SF-0403-007", "SF-0403-008",
     ]
+    static let responsiveRequirementIDs: Set<String> = [
+        "SF-0601-001", "SF-0601-002", "SF-0601-003", "SF-0601-004",
+        "SF-0601-005", "SF-0601-006", "SF-0601-008",
+        "SF-0602-001", "SF-0602-002", "SF-0602-003", "SF-0602-004",
+        "SF-0602-005", "SF-0602-006", "SF-0602-008",
+    ]
 
     private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid]
 
@@ -1374,7 +1474,8 @@ struct GeometryInspectorCommandRegistry: Sendable {
     func value(
         for field: GeometryInspectorField,
         in document: CanonicalDocument,
-        context: TransformValidationContext
+        context: TransformValidationContext,
+        breakpoint: ResponsiveBreakpoint = .desktop
     ) -> GeometryInspectorValue {
         guard !context.selectedNodeIDs.isEmpty else {
             return .unavailable("Select an object with editable geometry first.")
@@ -1386,10 +1487,7 @@ struct GeometryInspectorCommandRegistry: Sendable {
             return .unavailable("The selected objects do not support fixed geometry editing.")
         }
         let values = nodes.compactMap { node -> (Double, PropertyOrigin)? in
-            guard let property = node.insertionProperty(field.propertyKey),
-                  case let .number(value) = property.value,
-                  value.isFinite else { return nil }
-            return (value, property.origin)
+            ResponsiveGeometryResolver.value(for: field, node: node, breakpoint: breakpoint).map { ($0.0, $0.1) }
         }
         guard values.count == nodes.count, let first = values.first else {
             return .unavailable("The selected objects have invalid authored geometry.")
@@ -1429,7 +1527,7 @@ struct GeometryInspectorCommandRegistry: Sendable {
         guard command.orderedNodeIDs == context.selectedNodeIDs else {
             throw GeometryInspectorError.selectionMismatch
         }
-        guard Self.isValid(command.value, for: command.field) else { throw GeometryInspectorError.invalidValue }
+        guard command.removesOverride || Self.isValid(command.value, for: command.field) else { throw GeometryInspectorError.invalidValue }
 
         var commands: [DocumentCommand] = []
         var skipped: [NodeID] = []
@@ -1445,15 +1543,24 @@ struct GeometryInspectorCommandRegistry: Sendable {
             guard !node.insertionBooleanProperty("locked") else { throw GeometryInspectorError.lockedTarget }
             guard !node.insertionBooleanProperty("hidden") else { throw GeometryInspectorError.hiddenTarget }
             guard context.availableNodeIDs.contains(id) else { throw GeometryInspectorError.unavailableTarget }
-            guard let property = node.insertionProperty(command.field.propertyKey) else {
-                skipped.append(id)
-                continue
+            if command.breakpoint == .desktop {
+                guard !command.removesOverride,
+                      let property = node.insertionProperty(command.field.propertyKey) else { skipped.append(id); continue }
+                commands.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                    property: .init(id: property.id, key: property.key, value: .number(command.value), origin: .authored))))
+            } else {
+                let key = ResponsiveGeometryResolver.key(command.field, breakpoint: command.breakpoint)
+                if let property = node.insertionProperty(key) {
+                    commands.append(command.removesOverride
+                        ? .removeProperty(.init(pageID: page.id, nodeID: id, propertyID: property.id))
+                        : .setProperty(.init(pageID: page.id, nodeID: id,
+                            property: .init(id: property.id, key: property.key, value: .number(command.value), origin: .authored))))
+                } else if !command.removesOverride {
+                    commands.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                        property: .init(key: .init(rawValue: key), value: .number(command.value), origin: .authored),
+                        insertionIndex: node.properties.count)))
+                }
             }
-            commands.append(.setProperty(.init(
-                pageID: page.id,
-                nodeID: id,
-                property: .init(id: property.id, key: property.key, value: .number(command.value), origin: .authored)
-            )))
         }
         guard !commands.isEmpty else { throw GeometryInspectorError.noApplicableTargets }
         let documentCommand = DocumentCommand.batch(commands)
@@ -1465,7 +1572,9 @@ struct GeometryInspectorCommandRegistry: Sendable {
             field: command.field,
             value: command.value,
             skippedNodeIDs: skipped,
-            documentCommand: documentCommand
+            documentCommand: documentCommand,
+            breakpoint: command.breakpoint,
+            removesOverride: command.removesOverride
         )
     }
 
@@ -2007,8 +2116,11 @@ enum GeometryInspectorDiagnosticFactory {
         result: GeometryInspectorDiagnosticResult,
         failure: GeometryInspectorError?
     ) -> GeometryInspectorDiagnosticRecord {
-        GeometryInspectorDiagnosticRecord(
-            requirementIDs: GeometryInspectorCommandRegistry.requirementIDs.sorted(),
+        let requirements = command.breakpoint == .desktop && !command.removesOverride
+            ? GeometryInspectorCommandRegistry.requirementIDs
+            : GeometryInspectorCommandRegistry.responsiveRequirementIDs
+        return GeometryInspectorDiagnosticRecord(
+            requirementIDs: requirements.sorted(),
             operationType: "geometry-inspector.\(command.field.rawValue)",
             provenance: command.provenance,
             sanitizedIdentifiers: command.orderedNodeIDs.map(sanitize),

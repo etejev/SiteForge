@@ -668,6 +668,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case invalidFillLayerState
     case invalidBoxStyleState
     case invalidTypographyState
+    case invalidResponsiveGeometryState
 
     var errorDescription: String? {
         switch self {
@@ -699,6 +700,33 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .invalidFillLayerState: "The document contains an invalid canonical fill-layer state."
         case .invalidBoxStyleState: "The document contains an invalid canonical border, radius, or shadow state."
         case .invalidTypographyState: "The document contains invalid canonical typography state."
+        case .invalidResponsiveGeometryState: "The document contains invalid responsive geometry state."
+        }
+    }
+}
+
+enum CanonicalResponsiveGeometryNamespaceValidator {
+    static let root = "responsive.geometry.v1."
+    private static let breakpointIDs: Set<String> = [
+        "60000000-0000-4000-8000-000000000002",
+        "60000000-0000-4000-8000-000000000003",
+    ]
+    private static let fields: Set<String> = ["x", "y", "width", "height"]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid]
+
+    static func validate(_ node: DocumentNode) throws {
+        let properties = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
+        guard !properties.isEmpty else { return }
+        guard supportedKinds.contains(node.kind) else { throw ModelValidationError.invalidResponsiveGeometryState }
+        for property in properties {
+            let suffix = String(property.key.rawValue.dropFirst(root.count))
+            let components = suffix.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+            guard components.count == 2, breakpointIDs.contains(components[0]), fields.contains(components[1]),
+                  case .number(let value) = property.value, value.isFinite,
+                  abs(value) <= 1_000_000_000,
+                  !(["width", "height"].contains(components[1])) || value >= 1 else {
+                throw ModelValidationError.invalidResponsiveGeometryState
+            }
         }
     }
 }
@@ -1060,6 +1088,7 @@ private extension DocumentPage {
             try CanonicalFillLayerNamespaceValidator.validate(node)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
+            try CanonicalResponsiveGeometryNamespaceValidator.validate(node)
             try node.validateStructuralDefaults()
         }
 

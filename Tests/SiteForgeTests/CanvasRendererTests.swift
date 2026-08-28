@@ -588,6 +588,44 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(state.primaryID, textID)
     }
 
+    // SF-0601-003, SF-0602-002/003/005/008
+    func testResponsiveProjectionSharesResolvedGeometryWithRendererSelectionAndAccessibility() async throws {
+        var document = ProjectCreation.blank()
+        var page = try XCTUnwrap(document.pages.first)
+        let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+        let rootIndex = try XCTUnwrap(page.nodes.firstIndex { $0.id == rootID })
+        let nodeID = NodeID(UUID(uuidString: "60600000-0000-4000-8000-000000000001")!)
+        var properties: [NodeProperty] = [
+            .init(key: .init(rawValue: "layout.x"), value: .number(100), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.y"), value: .number(120), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.width"), value: .number(240), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.height"), value: .number(160), origin: .defaulted),
+        ]
+        for (field, value) in [(GeometryInspectorField.x, 24.0), (.y, 32), (.width, 342), (.height, 220)] {
+            properties.append(.init(key: .init(rawValue: ResponsiveGeometryResolver.key(field, breakpoint: .mobile)),
+                value: .number(value), origin: .authored))
+        }
+        page.nodes[rootIndex].childIDs.append(nodeID)
+        page.nodes.append(.init(id: nodeID, kind: .frame, name: "Responsive Frame", parent: .node(rootID), properties: properties))
+        document.pages[0] = page
+        let viewport = try CanvasViewportState(viewportSize: .init(width: 800, height: 700),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 390, height: 900)), pixelRatio: .init(2))
+        let prepared = try await WorkspaceScenePreparationWorker().prepare(.init(document: document,
+            activePageID: page.id, activeContainerID: nil, viewport: viewport, surfaceID: CanvasRenderSurfaceID(),
+            breakpoint: .mobile))
+        let object = try XCTUnwrap(prepared.renderScene.objects.first { $0.id == nodeID })
+        let target = try XCTUnwrap(prepared.selectionScene?.targets.first { $0.id == nodeID })
+        XCTAssertEqual(object.frame, .init(origin: .init(x: 24, y: 32), size: .init(width: 342, height: 220)))
+        XCTAssertEqual(target.frame, object.frame)
+        let renderer = CanvasRendererCore()
+        let plan = try renderer.prepare(scene: prepared.renderScene, overlays: prepared.overlays, viewport: viewport)
+        XCTAssertEqual(plan.authoredObjects.first { $0.id == nodeID }?.frame, object.frame)
+        let accessibility = try XCTUnwrap(plan.accessibilityElements.first { $0.objectID == nodeID })
+        XCTAssertEqual(accessibility.frame.origin, try viewport.transform.worldToViewport(object.frame.origin))
+        XCTAssertEqual(accessibility.frame.size.width, object.frame.size.width * viewport.zoom.value)
+        XCTAssertEqual(renderer.hitTest(.init(x: 30, y: 40), in: plan), nodeID)
+    }
+
     // SF-0407-006, SF-0407-007, SF-0407-008, SF-1502-001
     @MainActor
     func testProductionSceneProjectionAndRendererKeepMainActorResponsiveWhileWorkIsActive() async throws {

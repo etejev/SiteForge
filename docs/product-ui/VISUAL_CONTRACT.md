@@ -164,11 +164,18 @@ fields, interaction controls, command, history, package, or canonical mutation.
 - Navigator: 210–300 pt; inspector: 280–360 pt; canvas keeps a 500 pt minimum.
   The 1100 × 700 editor minimum prevents clipping/overlap in normal use.
 - The viewport header remains visible above the canvas. It contains a labeled
-  preview-viewport preset (Desktop 1440, Tablet, or Mobile), zoom out/current
+  authored-breakpoint preset (Desktop 1440, Tablet 768, or Mobile 390), zoom out/current
   percentage/zoom in, Actual Size, Fit to Canvas, and Fit to Document. At
   explicitly constrained Debug/UI-test geometry these remain real named native
   controls; an overflow affordance, when required by a later narrower layout,
   must stay visible rather than hiding functional controls behind automation.
+- Desktop is the base geometry source. Tablet and Mobile Layout fields resolve
+  inherited Desktop values until the user authors a breakpoint-specific X, Y,
+  Width, or Height override. Each field names its source, and the visible Reset
+  Override action removes the canonical override rather than writing a copied
+  literal. Switching presets changes only the scene-local authoring context and
+  immutable resolved geometry; it never serializes the selected preset, moves
+  another breakpoint, or fabricates responsive reflow.
 - At explicitly constrained Debug/UI-test geometry, tests may expose safe
   screen edges while retaining the production metrics as the Release contract.
 

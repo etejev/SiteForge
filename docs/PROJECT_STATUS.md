@@ -2,18 +2,24 @@
 
 Last updated: 2026-08-28.
 
-Current work: `SF-AUTHORING-015` is verified and complete as the bounded
-plain-Text typography slice for SF-0507-001 through SF-0507-008. Native Design
-fields/pickers author family, weight, size, explicit line height, tracking, and
-alignment through one canonical transaction registry; committed tiles and the
-live inline editor share one metric contract. Focused registry/render/package/
-recovery tests passed 3/3 and the actual Save/close/reopen app journey passed
-1/1 with reviewed original-resolution evidence. The authoritative `./sf verify`
-passed 363 unit/integration plus 44 UI tests (407 total), zero failures, with
-all repository gates green. The module remains Partial for
-font import/licensing, variable axes, rich text, advanced paragraphs,
-responsive overrides, tokens, preview/export parity, performance, and release
-acceptance. No subsequent feature item is READY.
+Current work: `SF-AUTHORING-016` is verified and complete as the bounded
+responsive geometry-authoring slice for SF-0601-001 through SF-0601-008 and
+SF-0602-001 through SF-0602-008. Stable Desktop, Tablet, and Mobile identities
+resolve deterministic non-overlapping widths. Native Layout fields author and
+reset isolated Tablet/Mobile X/Y/Width/Height overrides while naming inherited
+or authored provenance; one immutable resolution feeds renderer, selection,
+hit testing, accessibility, inline text, history, packages, and recovery.
+Focused acceptance passed 5/5 with reviewed original-resolution evidence. The
+authoritative `./sf verify` passed 367 unit/integration plus 45 UI tests (412
+total), zero failures, with all repository gates green. Both normative modules
+remain Partial for custom breakpoint management, responsive style/typography/
+content/visibility, comparison panes, orientation/safe areas, container
+queries, fluid typography, component responsiveness, preview/export parity,
+performance budgets, and release acceptance. No subsequent item is READY.
+
+`SF-AUTHORING-015` remains verified and complete as the bounded plain-Text
+typography slice for SF-0507-001 through SF-0507-008. The authoritative gate
+passed 363 unit/integration plus 44 UI tests (407 total), zero failures.
 
 `SF-AUTHORING-014` is verified as the bounded uniform
 border/radius/single-shadow Design Inspector slice for SF-0506-001 through

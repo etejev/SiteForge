@@ -11,6 +11,13 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Added live Desktop, Tablet, and Mobile geometry authoring in the Layout
+  Inspector. Desktop remains the base source; Tablet and Mobile fields expose
+  inherited or authored provenance, commit isolated X/Y/Width/Height overrides,
+  and provide a Reset Override action. Renderer, selection, hit testing,
+  accessibility, history, package reopen, and recovery share the same resolved
+  breakpoint geometry while the selected preset remains scene-local.
+
 - Added production typography controls for plain Text in the Design Inspector:
   font family with deterministic missing-font fallback, four bounded weights,
   size, explicit line height, tracking, leading/center/trailing alignment, and

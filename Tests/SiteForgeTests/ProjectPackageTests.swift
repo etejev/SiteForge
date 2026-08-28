@@ -616,6 +616,81 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: recoveredNode), expected)
     }
 
+    // SF-0601-002/004/005; SF-0602-001/004/005 — breakpoint overrides use
+    // the production package and owned-recovery paths while the selected
+    // editor breakpoint remains scene-local and absent from canonical data.
+    @MainActor
+    func testResponsiveGeometryPersistsAcrossPackageReopenAndOwnedRecovery() async throws {
+        var document = ProjectCreation.blank()
+        let page = try XCTUnwrap(document.pages.first)
+        let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+        let nodeID = NodeID(UUID(uuidString: "87000000-0000-4000-8000-000000000016")!)
+        document.pages[0].nodes[0].childIDs.append(nodeID)
+        document.pages[0].nodes.append(DocumentNode(
+            id: nodeID,
+            kind: .frame,
+            name: "Responsive Frame",
+            parent: .node(rootID),
+            properties: [
+                NodeProperty(key: .init(rawValue: "layout.x"), value: .number(120), origin: .authored),
+                NodeProperty(key: .init(rawValue: "layout.y"), value: .number(80), origin: .authored),
+                NodeProperty(key: .init(rawValue: "layout.width"), value: .number(240), origin: .authored),
+                NodeProperty(key: .init(rawValue: "layout.height"), value: .number(160), origin: .authored),
+            ]
+        ))
+        let sceneID = CanvasViewportSceneID(UUID(uuidString: "88000000-0000-4000-8000-000000000016")!)
+        let generation: UInt64 = 16
+        let registry = GeometryInspectorCommandRegistry()
+        let session = DocumentSession(document: document)
+        func commit(_ field: GeometryInspectorField, _ value: Double, at breakpoint: ResponsiveBreakpoint) throws {
+            let command = GeometryInspectorCommand(
+                identity: .init(
+                    editID: GeometryInspectorEditID(), documentID: session.document.id,
+                    pageID: page.id, revision: session.document.revision,
+                    sceneID: sceneID, rendererGeneration: generation
+                ),
+                orderedNodeIDs: [nodeID], field: field, value: value,
+                provenance: .automation, breakpoint: breakpoint
+            )
+            let context = TransformValidationContext(
+                activePageID: page.id, currentSceneID: sceneID,
+                rendererGeneration: generation, selectedNodeIDs: [nodeID],
+                availableNodeIDs: [nodeID], isLifecycleAvailable: true,
+                lifecycleDisabledReason: nil
+            )
+            _ = try session.execute(try registry.prepare(command, in: session.document, context: context).documentCommand)
+        }
+        try commit(.x, 48, at: .tablet)
+        try commit(.width, 320, at: .mobile)
+
+        let baseline = package()
+        let authored = ProjectPackage(
+            projectID: baseline.projectID, createdAt: baseline.createdAt,
+            modifiedAt: baseline.modifiedAt, document: session.document,
+            optionalMembers: baseline.optionalMembers, compatibility: baseline.compatibility
+        )
+        let store = ProjectPackageStore()
+        let encoded = try await store.encode(authored)
+        let reopened = try await store.decode(encoded)
+        let reopenedNode = try XCTUnwrap(reopened.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(ResponsiveGeometryResolver.geometry(for: reopenedNode, breakpoint: .desktop)?.origin.x, 120)
+        XCTAssertEqual(ResponsiveGeometryResolver.geometry(for: reopenedNode, breakpoint: .tablet)?.origin.x, 48)
+        XCTAssertEqual(ResponsiveGeometryResolver.geometry(for: reopenedNode, breakpoint: .mobile)?.size.width, 320)
+        let resaved = try await store.encode(reopened)
+        XCTAssertEqual(resaved, encoded)
+
+        let recoveryDirectory = try fixtureDirectory().appendingPathComponent("responsive-recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(recoveryDirectory)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: baseline.projectID, in: recoveryDirectory)
+        try await store.write(reopened, to: recoveryURL, policy: .recovery(baseline.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(
+            from: recoveryURL, expectedProjectID: baseline.projectID
+        ).package
+        let recoveredNode = try XCTUnwrap(recovered.document.pages[0].nodes.first(where: { $0.id == nodeID }))
+        XCTAssertEqual(ResponsiveGeometryResolver.geometry(for: recoveredNode, breakpoint: .tablet)?.origin.x, 48)
+        XCTAssertEqual(ResponsiveGeometryResolver.geometry(for: recoveredNode, breakpoint: .mobile)?.size.width, 320)
+    }
+
     // SF-0301-004...006, SF-0303-005, SF-0508-001...008 — recomputing the
     // package member checksum cannot make malformed current fill state valid.
     // Canonical validation rejects the candidate before lifecycle adoption.

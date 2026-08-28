@@ -12,6 +12,39 @@ None.
 
 ## DONE
 
+- [x] `SF-AUTHORING-016` Implement responsive breakpoint geometry overrides and
+  live device authoring.
+  - Requirements: bounded production evidence for `SF-0601-001` through
+    `SF-0601-008` and `SF-0602-001` through `SF-0602-008`; both normative
+    modules remain Partial outside the geometry-authoring slice.
+  - Plan: establish stable Desktop/Tablet/Mobile breakpoint identities and
+    deterministic non-overlapping width resolution; store typed per-node
+    geometry overrides with explicit authored/inherited provenance; extend the
+    identity-gated Layout registry so set/reset is one exact transaction;
+    project one resolved geometry snapshot into layout, renderer, selection,
+    hit testing, inline editing, and accessibility; expose inherited source and
+    Reset Override in native Layout controls; prove history, package/recovery,
+    preset/custom-width resolution, accessibility, and actual-app parity before
+    one authoritative verification gate.
+  - Explicit exclusions: custom breakpoint management, overlapping ranges,
+    responsive style/fill/typography/visibility/content, comparison panes,
+    orientation and safe-area simulation, container queries, fluid typography,
+    component responsiveness, preview/export parity, and release acceptance.
+  - Result: stable fixed Desktop/Tablet/Mobile identities resolve deterministic
+    non-overlapping ranges. Desktop remains the base geometry source; native
+    Layout fields author isolated Tablet/Mobile X/Y/Width/Height overrides,
+    label inherited/authored provenance, and remove overrides through a visible
+    Reset action. One responsive resolver feeds immutable renderer, selection,
+    hit-test, accessibility, package, recovery, history, and inline geometry.
+  - Evidence: four focused model/renderer/package selectors and one actual-app
+    journey passed 5/5. Original-resolution maximized-window screenshots were
+    reviewed for Desktop inheritance, visible Tablet/Mobile overrides, reset,
+    undo/redo, artboard/grid clarity, aligned selection, readable controls, and
+    absence of ghost/debug content. Final `./sf verify` passed 367 unit/
+    integration plus 45 UI tests (412 total), zero failures, with every
+    repository gate green on 2026-08-28. See
+    `docs/evidence/SF-AUTHORING-016-RESPONSIVE-GEOMETRY.md`.
+
 - [x] `SF-AUTHORING-015` Implement bounded production typography controls and
   consistent text rendering.
   - Requirements: bounded evidence for `SF-0507-001` through `SF-0507-008`.
