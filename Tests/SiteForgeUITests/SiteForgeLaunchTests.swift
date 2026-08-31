@@ -3024,19 +3024,35 @@ final class SiteForgeLaunchTests: XCTestCase {
     ) -> XCUIElement {
         let identifier = element.identifier
         let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
-        var liveElement = application.descendants(matching: .any)[identifier].firstMatch
+        var liveElement = liveStructuralLayoutControl(identifier, in: application)
         for _ in 0..<10 where !liveElement.isHittable {
             let targetFrame = liveElement.frame
             let viewportFrame = scroll.frame
             let deltaY: CGFloat = targetFrame.minY < viewportFrame.minY + 8 ? 180 : -180
             scroll.scroll(byDeltaX: 0, deltaY: deltaY)
             // Undo/redo and reset can replace the SwiftUI control host. A
-            // fresh AX query observes the live shipping control rather than
-            // retaining an obsolete proxy from the previous Inspector tree.
-            liveElement = application.descendants(matching: .any)[identifier].firstMatch
+            // fresh, role-preserving AX query observes the live shipping
+            // control rather than retaining an obsolete proxy or resolving
+            // the non-hittable SwiftUI wrapper that shares its identifier.
+            liveElement = liveStructuralLayoutControl(identifier, in: application)
         }
         XCTAssertTrue(liveElement.isHittable, "Inspector control \(identifier) must remain reachable")
         return liveElement
+    }
+
+    private func liveStructuralLayoutControl(
+        _ identifier: String,
+        in application: XCUIApplication
+    ) -> XCUIElement {
+        if identifier.hasSuffix(".reset") {
+            return application.buttons[identifier]
+        }
+        if identifier.hasSuffix(".padding")
+            || identifier.hasSuffix(".gap")
+            || identifier.hasSuffix(".columns") {
+            return application.textFields[identifier]
+        }
+        return application.descendants(matching: .any)[identifier].firstMatch
     }
 
     private func replaceStructuralLayoutField(
