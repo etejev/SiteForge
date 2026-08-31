@@ -498,6 +498,41 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(state.canvasRenderPlan?.identity.revision, state.documentSession.document.revision)
     }
 
+    // SF-0405-002, SF-0405-005 — recovery autosave writes an immutable
+    // revision snapshot and must not transiently disable the native Insert
+    // menu or reject the next canonical transaction.
+    func testInsertionRemainsAvailableDuringBackgroundAutosave() async throws {
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let backend = DocumentLifecycleBackend()
+        await backend.configureForTesting(delayNanoseconds: 500_000_000)
+        let recoveryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SiteForge-Insertion-Autosave-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: recoveryDirectory) }
+        let lifecycle = DocumentLifecycleController(
+            session: session,
+            backend: backend,
+            recoveryDirectory: recoveryDirectory,
+            saveDestinationProvider: { _ in nil },
+            autosaveDebouncer: ImmediateInsertionAutosaveDebouncer()
+        )
+        let state = WorkspaceShellState(documentSession: session, lifecycle: lifecycle)
+        state.resizeViewport(to: .init(width: 900, height: 600), pixelRatio: 2)
+        for _ in 0..<200 where state.canvasRenderPlan == nil { await Task.yield() }
+
+        state.performDefaultInsertion(.section, provenance: .accessibility)
+        for _ in 0..<400 where lifecycle.phase != .autosaving { await Task.yield() }
+        XCTAssertEqual(lifecycle.phase, .autosaving)
+        XCTAssertTrue(state.insertionAvailability(.stack).isEnabled)
+
+        state.performDefaultInsertion(.stack, provenance: .menu)
+        for _ in 0..<400 where session.document.pages[0].nodes.filter({ $0.insertionGeometry != nil }).count != 2 {
+            await Task.yield()
+        }
+        XCTAssertEqual(session.document.pages[0].nodes.filter { $0.insertionGeometry != nil }.count, 2)
+        XCTAssertEqual(session.document.revision, 2)
+        XCTAssertNil(state.insertionFailure)
+    }
+
     // SF-0405-004, SF-0405-007
     func testCommittedNodesIntegrateWithLayoutRendererHitTestingAndBoundedInvalidation() throws {
         let fixture = makeFixture()
@@ -685,4 +720,8 @@ final class InsertionModelTests: XCTestCase {
         try operation()
         return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
     }
+}
+
+private struct ImmediateInsertionAutosaveDebouncer: LifecycleAutosaveDebouncing {
+    func wait() async throws {}
 }

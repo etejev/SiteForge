@@ -3583,8 +3583,15 @@ final class WorkspaceShellState: ObservableObject {
         } else {
             switch lifecycle.phase {
             case .saving, .autosaving:
-                lifecycleAvailable = false
-                reason = "Wait for the current save operation to finish."
+                // Durable saves and recovery autosaves operate on immutable
+                // document/history snapshots. A later canonical transaction
+                // advances the revision, causing the completed write to
+                // publish Modified rather than overwriting or claiming the
+                // newer state. Insertion therefore remains available just as
+                // inline text editing does; blocking it makes ordinary native
+                // menu commands timing-dependent on background I/O.
+                lifecycleAvailable = true
+                reason = nil
             case .conflicted:
                 lifecycleAvailable = false
                 reason = "Resolve the file conflict before inserting content."
