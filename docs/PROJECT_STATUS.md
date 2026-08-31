@@ -1,6 +1,6 @@
 # SiteForge Project Status
 
-Last updated: 2026-08-28.
+Last updated: 2026-08-31.
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and
@@ -11,8 +11,10 @@ editing, and canvas accessibility while remaining inspectable and recoverable
 through an explicit Layers state. Focused registry, selection, renderer,
 package/recovery, scale, and fresh-process UI acceptance is green; seven
 original-resolution maximized-window states passed visual review. Final
-`./sf verify` passed 377 unit/integration plus 48 UI tests (425 total), zero
-failures, with every repository gate green on 2026-08-28.
+hosted `./sf verify` passed 379 unit/integration plus 48 UI tests (427 total),
+zero failures, with every repository gate green on 2026-08-31. The hosted
+follow-up keeps nested insertion available during background autosave and
+keeps container Reset controls visible at the practical Inspector width.
 
 `SF-AUTHORING-017` is verified and complete as the bounded production
 structural-layout authoring slice for SF-0502, SF-0503, and uniform structural

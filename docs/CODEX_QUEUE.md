@@ -28,10 +28,13 @@ None.
     identity and an explicit inspect/restore route.
   - Evidence: seven focused non-UI selectors and the fresh-process responsive
     journey passed; the practical-minimum Inspector remains covered by the
-    existing structural journey. Final `./sf verify` passed 377 unit/
-    integration plus 48 UI tests (425 total), zero failures, with repository,
+    existing structural journey. Final hosted `./sf verify` passed 379 unit/
+    integration plus 48 UI tests (427 total), zero failures, with repository,
     security, traceability, architecture, migration, and evidence checks green
-    on 2026-08-28. Seven original-resolution maximized-window states passed
+    on 2026-08-31. Hosted follow-up also proved nested insertion remains
+    available during immutable-snapshot autosave and every container Reset
+    control remains visible at the practical Inspector width. Seven
+    original-resolution maximized-window states passed
     visual review; see
     `docs/evidence/SF-AUTHORING-018-RESPONSIVE-LAYOUT-VISIBILITY.md`.
   - Explicit exclusions: custom or overlapping breakpoint management,

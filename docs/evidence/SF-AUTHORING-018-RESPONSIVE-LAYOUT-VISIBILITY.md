@@ -61,9 +61,13 @@ All seven focused non-UI selectors passed after one production recovery-message
 correction, and the fresh-process responsive journey passed 1/1 after its
 stable-NodeID Layers query was made explicit. The previously retained
 `@MainActor` XCTest helper annotations compile in this Swift 6 UI target and
-remain assertion-neutral. Final `./sf verify` passed 377 unit/integration plus
-48 UI tests (425 total), zero failures, with repository, security, traceability,
-architecture, migration, and evidence checks green on 2026-08-28.
+remain assertion-neutral. Hosted follow-up added deterministic coverage for
+insertion during immutable-snapshot background autosave and bounded the native
+numeric Inspector fields so their intrinsic Reset controls remain visible at
+the practical width. Final hosted `./sf verify` passed 379 unit/integration
+plus 48 UI tests (427 total), zero failures, with repository, security,
+traceability, architecture, migration, and evidence checks green on
+2026-08-31. GitHub Actions run `33388106391` passed on the final SHA.
 
 ## Visual review contract
 

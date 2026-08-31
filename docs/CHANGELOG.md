@@ -4,6 +4,12 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
+- Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
+  remains available while background autosave writes an immutable snapshot,
+  and bounded native numeric fields keep every container Reset action visible
+  at the practical Inspector width. Actions `33388106391` passed all 379
+  unit/integration and 48 UI tests.
+
 - Closed the `SF-AUDIT-001` hosted compact-window follow-up by keeping native
   fill-layer deletion and colour-well actions reachable at the supported
   Inspector width, preserving distinct navigator destinations, and validating

@@ -11,8 +11,11 @@ participate in layout, authored rendering, hit testing, inline editing, canvas
 accessibility, or selection chrome; Layers remains the explicit inspection and
 recovery route. Seven focused non-UI selectors and the fresh-process responsive
 journey are green, and seven original-resolution maximized-window states passed
-visual review. Final `./sf verify` passed 377 unit/integration plus 48 UI tests
-(425 total), zero failures, with every repository gate green. No subsequent
+visual review. Final hosted `./sf verify` passed 379 unit/integration plus 48
+UI tests (427 total), zero failures, with every repository gate green. Hosted
+follow-up coverage also proves nested insertion remains available during
+background autosave and container Reset controls remain visible at the
+practical Inspector width. No subsequent
 feature item is READY; do not create another responsive/property cascade or
 invent an unspecified feature.
 
