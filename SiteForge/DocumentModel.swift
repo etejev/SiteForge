@@ -674,6 +674,8 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case invalidBoxStyleState
     case invalidTypographyState
     case invalidResponsiveGeometryState
+    case invalidResponsiveContainerState
+    case invalidResponsiveVisibilityState
 
     var errorDescription: String? {
         switch self {
@@ -706,6 +708,8 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .invalidBoxStyleState: "The document contains an invalid canonical border, radius, or shadow state."
         case .invalidTypographyState: "The document contains invalid canonical typography state."
         case .invalidResponsiveGeometryState: "The document contains invalid responsive geometry state."
+        case .invalidResponsiveContainerState: "The document contains invalid responsive container-layout state."
+        case .invalidResponsiveVisibilityState: "The document contains invalid responsive visibility state."
         }
     }
 }
@@ -732,6 +736,72 @@ enum CanonicalResponsiveGeometryNamespaceValidator {
                   !(["width", "height"].contains(components[1])) || value >= 1 else {
                 throw ModelValidationError.invalidResponsiveGeometryState
             }
+        }
+    }
+}
+
+enum CanonicalResponsiveContainerNamespaceValidator {
+    static let root = "responsive.container.v1."
+    private static let breakpointIDs: Set<String> = [
+        "60000000-0000-4000-8000-000000000002", "60000000-0000-4000-8000-000000000003",
+    ]
+
+    static func validate(_ node: DocumentNode) throws {
+        let properties = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
+        guard !properties.isEmpty else { return }
+        guard [.section, .stack, .grid].contains(node.kind) else { throw ModelValidationError.invalidResponsiveContainerState }
+        for property in properties {
+            let components = String(property.key.rawValue.dropFirst(root.count)).split(separator: ".").map(String.init)
+            guard components.count == 2, breakpointIDs.contains(components[0]),
+                  validates(field: components[1], value: property.value, kind: node.kind) else {
+                throw ModelValidationError.invalidResponsiveContainerState
+            }
+        }
+    }
+
+    /// Canonical decoding owns its wire-domain validation and deliberately
+    /// does not depend on Inspector command types. Keep these bounds in sync
+    /// with the typed authoring registry; the headless model remains usable by
+    /// package, recovery, and migration code without importing editor policy.
+    private static func validates(field: String, value: PropertyValue, kind: NodeKind) -> Bool {
+        let supported: Bool = switch (kind, field) {
+        case (.section, "padding"): true
+        case (.stack, "padding"), (.stack, "gap"), (.stack, "axis"), (.stack, "alignment"): true
+        case (.grid, "padding"), (.grid, "gap"), (.grid, "columns"): true
+        default: false
+        }
+        guard supported else { return false }
+        switch (field, value) {
+        case ("padding", .number(let number)), ("gap", .number(let number)):
+            return number.isFinite && (0...10_000).contains(number)
+        case ("columns", .number(let number)):
+            return number.isFinite && number.rounded(.towardZero) == number && (1...64).contains(number)
+        case ("axis", .string(let value)):
+            return ["vertical", "horizontal"].contains(value)
+        case ("alignment", .string(let value)):
+            return ["start", "center", "end", "stretch"].contains(value)
+        default:
+            return false
+        }
+    }
+}
+
+enum CanonicalResponsiveVisibilityNamespaceValidator {
+    static let root = "responsive.visibility.v1."
+    private static let breakpointIDs: Set<String> = [
+        "60000000-0000-4000-8000-000000000002", "60000000-0000-4000-8000-000000000003",
+    ]
+
+    static func validate(_ node: DocumentNode) throws {
+        let properties = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
+        guard !properties.isEmpty else { return }
+        guard [.frame, .text, .section, .stack, .grid].contains(node.kind) else {
+            throw ModelValidationError.invalidResponsiveVisibilityState
+        }
+        for property in properties {
+            let components = String(property.key.rawValue.dropFirst(root.count)).split(separator: ".").map(String.init)
+            guard components.count == 2, breakpointIDs.contains(components[0]), components[1] == "visible",
+                  case .boolean = property.value else { throw ModelValidationError.invalidResponsiveVisibilityState }
         }
     }
 }
@@ -1094,6 +1164,8 @@ private extension DocumentPage {
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
             try CanonicalResponsiveGeometryNamespaceValidator.validate(node)
+            try CanonicalResponsiveContainerNamespaceValidator.validate(node)
+            try CanonicalResponsiveVisibilityNamespaceValidator.validate(node)
             try node.validateStructuralDefaults()
         }
 

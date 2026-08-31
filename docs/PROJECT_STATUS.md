@@ -2,6 +2,18 @@
 
 Last updated: 2026-08-28.
 
+`SF-AUTHORING-018` is verified and complete as the bounded responsive
+container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and
+SF-0603. The existing Desktop-base cascade now authors isolated Tablet/Mobile
+Section/Stack/Grid layout and supported-node visibility overrides. Hidden
+subtrees are excluded from layout, rendering, canvas interaction, inline
+editing, and canvas accessibility while remaining inspectable and recoverable
+through an explicit Layers state. Focused registry, selection, renderer,
+package/recovery, scale, and fresh-process UI acceptance is green; seven
+original-resolution maximized-window states passed visual review. Final
+`./sf verify` passed 377 unit/integration plus 48 UI tests (425 total), zero
+failures, with every repository gate green on 2026-08-28.
+
 `SF-AUTHORING-017` is verified and complete as the bounded production
 structural-layout authoring slice for SF-0502, SF-0503, and uniform structural
 spacing under SF-0506. Schema-v4 layout properties remain the sole canonical

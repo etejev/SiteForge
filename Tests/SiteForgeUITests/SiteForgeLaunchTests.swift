@@ -464,6 +464,119 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-016 responsive undo redo")
     }
 
+    // SF-0601-001...006/008; SF-0602-001...006/008; SF-0603-001...006/008
+    @MainActor
+    func testResponsiveContainerLayoutAndBreakpointVisibilityJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        @MainActor func reveal(_ element: XCUIElement) {
+            let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
+            for _ in 0..<8 where !element.isHittable { scroll.scroll(byDeltaX: 0, deltaY: -180) }
+            XCTAssertTrue(element.isHittable, "Responsive Inspector control \(element.identifier) must remain reachable")
+        }
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.stack"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        for count in 2...3 {
+            application.menuBars.menuBarItems["Insert"].click()
+            application.menuItems["Insert Frame at Center"].click()
+            XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects \(count)", timeout: 5))
+            application.buttons["navigator.tab.layers"].click()
+            let stackRow = application.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Stack"
+            )).firstMatch
+            XCTAssertTrue(stackRow.waitForExistence(timeout: 3)); stackRow.click()
+        }
+        application.buttons["inspector.tab.layout"].click()
+        XCTAssertTrue(application.staticTexts["Desktop base"].firstMatch.exists)
+        let preset = application.descendants(matching: .any)["canvas.viewport.preset"]
+        attachWindowScreenshot(application, named: "SF-AUTHORING-018 Desktop Stack base layout")
+
+        preset.click(); application.menuItems["Tablet"].click()
+        let axis = application.descendants(matching: .any)["inspector.layout.container.axis"]
+        XCTAssertTrue(axis.waitForExistence(timeout: 3))
+        axis.radioButtons["Horizontal"].click()
+        XCTAssertTrue(waitForValue(axis, containing: "horizontal"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-018 Tablet Stack override")
+
+        preset.click(); application.menuItems["Mobile"].click()
+        let gap = application.textFields["inspector.layout.container.gap"]
+        XCTAssertTrue(gap.waitForExistence(timeout: 3))
+        gap.doubleClick(); gap.typeKey("a", modifierFlags: .command); gap.typeText("8"); gap.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(gap, containing: "Authored for Mobile"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-018 Mobile Stack override")
+
+        application.buttons["navigator.tab.layers"].click()
+        let frameRow = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame"
+        )).firstMatch
+        XCTAssertTrue(frameRow.waitForExistence(timeout: 3))
+        let selectedFrameIdentifier = frameRow.identifier
+        XCTAssertTrue(selectedFrameIdentifier.hasPrefix("navigator.layer.")); frameRow.click()
+        application.buttons["inspector.tab.layout"].click()
+        let visibility = application.descendants(matching: .any)["inspector.layout.visibility"]
+        XCTAssertTrue(visibility.waitForExistence(timeout: 3)); reveal(visibility); XCTAssertTrue(visibility.isEnabled)
+        visibility.click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        XCTAssertFalse(application.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "canvas.selection.")
+        ).firstMatch.exists, "A hidden breakpoint object must not retain canvas chrome")
+        application.buttons["navigator.tab.layers"].click()
+        let hiddenFrameRow = application.descendants(matching: .any)[selectedFrameIdentifier]
+        XCTAssertTrue(waitForValue(hiddenFrameRow, containing: "Hidden at current breakpoint"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-018 Mobile hidden Layers inspection")
+
+        application.buttons["inspector.tab.layout"].click()
+        let hiddenVisibility = application.descendants(matching: .any)["inspector.layout.visibility"]
+        XCTAssertTrue(hiddenVisibility.waitForExistence(timeout: 3)); reveal(hiddenVisibility); hiddenVisibility.click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        XCTAssertTrue(canvas.exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-018 visibility restored undo redo")
+
+        preset.click(); application.menuItems["Desktop"].click()
+        application.menuBars.menuBarItems["Selection"].click()
+        let clearSelection = application.menuItems["Clear Selection"]
+        XCTAssertTrue(clearSelection.waitForExistence(timeout: 2)); clearSelection.click()
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.grid"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 4", timeout: 5))
+        for count in 5...6 {
+            application.menuBars.menuBarItems["Insert"].click()
+            application.menuItems["Insert Frame at Center"].click()
+            XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects \(count)", timeout: 5))
+            application.buttons["navigator.tab.layers"].click()
+            let gridRow = application.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Grid"
+            )).firstMatch
+            XCTAssertTrue(gridRow.waitForExistence(timeout: 3)); gridRow.click()
+        }
+        application.buttons["inspector.tab.layout"].click()
+        XCTAssertTrue(waitForValue(
+            application.staticTexts["inspector.layout.container.announcement"],
+            containing: "Container layout inactive"
+        ), "Selecting a different container at another breakpoint must not retain stale operation feedback")
+        XCTAssertTrue(waitForValue(
+            application.staticTexts["inspector.layout.visibility.announcement"],
+            containing: "Breakpoint visibility inactive"
+        ), "Breakpoint visibility feedback must stay scoped to the selection and breakpoint that produced it")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-018 Desktop Stack Grid base layout")
+        preset.click(); application.menuItems["Tablet"].click()
+        let columns = application.textFields["inspector.layout.container.columns"]
+        XCTAssertTrue(columns.waitForExistence(timeout: 3)); reveal(columns)
+        columns.doubleClick(); columns.typeKey("a", modifierFlags: .command)
+        columns.typeText("1"); columns.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(columns, containing: "Authored for Tablet"))
+        XCTAssertTrue(waitForValue(
+            application.staticTexts["inspector.layout.container.announcement"], containing: "Columns committed"
+        ))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-018 Tablet Grid override")
+    }
+
     // SF-0508-001...006 — real native Design controls, not an accessibility-only mock.
     func testDesignInspectorSolidFillOpacityKeyboardUndoRedoJourney() throws {
         // The native opacity stepper is a genuine trailing Inspector control.
@@ -2004,7 +2117,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0", timeout: 5))
 
-        func selectLayer(_ name: String) {
+        @MainActor func selectLayer(_ name: String) {
             application.buttons["navigator.tab.layers"].click()
             let row = application.descendants(matching: .any).matching(NSPredicate(
                 format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", name
@@ -2012,18 +2125,18 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTAssertTrue(row.waitForExistence(timeout: 3), "Missing \(name) Layers row")
             row.click()
         }
-        func insertFrame(expectedCount: Int) {
+        @MainActor func insertFrame(expectedCount: Int) {
             application.menuBars.menuBarItems["Insert"].click()
             let insert = application.menuItems["Insert Frame at Center"]
             XCTAssertTrue(insert.waitForExistence(timeout: 2)); insert.click()
             XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects \(expectedCount)", timeout: 5))
         }
-        func reveal(_ element: XCUIElement) {
+        @MainActor func reveal(_ element: XCUIElement) {
             let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
             for _ in 0..<6 where !element.isHittable { scroll.scroll(byDeltaX: 0, deltaY: -240) }
             XCTAssertTrue(element.isHittable, "Inspector control \(element.identifier) must remain reachable")
         }
-        func replace(_ field: XCUIElement, with text: String) {
+        @MainActor func replace(_ field: XCUIElement, with text: String) {
             reveal(field)
             field.doubleClick(); field.typeKey("a", modifierFlags: .command)
             field.typeText(text); field.typeKey(.return, modifierFlags: [])
@@ -2142,6 +2255,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             "inspector.layout.container.gap",
             "inspector.layout.container.axis",
             "inspector.layout.container.alignment",
+            "inspector.layout.visibility",
         ]
         for identifier in identifiers {
             let control = application.descendants(matching: .any)[identifier]
@@ -2152,6 +2266,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTAssertTrue(control.isHittable, "Compact control \(identifier) must be reachable")
         }
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 practical minimum inspector")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-018 practical minimum responsive inspector")
     }
 
     // SF-0201-002, SF-0201-006, SF-0201-008, SF-1505-006 through SF-1505-008

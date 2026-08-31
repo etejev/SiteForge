@@ -102,6 +102,40 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertTrue(overlay.overlays.isEmpty)
     }
 
+    // SF-0603-003/006 — hidden-at-breakpoint nodes remain inspectable only
+    // through Layers. They never become canvas hit/overlay targets.
+    func testHiddenBreakpointSelectionIsLayersInspectableWithoutCanvasChrome() throws {
+        var fixture = try makeFixture(count: 1)
+        fixture.targets[0] = fixture.targets[0].copy(isVisible: false, participatesInCanvasTraversal: false)
+        fixture = fixture.rebuilt()
+        let hiddenID = fixture.ids[0]
+        let registry = SelectionCommandRegistry()
+        var state = SelectionState()
+        _ = try registry.adopt(fixture.scene, boundary: .documentAdoption, state: &state)
+
+        XCTAssertThrowsError(try registry.apply(
+            .init(.replace, targetID: hiddenID, expectedIdentity: fixture.identity, provenance: .pointer),
+            to: &state, scene: fixture.scene
+        )) {
+            XCTAssertEqual($0 as? SelectionCommandError, .disabled(
+                "Hidden objects cannot be selected from the canvas; use Layers to inspect or restore them."
+            ))
+        }
+
+        XCTAssertEqual(try registry.apply(
+            .init(.replace, targetID: hiddenID, expectedIdentity: fixture.identity, provenance: .layersNavigator),
+            to: &state, scene: fixture.scene
+        ), .changed)
+        XCTAssertEqual(state.orderedIDs, [hiddenID])
+        XCTAssertEqual(try registry.adopt(fixture.scene, boundary: .rendererGeneration, state: &state), .none)
+        XCTAssertEqual(state.orderedIDs, [hiddenID])
+        let overlay = try SelectionOverlayPlanner().plan(
+            selection: state, scene: fixture.scene, renderPlan: try renderPlan(fixture)
+        )
+        XCTAssertTrue(overlay.overlays.isEmpty)
+        XCTAssertFalse(try renderPlan(fixture).accessibilityElements.contains { $0.objectID == hiddenID })
+    }
+
     func testAuthoredOverlay() throws {
         var fixture = try makeFixture(count: 1)
         let authoredID = fixture.ids[0]

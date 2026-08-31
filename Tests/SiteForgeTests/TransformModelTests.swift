@@ -1703,6 +1703,232 @@ final class TransformModelTests: XCTestCase {
         XCTAssertFalse(String(describing: record).contains(stack.id.description))
         XCTAssertFalse(String(describing: record).contains("/Users/"))
     }
+
+    // SF-0601-001...006 / SF-0603-001...006
+    func testResponsiveContainerAndVisibilityRegistriesSetResetValidateAndPreserveExactHistory() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        var stack = fixture.document.pages[0].nodes[1]
+        stack.kind = .stack
+        applyStructuralDefaults(for: .stack, to: &stack)
+        fixture.document.pages[0].nodes[1] = stack
+        fixture.selectedIDs = [stack.id]
+        let context = fixture.context(selectedIDs: [stack.id])
+        let identity = GeometryInspectorOperationIdentity(
+            editID: GeometryInspectorEditID(), documentID: fixture.document.id,
+            pageID: fixture.pageID, revision: fixture.document.revision,
+            sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration
+        )
+        let layoutRegistry = ContainerLayoutCommandRegistry()
+        let rootID = fixture.document.pages[0].nodes[0].id
+        let partial = try layoutRegistry.prepare(.init(
+            identity: identity, orderedNodeIDs: [stack.id, rootID], field: .gap,
+            value: .number(11), provenance: .accessibility, cancelled: false,
+            breakpoint: .mobile
+        ), in: fixture.document, context: fixture.context(selectedIDs: [stack.id, rootID]))
+        XCTAssertEqual(partial.applicableNodeIDs, [stack.id])
+        XCTAssertEqual(partial.skippedNodeIDs, [rootID])
+
+        let layout = try layoutRegistry.prepare(.init(
+            identity: identity, orderedNodeIDs: [stack.id], field: .axis,
+            value: .axis(.horizontal), provenance: .automation, cancelled: false,
+            breakpoint: .tablet
+        ), in: fixture.document, context: context)
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(layout.documentCommand)
+        var node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == stack.id })
+        let key = ResponsiveContainerLayoutResolver.key(.axis, breakpoint: .tablet)
+        let authoredProperty = try XCTUnwrap(node.insertionProperty(key))
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .axis, node: node, breakpoint: .tablet)?.0, .axis(.horizontal))
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .axis, node: node, breakpoint: .mobile)?.0, .axis(.vertical))
+        XCTAssertEqual(ResponsiveBreakpoint.resolving(width: 768), .tablet)
+        XCTAssertEqual(ResponsiveBreakpoint.resolving(width: 390), .mobile)
+        try session.undo()
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == stack.id }?.insertionProperty(key))
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == stack.id }?.insertionProperty(key)?.id, authoredProperty.id)
+
+        let current = fixture.with(document: session.document)
+        let reset = try layoutRegistry.prepare(.init(
+            identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                pageID: fixture.pageID, revision: session.document.revision,
+                sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [stack.id], field: .axis, value: nil,
+            provenance: .automation, cancelled: false, breakpoint: .tablet,
+            removesOverride: true
+        ), in: session.document, context: current.context(selectedIDs: [stack.id]))
+        _ = try session.execute(reset.documentCommand)
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == stack.id }?.insertionProperty(key))
+
+        let visibilityRegistry = ResponsiveVisibilityCommandRegistry()
+        var partialDocument = session.document
+        partialDocument.pages[0].nodes[2].kind = .image
+        let partialFixture = fixture.with(document: partialDocument)
+        let partialVisibility = try visibilityRegistry.prepare(.init(
+            identity: .init(editID: GeometryInspectorEditID(), documentID: partialDocument.id,
+                pageID: fixture.pageID, revision: partialDocument.revision,
+                sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [stack.id, fixture.secondNodeID], breakpoint: .mobile, visible: false,
+            provenance: .accessibility, cancelled: false
+        ), in: partialDocument, context: partialFixture.context(selectedIDs: [stack.id, fixture.secondNodeID]))
+        XCTAssertEqual(partialVisibility.applicableNodeIDs, [stack.id])
+        XCTAssertEqual(partialVisibility.skippedNodeIDs, [fixture.secondNodeID])
+
+        var mixedDocument = session.document
+        mixedDocument.pages[0].nodes[2].properties.append(.init(
+            key: .init(rawValue: ResponsiveVisibilityResolver.key(.mobile)),
+            value: .boolean(false), origin: .authored
+        ))
+        let mixedFixture = fixture.with(document: mixedDocument)
+        XCTAssertEqual(visibilityRegistry.value(in: mixedDocument,
+            context: mixedFixture.context(selectedIDs: [stack.id, fixture.secondNodeID]), breakpoint: .mobile),
+            .mixed(applicableCount: 2, skippedCount: 0))
+
+        let visibility = try visibilityRegistry.prepare(.init(
+            identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                pageID: fixture.pageID, revision: session.document.revision,
+                sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [stack.id], breakpoint: .mobile, visible: false,
+            provenance: .automation, cancelled: false
+        ), in: session.document, context: fixture.with(document: session.document).context(selectedIDs: [stack.id]))
+        _ = try session.execute(visibility.documentCommand)
+        node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == stack.id })
+        let visibilityKey = ResponsiveVisibilityResolver.key(.mobile)
+        let visibilityProperty = try XCTUnwrap(node.insertionProperty(visibilityKey))
+        XCTAssertFalse(ResponsiveVisibilityResolver.isVisible(node, breakpoint: .mobile))
+        XCTAssertTrue(ResponsiveVisibilityResolver.isVisible(node, breakpoint: .tablet))
+        try session.undo()
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == stack.id }?.insertionProperty(visibilityKey))
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == stack.id }?.insertionProperty(visibilityKey)?.id,
+                       visibilityProperty.id)
+
+        let visibilityCurrent = fixture.with(document: session.document)
+        let visibilityReset = try visibilityRegistry.prepare(.init(
+            identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                pageID: fixture.pageID, revision: session.document.revision,
+                sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [stack.id], breakpoint: .mobile, visible: nil,
+            provenance: .keyboard, cancelled: false
+        ), in: session.document, context: visibilityCurrent.context(selectedIDs: [stack.id]))
+        _ = try session.execute(visibilityReset.documentCommand)
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == stack.id }?.insertionProperty(visibilityKey))
+        try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == stack.id }?.insertionProperty(visibilityKey)?.id,
+                       visibilityProperty.id)
+        try session.redo()
+
+        XCTAssertNoThrow(try session.document.validate())
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+
+        XCTAssertThrowsError(try visibilityRegistry.prepare(.init(
+            identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                pageID: fixture.pageID, revision: session.document.revision + 1,
+                sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [stack.id], breakpoint: .mobile, visible: true,
+            provenance: .automation, cancelled: false
+        ), in: session.document, context: fixture.with(document: session.document).context(selectedIDs: [stack.id]))) {
+            XCTAssertEqual($0 as? ResponsiveVisibilityError, .staleRevision)
+        }
+        XCTAssertThrowsError(try visibilityRegistry.prepare(.init(
+            identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                pageID: fixture.pageID, revision: session.document.revision,
+                sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [stack.id], breakpoint: .mobile, visible: true,
+            provenance: .automation, cancelled: true
+        ), in: session.document, context: fixture.with(document: session.document).context(selectedIDs: [stack.id]))) {
+            XCTAssertEqual($0 as? ResponsiveVisibilityError, .cancelled)
+        }
+
+        let diagnostic = ResponsiveVisibilityDiagnosticFactory.make(
+            command: .init(
+                identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                    pageID: fixture.pageID, revision: session.document.revision,
+                    sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: [stack.id], breakpoint: .mobile, visible: false,
+                provenance: .accessibility, cancelled: false
+            ),
+            durationMilliseconds: 1.5, resultRevision: session.document.revision + 1,
+            result: .success, failure: nil
+        )
+        XCTAssertEqual(diagnostic.requirementIDs, ResponsiveVisibilityCommandRegistry.requirementIDs.sorted())
+        XCTAssertEqual(diagnostic.provenance, "accessibility")
+        XCTAssertFalse(String(describing: diagnostic).contains(stack.id.description))
+        XCTAssertFalse(String(describing: diagnostic).contains("/Users/"))
+
+        var malformedContainer = session.document
+        malformedContainer.pages[0].nodes[1].properties.append(.init(
+            key: .init(rawValue: ResponsiveContainerLayoutResolver.key(.axis, breakpoint: .tablet)),
+            value: .string("diagonal"), origin: .authored
+        ))
+        XCTAssertThrowsError(try malformedContainer.validate()) {
+            XCTAssertEqual($0 as? ModelValidationError, .invalidResponsiveContainerState)
+        }
+        var malformedVisibility = session.document
+        malformedVisibility.pages[0].nodes[1].properties.append(.init(
+            key: .init(rawValue: ResponsiveVisibilityResolver.key(.tablet)),
+            value: .number(1), origin: .authored
+        ))
+        XCTAssertThrowsError(try malformedVisibility.validate()) {
+            XCTAssertEqual($0 as? ModelValidationError, .invalidResponsiveVisibilityState)
+        }
+    }
+
+    // SF-0502/SF-0503/SF-0601 — every bounded structural kind uses the same
+    // breakpoint override representation and reset semantics.
+    func testResponsiveSectionAndGridOverridesResolveAndResetIndependently() throws {
+        let registry = ContainerLayoutCommandRegistry()
+
+        func prepared(
+            _ field: ContainerLayoutField,
+            _ value: ContainerLayoutValue?,
+            breakpoint: ResponsiveBreakpoint,
+            removesOverride: Bool = false,
+            fixture: TransformFixture
+        ) throws -> PreparedContainerLayoutEdit {
+            try registry.prepare(.init(
+                identity: .init(editID: GeometryInspectorEditID(), documentID: fixture.document.id,
+                    pageID: fixture.pageID, revision: fixture.document.revision,
+                    sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: fixture.selectedIDs, field: field, value: value,
+                provenance: .keyboard, cancelled: false, breakpoint: breakpoint,
+                removesOverride: removesOverride
+            ), in: fixture.document, context: fixture.context)
+        }
+
+        var sectionFixture = makeFixture()
+        sectionFixture.document.pages[0].nodes[1].kind = .section
+        applyStructuralDefaults(for: .section, to: &sectionFixture.document.pages[0].nodes[1])
+        let sectionSession = DocumentSession(document: sectionFixture.document)
+        _ = try sectionSession.execute(try prepared(.padding, .number(72), breakpoint: .tablet,
+            fixture: sectionFixture).documentCommand)
+        var section = try XCTUnwrap(sectionSession.document.pages[0].nodes.first { $0.id == sectionFixture.nodeID })
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .padding, node: section, breakpoint: .tablet)?.0, .number(72))
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .padding, node: section, breakpoint: .mobile)?.0, .number(48))
+        sectionFixture.document = sectionSession.document
+        _ = try sectionSession.execute(try prepared(.padding, nil, breakpoint: .tablet,
+            removesOverride: true, fixture: sectionFixture).documentCommand)
+        section = try XCTUnwrap(sectionSession.document.pages[0].nodes.first { $0.id == sectionFixture.nodeID })
+        XCTAssertNil(section.insertionProperty(ResponsiveContainerLayoutResolver.key(.padding, breakpoint: .tablet)))
+
+        var gridFixture = makeFixture()
+        gridFixture.document.pages[0].nodes[1].kind = .grid
+        applyStructuralDefaults(for: .grid, to: &gridFixture.document.pages[0].nodes[1])
+        let gridSession = DocumentSession(document: gridFixture.document)
+        for (field, value) in [
+            (ContainerLayoutField.columns, ContainerLayoutValue.number(3)),
+            (.gap, .number(12)),
+            (.padding, .number(16)),
+        ] {
+            gridFixture.document = gridSession.document
+            _ = try gridSession.execute(try prepared(field, value, breakpoint: .mobile,
+                fixture: gridFixture).documentCommand)
+        }
+        let grid = try XCTUnwrap(gridSession.document.pages[0].nodes.first { $0.id == gridFixture.nodeID })
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .columns, node: grid, breakpoint: .mobile)?.0, .number(3))
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .gap, node: grid, breakpoint: .mobile)?.0, .number(12))
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .padding, node: grid, breakpoint: .mobile)?.0, .number(16))
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .columns, node: grid, breakpoint: .tablet)?.0, .number(2))
+    }
 }
 
 private struct TransformFixture {

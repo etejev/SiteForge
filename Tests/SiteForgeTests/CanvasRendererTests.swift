@@ -686,6 +686,101 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(page.nodes.first { $0.id == gridID }?.childIDs, Array(childIDs[3...5]))
     }
 
+    // SF-0601-003 / SF-0603-003 — responsive layout and visibility resolve
+    // once before immutable renderer/selection/hit-test/AX projection.
+    func testResponsiveContainerVisibilityExcludesHiddenChildAndReflowsSharedScene() async throws {
+        var document = ProjectCreation.blank()
+        var page = try XCTUnwrap(document.pages.first)
+        let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+        let rootIndex = try XCTUnwrap(page.nodes.firstIndex { $0.id == rootID })
+        func geometry(_ x: Double, _ y: Double, _ width: Double, _ height: Double) -> [NodeProperty] {
+            [("layout.x", x), ("layout.y", y), ("layout.width", width), ("layout.height", height)].map {
+                .init(key: .init(rawValue: $0.0), value: .number($0.1), origin: .authored)
+            }
+        }
+        let stackID = NodeID(), firstID = NodeID(), hiddenID = NodeID(), lastID = NodeID()
+        var stack = DocumentNode(id: stackID, kind: .stack, name: "Responsive Stack", parent: .node(rootID),
+            properties: geometry(20, 20, 500, 300) + [
+                .init(key: .init(rawValue: "layout.container.kind"), value: .string("stack"), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.axis"), value: .string("vertical"), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.padding"), value: .number(24), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.gap"), value: .number(24), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.align"), value: .string("start"), origin: .defaulted),
+                .init(key: .init(rawValue: ResponsiveContainerLayoutResolver.key(.axis, breakpoint: .mobile)),
+                      value: .string("horizontal"), origin: .authored),
+                .init(key: .init(rawValue: ResponsiveContainerLayoutResolver.key(.gap, breakpoint: .mobile)),
+                      value: .number(10), origin: .authored),
+            ])
+        stack.childIDs = [firstID, hiddenID, lastID]
+        let children = [firstID, hiddenID, lastID].enumerated().map { index, id in
+            var properties = geometry(700, 700, 100, 80)
+            if id == hiddenID {
+                properties.append(.init(key: .init(rawValue: ResponsiveVisibilityResolver.key(.mobile)),
+                                        value: .boolean(false), origin: .authored))
+            }
+            return DocumentNode(id: id, kind: .frame, name: "Child \(index)", parent: .node(stackID), properties: properties)
+        }
+        page.nodes[rootIndex].childIDs.append(stackID)
+        page.nodes += [stack] + children
+        document.pages[0] = page
+        XCTAssertNoThrow(try document.validate())
+        let resolved = page.resolvedStructuralGeometry(breakpoint: .mobile)
+        let viewport = try CanvasViewportState(viewportSize: .init(width: 600, height: 500),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 390, height: 900)), pixelRatio: .init(2))
+        let prepared = try await WorkspaceScenePreparationWorker().prepare(.init(
+            document: document, activePageID: page.id, activeContainerID: nil,
+            viewport: viewport, surfaceID: CanvasRenderSurfaceID(), breakpoint: .mobile
+        ))
+        XCTAssertNil(prepared.renderScene.objects.first { $0.id == hiddenID })
+        let hiddenTarget = try XCTUnwrap(prepared.selectionScene?.targets.first { $0.id == hiddenID })
+        XCTAssertFalse(hiddenTarget.isVisible)
+        XCTAssertFalse(hiddenTarget.participatesInCanvasTraversal)
+        XCTAssertNotNil(prepared.renderScene.objects.first { $0.id == firstID })
+        XCTAssertNotNil(prepared.renderScene.objects.first { $0.id == lastID })
+        XCTAssertEqual(resolved[firstID]?.origin.x, 44)
+        XCTAssertEqual(resolved[lastID]?.origin.x, 154)
+        let plan = try CanvasRendererCore().prepare(scene: prepared.renderScene, overlays: prepared.overlays, viewport: viewport)
+        XCTAssertFalse(plan.authoredObjects.contains { $0.id == hiddenID })
+        XCTAssertFalse(plan.accessibilityElements.contains { $0.objectID == hiddenID })
+        XCTAssertNotEqual(CanvasRendererCore().hitTest(.init(x: 150, y: 80), in: plan), hiddenID)
+    }
+
+    // SF-0603-007 — the shared visibility cascade remains linear and bounded
+    // for the specified standard and large fixtures.
+    func testResponsiveVisibilityResolutionIsBoundedForStandardAndLargeFixtures() throws {
+        for count in [100, 10_000] {
+            var document = ProjectCreation.blank()
+            var page = try XCTUnwrap(document.pages.first)
+            let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+            let rootIndex = try XCTUnwrap(page.nodes.firstIndex { $0.id == rootID })
+            let children = (0..<count).map { index -> DocumentNode in
+                var properties = [
+                    NodeProperty(key: .init(rawValue: "hidden"), value: .boolean(false), origin: .defaulted),
+                    .init(key: .init(rawValue: "layout.x"), value: .number(Double(index)), origin: .authored),
+                    .init(key: .init(rawValue: "layout.y"), value: .number(0), origin: .authored),
+                    .init(key: .init(rawValue: "layout.width"), value: .number(10), origin: .authored),
+                    .init(key: .init(rawValue: "layout.height"), value: .number(10), origin: .authored),
+                ]
+                if index.isMultiple(of: 10) {
+                    properties.append(.init(
+                        key: .init(rawValue: ResponsiveVisibilityResolver.key(.mobile)),
+                        value: .boolean(false), origin: .authored
+                    ))
+                }
+                return DocumentNode(
+                    kind: .frame, name: "Object \(index)", parent: .node(rootID), properties: properties
+                )
+            }
+            page.nodes[rootIndex].childIDs = children.map(\.id)
+            page.nodes.append(contentsOf: children)
+            let started = DispatchTime.now().uptimeNanoseconds
+            let visible = page.effectiveVisibleNodeIDs(breakpoint: .mobile)
+            let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            XCTAssertEqual(visible.count, 1 + count - (count / 10))
+            XCTAssertLessThan(milliseconds, count == 100 ? 250 : 2_000)
+        }
+    }
+
     // SF-0407-006, SF-0407-007, SF-0407-008, SF-1502-001
     @MainActor
     func testProductionSceneProjectionAndRendererKeepMainActorResponsiveWhileWorkIsActive() async throws {

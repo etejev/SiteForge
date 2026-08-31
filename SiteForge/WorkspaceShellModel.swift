@@ -682,17 +682,18 @@ actor WorkspaceScenePreparationWorker {
 
         let activePage = request.document.pages.first { $0.id == request.activePageID }
         let orderedActiveNodes = activePage?.canonicalDepthFirstNodes() ?? []
-        let resolvedGeometry = activePage?.resolvedStructuralGeometry() ?? [:]
+        let resolvedGeometry = activePage?.resolvedStructuralGeometry(breakpoint: request.breakpoint) ?? [:]
+        let effectivelyVisible = activePage?.effectiveVisibleNodeIDs(breakpoint: request.breakpoint) ?? []
         var renderObjects: [CanvasRenderObject] = []
         renderObjects.reserveCapacity(orderedActiveNodes.count)
 
         for node in orderedActiveNodes {
             try checkpoint()
+            guard effectivelyVisible.contains(node.id) else { continue }
             // Structural roots intentionally have no authored geometry and
             // never receive a fabricated fallback rectangle.
             guard let authoredGeometry = node.insertionGeometry else { continue }
-            let baseFrame = (resolvedGeometry[node.id] ?? authoredGeometry).frame
-            let frame = ResponsiveGeometryResolver.frame(for: node, base: baseFrame, breakpoint: request.breakpoint)
+            let frame = (resolvedGeometry[node.id] ?? authoredGeometry).frame
             let style: CanvasPaintStyle = switch node.kind {
             case .frame:
                 if case .page(let pageID) = node.parent, pageID == request.activePageID {
@@ -819,10 +820,10 @@ actor WorkspaceScenePreparationWorker {
                     name: node.name,
                     kind: node.kind,
                     parentName: canonicalParentID.flatMap { names[$0] },
-                    frame: object?.frame ?? request.viewport.contentBounds,
+                    frame: object?.frame ?? resolvedGeometry[node.id]?.frame ?? request.viewport.contentBounds,
                     clipRect: nil,
                     paintOrder: object?.paintOrder ?? fallbackOrder,
-                    isVisible: object?.isVisible ?? true,
+                    isVisible: effectivelyVisible.contains(node.id),
                     isLocked: node.selectionBooleanProperty("locked"),
                     isAvailable: object != nil || page.nodes.count > 1,
                     participatesInCanvasTraversal: object != nil
@@ -865,6 +866,15 @@ actor WorkspaceScenePreparationWorker {
             overlays: CanvasEditorOverlaySnapshot(identity: identity, overlays: []),
             selectionScene: selectionScene
         )
+    }
+}
+
+private struct InspectorAnnouncementContext {
+    let breakpoint: ResponsiveBreakpoint
+    let orderedNodeIDs: [NodeID]
+
+    func matches(breakpoint: ResponsiveBreakpoint, orderedNodeIDs: [NodeID]) -> Bool {
+        self.breakpoint == breakpoint && self.orderedNodeIDs == orderedNodeIDs
     }
 }
 
@@ -929,6 +939,10 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var lastGeometryInspectorAnnouncement = "Layout Inspector inactive"
     @Published private(set) var containerLayoutFailure: ContainerLayoutError?
     @Published private(set) var lastContainerLayoutAnnouncement = "Container layout inactive"
+    @Published private(set) var responsiveVisibilityFailure: ResponsiveVisibilityError?
+    @Published private(set) var lastResponsiveVisibilityAnnouncement = "Breakpoint visibility inactive"
+    private var containerLayoutAnnouncementContext: InspectorAnnouncementContext?
+    private var responsiveVisibilityAnnouncementContext: InspectorAnnouncementContext?
     @Published private(set) var designInspectorFailure: DesignInspectorError?
     @Published private(set) var lastDesignInspectorAnnouncement = "Design Inspector inactive"
     @Published private(set) var snapResolution: SnapResolution?
@@ -968,6 +982,7 @@ final class WorkspaceShellState: ObservableObject {
     private let transformRegistry = TransformCommandRegistry()
     private let geometryInspectorRegistry = GeometryInspectorCommandRegistry()
     private let containerLayoutRegistry = ContainerLayoutCommandRegistry()
+    private let responsiveVisibilityRegistry = ResponsiveVisibilityCommandRegistry()
     private let designInspectorRegistry = DesignInspectorCommandRegistry()
     private let designBoxStyleRegistry = DesignBoxStyleCommandRegistry()
     private let typographyRegistry = TypographyCommandRegistry()
@@ -982,6 +997,7 @@ final class WorkspaceShellState: ObservableObject {
     let transformDiagnostics = TransformDiagnostics()
     let geometryInspectorDiagnostics = GeometryInspectorDiagnostics()
     let containerLayoutDiagnostics = ContainerLayoutDiagnostics()
+    let responsiveVisibilityDiagnostics = ResponsiveVisibilityDiagnostics()
     let snapDiagnostics = SnapDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
     private let announcementPoster: AccessibilityAnnouncementPoster
@@ -1366,12 +1382,49 @@ final class WorkspaceShellState: ObservableObject {
         selectedCanonicalNodes.contains { [.section, .stack, .grid].contains($0.kind) }
     }
 
+    /// Operation feedback belongs to the exact selection and breakpoint that
+    /// produced it. The Inspector recomputes this presentation instead of
+    /// publishing another state mutation while a SwiftUI selection/preset
+    /// update is in flight.
+    var currentContainerLayoutAnnouncement: String {
+        containerLayoutAnnouncementContext?.matches(
+            breakpoint: viewportPreset.responsiveBreakpoint,
+            orderedNodeIDs: selectionState.orderedIDs
+        ) == true ? lastContainerLayoutAnnouncement : "Container layout inactive"
+    }
+
+    var currentResponsiveVisibilityAnnouncement: String {
+        responsiveVisibilityAnnouncementContext?.matches(
+            breakpoint: viewportPreset.responsiveBreakpoint,
+            orderedNodeIDs: selectionState.orderedIDs
+        ) == true ? lastResponsiveVisibilityAnnouncement : "Breakpoint visibility inactive"
+    }
+
     func containerLayoutValue(for field: ContainerLayoutField) -> ContainerLayoutInspectorValue {
         containerLayoutRegistry.value(
             for: field,
             in: documentSession.document,
-            context: transformValidationContext
+            context: transformValidationContext,
+            breakpoint: viewportPreset.responsiveBreakpoint
         )
+    }
+
+    func containerLayoutResponsiveSource(for field: ContainerLayoutField) -> String? {
+        let values = selectedCanonicalNodes.filter { ContainerLayoutCommandRegistry.supports(field, kind: $0.kind) }
+            .compactMap { ResponsiveContainerLayoutResolver.value(for: field, node: $0,
+                breakpoint: viewportPreset.responsiveBreakpoint)?.2 }
+        guard let first = values.first, values.dropFirst().allSatisfy({ $0 == first }) else {
+            return values.isEmpty ? nil : "Mixed breakpoint sources"
+        }
+        return first == .baseDesktop && viewportPreset == .desktop ? "Desktop base" : first.label
+    }
+
+    func hasContainerLayoutOverride(_ field: ContainerLayoutField) -> Bool {
+        let breakpoint = viewportPreset.responsiveBreakpoint
+        guard breakpoint != .desktop else { return false }
+        return selectedCanonicalNodes.contains {
+            $0.insertionProperty(ResponsiveContainerLayoutResolver.key(field, breakpoint: breakpoint)) != nil
+        }
     }
 
     func containerLayoutAvailability(for field: ContainerLayoutField) -> TransformAvailability {
@@ -1390,7 +1443,8 @@ final class WorkspaceShellState: ObservableObject {
                     pageID: pageID, revision: documentSession.document.revision,
                     sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration),
                 orderedNodeIDs: selectionState.orderedIDs, field: field, value: sample,
-                provenance: .automation, cancelled: false
+                provenance: .automation, cancelled: false,
+                breakpoint: viewportPreset.responsiveBreakpoint
             ), in: documentSession.document, context: transformValidationContext)
             return .enabled
         } catch ContainerLayoutError.noChanges {
@@ -1416,7 +1470,9 @@ final class WorkspaceShellState: ObservableObject {
             field: field,
             value: value,
             provenance: provenance,
-            cancelled: false
+            cancelled: false,
+            breakpoint: viewportPreset.responsiveBreakpoint,
+            removesOverride: value == nil && viewportPreset.responsiveBreakpoint != .desktop
         )
         do {
             let prepared = try containerLayoutRegistry.prepare(
@@ -1424,17 +1480,27 @@ final class WorkspaceShellState: ObservableObject {
             )
             _ = try documentSession.execute(prepared.documentCommand)
             containerLayoutFailure = nil
-            let reset = value == nil ? " reset to default" : " committed"
+            let reset = value == nil
+                ? (viewportPreset.responsiveBreakpoint == .desktop ? " reset to default" : " override removed")
+                : " committed for \(viewportPreset.title)"
             let skipped = prepared.skippedNodeIDs.isEmpty
                 ? ""
                 : "; \(prepared.skippedNodeIDs.count) incompatible selection\(prepared.skippedNodeIDs.count == 1 ? "" : "s") unchanged"
             lastContainerLayoutAnnouncement = "\(field.title)\(reset) for \(prepared.applicableNodeIDs.count) container\(prepared.applicableNodeIDs.count == 1 ? "" : "s")\(skipped)"
+            containerLayoutAnnouncementContext = .init(
+                breakpoint: viewportPreset.responsiveBreakpoint,
+                orderedNodeIDs: selectionState.orderedIDs
+            )
             announcementPoster.post(lastContainerLayoutAnnouncement)
             recordContainerLayoutDiagnostic(command, started: started, result: .success, failure: nil)
             return true
         } catch let error as ContainerLayoutError {
             containerLayoutFailure = error
             lastContainerLayoutAnnouncement = error.localizedDescription
+            containerLayoutAnnouncementContext = .init(
+                breakpoint: viewportPreset.responsiveBreakpoint,
+                orderedNodeIDs: selectionState.orderedIDs
+            )
             announcementPoster.post(lastContainerLayoutAnnouncement)
             let result: ContainerLayoutDiagnosticResult = error == .cancelled ? .cancelled
                 : [.staleDocument, .staleRevision, .staleRenderer, .selectionMismatch].contains(error) ? .stale : .failure
@@ -1443,6 +1509,10 @@ final class WorkspaceShellState: ObservableObject {
         } catch {
             containerLayoutFailure = .staleRevision
             lastContainerLayoutAnnouncement = ContainerLayoutError.staleRevision.localizedDescription
+            containerLayoutAnnouncementContext = .init(
+                breakpoint: viewportPreset.responsiveBreakpoint,
+                orderedNodeIDs: selectionState.orderedIDs
+            )
             announcementPoster.post(lastContainerLayoutAnnouncement)
             recordContainerLayoutDiagnostic(command, started: started, result: .stale, failure: .staleRevision)
             return false
@@ -1468,6 +1538,10 @@ final class WorkspaceShellState: ObservableObject {
     func cancelContainerLayoutDraft(field: ContainerLayoutField) {
         containerLayoutFailure = nil
         lastContainerLayoutAnnouncement = "Container layout draft cancelled; committed layout is unchanged"
+        containerLayoutAnnouncementContext = .init(
+            breakpoint: viewportPreset.responsiveBreakpoint,
+            orderedNodeIDs: selectionState.orderedIDs
+        )
         announcementPoster.post(lastContainerLayoutAnnouncement)
         guard let plan = canvasRenderPlan, let pageID = effectiveSelectedPageID else { return }
         let command = ContainerLayoutCommand(
@@ -1480,7 +1554,8 @@ final class WorkspaceShellState: ObservableObject {
             field: field,
             value: nil,
             provenance: .keyboard,
-            cancelled: true
+            cancelled: true,
+            breakpoint: viewportPreset.responsiveBreakpoint
         )
         recordContainerLayoutDiagnostic(
             command,
@@ -1488,6 +1563,82 @@ final class WorkspaceShellState: ObservableObject {
             result: .cancelled,
             failure: .cancelled
         )
+    }
+
+    var responsiveVisibilityValue: ResponsiveVisibilityInspectorValue {
+        responsiveVisibilityRegistry.value(in: documentSession.document, context: transformValidationContext,
+                                           breakpoint: viewportPreset.responsiveBreakpoint)
+    }
+
+    var hasVisibilityOverrideAtCurrentBreakpoint: Bool {
+        let breakpoint = viewportPreset.responsiveBreakpoint
+        guard breakpoint != .desktop else { return false }
+        return selectedCanonicalNodes.contains { $0.insertionProperty(ResponsiveVisibilityResolver.key(breakpoint)) != nil }
+    }
+
+    @discardableResult
+    func commitResponsiveVisibility(_ visible: Bool?, provenance: ResponsiveVisibilityProvenance) -> Bool {
+        guard let plan = canvasRenderPlan, let pageID = effectiveSelectedPageID else { return false }
+        let started = DispatchTime.now().uptimeNanoseconds
+        let command = ResponsiveVisibilityCommand(identity: .init(editID: GeometryInspectorEditID(),
+            documentID: documentSession.document.id, pageID: pageID,
+            revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration), orderedNodeIDs: selectionState.orderedIDs,
+            breakpoint: viewportPreset.responsiveBreakpoint, visible: visible,
+            provenance: provenance, cancelled: false)
+        do {
+            let prepared = try responsiveVisibilityRegistry.prepare(command, in: documentSession.document,
+                                                                     context: transformValidationContext)
+            _ = try documentSession.execute(prepared.documentCommand)
+            responsiveVisibilityFailure = nil
+            let action = visible.map { $0 ? "shown" : "hidden" } ?? "reset to inherited visibility"
+            lastResponsiveVisibilityAnnouncement = "\(prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s") \(action) at \(viewportPreset.title)"
+            responsiveVisibilityAnnouncementContext = .init(
+                breakpoint: viewportPreset.responsiveBreakpoint,
+                orderedNodeIDs: selectionState.orderedIDs
+            )
+            announcementPoster.post(lastResponsiveVisibilityAnnouncement)
+            recordResponsiveVisibilityDiagnostic(command, started: started, result: .success, failure: nil)
+            return true
+        } catch let error as ResponsiveVisibilityError {
+            responsiveVisibilityFailure = error
+            lastResponsiveVisibilityAnnouncement = error.localizedDescription
+            responsiveVisibilityAnnouncementContext = .init(
+                breakpoint: viewportPreset.responsiveBreakpoint,
+                orderedNodeIDs: selectionState.orderedIDs
+            )
+            announcementPoster.post(lastResponsiveVisibilityAnnouncement)
+            let result: ResponsiveVisibilityDiagnosticResult = error == .cancelled ? .cancelled
+                : [.staleDocument, .staleRevision, .staleRenderer, .selectionMismatch].contains(error) ? .stale : .failure
+            recordResponsiveVisibilityDiagnostic(command, started: started, result: result, failure: error)
+            return false
+        } catch {
+            responsiveVisibilityFailure = .staleRevision
+            lastResponsiveVisibilityAnnouncement = ResponsiveVisibilityError.staleRevision.localizedDescription
+            responsiveVisibilityAnnouncementContext = .init(
+                breakpoint: viewportPreset.responsiveBreakpoint,
+                orderedNodeIDs: selectionState.orderedIDs
+            )
+            announcementPoster.post(lastResponsiveVisibilityAnnouncement)
+            recordResponsiveVisibilityDiagnostic(command, started: started, result: .stale, failure: .staleRevision)
+            return false
+        }
+    }
+
+    private func recordResponsiveVisibilityDiagnostic(
+        _ command: ResponsiveVisibilityCommand,
+        started: UInt64,
+        result: ResponsiveVisibilityDiagnosticResult,
+        failure: ResponsiveVisibilityError?
+    ) {
+        let record = ResponsiveVisibilityDiagnosticFactory.make(
+            command: command,
+            durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000,
+            resultRevision: result == .success ? documentSession.document.revision : nil,
+            result: result,
+            failure: failure
+        )
+        Task { await responsiveVisibilityDiagnostics.append(record) }
     }
 
     private var selectedCanonicalNodes: [DocumentNode] {

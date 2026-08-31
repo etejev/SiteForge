@@ -213,7 +213,7 @@ enum SelectionCommandError: Error, Equatable, LocalizedError, Sendable {
         case .duplicateSceneTarget, .invalidState: "The selection scene is internally inconsistent."
         case .missingTarget: "The selection target no longer exists."
         case .duplicateTarget: "The object is already selected."
-        case .hiddenTarget: "Hidden objects cannot be selected from the canvas or Layers."
+        case .hiddenTarget: "Hidden objects cannot be selected from the canvas; use Layers to inspect or restore them."
         case .clippedTarget: "The object is outside the selectable clipped region."
         case .unavailableTarget: "The object is temporarily unavailable."
         case .outsideActiveScope: "The object is outside the active page or container."
@@ -260,7 +260,7 @@ struct SelectionCommandRegistry: Sendable {
             switch command.name {
             case .replace, .add, .toggle:
                 guard let targetID = command.targetID else { return .disabled("A selection target is required.") }
-                do { _ = try target(targetID, in: scene) }
+                do { _ = try target(targetID, in: scene, allowsHiddenInspection: command.provenance == .layersNavigator) }
                 catch { return .disabled(error.localizedDescription) }
                 if command.name == .add, state.orderedIDs.contains(targetID) {
                     return .disabled("The object is already selected.")
@@ -375,14 +375,15 @@ struct SelectionCommandRegistry: Sendable {
         }
         let catalog = Dictionary(uniqueKeysWithValues: scene.targets.map { ($0.id, $0) })
         var repair: SelectionRepairCategory = boundary == .sceneReplacement ? .sceneReplaced : .none
+        let retainsHiddenLayersInspection = prior.provenance == .layersNavigator
         let retained = prior.orderedIDs.filter { id in
             guard let value = catalog[id] else { repair = .removed; return false }
             guard value.pageID == scene.activePageID, value.parentID == scene.activeContainerID else {
                 repair = .scopeChanged; return false
             }
             guard value.isAvailable else { repair = .unavailable; return false }
-            guard value.isVisible else { repair = .hidden; return false }
-            guard !value.isFullyClipped else { repair = .clipped; return false }
+            guard value.isVisible || retainsHiddenLayersInspection else { repair = .hidden; return false }
+            guard !value.isFullyClipped || retainsHiddenLayersInspection else { repair = .clipped; return false }
             return true
         }
         let primary = prior.primaryID.flatMap { retained.contains($0) ? $0 : nil } ?? retained.last
@@ -400,10 +401,14 @@ struct SelectionCommandRegistry: Sendable {
         scene: SelectionSceneSnapshot
     ) throws -> SelectionTargetSnapshot {
         guard let id = command.targetID else { throw SelectionCommandError.missingTarget }
-        return try target(id, in: scene)
+        return try target(id, in: scene, allowsHiddenInspection: command.provenance == .layersNavigator)
     }
 
-    private func target(_ id: NodeID, in scene: SelectionSceneSnapshot) throws -> SelectionTargetSnapshot {
+    private func target(
+        _ id: NodeID,
+        in scene: SelectionSceneSnapshot,
+        allowsHiddenInspection: Bool = false
+    ) throws -> SelectionTargetSnapshot {
         guard let target = scene.targets.first(where: { $0.id == id }) else {
             throw SelectionCommandError.missingTarget
         }
@@ -411,8 +416,8 @@ struct SelectionCommandRegistry: Sendable {
             throw SelectionCommandError.outsideActiveScope(id)
         }
         guard target.isAvailable else { throw SelectionCommandError.unavailableTarget(id) }
-        guard target.isVisible else { throw SelectionCommandError.hiddenTarget(id) }
-        guard !target.isFullyClipped else { throw SelectionCommandError.clippedTarget(id) }
+        guard target.isVisible || allowsHiddenInspection else { throw SelectionCommandError.hiddenTarget(id) }
+        guard !target.isFullyClipped || allowsHiddenInspection else { throw SelectionCommandError.clippedTarget(id) }
         return target
     }
 
@@ -434,7 +439,13 @@ struct SelectionCommandRegistry: Sendable {
               state.anchorID.map(state.orderedIDs.contains) ?? state.orderedIDs.isEmpty else {
             throw SelectionCommandError.invalidState
         }
-        for id in state.orderedIDs { _ = try target(id, in: scene) }
+        // A hidden-at-breakpoint node may remain selected for truthful Layers
+        // inspection. Overlay planning still suppresses it because it is not
+        // visible and does not participate in canvas traversal.
+        let allowsHiddenInspection = state.provenance == .layersNavigator
+        for id in state.orderedIDs {
+            _ = try target(id, in: scene, allowsHiddenInspection: allowsHiddenInspection)
+        }
     }
 }
 

@@ -1,6 +1,172 @@
 import CryptoKit
 import Foundation
 
+/// Shared responsive fields live below the transform/Inspector boundary so
+/// canonical insertion/layout resolution can remain a standalone headless
+/// subsystem. Inspector registries consume these types; they do not own them.
+enum GeometryInspectorField: String, CaseIterable, Hashable, Sendable {
+    case x, y, width, height
+
+    var title: String {
+        switch self { case .x: "X"; case .y: "Y"; case .width: "Width"; case .height: "Height" }
+    }
+    var propertyKey: String { "layout.\(rawValue)" }
+    var requiresPositiveValue: Bool { self == .width || self == .height }
+}
+
+enum ResponsiveBreakpointIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "responsive-breakpoint"
+}
+typealias BreakpointID = StableIdentifier<ResponsiveBreakpointIdentifierDomain>
+
+/// Product-owned v1 breakpoints. Scene selection stays noncanonical.
+enum ResponsiveBreakpoint: String, CaseIterable, Codable, Sendable {
+    case desktop, tablet, mobile
+
+    var id: BreakpointID {
+        let raw: String = switch self {
+        case .desktop: "60000000-0000-4000-8000-000000000001"
+        case .tablet: "60000000-0000-4000-8000-000000000002"
+        case .mobile: "60000000-0000-4000-8000-000000000003"
+        }
+        return BreakpointID(UUID(uuidString: raw)!)
+    }
+    var title: String { rawValue.capitalized }
+    var rangeDescription: String {
+        switch self { case .desktop: "1024 points and wider"; case .tablet: "600–1023 points"; case .mobile: "below 600 points" }
+    }
+    static func resolving(width: Double) -> ResponsiveBreakpoint {
+        guard width.isFinite else { return .desktop }
+        if width < 600 { return .mobile }
+        if width < 1024 { return .tablet }
+        return .desktop
+    }
+}
+
+enum ResponsiveGeometrySource: Equatable, Sendable {
+    case baseDesktop
+    case override(ResponsiveBreakpoint)
+
+    var label: String {
+        switch self { case .baseDesktop: "Inherited from Desktop"; case .override(let value): "Authored for \(value.title)" }
+    }
+}
+
+enum ResponsiveGeometryResolver {
+    static let namespace = "responsive.geometry.v1"
+    static func key(_ field: GeometryInspectorField, breakpoint: ResponsiveBreakpoint) -> String {
+        "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).\(field.rawValue)"
+    }
+    static func value(for field: GeometryInspectorField, node: DocumentNode, breakpoint: ResponsiveBreakpoint)
+        -> (Double, PropertyOrigin, ResponsiveGeometrySource)? {
+        if breakpoint != .desktop,
+           let property = node.insertionProperty(key(field, breakpoint: breakpoint)),
+           case .number(let value) = property.value, isValid(value, for: field) {
+            return (value, property.origin, .override(breakpoint))
+        }
+        guard let property = node.insertionProperty(field.propertyKey),
+              case .number(let value) = property.value, isValid(value, for: field) else { return nil }
+        return (value, property.origin, .baseDesktop)
+    }
+    static func geometry(for node: DocumentNode, breakpoint: ResponsiveBreakpoint) -> InsertionGeometry? {
+        guard let x = value(for: .x, node: node, breakpoint: breakpoint)?.0,
+              let y = value(for: .y, node: node, breakpoint: breakpoint)?.0,
+              let width = value(for: .width, node: node, breakpoint: breakpoint)?.0,
+              let height = value(for: .height, node: node, breakpoint: breakpoint)?.0 else { return nil }
+        return InsertionGeometry(origin: .init(x: x, y: y), size: .init(width: width, height: height))
+    }
+    static func frame(for node: DocumentNode, base: WorldRect, breakpoint: ResponsiveBreakpoint) -> WorldRect {
+        guard breakpoint != .desktop else { return base }
+        func resolved(_ field: GeometryInspectorField, fallback: Double) -> Double {
+            value(for: field, node: node, breakpoint: breakpoint)?.0 ?? fallback
+        }
+        return .init(origin: .init(x: resolved(.x, fallback: base.origin.x), y: resolved(.y, fallback: base.origin.y)),
+                     size: .init(width: resolved(.width, fallback: base.size.width),
+                                 height: resolved(.height, fallback: base.size.height)))
+    }
+    private static func isValid(_ value: Double, for field: GeometryInspectorField) -> Bool {
+        value.isFinite && abs(value) <= 1_000_000_000 && (!field.requiresPositiveValue || value >= 1)
+    }
+}
+
+enum ContainerLayoutField: String, CaseIterable, Sendable {
+    case padding, gap, axis, alignment, columns
+    var title: String {
+        switch self { case .padding: "Padding"; case .gap: "Gap"; case .axis: "Direction"; case .alignment: "Alignment"; case .columns: "Columns" }
+    }
+    var propertyKey: String {
+        switch self { case .padding: "layout.padding"; case .gap: "layout.gap"; case .axis: "layout.axis"; case .alignment: "layout.align"; case .columns: "layout.grid.columns" }
+    }
+    var propertySuffix: String { rawValue }
+}
+
+enum ContainerLayoutValue: Equatable, Sendable {
+    case number(Double)
+    case axis(ContainerLayoutAxis)
+    case alignment(ContainerLayoutAlignment)
+    var propertyValue: PropertyValue {
+        switch self { case .number(let value): .number(value); case .axis(let value): .string(value.rawValue); case .alignment(let value): .string(value.rawValue) }
+    }
+}
+
+/// SF-0601/SF-0603 — one breakpoint-keyed property cascade is shared by
+/// structural layout and its Inspector authoring registry.
+enum ResponsiveContainerLayoutResolver {
+    static let namespace = "responsive.container.v1"
+    static func key(_ field: ContainerLayoutField, breakpoint: ResponsiveBreakpoint) -> String {
+        "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).\(field.propertySuffix)"
+    }
+    static func value(for field: ContainerLayoutField, node: DocumentNode, breakpoint: ResponsiveBreakpoint)
+        -> (ContainerLayoutValue, PropertyOrigin, ResponsiveGeometrySource)? {
+        if breakpoint != .desktop,
+           let property = node.insertionProperty(key(field, breakpoint: breakpoint)),
+           let value = parse(property.value, field: field) {
+            return (value, property.origin, .override(breakpoint))
+        }
+        guard let property = node.insertionProperty(field.propertyKey),
+              let value = parse(property.value, field: field) else { return nil }
+        return (value, property.origin, .baseDesktop)
+    }
+    private static func parse(_ value: PropertyValue, field: ContainerLayoutField) -> ContainerLayoutValue? {
+        switch (field, value) {
+        case (.padding, .number(let number)), (.gap, .number(let number))
+            where number.isFinite && (0...10_000).contains(number): return .number(number)
+        case (.columns, .number(let number))
+            where number.isFinite && number.rounded(.towardZero) == number && (1...64).contains(number): return .number(number)
+        case (.axis, .string(let value)): return ContainerLayoutAxis(rawValue: value).map(ContainerLayoutValue.axis)
+        case (.alignment, .string(let value)): return ContainerLayoutAlignment(rawValue: value).map(ContainerLayoutValue.alignment)
+        default: return nil
+        }
+    }
+}
+
+enum ResponsiveVisibilitySource: Equatable, Sendable {
+    case baseDesktop
+    case override(ResponsiveBreakpoint)
+    func label(at breakpoint: ResponsiveBreakpoint) -> String {
+        switch self { case .baseDesktop: breakpoint == .desktop ? "Desktop base" : "Inherited from Desktop"; case .override(let value): "Authored for \(value.title)" }
+    }
+}
+
+enum ResponsiveVisibilityResolver {
+    static let namespace = "responsive.visibility.v1"
+    static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid]
+    static func supports(_ node: DocumentNode) -> Bool { supportedKinds.contains(node.kind) && node.insertionGeometry != nil }
+    static func key(_ breakpoint: ResponsiveBreakpoint) -> String {
+        "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).visible"
+    }
+    static func value(for node: DocumentNode, breakpoint: ResponsiveBreakpoint)
+        -> (Bool, PropertyOrigin, ResponsiveVisibilitySource) {
+        if breakpoint != .desktop, let property = node.insertionProperty(key(breakpoint)),
+           case .boolean(let visible) = property.value { return (visible, property.origin, .override(breakpoint)) }
+        let property = node.insertionProperty("hidden")
+        return (!node.insertionBooleanProperty("hidden"), property?.origin ?? .defaulted, .baseDesktop)
+    }
+    static func isVisible(_ node: DocumentNode, breakpoint: ResponsiveBreakpoint) -> Bool {
+        supports(node) ? value(for: node, breakpoint: breakpoint).0 : true
+    }
+}
+
 // SF-0405-001...008 — bounded transactional frame/plain-text insertion foundation.
 
 enum InsertionKind: String, Codable, CaseIterable, Sendable {
@@ -542,6 +708,22 @@ enum GridRowOffsetResolver {
 }
 
 extension DocumentPage {
+    /// A hidden container suppresses its complete authored subtree at the
+    /// active breakpoint without deleting or rewriting descendants. Hidden
+    /// children do not consume Stack/Grid placement slots.
+    func effectiveVisibleNodeIDs(breakpoint: ResponsiveBreakpoint) -> Set<NodeID> {
+        let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        var visible = Set<NodeID>()
+        func visit(_ id: NodeID, ancestorVisible: Bool) {
+            guard let node = nodesByID[id] else { return }
+            let isVisible = ancestorVisible && ResponsiveVisibilityResolver.isVisible(node, breakpoint: breakpoint)
+            if isVisible { visible.insert(id) }
+            for childID in node.childIDs { visit(childID, ancestorVisible: isVisible) }
+        }
+        for rootID in rootNodeIDs { visit(rootID, ancestorVisible: true) }
+        return visible
+    }
+
     /// Fits authored main-axis lengths into a bounded container without changing
     /// canonical child geometry. Values are preserved while they fit; overflow
     /// is reduced proportionally so resolved/rendered children cannot escape the
@@ -559,24 +741,39 @@ extension DocumentPage {
         return bounded.map { max(1, $0 * scale) }
     }
 
-    func resolvedStructuralGeometry() -> [NodeID: InsertionGeometry] {
+    func resolvedStructuralGeometry(breakpoint: ResponsiveBreakpoint = .desktop) -> [NodeID: InsertionGeometry] {
         let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        let visibleNodeIDs = effectiveVisibleNodeIDs(breakpoint: breakpoint)
         var result = Dictionary(uniqueKeysWithValues: nodes.compactMap { node in
-            node.insertionGeometry.map { (node.id, $0) }
+            node.insertionGeometry.map {
+                let base = $0.frame
+                let resolved = ResponsiveGeometryResolver.frame(for: node, base: base, breakpoint: breakpoint)
+                return (node.id, InsertionGeometry(origin: resolved.origin, size: resolved.size))
+            }
         })
         for parent in canonicalDepthFirstNodes() {
             guard let parentGeometry = result[parent.id] else { continue }
-            let children = parent.childIDs.compactMap { nodesByID[$0] }
+            let children = parent.childIDs.filter(visibleNodeIDs.contains).compactMap { nodesByID[$0] }
             switch parent.kind {
             case .section, .stack:
-                let padding = parent.insertionNumberProperty("layout.padding") ?? (parent.kind == .section ? 48 : 24)
-                let gap = parent.kind == .section ? 0 : (parent.insertionNumberProperty("layout.gap") ?? 24)
+                let padding = ResponsiveContainerLayoutResolver.value(for: .padding, node: parent, breakpoint: breakpoint)
+                    .flatMap { if case .number(let value) = $0.0 { value } else { nil } }
+                    ?? (parent.kind == .section ? 48 : 24)
+                let gap: Double
+                if parent.kind == .section {
+                    gap = 0
+                } else {
+                    gap = ResponsiveContainerLayoutResolver.value(for: .gap, node: parent, breakpoint: breakpoint)
+                        .flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 24
+                }
                 let axis = parent.kind == .section
                     ? ContainerLayoutAxis.vertical
-                    : ContainerLayoutAxis(rawValue: parent.insertionStringProperty("layout.axis") ?? "vertical") ?? .vertical
+                    : (ResponsiveContainerLayoutResolver.value(for: .axis, node: parent, breakpoint: breakpoint)
+                        .flatMap { if case .axis(let value) = $0.0 { value } else { nil } } ?? .vertical)
                 let alignment = parent.kind == .section
                     ? ContainerLayoutAlignment.start
-                    : ContainerLayoutAlignment(rawValue: parent.insertionStringProperty("layout.align") ?? "start") ?? .start
+                    : (ResponsiveContainerLayoutResolver.value(for: .alignment, node: parent, breakpoint: breakpoint)
+                        .flatMap { if case .alignment(let value) = $0.0 { value } else { nil } } ?? .start)
                 let contentWidth = max(1, parentGeometry.size.width - (2 * padding))
                 let contentHeight = max(1, parentGeometry.size.height - (2 * padding))
                 let availableMain = max(
@@ -619,9 +816,14 @@ extension DocumentPage {
                     result[child.id] = geometry
                 }
             case .grid:
-                let padding = parent.insertionNumberProperty("layout.padding") ?? 24
-                let gap = parent.insertionNumberProperty("layout.gap") ?? 24
-                let columns = max(1, Int(parent.insertionNumberProperty("layout.grid.columns") ?? 2))
+                let padding = ResponsiveContainerLayoutResolver.value(for: .padding, node: parent, breakpoint: breakpoint)
+                    .flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 24
+                let gap = ResponsiveContainerLayoutResolver.value(for: .gap, node: parent, breakpoint: breakpoint)
+                    .flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 24
+                let columnValue: Double = ResponsiveContainerLayoutResolver.value(
+                    for: .columns, node: parent, breakpoint: breakpoint
+                ).flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 2
+                let columns = max(1, Int(columnValue))
                 let usableWidth = max(1, parentGeometry.size.width - (2 * padding) - (Double(columns - 1) * gap))
                 let cellWidth = usableWidth / Double(columns)
                 let rowCount = children.isEmpty ? 0 : (children.count + columns - 1) / columns

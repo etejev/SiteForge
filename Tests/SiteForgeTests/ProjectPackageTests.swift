@@ -715,7 +715,8 @@ final class ProjectPackageTests: XCTestCase {
         let sceneID = CanvasViewportSceneID(UUID(uuidString: "89000000-0000-4000-8000-000000000018")!)
         let registry = ContainerLayoutCommandRegistry()
         let session = DocumentSession(document: document)
-        func commit(_ field: ContainerLayoutField, _ value: ContainerLayoutValue) throws {
+        func commit(_ field: ContainerLayoutField, _ value: ContainerLayoutValue,
+                    breakpoint: ResponsiveBreakpoint = .desktop) throws {
             let context = TransformValidationContext(
                 activePageID: page.id, currentSceneID: sceneID,
                 rendererGeneration: 17, selectedNodeIDs: [stackID],
@@ -727,7 +728,7 @@ final class ProjectPackageTests: XCTestCase {
                     pageID: page.id, revision: session.document.revision,
                     sceneID: sceneID, rendererGeneration: 17),
                 orderedNodeIDs: [stackID], field: field, value: value,
-                provenance: .automation, cancelled: false
+                provenance: .automation, cancelled: false, breakpoint: breakpoint
             )
             _ = try session.execute(try registry.prepare(command, in: session.document, context: context).documentCommand)
         }
@@ -735,6 +736,22 @@ final class ProjectPackageTests: XCTestCase {
         try commit(.gap, .number(18))
         try commit(.padding, .number(30))
         try commit(.alignment, .alignment(.center))
+        try commit(.axis, .axis(.vertical), breakpoint: .mobile)
+        try commit(.gap, .number(8), breakpoint: .mobile)
+        let visibilityRegistry = ResponsiveVisibilityCommandRegistry()
+        let visibilityContext = TransformValidationContext(
+            activePageID: page.id, currentSceneID: sceneID, rendererGeneration: 17,
+            selectedNodeIDs: [stackID], availableNodeIDs: [stackID],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil
+        )
+        let visibility = try visibilityRegistry.prepare(.init(
+            identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                pageID: page.id, revision: session.document.revision,
+                sceneID: sceneID, rendererGeneration: 17),
+            orderedNodeIDs: [stackID], breakpoint: .tablet, visible: false,
+            provenance: .automation, cancelled: false
+        ), in: session.document, context: visibilityContext)
+        _ = try session.execute(visibility.documentCommand)
 
         let expectedIDs = session.document.pages[0].nodes.first { $0.id == stackID }!.properties
             .filter { ["layout.axis", "layout.gap", "layout.padding", "layout.align"].contains($0.key.rawValue) }
@@ -753,6 +770,9 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(reopenedNode.insertionNumberProperty("layout.gap"), 18)
         XCTAssertEqual(reopenedNode.insertionNumberProperty("layout.padding"), 30)
         XCTAssertEqual(reopenedNode.insertionStringProperty("layout.align"), "center")
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .axis, node: reopenedNode, breakpoint: .mobile)?.0, .axis(.vertical))
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .gap, node: reopenedNode, breakpoint: .mobile)?.0, .number(8))
+        XCTAssertFalse(ResponsiveVisibilityResolver.isVisible(reopenedNode, breakpoint: .tablet))
         XCTAssertEqual(reopenedNode.properties.filter {
             ["layout.axis", "layout.gap", "layout.padding", "layout.align"].contains($0.key.rawValue)
         }.map(\.id), expectedIDs)
@@ -765,6 +785,8 @@ final class ProjectPackageTests: XCTestCase {
             from: recoveryURL, expectedProjectID: baseline.projectID
         ).package
         let recoveredNode = try XCTUnwrap(recovered.document.pages[0].nodes.first { $0.id == stackID })
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .gap, node: recoveredNode, breakpoint: .mobile)?.0, .number(8))
+        XCTAssertFalse(ResponsiveVisibilityResolver.isVisible(recoveredNode, breakpoint: .tablet))
         XCTAssertEqual(recoveredNode.insertionStringProperty("layout.axis"), "horizontal")
         XCTAssertEqual(recoveredNode.insertionNumberProperty("layout.gap"), 18)
         XCTAssertEqual(recoveredNode.insertionStringProperty("layout.align"), "center")

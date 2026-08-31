@@ -1249,121 +1249,6 @@ enum TransformPolicy {
 
 // MARK: - Fixed geometry Inspector
 
-/// Inspector fields deliberately address the existing canonical layout
-/// properties. They do not introduce sizing modes, constraints, or an editor
-/// geometry cache.
-enum GeometryInspectorField: String, CaseIterable, Hashable, Sendable {
-    case x
-    case y
-    case width
-    case height
-
-    var title: String {
-        switch self {
-        case .x: "X"
-        case .y: "Y"
-        case .width: "Width"
-        case .height: "Height"
-        }
-    }
-
-    var propertyKey: String { "layout.\(rawValue)" }
-
-    var requiresPositiveValue: Bool {
-        self == .width || self == .height
-    }
-}
-
-enum ResponsiveBreakpointIdentifierDomain: StableIdentifierDomain {
-    static let diagnosticNamespace = "responsive-breakpoint"
-}
-typealias BreakpointID = StableIdentifier<ResponsiveBreakpointIdentifierDomain>
-
-/// Product-owned v1 breakpoints. Ranges are non-overlapping and resolve by
-/// viewport width; the current scene preset is never canonical document state.
-enum ResponsiveBreakpoint: String, CaseIterable, Codable, Sendable {
-    case desktop, tablet, mobile
-
-    var id: BreakpointID {
-        let raw: String = switch self {
-        case .desktop: "60000000-0000-4000-8000-000000000001"
-        case .tablet: "60000000-0000-4000-8000-000000000002"
-        case .mobile: "60000000-0000-4000-8000-000000000003"
-        }
-        return BreakpointID(UUID(uuidString: raw)!)
-    }
-
-    var title: String { rawValue.capitalized }
-    var rangeDescription: String {
-        switch self { case .desktop: "1024 points and wider"; case .tablet: "600–1023 points"; case .mobile: "below 600 points" }
-    }
-
-    static func resolving(width: Double) -> ResponsiveBreakpoint {
-        guard width.isFinite else { return .desktop }
-        if width < 600 { return .mobile }
-        if width < 1024 { return .tablet }
-        return .desktop
-    }
-}
-
-enum ResponsiveGeometrySource: Equatable, Sendable {
-    case baseDesktop
-    case override(ResponsiveBreakpoint)
-
-    var label: String {
-        switch self { case .baseDesktop: "Inherited from Desktop"; case .override(let value): "Authored for \(value.title)" }
-    }
-}
-
-enum ResponsiveGeometryResolver {
-    static let namespace = "responsive.geometry.v1"
-
-    static func key(_ field: GeometryInspectorField, breakpoint: ResponsiveBreakpoint) -> String {
-        "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).\(field.rawValue)"
-    }
-
-    static func value(
-        for field: GeometryInspectorField,
-        node: DocumentNode,
-        breakpoint: ResponsiveBreakpoint
-    ) -> (Double, PropertyOrigin, ResponsiveGeometrySource)? {
-        if breakpoint != .desktop,
-           let property = node.insertionProperty(key(field, breakpoint: breakpoint)),
-           case .number(let value) = property.value, value.isFinite {
-            return (value, property.origin, .override(breakpoint))
-        }
-        guard let property = node.insertionProperty(field.propertyKey),
-              case .number(let value) = property.value, value.isFinite else { return nil }
-        return (value, property.origin, .baseDesktop)
-    }
-
-    static func geometry(for node: DocumentNode, breakpoint: ResponsiveBreakpoint) -> InsertionGeometry? {
-        guard let x = value(for: .x, node: node, breakpoint: breakpoint)?.0,
-              let y = value(for: .y, node: node, breakpoint: breakpoint)?.0,
-              let width = value(for: .width, node: node, breakpoint: breakpoint)?.0,
-              let height = value(for: .height, node: node, breakpoint: breakpoint)?.0 else { return nil }
-        return InsertionGeometry(origin: .init(x: x, y: y), size: .init(width: width, height: height))
-    }
-
-    static func frame(
-        for node: DocumentNode,
-        base: WorldRect,
-        breakpoint: ResponsiveBreakpoint
-    ) -> WorldRect {
-        guard breakpoint != .desktop else { return base }
-        func override(_ field: GeometryInspectorField, fallback: Double) -> Double {
-            let key = key(field, breakpoint: breakpoint)
-            guard let property = node.insertionProperty(key), case .number(let value) = property.value,
-                  GeometryInspectorCommandRegistry.isValid(value, for: field) else { return fallback }
-            return value
-        }
-        return WorldRect(
-            origin: .init(x: override(.x, fallback: base.origin.x), y: override(.y, fallback: base.origin.y)),
-            size: .init(width: override(.width, fallback: base.size.width), height: override(.height, fallback: base.size.height))
-        )
-    }
-}
-
 enum GeometryInspectorIdentifierDomain: StableIdentifierDomain {
     static let diagnosticNamespace = "geometry-inspector"
 }
@@ -1823,48 +1708,6 @@ struct TransformCommandRegistry: Sendable {
     }
 }
 
-// SF-0502-001...008 / SF-0503-001...008 / SF-0506-001...008 — bounded
-// structural-container layout authoring. The existing schema-v4 properties
-// remain authoritative; Inspector drafts compile through this registry and
-// never become a second layout source.
-enum ContainerLayoutField: String, CaseIterable, Sendable {
-    case padding, gap, axis, alignment, columns
-
-    var title: String {
-        switch self {
-        case .padding: "Padding"
-        case .gap: "Gap"
-        case .axis: "Direction"
-        case .alignment: "Alignment"
-        case .columns: "Columns"
-        }
-    }
-
-    var propertyKey: String {
-        switch self {
-        case .padding: "layout.padding"
-        case .gap: "layout.gap"
-        case .axis: "layout.axis"
-        case .alignment: "layout.align"
-        case .columns: "layout.grid.columns"
-        }
-    }
-}
-
-enum ContainerLayoutValue: Equatable, Sendable {
-    case number(Double)
-    case axis(ContainerLayoutAxis)
-    case alignment(ContainerLayoutAlignment)
-
-    var propertyValue: PropertyValue {
-        switch self {
-        case .number(let value): .number(value)
-        case .axis(let value): .string(value.rawValue)
-        case .alignment(let value): .string(value.rawValue)
-        }
-    }
-}
-
 enum ContainerLayoutInspectorValue: Equatable, Sendable {
     case unavailable(String)
     case single(ContainerLayoutValue, PropertyOrigin, applicableCount: Int, skippedCount: Int)
@@ -1882,6 +1725,8 @@ struct ContainerLayoutCommand: Sendable {
     let value: ContainerLayoutValue?
     let provenance: ContainerLayoutProvenance
     let cancelled: Bool
+    var breakpoint: ResponsiveBreakpoint = .desktop
+    var removesOverride = false
 }
 
 struct PreparedContainerLayoutEdit: Sendable {
@@ -1890,6 +1735,8 @@ struct PreparedContainerLayoutEdit: Sendable {
     let applicableNodeIDs: [NodeID]
     let skippedNodeIDs: [NodeID]
     let documentCommand: DocumentCommand
+    let breakpoint: ResponsiveBreakpoint
+    let removesOverride: Bool
 }
 
 enum ContainerLayoutError: Error, Equatable, LocalizedError, Sendable {
@@ -1943,6 +1790,18 @@ struct ContainerLayoutCommandRegistry: Sendable {
         }
     }
 
+    static func value(_ propertyValue: PropertyValue, for field: ContainerLayoutField) -> ContainerLayoutValue? {
+        switch (field, propertyValue) {
+        case (.padding, .number(let value)), (.gap, .number(let value)), (.columns, .number(let value)):
+            return .number(value)
+        case (.axis, .string(let value)):
+            return ContainerLayoutAxis(rawValue: value).map(ContainerLayoutValue.axis)
+        case (.alignment, .string(let value)):
+            return ContainerLayoutAlignment(rawValue: value).map(ContainerLayoutValue.alignment)
+        default: return nil
+        }
+    }
+
     static func resolvedValue(_ field: ContainerLayoutField, node: DocumentNode) -> ContainerLayoutValue? {
         guard supports(field, kind: node.kind) else { return nil }
         switch field {
@@ -1960,7 +1819,8 @@ struct ContainerLayoutCommandRegistry: Sendable {
     func value(
         for field: ContainerLayoutField,
         in document: CanonicalDocument,
-        context: TransformValidationContext
+        context: TransformValidationContext,
+        breakpoint: ResponsiveBreakpoint = .desktop
     ) -> ContainerLayoutInspectorValue {
         guard let page = document.pages.first(where: { $0.id == context.activePageID }) else {
             return .unavailable("The active page is unavailable.")
@@ -1971,9 +1831,8 @@ struct ContainerLayoutCommandRegistry: Sendable {
             return .unavailable("The selection does not support \(field.title.lowercased()).")
         }
         let values = applicable.compactMap { node -> (ContainerLayoutValue, PropertyOrigin)? in
-            guard let value = Self.resolvedValue(field, node: node),
-                  let property = node.insertionProperty(field.propertyKey) else { return nil }
-            return (value, property.origin)
+            ResponsiveContainerLayoutResolver.value(for: field, node: node, breakpoint: breakpoint)
+                .map { ($0.0, $0.1) }
         }
         guard values.count == applicable.count, let first = values.first else {
             return .unavailable("The selected containers have invalid canonical layout state.")
@@ -2020,19 +1879,39 @@ struct ContainerLayoutCommandRegistry: Sendable {
             guard !node.insertionBooleanProperty("locked") else { throw ContainerLayoutError.lockedTarget }
             guard !node.insertionBooleanProperty("hidden") else { throw ContainerLayoutError.hiddenTarget }
             guard context.availableNodeIDs.contains(id) else { throw ContainerLayoutError.unavailableTarget }
-            guard let property = node.insertionProperty(command.field.propertyKey),
+            guard let baseProperty = node.insertionProperty(command.field.propertyKey),
                   let defaultValue = Self.defaultValue(for: command.field, kind: node.kind) else {
                 throw ContainerLayoutError.invalidValue
             }
-            let nextValue = command.value ?? defaultValue
-            let nextOrigin: PropertyOrigin = command.value == nil ? .defaulted : .authored
-            if property.value == nextValue.propertyValue, property.origin == nextOrigin { continue }
-            applicable.append(id)
-            mutations.append(.setProperty(.init(
-                pageID: page.id,
-                nodeID: id,
-                property: .init(id: property.id, key: property.key, value: nextValue.propertyValue, origin: nextOrigin)
-            )))
+            if command.breakpoint == .desktop {
+                guard !command.removesOverride else { throw ContainerLayoutError.invalidValue }
+                let nextValue = command.value ?? defaultValue
+                let nextOrigin: PropertyOrigin = command.value == nil ? .defaulted : .authored
+                if baseProperty.value == nextValue.propertyValue, baseProperty.origin == nextOrigin { continue }
+                applicable.append(id)
+                mutations.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                    property: .init(id: baseProperty.id, key: baseProperty.key,
+                                    value: nextValue.propertyValue, origin: nextOrigin))))
+            } else {
+                let key = ResponsiveContainerLayoutResolver.key(command.field, breakpoint: command.breakpoint)
+                if let property = node.insertionProperty(key) {
+                    if command.removesOverride {
+                        applicable.append(id)
+                        mutations.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: property.id)))
+                    } else if let value = command.value,
+                              property.value != value.propertyValue || property.origin != .authored {
+                        applicable.append(id)
+                        mutations.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                            property: .init(id: property.id, key: property.key,
+                                            value: value.propertyValue, origin: .authored))))
+                    }
+                } else if !command.removesOverride, let value = command.value {
+                    applicable.append(id)
+                    mutations.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                        property: .init(key: .init(rawValue: key), value: value.propertyValue, origin: .authored),
+                        insertionIndex: node.properties.count)))
+                }
+            }
         }
         guard !applicable.isEmpty else {
             if skipped.count == command.orderedNodeIDs.count { throw ContainerLayoutError.noApplicableTargets }
@@ -2044,7 +1923,8 @@ struct ContainerLayoutCommandRegistry: Sendable {
         }
         return .init(identity: command.identity, field: command.field,
                      applicableNodeIDs: applicable, skippedNodeIDs: skipped,
-                     documentCommand: documentCommand)
+                     documentCommand: documentCommand, breakpoint: command.breakpoint,
+                     removesOverride: command.removesOverride)
     }
 
     static func validate(_ value: ContainerLayoutValue, field: ContainerLayoutField) throws {
@@ -2057,6 +1937,218 @@ struct ContainerLayoutCommandRegistry: Sendable {
             }
         case (.axis, .axis), (.alignment, .alignment): break
         default: throw ContainerLayoutError.invalidValue
+        }
+    }
+}
+
+enum ResponsiveVisibilityProvenance: String, Sendable {
+    case pointer, keyboard, accessibility, automation
+}
+
+enum ResponsiveVisibilityInspectorValue: Equatable, Sendable {
+    case unavailable(String)
+    case single(Bool, PropertyOrigin, ResponsiveVisibilitySource, applicableCount: Int, skippedCount: Int)
+    case mixed(applicableCount: Int, skippedCount: Int)
+}
+
+struct ResponsiveVisibilityCommand: Sendable {
+    let identity: GeometryInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let breakpoint: ResponsiveBreakpoint
+    let visible: Bool?
+    let provenance: ResponsiveVisibilityProvenance
+    let cancelled: Bool
+}
+
+struct PreparedResponsiveVisibilityEdit: Sendable {
+    let applicableNodeIDs: [NodeID]
+    let skippedNodeIDs: [NodeID]
+    let documentCommand: DocumentCommand
+}
+
+enum ResponsiveVisibilityError: Error, Equatable, LocalizedError, Sendable {
+    case cancelled, staleDocument, staleRevision, staleRenderer, selectionMismatch
+    case duplicateTarget, emptySelection, pageUnavailable, missingTarget
+    case lockedTarget, unavailableTarget, noApplicableTargets, noChanges
+    case lifecycleUnavailable(String), revisionExhausted
+
+    var errorDescription: String? {
+        switch self {
+        case .cancelled: "The visibility edit was cancelled; committed visibility is unchanged."
+        case .staleDocument, .staleRevision, .staleRenderer, .selectionMismatch:
+            "The visibility edit is stale; reselect the object and try again."
+        case .duplicateTarget: "The visibility selection contains a duplicate object."
+        case .emptySelection: "Select an object to edit breakpoint visibility."
+        case .pageUnavailable, .missingTarget: "A selected object is no longer on the active page."
+        case .lockedTarget: "Unlock the selected object before changing visibility."
+        case .unavailableTarget: "The selected object is unavailable."
+        case .noApplicableTargets: "The selection has no object that supports breakpoint visibility."
+        case .noChanges: "The selected objects already use that visibility value."
+        case .lifecycleUnavailable(let reason): reason
+        case .revisionExhausted: "The document cannot accept another revision."
+        }
+    }
+}
+
+struct ResponsiveVisibilityCommandRegistry: Sendable {
+    static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-0603-%03d", $0) })
+
+    func value(
+        in document: CanonicalDocument,
+        context: TransformValidationContext,
+        breakpoint: ResponsiveBreakpoint
+    ) -> ResponsiveVisibilityInspectorValue {
+        guard let page = document.pages.first(where: { $0.id == context.activePageID }) else {
+            return .unavailable("The active page is unavailable.")
+        }
+        let selected = context.selectedNodeIDs.compactMap { id in page.nodes.first(where: { $0.id == id }) }
+        let applicable = selected.filter(ResponsiveVisibilityResolver.supports)
+        guard !applicable.isEmpty else { return .unavailable("The selection does not support breakpoint visibility.") }
+        let values = applicable.map { ResponsiveVisibilityResolver.value(for: $0, breakpoint: breakpoint) }
+        guard let first = values.first else { return .unavailable("Visibility is unavailable.") }
+        if values.dropFirst().allSatisfy({ $0.0 == first.0 && $0.1 == first.1 && $0.2 == first.2 }) {
+            return .single(first.0, first.1, first.2, applicableCount: applicable.count,
+                           skippedCount: selected.count - applicable.count)
+        }
+        return .mixed(applicableCount: applicable.count, skippedCount: selected.count - applicable.count)
+    }
+
+    func prepare(
+        _ command: ResponsiveVisibilityCommand,
+        in document: CanonicalDocument,
+        context: TransformValidationContext
+    ) throws -> PreparedResponsiveVisibilityEdit {
+        guard !command.cancelled else { throw ResponsiveVisibilityError.cancelled }
+        guard context.isLifecycleAvailable else {
+            throw ResponsiveVisibilityError.lifecycleUnavailable(context.lifecycleDisabledReason ?? "Visibility editing is unavailable.")
+        }
+        guard command.identity.documentID == document.id else { throw ResponsiveVisibilityError.staleDocument }
+        guard command.identity.revision == document.revision else { throw ResponsiveVisibilityError.staleRevision }
+        guard document.revision < UInt64.max else { throw ResponsiveVisibilityError.revisionExhausted }
+        guard command.identity.pageID == context.activePageID,
+              let page = document.pages.first(where: { $0.id == context.activePageID }) else {
+            throw ResponsiveVisibilityError.pageUnavailable
+        }
+        guard command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration else {
+            throw ResponsiveVisibilityError.staleRenderer
+        }
+        guard !command.orderedNodeIDs.isEmpty else { throw ResponsiveVisibilityError.emptySelection }
+        guard Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count else { throw ResponsiveVisibilityError.duplicateTarget }
+        guard command.orderedNodeIDs == context.selectedNodeIDs else { throw ResponsiveVisibilityError.selectionMismatch }
+        var applicable: [NodeID] = [], skipped: [NodeID] = [], mutations: [DocumentCommand] = []
+        for id in command.orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw ResponsiveVisibilityError.missingTarget }
+            guard ResponsiveVisibilityResolver.supports(node) else { skipped.append(id); continue }
+            guard !node.insertionBooleanProperty("locked") else { throw ResponsiveVisibilityError.lockedTarget }
+            guard context.availableNodeIDs.contains(id)
+                    || !ResponsiveVisibilityResolver.isVisible(node, breakpoint: command.breakpoint) else {
+                throw ResponsiveVisibilityError.unavailableTarget
+            }
+            if command.breakpoint == .desktop {
+                guard let visible = command.visible,
+                      let property = node.insertionProperty("hidden") else { throw ResponsiveVisibilityError.noChanges }
+                let next = PropertyValue.boolean(!visible)
+                guard property.value != next else { continue }
+                applicable.append(id)
+                mutations.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                    property: .init(id: property.id, key: property.key, value: next, origin: .authored))))
+            } else {
+                let key = ResponsiveVisibilityResolver.key(command.breakpoint)
+                if let property = node.insertionProperty(key) {
+                    if let visible = command.visible {
+                        guard property.value != .boolean(visible) else { continue }
+                        applicable.append(id)
+                        mutations.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                            property: .init(id: property.id, key: property.key,
+                                            value: .boolean(visible), origin: .authored))))
+                    } else {
+                        applicable.append(id)
+                        mutations.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: property.id)))
+                    }
+                } else if let visible = command.visible {
+                    applicable.append(id)
+                    mutations.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                        property: .init(key: .init(rawValue: key), value: .boolean(visible), origin: .authored),
+                        insertionIndex: node.properties.count)))
+                }
+            }
+        }
+        guard !applicable.isEmpty else {
+            if skipped.count == command.orderedNodeIDs.count { throw ResponsiveVisibilityError.noApplicableTargets }
+            throw ResponsiveVisibilityError.noChanges
+        }
+        let documentCommand = DocumentCommand.batch(mutations)
+        guard CommandRegistry().availability(for: documentCommand, in: document).isEnabled else {
+            throw ResponsiveVisibilityError.unavailableTarget
+        }
+        return .init(applicableNodeIDs: applicable, skippedNodeIDs: skipped, documentCommand: documentCommand)
+    }
+}
+
+enum ResponsiveVisibilityDiagnosticResult: String, Codable, Sendable {
+    case success, failure, cancelled, stale
+}
+
+struct ResponsiveVisibilityDiagnosticRecord: Codable, Equatable, Sendable {
+    let requirementIDs: [String]
+    let operationType: String
+    let provenance: String
+    let sanitizedIdentifiers: [String]
+    let durationMilliseconds: Double
+    let parentRevision: UInt64
+    let resultRevision: UInt64?
+    let affectedObjectCount: Int
+    let result: ResponsiveVisibilityDiagnosticResult
+    let failureCategory: String?
+}
+
+actor ResponsiveVisibilityDiagnostics {
+    private var buffer: BoundedDiagnosticBuffer<ResponsiveVisibilityDiagnosticRecord>
+
+    init(capacity: Int = DiagnosticRetentionPolicy.defaultCapacity) {
+        buffer = BoundedDiagnosticBuffer(capacity: capacity)
+    }
+
+    func append(_ record: ResponsiveVisibilityDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [ResponsiveVisibilityDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
+}
+
+enum ResponsiveVisibilityDiagnosticFactory {
+    static func make(
+        command: ResponsiveVisibilityCommand,
+        durationMilliseconds: Double,
+        resultRevision: UInt64?,
+        result: ResponsiveVisibilityDiagnosticResult,
+        failure: ResponsiveVisibilityError?
+    ) -> ResponsiveVisibilityDiagnosticRecord {
+        ResponsiveVisibilityDiagnosticRecord(
+            requirementIDs: ResponsiveVisibilityCommandRegistry.requirementIDs.sorted(),
+            operationType: command.visible == nil ? "responsive-visibility.reset" : "responsive-visibility.set",
+            provenance: command.provenance.rawValue,
+            sanitizedIdentifiers: command.orderedNodeIDs.map {
+                DiagnosticStableIdentifier.sanitize($0.description, domain: .responsiveVisibility, kind: "node")
+            },
+            durationMilliseconds: max(0, durationMilliseconds),
+            parentRevision: command.identity.revision,
+            resultRevision: resultRevision,
+            affectedObjectCount: command.orderedNodeIDs.count,
+            result: result,
+            failureCategory: failure.map(Self.failureCategory)
+        )
+    }
+
+    private static func failureCategory(_ error: ResponsiveVisibilityError) -> String {
+        switch error {
+        case .cancelled: "cancelled"
+        case .staleDocument, .staleRevision, .staleRenderer, .selectionMismatch: "stale-identity"
+        case .duplicateTarget, .emptySelection, .pageUnavailable, .missingTarget: "invalid-target"
+        case .lockedTarget, .unavailableTarget: "unavailable-target"
+        case .noApplicableTargets: "no-applicable-target"
+        case .noChanges: "no-change"
+        case .lifecycleUnavailable: "lifecycle-unavailable"
+        case .revisionExhausted: "revision-exhausted"
         }
     }
 }

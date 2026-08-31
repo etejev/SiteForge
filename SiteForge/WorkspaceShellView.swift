@@ -560,10 +560,11 @@ private struct NavigatorLayerRow: View {
                 state.selectLayer(target.id, modifier: modifier)
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: target.isLocked ? "lock.fill" : "square.dashed")
+                    Image(systemName: target.isLocked ? "lock.fill" : target.isVisible ? "square.dashed" : "eye.slash.fill")
                         .frame(width: 16)
                     Text(target.name).lineLimit(1)
                     Spacer(minLength: 4)
+                    if !target.isVisible { Text("Hidden here").font(.caption2).foregroundStyle(.secondary) }
                     if isPrimary { Text("Primary").font(.caption2).foregroundStyle(.secondary) }
                 }
                 .padding(.horizontal, 8)
@@ -580,7 +581,7 @@ private struct NavigatorLayerRow: View {
                 if direction == .up { state.performSelectionCommand(.previous, provenance: .keyboard) }
             }
             .accessibilityLabel(target.name)
-            .accessibilityValue("\(target.isLocked ? "Locked; " : "")\(isPrimary ? "Primary selection" : isSelected ? "Selected" : "Not selected")")
+            .accessibilityValue("\(target.isLocked ? "Locked; " : "")\(!target.isVisible ? "Hidden at current breakpoint; " : "")\(isPrimary ? "Primary selection" : isSelected ? "Selected" : "Not selected")")
             .accessibilityHint(dragAccessibilityHint)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .accessibilityIdentifier("navigator.layer.\(target.id.description)")
@@ -1833,6 +1834,11 @@ private struct InspectorView: View {
                 ContainerLayoutInspectorView(state: state)
                     .id("container:\(state.geometryInspectorSelectionKey)")
             }
+            if !state.selectionState.isEmpty {
+                Divider()
+                ResponsiveVisibilityInspectorView(state: state)
+                    .id("visibility:\(state.geometryInspectorSelectionKey)")
+            }
             Divider()
             guideAndSnappingDetails
         case .accessibility:
@@ -2763,10 +2769,10 @@ private struct ContainerLayoutInspectorView: View {
             HStack {
                 Text("Container Layout").font(.headline)
                 Spacer()
-                Text("Base")
+                Text(state.viewportPreset.title)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Base container layout values")
+                    .accessibilityLabel("Container layout values for \(state.viewportPreset.title)")
             }
             numericRow(.padding)
             numericRow(.gap)
@@ -2779,7 +2785,7 @@ private struct ContainerLayoutInspectorView: View {
                     .foregroundStyle(.red)
                     .accessibilityIdentifier("inspector.layout.container.validation")
             }
-            Text(state.lastContainerLayoutAnnouncement)
+            Text(state.currentContainerLayoutAnnouncement)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.layout.container.announcement")
@@ -2821,17 +2827,19 @@ private struct ContainerLayoutInspectorView: View {
                             }
                         }
                         .accessibilityLabel("Container \(field.title.lowercased())")
-                        .accessibilityValue(accessibilityValue(selection))
+                        .accessibilityValue(accessibilityValue(selection, field: field))
                         .accessibilityHint(availability.disabledReason
                             ?? "Enter a value and press Return. Escape cancels the draft.")
                         .accessibilityIdentifier("inspector.layout.container.\(field.rawValue)")
                     Button("Reset") { reset(field) }
                         .buttonStyle(.borderless)
-                        .disabled(!availability.isEnabled || !canReset(selection))
-                        .accessibilityLabel("Reset \(field.title) to default")
+                        .disabled(!availability.isEnabled || !canReset(selection, field: field))
+                        .accessibilityLabel(state.viewportPreset == .desktop
+                            ? "Reset \(field.title) to default" : "Reset \(field.title) override")
                         .accessibilityIdentifier("inspector.layout.container.\(field.rawValue).reset")
                 }
                 subsetLabel(selection)
+                sourceLabel(field)
             }
         }
     }
@@ -2853,15 +2861,16 @@ private struct ContainerLayoutInspectorView: View {
                         .pickerStyle(.segmented)
                         .disabled(!availability.isEnabled)
                         .accessibilityLabel("Stack direction")
-                        .accessibilityValue(accessibilityValue(selection))
+                        .accessibilityValue(accessibilityValue(selection, field: .axis))
                         .accessibilityIdentifier("inspector.layout.container.axis")
                         Button("Reset") { reset(.axis) }
                             .buttonStyle(.borderless)
-                            .disabled(!availability.isEnabled || !canReset(selection))
+                            .disabled(!availability.isEnabled || !canReset(selection, field: .axis))
                             .accessibilityLabel("Reset Direction to default")
                             .accessibilityIdentifier("inspector.layout.container.axis.reset")
                     }
                     subsetLabel(selection)
+                    sourceLabel(.axis)
                 }
             }
         }
@@ -2882,17 +2891,18 @@ private struct ContainerLayoutInspectorView: View {
                     }
                     .accessibilityLabel("Stack cross-axis alignment")
                     .disabled(!availability.isEnabled)
-                    .accessibilityValue(accessibilityValue(selection))
+                    .accessibilityValue(accessibilityValue(selection, field: .alignment))
                     .accessibilityIdentifier("inspector.layout.container.alignment")
                     HStack {
                         subsetLabel(selection)
                         Spacer()
                         Button("Reset") { reset(.alignment) }
                             .buttonStyle(.borderless)
-                            .disabled(!availability.isEnabled || !canReset(selection))
+                            .disabled(!availability.isEnabled || !canReset(selection, field: .alignment))
                             .accessibilityLabel("Reset Alignment to default")
                             .accessibilityIdentifier("inspector.layout.container.alignment.reset")
                     }
+                    sourceLabel(.alignment)
                 }
             }
         }
@@ -2982,7 +2992,10 @@ private struct ContainerLayoutInspectorView: View {
         return GeometryInspectorNumberParser.format(value)
     }
 
-    private func accessibilityValue(_ selection: ContainerLayoutInspectorValue) -> String {
+    private func accessibilityValue(
+        _ selection: ContainerLayoutInspectorValue,
+        field: ContainerLayoutField
+    ) -> String {
         switch selection {
         case .single(let value, let origin, let applicable, let skipped):
             let display: String = switch value {
@@ -2991,7 +3004,8 @@ private struct ContainerLayoutInspectorView: View {
             case .alignment(let alignment): alignment.rawValue
             }
             let subset = skipped == 0 ? "" : "; applies to \(applicable), skips \(skipped)"
-            return "\(display); \(origin == .authored ? "authored" : "defaulted")\(subset)"
+            let source = state.containerLayoutResponsiveSource(for: field).map { "; \($0)" } ?? ""
+            return "\(display); \(origin == .authored ? "authored" : "defaulted")\(source)\(subset)"
         case .mixed(let applicable, let skipped):
             return "Mixed values; applies to \(applicable), skips \(skipped)"
         case .unavailable(let reason): return reason
@@ -3018,12 +3032,72 @@ private struct ContainerLayoutInspectorView: View {
         return "\(provenance) · \(applicable) applicable\(skipped > 0 ? " · \(skipped) skipped" : "")"
     }
 
-    private func canReset(_ selection: ContainerLayoutInspectorValue) -> Bool {
-        switch selection {
-        case .single(_, let origin, _, _): origin == .authored
-        case .mixed: true
-        case .unavailable: false
+    @ViewBuilder
+    private func sourceLabel(_ field: ContainerLayoutField) -> some View {
+        if let source = state.containerLayoutResponsiveSource(for: field) {
+            Text(source).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
+    }
+
+    private func canReset(_ selection: ContainerLayoutInspectorValue, field: ContainerLayoutField) -> Bool {
+        if state.viewportPreset != .desktop { return state.hasContainerLayoutOverride(field) }
+        switch selection {
+        case .single(_, let origin, _, _): return origin == .authored
+        case .mixed: return true
+        case .unavailable: return false
+        }
+    }
+}
+
+private struct ResponsiveVisibilityInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Breakpoint Visibility").font(.headline)
+            switch state.responsiveVisibilityValue {
+            case .single(let visible, let origin, let source, let applicable, let skipped):
+                Toggle("Visible at \(state.viewportPreset.title)", isOn: Binding(
+                    get: { visible },
+                    set: { _ = state.commitResponsiveVisibility($0, provenance: .pointer) }
+                ))
+                .accessibilityValue("\(visible ? "Visible" : "Hidden"); \(source.label(at: state.viewportPreset.responsiveBreakpoint)); \(origin.rawValue)")
+                .accessibilityIdentifier("inspector.layout.visibility")
+                Text("\(source.label(at: state.viewportPreset.responsiveBreakpoint)) · \(origin.rawValue.capitalized) · \(applicable) applicable\(skipped > 0 ? " · \(skipped) skipped" : "")")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            case .mixed(let applicable, let skipped):
+                Text("Visible at \(state.viewportPreset.title): Mixed")
+                    .accessibilityIdentifier("inspector.layout.visibility.mixed")
+                HStack(spacing: 8) {
+                    Button("Show") {
+                        _ = state.commitResponsiveVisibility(true, provenance: .pointer)
+                    }
+                    .accessibilityLabel("Show selected objects at \(state.viewportPreset.title)")
+                    .accessibilityIdentifier("inspector.layout.visibility.show")
+                    Button("Hide") {
+                        _ = state.commitResponsiveVisibility(false, provenance: .pointer)
+                    }
+                    .accessibilityLabel("Hide selected objects at \(state.viewportPreset.title)")
+                    .accessibilityIdentifier("inspector.layout.visibility.hide")
+                }
+                Text("\(applicable) applicable\(skipped > 0 ? " · \(skipped) skipped" : "")")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            case .unavailable(let reason):
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+            if state.viewportPreset != .desktop {
+                Button("Reset Visibility Override") {
+                    _ = state.commitResponsiveVisibility(nil, provenance: .pointer)
+                }
+                .disabled(!state.hasVisibilityOverrideAtCurrentBreakpoint)
+                .accessibilityIdentifier("inspector.layout.visibility.reset")
+            }
+            Text(state.currentResponsiveVisibilityAnnouncement)
+                .font(.caption2).foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.layout.visibility.announcement")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inspector.layout.visibility.section")
     }
 }
 

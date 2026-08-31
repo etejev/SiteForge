@@ -82,12 +82,20 @@ direction, uniform padding and gap, and start/center/end/stretch cross-axis
 alignment; Grid exposes uniform padding and gap plus bounded row-major column
 count. Draft strings are editor-only; Return and focus loss submit one
 identity-gated canonical transaction, while Escape preserves the displayed
-committed value. Reset removes responsive geometry overrides or restores a
-container's canonical v1 default without writing a visually equivalent
-authored value. Mixed and partially applicable selections identify the exact
-affected subset. Sizing modes, constraints, aspect ratio, automatic sizing,
-responsive container-layout overrides, advanced Stack/Grid behavior, and broad
-property editing remain unavailable. Accessibility is a read-only selection
+committed value. Reset removes responsive geometry/container/visibility
+overrides or restores a container's canonical v1 default without writing a
+visually equivalent authored value. At Tablet and Mobile, Section padding;
+Stack direction, gap, padding, and alignment; and Grid columns, gap, and
+padding name their inherited or authored breakpoint source. Applicable
+authored objects expose a native Visible at Current Breakpoint control. Hidden
+objects do not paint or expose canvas chrome, hit targets, inline editors, or
+canvas accessibility objects; Layers keeps their stable identity with an
+icon-plus-text `Hidden here` state and a route to show or reset the object.
+Hidden children do not occupy a Stack/Grid layout slot, while a hidden
+container suppresses its subtree without deleting or rewriting descendants.
+Mixed and partially applicable selections identify the exact affected subset.
+Sizing modes, constraints, aspect ratio, automatic sizing, advanced Stack/Grid
+behavior, and broad property editing remain unavailable. Accessibility is a read-only selection
 summary. Content and
 Interactions are intentionally
 selectable native unavailable surfaces: each states why it cannot operate and
@@ -183,6 +191,11 @@ fields, interaction controls, command, history, package, or canonical mutation.
   literal. Switching presets changes only the scene-local authoring context and
   immutable resolved geometry; it never serializes the selected preset, moves
   another breakpoint, or fabricates responsive reflow.
+- The same Desktop-base cascade resolves responsive container layout and
+  visibility. Tablet/Mobile Reset removes only the active-breakpoint override.
+  A hidden canvas object remains discoverable through an explicit Layers state
+  but produces no authored pixels, ghost selection chrome, hit target, inline
+  editor, or canvas accessibility object at that breakpoint.
 - At explicitly constrained Debug/UI-test geometry, tests may expose safe
   screen edges while retaining the production metrics as the Release contract.
 

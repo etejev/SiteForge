@@ -11,6 +11,17 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Added responsive structural layout and breakpoint visibility. Tablet and
+  Mobile can now override/reset Section padding; Stack direction, gap, padding,
+  and alignment; and Grid columns, gap, and padding through the existing
+  Layout Inspector and Desktop-base cascade. Frame, Text, Section, Stack, and
+  Grid objects can be shown or hidden per breakpoint. Hidden objects leave no
+  canvas pixels, hit target, inline editor, accessibility object, or selection
+  ghost, while Layers preserves stable identity with an explicit `Hidden here`
+  state and a route to restore/reset visibility. Transactions, Undo/Redo,
+  package reopen, recovery, shared layout, and redacted diagnostics use the
+  same canonical breakpoint properties.
+
 - Added native structural layout controls: Section padding; Stack
   direction, padding, gap, and cross-axis alignment; and Grid columns, padding,
   and gap now route through one identity-gated transaction registry and shared

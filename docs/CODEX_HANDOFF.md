@@ -2,6 +2,20 @@
 
 ## Current checkpoint
 
+`SF-AUTHORING-018` is **VERIFIED AND DONE**. The current tree extends the
+existing breakpoint cascade rather than adding a parallel responsive system:
+Tablet/Mobile overrides cover Section padding, Stack direction/gap/padding/
+alignment, Grid columns/gap/padding, and visibility for Frame, Text, Section,
+Stack, and Grid. Hidden descendants retain canonical identity/data but do not
+participate in layout, authored rendering, hit testing, inline editing, canvas
+accessibility, or selection chrome; Layers remains the explicit inspection and
+recovery route. Seven focused non-UI selectors and the fresh-process responsive
+journey are green, and seven original-resolution maximized-window states passed
+visual review. Final `./sf verify` passed 377 unit/integration plus 48 UI tests
+(425 total), zero failures, with every repository gate green. No subsequent
+feature item is READY; do not create another responsive/property cascade or
+invent an unspecified feature.
+
 `SF-AUTHORING-017` is **VERIFIED AND DONE**. The current tree retains existing
 schema-v4 layout properties as the only canonical source and implements one
 identity-gated container-layout registry, native Layout Inspector controls,

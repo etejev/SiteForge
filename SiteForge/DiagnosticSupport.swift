@@ -81,6 +81,7 @@ enum DiagnosticIdentifierDomain: String, Sendable {
     case lifecycleOperation = "lifecycle-operation"
     case lifecycleProject = "lifecycle-project"
     case projectPackage = "project-package"
+    case responsiveVisibility = "responsive-visibility"
     case selection = "selection"
     case snapping = "snapping"
     case textEditing = "text-editing"

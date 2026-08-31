@@ -12,6 +12,34 @@ None.
 
 ## DONE
 
+- [x] `SF-AUTHORING-018` Add responsive container layout and breakpoint
+  visibility.
+  - Requirements: bounded continuation of `SF-0601-001` through
+    `SF-0601-008`, `SF-0602-001` through `SF-0602-008`, and `SF-0603-001`
+    through `SF-0603-008`, with supporting `SF-0502`/`SF-0503` evidence; the
+    normative responsive modules remain Partial outside this slice.
+  - Result: the existing stable Desktop/Tablet/Mobile cascade now authors and
+    resets breakpoint-specific Section padding, Stack direction/gap/padding/
+    alignment, Grid columns/gap/padding, and visibility for Frame, Text,
+    Section, Stack, and Grid. One identity-gated transaction path preserves
+    exact inverses and one resolved scene feeds layout, renderer, selection,
+    hit testing, inline editing, Layers, and accessibility. Hidden subtrees do
+    not participate in authored canvas behavior, while Layers retains stable
+    identity and an explicit inspect/restore route.
+  - Evidence: seven focused non-UI selectors and the fresh-process responsive
+    journey passed; the practical-minimum Inspector remains covered by the
+    existing structural journey. Final `./sf verify` passed 377 unit/
+    integration plus 48 UI tests (425 total), zero failures, with repository,
+    security, traceability, architecture, migration, and evidence checks green
+    on 2026-08-28. Seven original-resolution maximized-window states passed
+    visual review; see
+    `docs/evidence/SF-AUTHORING-018-RESPONSIVE-LAYOUT-VISIBILITY.md`.
+  - Explicit exclusions: custom or overlapping breakpoint management,
+    responsive fills/box styles/typography/content/assets/components,
+    comparison panes, orientation/safe-area simulation, container queries,
+    fluid typography, alternate source sets, preview/export parity,
+    cross-hardware/OS accessibility matrices, and release acceptance.
+
 - [x] `SF-AUTHORING-017` Implement production Section, Stack, and Grid layout
   controls.
   - Requirements: bounded production evidence for `SF-0502-001` through
