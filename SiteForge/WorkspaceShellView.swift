@@ -2815,6 +2815,12 @@ private struct ContainerLayoutInspectorView: View {
                     TextField(field.title, text: numericBinding(field, selection: selection))
                         .textFieldStyle(.roundedBorder)
                         .monospacedDigit()
+                        // Keep the intrinsic-width Reset action inside the
+                        // practical Inspector width. An unconstrained native
+                        // text field otherwise consumes the logical trailing
+                        // width when a 1100-point window is clipped by a
+                        // narrower display, pushing Reset offscreen.
+                        .frame(minWidth: 64, maxWidth: 120)
                         .focused($focusedField, equals: field)
                         .disabled(!availability.isEnabled)
                         .onSubmit { commitNumeric(field, provenance: .keyboard) }
@@ -2833,6 +2839,7 @@ private struct ContainerLayoutInspectorView: View {
                         .accessibilityIdentifier("inspector.layout.container.\(field.rawValue)")
                     Button("Reset") { reset(field) }
                         .buttonStyle(.borderless)
+                        .fixedSize()
                         .disabled(!availability.isEnabled || !canReset(selection, field: field))
                         .accessibilityLabel(state.viewportPreset == .desktop
                             ? "Reset \(field.title) to default" : "Reset \(field.title) override")
@@ -2865,6 +2872,7 @@ private struct ContainerLayoutInspectorView: View {
                         .accessibilityIdentifier("inspector.layout.container.axis")
                         Button("Reset") { reset(.axis) }
                             .buttonStyle(.borderless)
+                            .fixedSize()
                             .disabled(!availability.isEnabled || !canReset(selection, field: .axis))
                             .accessibilityLabel("Reset Direction to default")
                             .accessibilityIdentifier("inspector.layout.container.axis.reset")
@@ -2898,6 +2906,7 @@ private struct ContainerLayoutInspectorView: View {
                         Spacer()
                         Button("Reset") { reset(.alignment) }
                             .buttonStyle(.borderless)
+                            .fixedSize()
                             .disabled(!availability.isEnabled || !canReset(selection, field: .alignment))
                             .accessibilityLabel("Reset Alignment to default")
                             .accessibilityIdentifier("inspector.layout.container.alignment.reset")
