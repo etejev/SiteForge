@@ -3558,11 +3558,22 @@ final class WorkspaceShellState: ObservableObject {
         let page = pages.first(where: { $0.id == effectiveSelectedPageID })
         // Structural page roots intentionally do not produce render objects,
         // but they remain valid canonical insertion destinations for an empty
-        // page. All other parent availability continues to come from the
-        // currently adopted renderer/selection scene.
-        let available = selectionScene.map {
-            Set($0.targets.filter(\.isAvailable).map(\.id))
+        // page. A newly inserted canonical container can also become the
+        // selected insertion parent one publication before the selection
+        // scene adopts its render target. Eligibility therefore comes from
+        // the active page's responsive visibility for that exact parent,
+        // while every other target continues to use the adopted scene. This
+        // keeps menu validation deterministic without making hidden
+        // containers or stale nodes available.
+        let available = selectionScene.map { scene in
+            var result = Set(scene.targets.filter(\.isAvailable).map(\.id))
                 .union(page?.rootNodeIDs ?? [])
+            if let page,
+               let parentID = insertionParentID,
+               page.effectiveVisibleNodeIDs(breakpoint: viewportPreset.responsiveBreakpoint).contains(parentID) {
+                result.insert(parentID)
+            }
+            return result
         }
         let lifecycleAvailable: Bool
         let reason: String?

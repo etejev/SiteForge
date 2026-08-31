@@ -462,6 +462,42 @@ final class InsertionModelTests: XCTestCase {
         )
     }
 
+    // SF-0405-002, SF-0502-004 — insertion-menu availability follows the
+    // live canonical selected parent even while its newly committed render
+    // target is crossing the immutable scene-adoption boundary.
+    func testNestedInsertionParentRemainsAvailableAcrossRendererAdoption() async throws {
+        let state = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank()))
+        state.resizeViewport(to: .init(width: 900, height: 600), pixelRatio: 2)
+        for _ in 0..<200 where state.canvasRenderPlan == nil { await Task.yield() }
+
+        state.performDefaultInsertion(.section, provenance: .accessibility)
+        for _ in 0..<200 where state.canvasRenderPlan?.authoredObjects.count != 1 { await Task.yield() }
+        let sectionID = try XCTUnwrap(state.selectionState.primaryID)
+        XCTAssertEqual(state.documentSession.document.pages[0].nodes.first { $0.id == sectionID }?.kind, .section)
+
+        state.performDefaultInsertion(.stack, provenance: .accessibility)
+        // Command state is queried synchronously by the native Insert menu.
+        // It must already accept the canonical selected Stack; waiting for a
+        // later selection-scene publication would make a visible command
+        // transiently and incorrectly disabled.
+        let stackID = try XCTUnwrap(
+            state.documentSession.document.pages[0].nodes.first(where: { $0.kind == .stack })?.id
+        )
+        state.selectLayer(stackID)
+        for _ in 0..<200 where state.selectionState.primaryID != stackID { await Task.yield() }
+        XCTAssertEqual(state.selectionState.primaryID, stackID)
+        XCTAssertEqual(state.documentSession.document.pages[0].nodes.first { $0.id == stackID }?.kind, .stack)
+        XCTAssertTrue(state.insertionAvailability(.frame).isEnabled)
+
+        state.performDefaultInsertion(.frame, provenance: .menu)
+        for _ in 0..<200 where state.canvasRenderPlan?.authoredObjects.count != 3 { await Task.yield() }
+        let frameID = try XCTUnwrap(state.selectionState.primaryID)
+        let page = state.documentSession.document.pages[0]
+        XCTAssertEqual(page.nodes.first { $0.id == frameID }?.parent, .node(stackID))
+        XCTAssertEqual(page.nodes.first { $0.id == stackID }?.childIDs, [frameID])
+        XCTAssertEqual(state.canvasRenderPlan?.identity.revision, state.documentSession.document.revision)
+    }
+
     // SF-0405-004, SF-0405-007
     func testCommittedNodesIntegrateWithLayoutRendererHitTestingAndBoundedInvalidation() throws {
         let fixture = makeFixture()

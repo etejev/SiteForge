@@ -2191,8 +2191,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.buttons["toolbar.redo"].isEnabled)
         application.typeKey("z", modifierFlags: [.command, .shift])
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "3", timeout: 3))
-        let reset = application.buttons["inspector.layout.container.columns.reset"]
-        revealStructuralLayoutControl(reset, in: application)
+        let reset = revealStructuralLayoutControl(
+            application.buttons["inspector.layout.container.columns.reset"],
+            in: application
+        )
         XCTAssertTrue(reset.isEnabled); reset.click()
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "2", timeout: 3))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid reset default")
@@ -3015,15 +3017,26 @@ final class SiteForgeLaunchTests: XCTestCase {
         ))
     }
 
+    @discardableResult
     private func revealStructuralLayoutControl(
         _ element: XCUIElement,
         in application: XCUIApplication
-    ) {
+    ) -> XCUIElement {
+        let identifier = element.identifier
         let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
-        for _ in 0..<6 where !element.isHittable {
-            scroll.scroll(byDeltaX: 0, deltaY: -240)
+        var liveElement = application.descendants(matching: .any)[identifier].firstMatch
+        for _ in 0..<10 where !liveElement.isHittable {
+            let targetFrame = liveElement.frame
+            let viewportFrame = scroll.frame
+            let deltaY: CGFloat = targetFrame.minY < viewportFrame.minY + 8 ? 180 : -180
+            scroll.scroll(byDeltaX: 0, deltaY: deltaY)
+            // Undo/redo and reset can replace the SwiftUI control host. A
+            // fresh AX query observes the live shipping control rather than
+            // retaining an obsolete proxy from the previous Inspector tree.
+            liveElement = application.descendants(matching: .any)[identifier].firstMatch
         }
-        XCTAssertTrue(element.isHittable, "Inspector control \(element.identifier) must remain reachable")
+        XCTAssertTrue(liveElement.isHittable, "Inspector control \(identifier) must remain reachable")
+        return liveElement
     }
 
     private func replaceStructuralLayoutField(
@@ -3031,11 +3044,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         with text: String,
         in application: XCUIApplication
     ) {
-        revealStructuralLayoutControl(field, in: application)
-        field.doubleClick()
-        field.typeKey("a", modifierFlags: .command)
-        field.typeText(text)
-        field.typeKey(.return, modifierFlags: [])
+        let liveField = revealStructuralLayoutControl(field, in: application)
+        liveField.doubleClick()
+        liveField.typeKey("a", modifierFlags: .command)
+        liveField.typeText(text)
+        liveField.typeKey(.return, modifierFlags: [])
     }
 
     /// Save transitions can replace the status view's AX proxy. Query the live
