@@ -129,7 +129,9 @@ enum ResponsiveContainerLayoutResolver {
     }
     private static func parse(_ value: PropertyValue, field: ContainerLayoutField) -> ContainerLayoutValue? {
         switch (field, value) {
-        case (.padding, .number(let number)), (.gap, .number(let number))
+        case (.padding, .number(let number))
+            where number.isFinite && (0...10_000).contains(number): return .number(number)
+        case (.gap, .number(let number))
             where number.isFinite && (0...10_000).contains(number): return .number(number)
         case (.columns, .number(let number))
             where number.isFinite && number.rounded(.towardZero) == number && (1...64).contains(number): return .number(number)

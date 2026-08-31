@@ -2117,42 +2117,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0", timeout: 5))
 
-        @MainActor func selectLayer(_ name: String) {
-            application.buttons["navigator.tab.layers"].click()
-            let row = application.descendants(matching: .any).matching(NSPredicate(
-                format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", name
-            )).firstMatch
-            XCTAssertTrue(row.waitForExistence(timeout: 3), "Missing \(name) Layers row")
-            row.click()
-        }
-        @MainActor func insertFrame(expectedCount: Int) {
-            application.menuBars.menuBarItems["Insert"].click()
-            let insert = application.menuItems["Insert Frame at Center"]
-            XCTAssertTrue(insert.waitForExistence(timeout: 2)); insert.click()
-            XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects \(expectedCount)", timeout: 5))
-        }
-        @MainActor func reveal(_ element: XCUIElement) {
-            let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
-            for _ in 0..<6 where !element.isHittable { scroll.scroll(byDeltaX: 0, deltaY: -240) }
-            XCTAssertTrue(element.isHittable, "Inspector control \(element.identifier) must remain reachable")
-        }
-        @MainActor func replace(_ field: XCUIElement, with text: String) {
-            reveal(field)
-            field.doubleClick(); field.typeKey("a", modifierFlags: .command)
-            field.typeText(text); field.typeKey(.return, modifierFlags: [])
-        }
-
         application.buttons["navigator.tab.elements"].click()
         application.buttons["navigator.elements.section"].click()
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
-        insertFrame(expectedCount: 2)
-        selectLayer("Section")
+        insertStructuralFrame(in: application, expectedCount: 2)
+        selectStructuralLayer("Section", in: application)
         application.buttons["inspector.tab.layout"].click()
         let padding = application.textFields["inspector.layout.container.padding"]
         XCTAssertTrue(padding.waitForExistence(timeout: 3))
         XCTAssertTrue((padding.value as? String)?.contains("48") == true)
         let sectionChildBefore = canvasObject(named: "Frame", in: application).frame
-        replace(padding, with: "72")
+        replaceStructuralLayoutField(padding, with: "72", in: application)
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Padding committed", timeout: 3))
         let sectionChildAfter = canvasObject(named: "Frame", in: application).frame
         XCTAssertGreaterThan(sectionChildAfter.minX, sectionChildBefore.minX)
@@ -2165,45 +2140,48 @@ final class SiteForgeLaunchTests: XCTestCase {
         padding.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.padding"], containing: "72"))
 
-        selectLayer("Section")
+        selectStructuralLayer("Section", in: application)
         application.buttons["navigator.tab.elements"].click()
         application.buttons["navigator.elements.stack"].click()
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
-        insertFrame(expectedCount: 4)
-        selectLayer("Stack"); insertFrame(expectedCount: 5)
-        selectLayer("Stack")
+        insertStructuralFrame(in: application, expectedCount: 4)
+        selectStructuralLayer("Stack", in: application)
+        insertStructuralFrame(in: application, expectedCount: 5)
+        selectStructuralLayer("Stack", in: application)
         application.buttons["inspector.tab.layout"].click()
         let axis = application.descendants(matching: .any)["inspector.layout.container.axis"]
-        reveal(axis)
+        revealStructuralLayoutControl(axis, in: application)
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack vertical default")
         let horizontal = axis.radioButtons["Horizontal"]
         XCTAssertTrue(horizontal.waitForExistence(timeout: 3)); horizontal.click()
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Direction committed", timeout: 3))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack horizontal")
         let gap = application.textFields["inspector.layout.container.gap"]
-        replace(gap, with: "36")
+        replaceStructuralLayoutField(gap, with: "36", in: application)
         let alignment = application.descendants(matching: .any)["inspector.layout.container.alignment"]
-        reveal(alignment)
+        revealStructuralLayoutControl(alignment, in: application)
         XCTAssertTrue(alignment.waitForExistence(timeout: 3)); alignment.click()
         let center = alignment.menuItems["Center"]
         XCTAssertTrue(center.waitForExistence(timeout: 3)); center.click()
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Alignment committed", timeout: 3))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack gap alignment")
 
-        selectLayer("Section")
+        selectStructuralLayer("Section", in: application)
         application.buttons["navigator.tab.elements"].click()
         application.buttons["navigator.elements.grid"].click()
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 6", timeout: 5))
-        insertFrame(expectedCount: 7)
-        selectLayer("Grid"); insertFrame(expectedCount: 8)
-        selectLayer("Grid"); insertFrame(expectedCount: 9)
-        selectLayer("Grid")
+        insertStructuralFrame(in: application, expectedCount: 7)
+        selectStructuralLayer("Grid", in: application)
+        insertStructuralFrame(in: application, expectedCount: 8)
+        selectStructuralLayer("Grid", in: application)
+        insertStructuralFrame(in: application, expectedCount: 9)
+        selectStructuralLayer("Grid", in: application)
         application.buttons["inspector.tab.layout"].click()
         let columns = application.textFields["inspector.layout.container.columns"]
         XCTAssertTrue(columns.waitForExistence(timeout: 3))
-        reveal(columns)
+        revealStructuralLayoutControl(columns, in: application)
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid two columns sparse row")
-        replace(columns, with: "3")
+        replaceStructuralLayoutField(columns, with: "3", in: application)
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Columns committed", timeout: 3))
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 9", timeout: 5))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid three columns")
@@ -2214,7 +2192,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey("z", modifierFlags: [.command, .shift])
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "3", timeout: 3))
         let reset = application.buttons["inspector.layout.container.columns.reset"]
-        reveal(reset); XCTAssertTrue(reset.isEnabled); reset.click()
+        revealStructuralLayoutControl(reset, in: application)
+        XCTAssertTrue(reset.isEnabled); reset.click()
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "2", timeout: 3))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid reset default")
 
@@ -2227,14 +2206,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         let reopenRecoveryDirectory = fixtureRoot.appendingPathComponent("structural-layout-reopen-recovery", isDirectory: true)
         application = launchExistingIntegrationProject(project, recoveryDirectory: reopenRecoveryDirectory)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 9", timeout: 5))
-        selectLayer("Section")
+        selectStructuralLayer("Section", in: application)
         application.buttons["inspector.tab.layout"].click()
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.padding"], containing: "72"))
-        selectLayer("Stack")
+        selectStructuralLayer("Stack", in: application)
         application.buttons["inspector.tab.layout"].click()
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.axis"], containing: "horizontal"))
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.gap"], containing: "36"))
-        selectLayer("Grid")
+        selectStructuralLayer("Grid", in: application)
         application.buttons["inspector.tab.layout"].click()
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "2"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 save reopen")
@@ -3009,6 +2988,54 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     private func liveCanvas(in application: XCUIApplication) -> XCUIElement {
         application.descendants(matching: .any)["canvas.interaction"].firstMatch
+    }
+
+    /// Keep structural-layout journey helpers as actor-isolated instance
+    /// methods. Nested local functions capture the XCTestCase across an
+    /// isolation boundary under Swift 6's x86_64 hosted compiler, even when
+    /// both declarations spell `@MainActor`.
+    private func selectStructuralLayer(_ name: String, in application: XCUIApplication) {
+        application.buttons["navigator.tab.layers"].click()
+        let row = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", name
+        )).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 3), "Missing \(name) Layers row")
+        row.click()
+    }
+
+    private func insertStructuralFrame(in application: XCUIApplication, expectedCount: Int) {
+        application.menuBars.menuBarItems["Insert"].click()
+        let insert = application.menuItems["Insert Frame at Center"]
+        XCTAssertTrue(insert.waitForExistence(timeout: 2))
+        insert.click()
+        XCTAssertTrue(waitForLiveCanvasValue(
+            in: application,
+            containing: "rendered objects \(expectedCount)",
+            timeout: 5
+        ))
+    }
+
+    private func revealStructuralLayoutControl(
+        _ element: XCUIElement,
+        in application: XCUIApplication
+    ) {
+        let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
+        for _ in 0..<6 where !element.isHittable {
+            scroll.scroll(byDeltaX: 0, deltaY: -240)
+        }
+        XCTAssertTrue(element.isHittable, "Inspector control \(element.identifier) must remain reachable")
+    }
+
+    private func replaceStructuralLayoutField(
+        _ field: XCUIElement,
+        with text: String,
+        in application: XCUIApplication
+    ) {
+        revealStructuralLayoutControl(field, in: application)
+        field.doubleClick()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(text)
+        field.typeKey(.return, modifierFlags: [])
     }
 
     /// Save transitions can replace the status view's AX proxy. Query the live
