@@ -82,6 +82,16 @@ left-edge test placement only below the product minimum. Final local
 `./sf verify` again passed 391 unit/integration plus 49 UI tests (440 total).
 Hosted confirmation for the replacement commit remains required.
 
+Replacement Actions `33927510205` passed all 391 non-UI tests and reduced the
+UI failures to two system-control differences. On the hosted macOS build, a
+full file path could complete the native open-panel import before the retired
+Import button proxy became enabled. The journey now requires either the real
+asset row or a freshly queried enabled Import action. The structural layout
+journey now selects Center through the live native popup's standard keyboard
+path when its transient menu item is absent from AX. The two affected journeys
+passed together locally (2/2); the prior 440-test `./sf verify` remains the
+authoritative full local gate because no production code changed.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

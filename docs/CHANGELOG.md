@@ -9,6 +9,9 @@ This file records user-visible behavior during development. It is not a substitu
   autosave. On displays narrower than the supported 1100-point minimum, UI
   journeys that operate leading controls explicitly use the existing left-edge
   test placement; normal-width automation and production policy are unchanged.
+  A second hosted pass also made native image import tolerant of the system
+  open panel completing a full-path choice immediately, and drives structural
+  alignment through the live popup's standard keyboard-selection path.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,

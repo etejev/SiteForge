@@ -1198,13 +1198,30 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(pathField.waitForExistence(timeout: 3))
         pathField.typeText(imageURL.path)
         application.typeKey(.return, modifierFlags: [])
-        let nativeImport = application.buttons["OKButton"]
-        XCTAssertTrue(waitForEnabled(nativeImport))
-        nativeImport.click()
-
         let assetRow = application.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@", "assets.row.", "siteforge-image"
         )).firstMatch
+        let importCompletedOrAwaitsConfirmation = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { [weak application] _, _ in
+                    guard let application else { return false }
+                    if assetRow.exists { return true }
+                    let liveImport = application.buttons["OKButton"]
+                    return liveImport.exists && liveImport.isEnabled
+                },
+                object: application
+            )],
+            timeout: 8
+        ) == .completed
+        XCTAssertTrue(
+            importCompletedOrAwaitsConfirmation,
+            "The native panel must either import the chosen file or expose an enabled Import action"
+        )
+        if !assetRow.exists {
+            let liveImport = application.buttons["OKButton"]
+            XCTAssertTrue(liveImport.exists && liveImport.isEnabled)
+            liveImport.click()
+        }
         XCTAssertTrue(assetRow.waitForExistence(timeout: 8))
         XCTAssertTrue((assetRow.value as? String)?.contains("siteforge-image.png, 320 by 180 pixels") == true)
         assetRow.click()
@@ -2314,11 +2331,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack horizontal")
         let gap = application.textFields["inspector.layout.container.gap"]
         replaceStructuralLayoutField(gap, with: "36", in: application)
-        let alignment = application.descendants(matching: .any)["inspector.layout.container.alignment"]
-        revealStructuralLayoutControl(alignment, in: application)
+        let alignment = revealStructuralLayoutControl(
+            application.descendants(matching: .any)["inspector.layout.container.alignment"],
+            in: application
+        )
         XCTAssertTrue(alignment.waitForExistence(timeout: 3)); alignment.click()
-        let center = alignment.menuItems["Center"]
-        XCTAssertTrue(center.waitForExistence(timeout: 3)); center.click()
+        application.typeKey("c", modifierFlags: [])
+        application.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Alignment committed", timeout: 3))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack gap alignment")
 

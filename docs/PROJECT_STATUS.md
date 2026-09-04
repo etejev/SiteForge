@@ -21,7 +21,9 @@ Partial for the explicit deferred scope. Actions `33922908106` passed all 391
 non-UI tests but exposed a live autosave/Save-menu race and four leading-control
 journeys outside a 1024-point runner after the 1100-point minimum window was
 right-aligned. The bounded correction passed final local `./sf verify`
-(440/440); hosted confirmation remains.
+(440/440). Replacement Actions `33927510205` narrowed the remaining failures
+to native open-panel and popup-menu AX publication differences; both corrected
+journeys now pass together locally (2/2), and hosted confirmation remains.
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and

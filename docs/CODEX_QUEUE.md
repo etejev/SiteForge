@@ -16,12 +16,20 @@ None.
     failed five UI journeys. One failure was an autosave race that made Save
     correctly disabled after the document became Saved. Four journeys targeted
     leading controls while the unchanged 1100-point window was right-aligned
-    on the 1024-point runner.
+    on the 1024-point runner. Replacement Actions `33927510205` reduced the
+    failure set to two native-control publication differences: the open panel
+    could complete a full-path import before exposing a live Import button, and
+    a transient popup menu item was not present in the hosted AX tree.
   - Correction: Save now resolves either live autosave completion or a live
     enabled Save command before preserving the same reopen proof. Leading-
     control journeys opt into the existing left-edge test placement only when
-    the display is narrower than the product minimum. Final local `./sf verify`
-    passed 391 unit/integration plus 49 UI tests (440 total).
+    the display is narrower than the product minimum. Image import now accepts
+    only either an imported asset row or a freshly enabled native Import action;
+    structural alignment uses the live native popup's keyboard selection path.
+    The two replacement-run failures pass together (2/2). Final local
+    `./sf verify` remains the authoritative 391 unit/integration plus 49 UI
+    tests (440 total) from the preceding correction; unchanged broad coverage
+    was not repeated.
   - Remaining gate: require a green replacement hosted run before returning
     this item to DONE or continuing SF-AUTHORING-020 source work.
 
