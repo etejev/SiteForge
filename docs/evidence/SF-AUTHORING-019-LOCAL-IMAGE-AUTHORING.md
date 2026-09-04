@@ -71,6 +71,17 @@ tests (440 total), zero failures, on 2026-09-04. Repository security,
 traceability, architecture, migration, evidence, and fixture-hygiene checks
 also passed.
 
+Actions `33922908106` subsequently passed all 391 non-UI tests and exposed five
+UI-only assumptions. The typography persistence journey observed Save after
+autosave had already made it unnecessary. Four other journeys targeted leading
+navigator or Assets controls while the unchanged 1100-point product window was
+aligned to the trailing edge of a 1024-point runner. The correction re-queries
+live Save/status elements and accepts only the truthful states: already Saved,
+or Modified with Save enabled. Leading-control journeys use the established
+left-edge test placement only below the product minimum. Final local
+`./sf verify` again passed 391 unit/integration plus 49 UI tests (440 total).
+Hosted confirmation for the replacement commit remains required.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

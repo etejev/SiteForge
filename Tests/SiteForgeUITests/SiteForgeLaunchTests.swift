@@ -46,6 +46,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         }
     }
 
+    /// The product deliberately preserves its 1100-point minimum on a
+    /// narrower display. Journeys whose pointer contract is entirely in the
+    /// navigator opt into the existing leading-edge constrained placement on
+    /// those displays; ordinary displays continue to exercise the normal
+    /// maximized window policy.
+    private var leadingEdgeAlignmentOnNarrowDisplay: TestWindowAlignment? {
+        guard let visibleWidth = NSScreen.main?.visibleFrame.width,
+              visibleWidth < 1_100 else { return nil }
+        return .left
+    }
+
     // SF-0201-002, SF-0201-008 — the UI harness recognizes every canonical
     // native-window readiness path and rejects merely similar phase names.
     func testLaunchLifecycleReadinessVocabularyIsExact() {
@@ -1163,9 +1174,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         let imageURL = try makeLocalImageFixture(named: "siteforge-image.png")
         let fixture = legacyFixtureURL(named: "schema-v4-legacy-surface")
         let project = fixtureRoot.appendingPathComponent("local-image-authoring.siteforge")
-        var application = launchIntegrationOpen(project, base64Fixture: fixture)
+        var application = launchIntegrationOpen(
+            project,
+            base64Fixture: fixture,
+            windowAlignment: leadingEdgeAlignmentOnNarrowDisplay
+        )
         XCTAssertTrue(waitForWorkspaceReady(application))
-        assertNormalWindowPolicy(in: application)
+        assertNormalWindowPolicy(
+            in: application,
+            permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay:
+                leadingEdgeAlignmentOnNarrowDisplay != nil
+        )
 
         application.buttons["navigator.tab.assets"].click()
         let empty = application.descendants(matching: .any)["assets.empty"]
@@ -1227,7 +1246,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         terminateAndWait(application)
 
         let reopenRecovery = fixtureRoot.appendingPathComponent("image-reopen-recovery", isDirectory: true)
-        application = launchExistingIntegrationProject(project, recoveryDirectory: reopenRecovery)
+        application = launchExistingIntegrationProject(
+            project,
+            recoveryDirectory: reopenRecovery,
+            windowAlignment: leadingEdgeAlignmentOnNarrowDisplay
+        )
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 8))
         application.buttons["navigator.tab.layers"].click()
         let imageLayer = application.descendants(matching: .any).matching(NSPredicate(
@@ -1434,6 +1457,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     private func launchScenario(
         _ scenario: String,
         reduceMotion: Bool = false,
+        windowAlignment: TestWindowAlignment? = nil,
         extraArguments: [String] = []
     ) -> XCUIApplication {
         continueAfterFailure = false
@@ -1443,6 +1467,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         ]
         if reduceMotion {
             application.launchArguments += ["-SiteForgeReduceMotion", "YES"]
+        }
+        if let windowAlignment {
+            application.launchArguments += ["-SiteForgeUITestWindowAlignment", windowAlignment.rawValue]
         }
         application.launchArguments += extraArguments
         recordLaunchState("before-launch", application)
@@ -1823,7 +1850,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         _ url: URL,
         base64Fixture: URL,
         startMalformed: Bool = false,
-        retryBase64Fixture: URL? = nil
+        retryBase64Fixture: URL? = nil,
+        windowAlignment: TestWindowAlignment? = nil
     ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
@@ -1834,6 +1862,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         if startMalformed { application.launchArguments.append("-SiteForgeIntegrationStartMalformed") }
         if let retryBase64Fixture {
             application.launchArguments += ["-SiteForgeIntegrationRetryBase64", retryBase64Fixture.path]
+        }
+        if let windowAlignment {
+            application.launchArguments += ["-SiteForgeUITestWindowAlignment", windowAlignment.rawValue]
         }
         recordLaunchState("before-launch", application)
         application.launch()
@@ -1849,13 +1880,17 @@ final class SiteForgeLaunchTests: XCTestCase {
     /// from the preceding app lifetime cannot be replaced by a test fixture.
     private func launchExistingIntegrationProject(
         _ url: URL,
-        recoveryDirectory: URL? = nil
+        recoveryDirectory: URL? = nil,
+        windowAlignment: TestWindowAlignment? = nil
     ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
         application.launchArguments += baseLaunchArguments(recoveryDirectory: recoveryDirectory) + [
             "-SiteForgeIntegrationOpenProject", url.path,
         ]
+        if let windowAlignment {
+            application.launchArguments += ["-SiteForgeUITestWindowAlignment", windowAlignment.rawValue]
+        }
         recordLaunchState("before-reopen", application)
         application.launch()
         recordLaunchState("after-reopen", application)
@@ -2049,7 +2084,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     // SF-0201-002, SF-0201-006, SF-0201-008
     @MainActor
     func testProductNavigatorProvidesTruthfulElementsAssetsAndComponentsDestinations() throws {
-        let application = launchWorkspace()
+        let application = launchWorkspace(windowAlignment: leadingEdgeAlignmentOnNarrowDisplay)
 
         let elements = application.buttons["navigator.tab.elements"]
         XCTAssertTrue(waitForHittable(elements, in: application))
@@ -2619,7 +2654,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     // SF-0201-006, SF-0602-006, SF-1902-006
     @MainActor
     func testKeyboardFocusTraversesWorkspaceForwardAndReverse() throws {
-        let application = launchWorkspace()
+        let application = launchWorkspace(windowAlignment: leadingEdgeAlignmentOnNarrowDisplay)
         let pages = application.buttons["navigator.tab.pages"]
         let accessibility = application.buttons["inspector.tab.accessibility"]
 
@@ -3274,18 +3309,40 @@ final class SiteForgeLaunchTests: XCTestCase {
             "Document status must be Modified or Saved before persistence"
         )
         application.menuBars.menuBarItems["File"].click()
-        if waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 1) {
+        let saveBecamePossibleOrUnnecessary = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { [weak application] _, _ in
+                    guard let application else { return false }
+                    let status = application.descendants(matching: .any)["status.document"].firstMatch
+                    if status.label.contains("Saved")
+                        || (status.value as? String)?.contains("Saved") == true {
+                        return true
+                    }
+                    let liveSave = application.menuItems["Save"]
+                    return liveSave.exists && liveSave.isEnabled
+                },
+                object: application
+            )],
+            timeout: 5
+        ) == .completed
+        XCTAssertTrue(
+            saveBecamePossibleOrUnnecessary,
+            "Autosave must either finish or leave the native Save command enabled"
+        )
+        if waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 0.25) {
             application.typeKey(.escape, modifierFlags: [])
             return
         }
-        XCTAssertTrue(application.menuItems["Save"].waitForExistence(timeout: 3))
-        XCTAssertTrue(waitForEnabled(application.menuItems["Save"], timeout: 3))
-        application.menuItems["Save"].click()
+        let liveSave = application.menuItems["Save"]
+        XCTAssertTrue(liveSave.exists)
+        XCTAssertTrue(liveSave.isEnabled)
+        liveSave.click()
         XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 8))
     }
 
     private func assertNormalWindowPolicy(
         in application: XCUIApplication,
+        permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay: Bool = false,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -3304,9 +3361,20 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTAssertEqual(window.frame.width, visible.width, accuracy: 3, file: file, line: line)
         } else {
             XCTAssertEqual(window.frame.width, 1_100, accuracy: 3, file: file, line: line)
-            XCTAssertEqual(window.frame.maxX, visible.maxX, accuracy: 3, file: file, line: line)
+            if permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay {
+                XCTAssertEqual(
+                    window.frame.minX,
+                    visible.minX + TestWindowGeometry.safeScreenInset,
+                    accuracy: 3,
+                    file: file,
+                    line: line
+                )
+            } else {
+                XCTAssertEqual(window.frame.maxX, visible.maxX, accuracy: 3, file: file, line: line)
+            }
         }
-        if visible.height >= window.frame.height - 3 {
+        if !permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay,
+           visible.height >= window.frame.height - 3 {
             XCTAssertEqual(window.frame.height, visible.height, accuracy: 3, file: file, line: line)
         }
         XCTAssertLessThan(
@@ -3415,7 +3483,11 @@ final class SiteForgeLaunchTests: XCTestCase {
             ("inactive", ["-SiteForgeWindowInactive", "YES"]),
         ]
         for (name, arguments) in variants {
-            let application = launchScenario("workspace", extraArguments: arguments)
+            let application = launchScenario(
+                "workspace",
+                windowAlignment: leadingEdgeAlignmentOnNarrowDisplay,
+                extraArguments: arguments
+            )
             XCTAssertTrue(application.descendants(matching: .any)["shell.navigator"].exists)
             XCTAssertTrue(waitForHittable(application.buttons["navigator.tab.pages"]))
             XCTAssertEqual(

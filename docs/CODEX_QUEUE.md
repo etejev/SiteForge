@@ -8,11 +8,26 @@ None.
 
 ## IN PROGRESS
 
-None.
+- [ ] `SF-AUTHORING-019` Close the local image-authoring hosted checkpoint.
+  - Requirements: bounded `SF-0801-001` through `SF-0801-008` and
+    `SF-0802-001` through `SF-0802-008`, plus supporting native window,
+    persistence, keyboard, and accessibility contracts.
+  - Hosted diagnosis: Actions `33922908106` passed all 391 non-UI tests but
+    failed five UI journeys. One failure was an autosave race that made Save
+    correctly disabled after the document became Saved. Four journeys targeted
+    leading controls while the unchanged 1100-point window was right-aligned
+    on the 1024-point runner.
+  - Correction: Save now resolves either live autosave completion or a live
+    enabled Save command before preserving the same reopen proof. Leading-
+    control journeys opt into the existing left-edge test placement only when
+    the display is narrower than the product minimum. Final local `./sf verify`
+    passed 391 unit/integration plus 49 UI tests (440 total).
+  - Remaining gate: require a green replacement hosted run before returning
+    this item to DONE or continuing SF-AUTHORING-020 source work.
 
 ## DONE
 
-- [x] `SF-AUTHORING-019` Implement local image assets and Image authoring.
+- [x] `SF-AUTHORING-019` Initial local image assets and Image authoring checkpoint.
   - Requirements: bounded production evidence for `SF-0801-001` through
     `SF-0801-008` and `SF-0802-001` through `SF-0802-008`, plus only the
     existing insertion, canvas, Inspector, persistence, history, recovery,

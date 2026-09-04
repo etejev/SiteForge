@@ -2,8 +2,8 @@
 
 Last updated: 2026-09-04.
 
-`SF-AUTHORING-019` is verified and complete within its bounded local-raster
-scope. Schema-v5 owns stable image-asset descriptors
+`SF-AUTHORING-019` is locally verified within its bounded local-raster scope
+and its hosted follow-up remains in progress. Schema-v5 owns stable image-asset descriptors
 and Image-node references; the existing resource sidecar preserves exact
 original bytes. Assets import/search/rename/replace/reveal/delete, Image
 insertion, Fit/Fill/Stretch, focal point, alt/decorative semantics, renderer
@@ -17,7 +17,11 @@ three affected journeys passed independently and in three consecutive grouped
 runs; the complete UI target passed 49/49. Final `./sf verify` passed 391 unit/
 integration plus 49 UI tests (440 total), zero failures, with every repository
 gate green on 2026-09-04. The normative SF-0801 and SF-0802 modules remain
-Partial for the explicit deferred scope.
+Partial for the explicit deferred scope. Actions `33922908106` passed all 391
+non-UI tests but exposed a live autosave/Save-menu race and four leading-control
+journeys outside a 1024-point runner after the 1100-point minimum window was
+right-aligned. The bounded correction passed final local `./sf verify`
+(440/440); hosted confirmation remains.
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and
