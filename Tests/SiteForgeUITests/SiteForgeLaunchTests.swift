@@ -867,10 +867,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["inspector.design.typography.fallback"].waitForExistence(timeout: 3))
         attachWindowScreenshot(application, named: "SF-AUTHORING-015 deterministic font fallback")
 
-        application.menuBars.menuBarItems["File"].click()
-        let save = application.menuItems["Save"]
-        XCTAssertTrue(save.waitForExistence(timeout: 3)); XCTAssertTrue(save.isEnabled); save.click()
-        XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 5))
+        saveDocumentIfModified(in: application)
         terminateAndWait(application)
 
         let reopenRecoveryDirectory = fixtureRoot.appendingPathComponent("typography-reopen-recovery", isDirectory: true)
@@ -1168,11 +1165,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let project = fixtureRoot.appendingPathComponent("local-image-authoring.siteforge")
         var application = launchIntegrationOpen(project, base64Fixture: fixture)
         XCTAssertTrue(waitForWorkspaceReady(application))
-        let window = application.windows.firstMatch
-        if let visibleFrame = NSScreen.main?.visibleFrame {
-            XCTAssertEqual(window.frame.width, visibleFrame.width, accuracy: 3)
-            XCTAssertEqual(window.frame.height, visibleFrame.height, accuracy: 3)
-        }
+        assertNormalWindowPolicy(in: application)
 
         application.buttons["navigator.tab.assets"].click()
         let empty = application.descendants(matching: .any)["assets.empty"]
@@ -3190,11 +3183,139 @@ final class SiteForgeLaunchTests: XCTestCase {
         with text: String,
         in application: XCUIApplication
     ) {
-        let liveField = revealStructuralLayoutControl(field, in: application)
-        liveField.doubleClick()
-        liveField.typeKey("a", modifierFlags: .command)
-        liveField.typeText(text)
-        liveField.typeKey(.return, modifierFlags: [])
+        let identifier = field.identifier
+        _ = revealStructuralLayoutControl(field, in: application)
+        guard waitForLiveStructuralFieldReadiness(identifier, in: application) else {
+            attachStructuralFieldDiagnostics(identifier: identifier, application: application)
+            XCTFail("Inspector field \(identifier) did not become active, enabled, and hittable")
+            return
+        }
+        application.textFields[identifier].doubleClick()
+        guard waitForKeyboardFocus(
+            application.textFields[identifier],
+            in: application,
+            timeout: 5
+        ) else { return }
+        let focusedField = application.textFields[identifier]
+        focusedField.typeKey("a", modifierFlags: .command)
+        focusedField.typeText(text)
+        application.textFields[identifier].typeKey(.return, modifierFlags: [])
+    }
+
+    private func waitForLiveStructuralFieldReadiness(
+        _ identifier: String,
+        in application: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        // A retained screenshot or native menu can momentarily yield foreground
+        // ownership on a slow hosted runner. Reactivate the real application,
+        // then query the replacement SwiftUI field rather than typing through
+        // the pre-update AX proxy.
+        application.activate()
+        let predicate = NSPredicate { [weak application] _, _ in
+            guard let application,
+                  application.state == .runningForeground,
+                  application.sheets.count == 0,
+                  application.dialogs.count == 0 else { return false }
+            let live = application.textFields[identifier]
+            return live.exists && live.isEnabled && live.isHittable
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
+            timeout: timeout
+        ) == .completed
+    }
+
+    private func attachStructuralFieldDiagnostics(
+        identifier: String,
+        application: XCUIApplication
+    ) {
+        let field = application.textFields[identifier]
+        let window = application.windows.firstMatch
+        let focus = application.descendants(matching: .any)["workspace.focus.diagnostics"]
+        let details = """
+        application={state=\(application.state.rawValue);enabled=\(application.isEnabled);sheets=\(application.sheets.count);dialogs=\(application.dialogs.count)}
+        window={exists=\(window.exists);enabled=\(window.exists && window.isEnabled);frame=\(window.exists ? sanitizedFrame(window.frame) : "unavailable")}
+        field={identifier=\(identifier);exists=\(field.exists);enabled=\(field.exists && field.isEnabled);hittable=\(field.exists && field.isHittable);focused=\(field.exists && hasKeyboardFocus(field));frame=\(field.exists ? sanitizedFrame(field.frame) : "unavailable")}
+        focus=\(focus.exists ? ((focus.value as? String) ?? "unavailable") : "unavailable")
+        """
+        let attachment = XCTAttachment(string: details)
+        attachment.name = "structural-layout-field-readiness"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let hierarchy = XCTAttachment(string: redactedAccessibilityHierarchy(for: application))
+        hierarchy.name = "structural-layout-field-accessibility-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        attachScreenshot(named: "structural-layout-field-readiness")
+    }
+
+    private func saveDocumentIfModified(in application: XCUIApplication) {
+        func liveStatus() -> String {
+            let status = application.descendants(matching: .any)["status.document"].firstMatch
+            return status.label + " " + ((status.value as? String) ?? "")
+        }
+
+        let settled = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in
+                    let status = liveStatus()
+                    return status.contains("Modified") || status.contains("Saved")
+                },
+                object: application
+            )],
+            timeout: 5
+        ) == .completed
+        XCTAssertTrue(settled, "Document status must settle as Modified or Saved before persistence")
+        if liveStatus().contains("Saved") { return }
+
+        XCTAssertTrue(
+            liveStatus().contains("Modified"),
+            "Document status must be Modified or Saved before persistence"
+        )
+        application.menuBars.menuBarItems["File"].click()
+        if waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 1) {
+            application.typeKey(.escape, modifierFlags: [])
+            return
+        }
+        XCTAssertTrue(application.menuItems["Save"].waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForEnabled(application.menuItems["Save"], timeout: 3))
+        application.menuItems["Save"].click()
+        XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 8))
+    }
+
+    private func assertNormalWindowPolicy(
+        in application: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let window = application.windows.firstMatch
+        XCTAssertTrue(window.exists, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(window.frame.width, 1_100, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(
+            window.frame.height,
+            TestWindowGeometry.minimumExpectedHeight,
+            file: file,
+            line: line
+        )
+        guard let screen = NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        if visible.width >= 1_100 {
+            XCTAssertEqual(window.frame.width, visible.width, accuracy: 3, file: file, line: line)
+        } else {
+            XCTAssertEqual(window.frame.width, 1_100, accuracy: 3, file: file, line: line)
+            XCTAssertEqual(window.frame.maxX, visible.maxX, accuracy: 3, file: file, line: line)
+        }
+        if visible.height >= window.frame.height - 3 {
+            XCTAssertEqual(window.frame.height, visible.height, accuracy: 3, file: file, line: line)
+        }
+        XCTAssertLessThan(
+            window.frame.height,
+            screen.frame.height,
+            "A normal SiteForge window must leave system UI available and never enter a native full-screen Space.",
+            file: file,
+            line: line
+        )
     }
 
     /// Save transitions can replace the status view's AX proxy. Query the live

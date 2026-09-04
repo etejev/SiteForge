@@ -530,8 +530,17 @@ enum WorkspaceWindowPresentation {
             return restoredFrame
         }
         // `visibleFrame` is AppKit's usable display area: it excludes the
-        // menu bar and Dock while remaining a normal (non-Space) window.
-        return visibleFrame
+        // menu bar and Dock while remaining a normal (non-Space) window. A
+        // display narrower than the supported production minimum cannot fit
+        // the complete workspace. Preserve the minimum and its trailing
+        // controls by aligning that oversized frame to the usable right edge.
+        let width = max(visibleFrame.width, minimumFrameSize.width)
+        return CGRect(
+            x: visibleFrame.maxX - width,
+            y: visibleFrame.minY,
+            width: width,
+            height: visibleFrame.height
+        )
     }
 }
 

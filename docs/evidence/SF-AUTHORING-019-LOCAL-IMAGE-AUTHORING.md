@@ -54,9 +54,22 @@ accessibility, and programmatic tool selection cannot block in a modal panel.
   Assets library, selected-asset insertion, Image Inspector, Undo/Redo, native
   Save, termination, and fresh-process reopen.
 
-The milestone-closing `./sf verify` passed 390 unit/integration plus 49 UI tests
-(439 total), zero failures, on 2026-09-04. Repository security, traceability,
-architecture, migration, evidence, and fixture-hygiene checks also passed.
+Hosted Actions run `33912627892` then exposed three UI assumptions rather than
+canonical image defects: Save can already be disabled after autosave reaches
+the truthful Saved state; a 1024-point display cannot equal the supported
+1100-point production width; and a retained screenshot can yield activation
+while SwiftUI replaces an Inspector field's accessibility proxy. The corrected
+tests re-query live status/menu/field objects, retain the persistence and focus
+assertions, and attach bounded activation/sheet/window/field/focus diagnostics
+on readiness failure. The production normal-window policy now preserves its
+1100-point minimum and aligns the trailing edge on narrower displays.
+
+The three affected journeys passed independently (3/3) and together across
+three consecutive fresh-process repetitions (9/9). The complete UI target
+passed 49/49. The final `./sf verify` passed 391 unit/integration plus 49 UI
+tests (440 total), zero failures, on 2026-09-04. Repository security,
+traceability, architecture, migration, evidence, and fixture-hygiene checks
+also passed.
 
 ## Visual inspection
 

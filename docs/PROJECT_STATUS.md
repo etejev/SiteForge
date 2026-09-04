@@ -10,8 +10,12 @@ insertion, Fit/Fill/Stretch, focal point, alt/decorative semantics, renderer
 adoption, history, package, recovery, and fresh-process reopen are integrated.
 Focused model/persistence/renderer coverage passed 116/116, affected metadata,
 transform, navigator, and actual-app image journeys passed, and six
-original-resolution states were reviewed. Final `./sf verify` passed 390 unit/
-integration plus 49 UI tests (439 total), zero failures, with every repository
+original-resolution states were reviewed. Hosted stabilization preserves an
+autosave-aware native Save/reopen proof, the 1100-point production minimum on
+narrow displays, and live Inspector focus after foreground reactivation. The
+three affected journeys passed independently and in three consecutive grouped
+runs; the complete UI target passed 49/49. Final `./sf verify` passed 391 unit/
+integration plus 49 UI tests (440 total), zero failures, with every repository
 gate green on 2026-09-04. The normative SF-0801 and SF-0802 modules remain
 Partial for the explicit deferred scope.
 

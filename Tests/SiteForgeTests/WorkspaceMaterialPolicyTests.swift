@@ -200,6 +200,22 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         ))
     }
 
+    // SF-0201-002, SF-0201-008 — a narrow display must not compress the
+    // production workspace or lose its trailing controls. It remains a normal
+    // usable-frame window, aligned to the visible right edge.
+    func testNormalWindowPresentationPreservesMinimumWidthOnNarrowDisplay() {
+        let visible = CGRect(x: 0, y: 31, width: 1_024, height: 737)
+        let minimumFrame = CGSize(width: 1_100, height: 752)
+        let frame = WorkspaceWindowPresentation.initialFrame(
+            visibleFrame: visible,
+            restoredFrame: nil,
+            minimumFrameSize: minimumFrame
+        )
+        XCTAssertEqual(frame, CGRect(x: -76, y: 31, width: 1_100, height: 737))
+        XCTAssertEqual(frame.maxX, visible.maxX)
+        XCTAssertEqual(frame.height, visible.height)
+    }
+
     // SF-0201-002, SF-0201-006, SF-0201-008 — only the explicit minimum
     // override uses compact geometry; the normal path still consumes the
     // complete AppKit visible frame (menu bar and Dock remain outside it).

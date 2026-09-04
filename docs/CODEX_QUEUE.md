@@ -41,11 +41,13 @@ None.
     accessibility geometry form one production path.
   - Evidence: focused resource/insertion/command/package/renderer coverage
     passed 116/116; affected architecture, metadata, transform, navigator, and
-    actual-app image journeys passed. The final `./sf verify` passed 390 unit/
-    integration plus 49 UI tests (439 total), zero failures, with repository,
-    security, traceability, architecture, migration, and evidence checks green
-    on 2026-09-04. Six original-resolution maximized-window states passed
-    visual review; see
+    actual-app image journeys passed. Hosted stabilization then proved the
+    three affected journeys independently (3/3) and across three consecutive
+    grouped runs (9/9), followed by the complete UI target (49/49). The final
+    `./sf verify` passed 391 unit/integration plus 49 UI tests (440 total), zero
+    failures, with repository, security, traceability, architecture, migration,
+    and evidence checks green on 2026-09-04. Six original-resolution
+    maximized-window states passed visual review; see
     `docs/evidence/SF-AUTHORING-019-LOCAL-IMAGE-AUTHORING.md`.
 
 - [x] `SF-AUTHORING-018` Add responsive container layout and breakpoint

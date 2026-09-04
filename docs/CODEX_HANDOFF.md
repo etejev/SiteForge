@@ -10,8 +10,13 @@ Inspector edits, immutable native rendering, history, package/recovery, and
 fresh-process reopen. Focused model/persistence/renderer coverage passed
 116/116, the nonmodal Image-tool regression passed 1/1, and the actual-app
 native import/insert/edit/Undo/Redo/Save/reopen journey passed 1/1. Six
-original-resolution states passed visual review. Final `./sf verify` passed 390
-unit/integration plus 49 UI tests (439 total), zero failures, with all repository
+original-resolution states passed visual review. The hosted stabilization
+correction accepts either a live Modified document requiring Save or a document
+already made Saved by autosave, preserves the 1100-point minimum on narrow
+screens, and reactivates/re-queries live structural fields before keyboard
+input. The three affected journeys passed independently and in three grouped
+repetitions; the complete UI target passed 49/49. Final `./sf verify` passed 391
+unit/integration plus 49 UI tests (440 total), zero failures, with all repository
 checks green on 2026-09-04. Do not create a second asset
 store, retain user paths, serialize thumbnail/editor state, or broaden this
 slice into image fills, remote providers, responsive sources, or export. No

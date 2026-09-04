@@ -4,6 +4,12 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
+- Stabilized the SF-AUTHORING-019 hosted checkpoint. Native Save/reopen now
+  accepts a document already durably saved by autosave, normal windows preserve
+  the supported 1100-point width and trailing controls on narrower displays,
+  and structural Inspector keyboard edits reactivate the app and target the
+  current live accessibility field after SwiftUI replacement.
+
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,
   and bounded native numeric fields keep every container Reset action visible
