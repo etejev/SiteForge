@@ -233,6 +233,13 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     let cornerRadius: Double
     let shadow: CanvasAuthoredShadow?
     let typography: CanvasTypography?
+    let imageAssetID: AssetID?
+    let imageData: Data?
+    let imagePixelWidth: Int?
+    let imagePixelHeight: Int?
+    let imageFitMode: CanvasImageFitMode?
+    let imageFocalX: Double
+    let imageFocalY: Double
 
     init(
         id: NodeID,
@@ -250,7 +257,14 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         border: CanvasAuthoredBorder? = nil,
         cornerRadius: Double = 0,
         shadow: CanvasAuthoredShadow? = nil,
-        typography: CanvasTypography? = nil
+        typography: CanvasTypography? = nil,
+        imageAssetID: AssetID? = nil,
+        imageData: Data? = nil,
+        imagePixelWidth: Int? = nil,
+        imagePixelHeight: Int? = nil,
+        imageFitMode: CanvasImageFitMode? = nil,
+        imageFocalX: Double = 0.5,
+        imageFocalY: Double = 0.5
     ) {
         self.id = id
         self.frame = frame
@@ -268,6 +282,54 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.cornerRadius = cornerRadius
         self.shadow = shadow
         self.typography = typography
+        self.imageAssetID = imageAssetID
+        self.imageData = imageData
+        self.imagePixelWidth = imagePixelWidth
+        self.imagePixelHeight = imagePixelHeight
+        self.imageFitMode = imageFitMode
+        self.imageFocalX = imageFocalX
+        self.imageFocalY = imageFocalY
+    }
+}
+
+enum CanvasImageFitMode: String, Codable, Hashable, Sendable {
+    case fit, fill, stretch
+}
+
+/// One deterministic authored-image layout contract shared by tile drawing
+/// and headless renderer evidence. Geometry remains top-left/Y-down; native
+/// image decoding performs its single API-coordinate reflection only at draw.
+enum CanvasImageLayout {
+    static func destinationRect(
+        source: WorldSize,
+        bounds: WorldRect,
+        mode: CanvasImageFitMode,
+        focalX: Double,
+        focalY: Double
+    ) -> WorldRect? {
+        guard source.width.isFinite, source.height.isFinite,
+              source.width > 0, source.height > 0,
+              bounds.origin.x.isFinite, bounds.origin.y.isFinite,
+              bounds.size.width.isFinite, bounds.size.height.isFinite,
+              bounds.size.width > 0, bounds.size.height > 0,
+              focalX.isFinite, focalY.isFinite,
+              (0...1).contains(focalX), (0...1).contains(focalY) else { return nil }
+        if mode == .stretch { return bounds }
+        let xScale = bounds.size.width / source.width
+        let yScale = bounds.size.height / source.height
+        let scale = mode == .fit ? min(xScale, yScale) : max(xScale, yScale)
+        let size = WorldSize(width: source.width * scale, height: source.height * scale)
+        // Focal positioning is a crop control and therefore applies only to
+        // Fill. Fit always uses calm deterministic centering in its letterbox.
+        let x = mode == .fill ? focalX : 0.5
+        let y = mode == .fill ? focalY : 0.5
+        return WorldRect(
+            origin: WorldPoint(
+                x: bounds.origin.x + (bounds.size.width - size.width) * x,
+                y: bounds.origin.y + (bounds.size.height - size.height) * y
+            ),
+            size: size
+        )
     }
 }
 

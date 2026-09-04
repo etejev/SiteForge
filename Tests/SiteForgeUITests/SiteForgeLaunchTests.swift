@@ -1,4 +1,6 @@
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 
 private enum LaunchLifecycleReadinessHandshake {
@@ -1156,6 +1158,96 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-012 native reopened appearance")
     }
 
+    // SF-0801-001...008, SF-0802-001...008 — a real native Open panel feeds
+    // the production resource store, then the visible Assets/Image surfaces
+    // drive canonical insertion, non-destructive fit/focal/alt edits, history,
+    // native Save, process teardown, and package reopen.
+    func testLocalImageAssetImportAuthoringUndoRedoAndReopenJourney() throws {
+        let imageURL = try makeLocalImageFixture(named: "siteforge-image.png")
+        let fixture = legacyFixtureURL(named: "schema-v4-legacy-surface")
+        let project = fixtureRoot.appendingPathComponent("local-image-authoring.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: fixture)
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        let window = application.windows.firstMatch
+        if let visibleFrame = NSScreen.main?.visibleFrame {
+            XCTAssertEqual(window.frame.width, visibleFrame.width, accuracy: 3)
+            XCTAssertEqual(window.frame.height, visibleFrame.height, accuracy: 3)
+        }
+
+        application.buttons["navigator.tab.assets"].click()
+        let empty = application.descendants(matching: .any)["assets.empty"]
+        XCTAssertTrue(empty.waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-019 empty Assets")
+
+        application.buttons["assets.empty.import"].click()
+        XCTAssertTrue(waitForNativeOpenPanel(in: application))
+        application.typeKey("g", modifierFlags: [.command, .shift])
+        let pathField = application.sheets.textFields.firstMatch
+        XCTAssertTrue(pathField.waitForExistence(timeout: 3))
+        pathField.typeText(imageURL.path)
+        application.typeKey(.return, modifierFlags: [])
+        let nativeImport = application.buttons["OKButton"]
+        XCTAssertTrue(waitForEnabled(nativeImport))
+        nativeImport.click()
+
+        let assetRow = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "assets.row.", "siteforge-image"
+        )).firstMatch
+        XCTAssertTrue(assetRow.waitForExistence(timeout: 8))
+        XCTAssertTrue((assetRow.value as? String)?.contains("siteforge-image.png, 320 by 180 pixels") == true)
+        assetRow.click()
+        attachWindowScreenshot(application, named: "SF-AUTHORING-019 imported asset list")
+
+        let insert = application.buttons["assets.insert.selected"]
+        XCTAssertTrue(waitForEnabled(insert)); insert.click()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1", timeout: 8))
+        application.buttons["inspector.tab.design"].click()
+        let imageFields = application.descendants(matching: .any)["inspector.image.fields"]
+        XCTAssertTrue(imageFields.waitForExistence(timeout: 5))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-019 Image Fit")
+
+        let fit = application.descendants(matching: .any)["inspector.image.fit"]
+        XCTAssertTrue(fit.exists)
+        let fillMode = fit.radioButtons["Fill"]
+        XCTAssertTrue(fillMode.waitForExistence(timeout: 3))
+        fillMode.click()
+        let focalX = application.textFields["inspector.image.focalX"]
+        let focalY = application.textFields["inspector.image.focalY"]
+        focalX.click(); focalX.typeKey("a", modifierFlags: .command); focalX.typeText("25")
+        focalY.click(); focalY.typeKey("a", modifierFlags: .command); focalY.typeText("75"); focalY.typeKey(.return, modifierFlags: [])
+        let alt = application.textFields["inspector.image.alt"]
+        alt.click(); alt.typeText("A generated orange and teal test image"); alt.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.image.status"], containing: "committed"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-019 Image Fill focal alt")
+
+        let undo = application.buttons["toolbar.undo"]
+        XCTAssertTrue(waitForEnabled(undo)); undo.click()
+        let redo = application.buttons["toolbar.redo"]
+        XCTAssertTrue(waitForEnabled(redo)); redo.click()
+        attachWindowScreenshot(application, named: "SF-AUTHORING-019 Image undo redo")
+
+        application.menuBars.menuBarItems["File"].click()
+        let save = application.menuItems["Save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 3)); save.click()
+        XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 8))
+        terminateAndWait(application)
+
+        let reopenRecovery = fixtureRoot.appendingPathComponent("image-reopen-recovery", isDirectory: true)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: reopenRecovery)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 8))
+        application.buttons["navigator.tab.layers"].click()
+        let imageLayer = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Image"
+        )).firstMatch
+        XCTAssertTrue(imageLayer.waitForExistence(timeout: 5)); imageLayer.click()
+        application.buttons["inspector.tab.design"].click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.image.focalX"], containing: "25"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.image.focalY"], containing: "75"))
+        XCTAssertEqual(application.textFields["inspector.image.alt"].value as? String, "A generated orange and teal test image")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-019 Image reopened")
+    }
+
     // SF-0404-001 through SF-0404-008
     func testSnappingRulersAuthoredGuidesSuppressionAndAccessibilityJourney() throws {
         let application = launchWorkspace()
@@ -1785,6 +1877,41 @@ final class SiteForgeLaunchTests: XCTestCase {
         return repository.appendingPathComponent("Tests/Fixtures/Legacy/\(name).siteforge.b64")
     }
 
+    private func makeLocalImageFixture(named name: String) throws -> URL {
+        let url = fixtureRoot.appendingPathComponent(name)
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 320, pixelsHigh: 180,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ), let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        NSColor.systemOrange.setFill(); NSRect(x: 0, y: 0, width: 160, height: 180).fill()
+        NSColor.systemTeal.setFill(); NSRect(x: 160, y: 0, width: 160, height: 180).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    private func waitForNativeOpenPanel(in application: XCUIApplication, timeout: TimeInterval = 5) -> Bool {
+        XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { object, _ in
+                    guard let app = object as? XCUIApplication else { return false }
+                    return app.sheets.count > 0 || app.dialogs.count > 0
+                },
+                object: application
+            )],
+            timeout: timeout
+        ) == .completed
+    }
+
     // SF-0201-002, SF-0201-004, SF-0201-008
     @MainActor
     func testApplicationLaunchesCompleteNativeShellAtPracticalMinimumSize() throws {
@@ -1973,7 +2100,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         let assets = application.buttons["navigator.tab.assets"]
         XCTAssertTrue(waitForHittable(assets, in: application))
         assets.click()
-        XCTAssertTrue(application.descendants(matching: .any)["navigator.assets.unavailable"].exists)
+        XCTAssertTrue(application.descendants(matching: .any)["assets.empty"].waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForHittable(application.buttons["assets.empty.import"], in: application))
 
         // Components can be beyond the horizontally scrolled tab strip at
         // the practical minimum width. Use the real, always-visible native
@@ -2469,7 +2597,9 @@ final class SiteForgeLaunchTests: XCTestCase {
     // SF-0201-006, SF-0201-008, SF-0203-006, SF-0405-006, SF-0405-008
     @MainActor
     func testUndoRedoToolbarPointerUsesRightAlignedTestWindow() throws {
-        let application = launchWorkspace(windowAlignment: .right)
+        // Keep the constrained right edge required by this pointer journey,
+        // while placing its toolbar below transient system top-edge surfaces.
+        let application = launchWorkspace(windowAlignment: .right, verticalAlignment: .bottom)
         let canvas = application.descendants(matching: .any)["canvas.interaction"]
         application.typeKey("f", modifierFlags: [])
         XCTAssertTrue(application.staticTexts["Tool: Frame"].waitForExistence(timeout: 2))

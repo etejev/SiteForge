@@ -619,9 +619,10 @@ final class TransformModelTests: XCTestCase {
             )
             XCTAssertEqual(prepared.skippedNodeIDs, [], "\(kind) must use fixed geometry when declared applicable")
         }
+        XCTAssertTrue(GeometryInspectorCommandRegistry.supportsFixedGeometry(.image))
 
         var unsupported = makeFixture()
-        unsupported.document.pages[0].nodes[1].kind = .image
+        unsupported.document.pages[0].nodes[1].kind = .component
         XCTAssertThrowsError(try registry.prepare(
             unsupported.inspectorCommand(field: .x, value: 20),
             in: unsupported.document,
@@ -629,7 +630,7 @@ final class TransformModelTests: XCTestCase {
         )) { XCTAssertEqual($0 as? GeometryInspectorError, .noApplicableTargets) }
 
         var subset = makeFixture(selectedIDs: [])
-        subset.document.pages[0].nodes[2].kind = .image
+        subset.document.pages[0].nodes[2].kind = .component
         subset.selectedIDs = [subset.nodeID, subset.secondNodeID]
         let partial = try registry.prepare(
             subset.inspectorCommand(field: .y, value: 55),
@@ -1761,7 +1762,7 @@ final class TransformModelTests: XCTestCase {
 
         let visibilityRegistry = ResponsiveVisibilityCommandRegistry()
         var partialDocument = session.document
-        partialDocument.pages[0].nodes[2].kind = .image
+        partialDocument.pages[0].nodes[2].kind = .component
         let partialFixture = fixture.with(document: partialDocument)
         let partialVisibility = try visibilityRegistry.prepare(.init(
             identity: .init(editID: GeometryInspectorEditID(), documentID: partialDocument.id,

@@ -2,6 +2,91 @@ import XCTest
 @testable import SiteForge
 
 final class CanvasRendererTests: XCTestCase {
+    // SF-0802-001, SF-0802-004, SF-0802-008 — Fit/Fill/Stretch share one
+    // top-left/Y-down geometry contract and focal points never change bounds.
+    func testImageLayoutFitFillStretchFocalAndInvalidInputsAreDeterministic() throws {
+        let bounds = WorldRect(
+            origin: .init(x: 40, y: 60),
+            size: .init(width: 320, height: 240)
+        )
+        XCTAssertEqual(CanvasImageLayout.destinationRect(
+            source: .init(width: 1600, height: 900), bounds: bounds,
+            mode: .fit, focalX: 0, focalY: 1
+        ), WorldRect(origin: .init(x: 40, y: 90), size: .init(width: 320, height: 180)))
+        XCTAssertEqual(CanvasImageLayout.destinationRect(
+            source: .init(width: 1600, height: 900), bounds: bounds,
+            mode: .stretch, focalX: 0.3, focalY: 0.7
+        ), bounds)
+        let leftFill = try XCTUnwrap(CanvasImageLayout.destinationRect(
+            source: .init(width: 1600, height: 900), bounds: bounds,
+            mode: .fill, focalX: 0, focalY: 0.5
+        ))
+        let rightFill = try XCTUnwrap(CanvasImageLayout.destinationRect(
+            source: .init(width: 1600, height: 900), bounds: bounds,
+            mode: .fill, focalX: 1, focalY: 0.5
+        ))
+        XCTAssertEqual(leftFill.size, rightFill.size)
+        XCTAssertEqual(leftFill.origin.x, bounds.origin.x)
+        XCTAssertLessThan(rightFill.origin.x, leftFill.origin.x)
+        XCTAssertNil(CanvasImageLayout.destinationRect(
+            source: .init(width: 0, height: 10), bounds: bounds,
+            mode: .fit, focalX: 0.5, focalY: 0.5
+        ))
+        XCTAssertNil(CanvasImageLayout.destinationRect(
+            source: .init(width: 10, height: 10), bounds: bounds,
+            mode: .fill, focalX: .nan, focalY: 0.5
+        ))
+    }
+
+    func testImageRenderPlanAdoptsImmutableBytesIdentityGeometryAndAccessibility() throws {
+        let fixture = try makeFixture(count: 1)
+        let bytes = Data([0x89, 0x50, 0x4e, 0x47])
+        let assetID = AssetID()
+        let object = CanvasRenderObject(
+            id: fixture.scene.objects[0].id,
+            frame: fixture.scene.objects[0].frame,
+            clipRect: fixture.scene.objects[0].clipRect,
+            paintOrder: 0, style: .imagePlaceholder, isVisible: true,
+            accessibilityLabel: "Image, Product photo",
+            displayName: "Product photo", imageAssetID: assetID,
+            imageData: bytes, imagePixelWidth: 1600, imagePixelHeight: 900,
+            imageFitMode: .fill, imageFocalX: 0.25, imageFocalY: 0.75
+        )
+        let scene = CanvasRenderSceneSnapshot(
+            identity: fixture.scene.identity, surfaceID: fixture.scene.surfaceID,
+            objects: [object]
+        )
+        let plan = try CanvasRendererCore().prepare(
+            scene: scene,
+            overlays: .init(identity: scene.identity, overlays: []),
+            viewport: fixture.viewport
+        )
+        XCTAssertEqual(plan.authoredObjects.first, object)
+        XCTAssertEqual(plan.accessibilityElements.first?.objectID, object.id)
+        XCTAssertEqual(plan.accessibilityElements.first?.label, "Image, Product photo")
+        XCTAssertEqual(CanvasRendererCore().hitTest(.init(x: 5, y: 5), in: plan), object.id)
+
+        let changed = CanvasRenderSceneSnapshot(
+            identity: scene.identity, surfaceID: scene.surfaceID,
+            objects: [CanvasRenderObject(
+                id: object.id, frame: object.frame, clipRect: object.clipRect,
+                paintOrder: 0, style: .imagePlaceholder, isVisible: true,
+                accessibilityLabel: object.accessibilityLabel,
+                displayName: object.displayName, imageAssetID: assetID,
+                imageData: Data([1, 2, 3]), imagePixelWidth: 1600,
+                imagePixelHeight: 900, imageFitMode: .fit
+            )]
+        )
+        XCTAssertNotEqual(
+            plan.deterministicDigest,
+            try CanvasRendererCore().prepare(
+                scene: changed,
+                overlays: .init(identity: changed.identity, overlays: []),
+                viewport: fixture.viewport
+            ).deterministicDigest
+        )
+    }
+
     // SF-0201-003, SF-0407-001, SF-0407-003
     func testExplicitBlankSceneAdoptsWithoutFabricatingRenderableObjects() throws {
         let fixture = try makeFixture(count: 1)

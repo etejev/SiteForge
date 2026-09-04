@@ -1350,7 +1350,7 @@ struct GeometryInspectorCommandRegistry: Sendable {
         "SF-0602-005", "SF-0602-006", "SF-0602-008",
     ]
 
-    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image]
 
     static func supportsFixedGeometry(_ kind: NodeKind) -> Bool {
         supportedKinds.contains(kind)
@@ -2602,5 +2602,164 @@ enum DesignInspectorSelectionPresentation {
         selectionCount == 0
             ? "Design Inspector requires a selection."
             : "Design Inspector updated for current selection."
+    }
+}
+
+// MARK: - Image inspector command boundary
+
+enum ImageInspectorPresentation: Equatable, Sendable {
+    case single(CanonicalImageStyle, ImageAsset)
+    case mixed(applicable: Int, skipped: Int)
+    case unavailable(String)
+}
+
+enum ImageInspectorEdit: Equatable, Sendable {
+    case asset(AssetID)
+    case fit(ImageFitMode)
+    case focal(x: Double, y: Double)
+    case altText(String)
+    case decorative(Bool)
+}
+
+struct ImageInspectorOperationIdentity: Equatable, Sendable {
+    let documentID: DocumentID
+    let pageID: PageID
+    let revision: UInt64
+    let sceneID: CanvasViewportSceneID
+    let rendererGeneration: UInt64
+    let selectedNodeIDs: [NodeID]
+}
+
+struct ImageInspectorCommand: Equatable, Sendable {
+    let identity: ImageInspectorOperationIdentity
+    let edit: ImageInspectorEdit
+}
+
+struct PreparedImageInspectorEdit: Equatable, Sendable {
+    let command: DocumentCommand
+    let applicableNodeIDs: [NodeID]
+    let skippedNodeIDs: [NodeID]
+}
+
+enum ImageInspectorError: Error, Equatable, LocalizedError, Sendable {
+    case cancelled, emptySelection, staleDocument, staleRevision, staleRenderer,
+         pageUnavailable, selectionMismatch, duplicateTarget, missingTarget,
+         lockedTarget, hiddenTarget, unavailableTarget, noApplicableTarget,
+         invalidAsset, invalidFocalPoint, invalidAltText, revisionExhausted
+
+    var errorDescription: String? {
+        switch self {
+        case .cancelled: "Image edit cancelled; the committed value is unchanged."
+        case .emptySelection: "Select an Image to edit its image properties."
+        case .staleDocument, .staleRevision, .staleRenderer: "The canvas changed before this Image edit committed. Try again."
+        case .pageUnavailable: "The Image page is no longer active."
+        case .selectionMismatch: "The Image selection changed before this edit committed."
+        case .duplicateTarget: "The Image selection contains a duplicate stable identity."
+        case .missingTarget: "A selected Image no longer exists."
+        case .lockedTarget: "Unlock the selected Image before editing it."
+        case .hiddenTarget: "Show the selected Image before editing it."
+        case .unavailableTarget: "The selected Image is not available in the adopted renderer."
+        case .noApplicableTarget: "This selection contains no editable Image nodes."
+        case .invalidAsset: "Choose an imported image asset."
+        case .invalidFocalPoint: "Focal point values must be between 0 and 100 percent."
+        case .invalidAltText: "Alternative text must be valid plain text no longer than 4,096 UTF-8 bytes."
+        case .revisionExhausted: "The document revision cannot accept another Image edit."
+        }
+    }
+}
+
+struct ImageInspectorCommandRegistry: Sendable {
+    func prepare(
+        _ input: ImageInspectorCommand,
+        in document: CanonicalDocument,
+        context: TransformValidationContext,
+        cancelled: Bool = false
+    ) throws -> PreparedImageInspectorEdit {
+        if cancelled { throw ImageInspectorError.cancelled }
+        let identity = input.identity
+        guard identity.documentID == document.id else { throw ImageInspectorError.staleDocument }
+        guard identity.revision == document.revision else { throw ImageInspectorError.staleRevision }
+        guard identity.sceneID == context.currentSceneID,
+              identity.rendererGeneration == context.rendererGeneration else {
+            throw ImageInspectorError.staleRenderer
+        }
+        guard identity.pageID == context.activePageID,
+              let page = document.pages.first(where: { $0.id == identity.pageID }) else {
+            throw ImageInspectorError.pageUnavailable
+        }
+        guard !identity.selectedNodeIDs.isEmpty else { throw ImageInspectorError.emptySelection }
+        guard Set(identity.selectedNodeIDs).count == identity.selectedNodeIDs.count else {
+            throw ImageInspectorError.duplicateTarget
+        }
+        guard identity.selectedNodeIDs == context.selectedNodeIDs else {
+            throw ImageInspectorError.selectionMismatch
+        }
+        guard document.revision < UInt64.max - 1 else { throw ImageInspectorError.revisionExhausted }
+        try validate(input.edit, document: document)
+        var commands: [DocumentCommand] = []
+        var applicable: [NodeID] = []
+        var skipped: [NodeID] = []
+        for id in identity.selectedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else {
+                throw ImageInspectorError.missingTarget
+            }
+            guard node.kind == .image else { skipped.append(id); continue }
+            if node.insertionBooleanProperty("locked") { throw ImageInspectorError.lockedTarget }
+            if node.insertionBooleanProperty("hidden") { throw ImageInspectorError.hiddenTarget }
+            guard context.availableNodeIDs.contains(id) else { throw ImageInspectorError.unavailableTarget }
+            applicable.append(id)
+            let values: [(String, PropertyValue)] = switch input.edit {
+            case .asset(let value): [(CanonicalImageStyle.namespace + "assetID", .string(value.description))]
+            case .fit(let value): [(CanonicalImageStyle.namespace + "fit", .string(value.rawValue))]
+            case .focal(let x, let y): [
+                (CanonicalImageStyle.namespace + "focal.x", .number(x)),
+                (CanonicalImageStyle.namespace + "focal.y", .number(y)),
+            ]
+            case .altText(let value): [(CanonicalImageStyle.namespace + "alt", .string(value))]
+            case .decorative(let value): [(CanonicalImageStyle.namespace + "decorative", .boolean(value))]
+            }
+            for (key, value) in values {
+                let previous = node.insertionProperty(key)
+                commands.append(.setProperty(.init(
+                    pageID: page.id,
+                    nodeID: id,
+                    property: NodeProperty(
+                        id: previous?.id ?? PropertyID(),
+                        key: .init(rawValue: key),
+                        value: value,
+                        origin: .authored
+                    )
+                )))
+            }
+        }
+        guard !applicable.isEmpty else { throw ImageInspectorError.noApplicableTarget }
+        let command: DocumentCommand = commands.count == 1 ? commands[0] : .batch(commands)
+        guard CommandRegistry().availability(for: command, in: document).isEnabled else {
+            throw ImageInspectorError.missingTarget
+        }
+        return PreparedImageInspectorEdit(
+            command: command,
+            applicableNodeIDs: applicable,
+            skippedNodeIDs: skipped
+        )
+    }
+
+    private func validate(_ edit: ImageInspectorEdit, document: CanonicalDocument) throws {
+        switch edit {
+        case .asset(let id):
+            guard document.imageAssets.contains(where: { $0.id == id }) else {
+                throw ImageInspectorError.invalidAsset
+            }
+        case .focal(let x, let y):
+            guard x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else {
+                throw ImageInspectorError.invalidFocalPoint
+            }
+        case .altText(let value):
+            guard value.utf8.count <= 4_096,
+                  !value.unicodeScalars.contains(where: {
+                      CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t"
+                  }) else { throw ImageInspectorError.invalidAltText }
+        case .fit, .decorative: break
+        }
     }
 }

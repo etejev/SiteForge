@@ -502,7 +502,11 @@ private extension ProjectPackageStore {
             throw ProjectPackageError.corruptDocument
         }
 
-        var payloads = package.optionalMembers
+        // Original resource blobs are persisted by ProjectResourceStore in
+        // the identity-bound sidecar. Only the canonical index belongs in the
+        // bounded project package; transient in-memory blobs must never create
+        // a second embedded resource format or exceed package member limits.
+        var payloads = package.archiveOptionalMembers
         payloads.append(ProjectPackageMember(path: documentPath, role: .document, data: documentData))
         try validatePayloads(payloads)
 

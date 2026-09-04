@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 enum NativeProjectOpenPanel {
@@ -11,6 +12,33 @@ enum NativeProjectOpenPanel {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.message = "Choose a SiteForge project to validate before opening."
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+}
+
+/// Central AppKit ownership for local image selection. Callers receive only
+/// the chosen URLs; canonical asset state never retains a panel or user path.
+@MainActor
+enum NativeImageOpenPanel {
+    static func chooseImages(insertFirst: Bool) -> [URL]? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .tiff, .heic]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = insertFirst
+            ? "Choose local raster images. The first imported image will be inserted on the active artboard."
+            : "Choose local raster images to preserve in this SiteForge project."
+        panel.prompt = insertFirst ? "Import and Insert" : "Import"
+        return panel.runModal() == .OK ? panel.urls : nil
+    }
+
+    static func chooseReplacement() -> URL? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .tiff, .heic]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose a replacement image. Existing Image nodes keep their stable asset reference."
+        panel.prompt = "Replace"
         return panel.runModal() == .OK ? panel.url : nil
     }
 }

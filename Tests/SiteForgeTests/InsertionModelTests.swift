@@ -348,7 +348,7 @@ final class InsertionModelTests: XCTestCase {
             try session.execute(try prepare(kind, fixture: current, nodeID: id).documentCommand)
         }
         let bytes = try DocumentSerializer.encode(session.document)
-        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":4"))
+        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":5"))
         let reopened = try DocumentSerializer.decode(bytes)
         XCTAssertEqual(reopened, session.document)
         XCTAssertEqual(reopened.pages[0].nodes.first { $0.id == sectionID }?.kind, .section)
@@ -357,8 +357,14 @@ final class InsertionModelTests: XCTestCase {
 
         // Schema 3 was the prior canonical envelope. It intentionally has no
         // structural instances, but must migrate without data loss.
-        let legacy = Data(String(decoding: try DocumentSerializer.encode(fixture.document), as: UTF8.self)
-            .replacingOccurrences(of: "\"schemaVersion\":4", with: "\"schemaVersion\":3").utf8)
+        var legacyEnvelope = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: DocumentSerializer.encode(fixture.document)) as? [String: Any]
+        )
+        legacyEnvelope["schemaVersion"] = 3
+        var legacyDocument = try XCTUnwrap(legacyEnvelope["document"] as? [String: Any])
+        legacyDocument.removeValue(forKey: "imageAssets")
+        legacyEnvelope["document"] = legacyDocument
+        let legacy = try JSONSerialization.data(withJSONObject: legacyEnvelope)
         XCTAssertEqual(try DocumentSerializer.decode(legacy), fixture.document)
     }
 
@@ -661,6 +667,16 @@ final class InsertionModelTests: XCTestCase {
         case .text: return .text(.init(identity: identity, nodeID: nodeID, parentID: parentID ?? fixture.rootID, index: index, geometry: geometry, text: text, provenance: provenance))
         case .section, .stack, .grid:
             return .container(.init(kind: kind, identity: identity, nodeID: nodeID, parentID: parentID ?? fixture.rootID, index: index, geometry: geometry, provenance: provenance))
+        case .image:
+            return .image(.init(
+                identity: identity,
+                nodeID: nodeID,
+                parentID: parentID ?? fixture.rootID,
+                index: index,
+                geometry: geometry,
+                assetID: AssetID(UUID(uuidString: "70000000-0000-4000-8000-000000000001")!),
+                provenance: provenance
+            ))
         }
     }
 

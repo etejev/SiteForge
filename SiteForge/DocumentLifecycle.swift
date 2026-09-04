@@ -321,21 +321,25 @@ actor DocumentLifecycleBackend {
                 intent: identity.intent == .revert ? .revert : .open
             ) { [store] coordinatedURL in
                 let read = try await store.readSnapshot(from: coordinatedURL)
-                return (coordinatedURL, read)
+                let package = try await Self.attachAvailableResources(
+                    to: read.package,
+                    beside: coordinatedURL
+                )
+                return (coordinatedURL, read, package)
             }
-            let (sourceURL, read) = accessed
+            let (sourceURL, read, package) = accessed
             try Task.checkCancellation()
             await progress?(.validatingCanonicalDocument)
             try Task.checkCancellation()
             await progress?(.validatingHistory)
-            let history = try await historyStore.load(from: read.package)
+            let history = try await historyStore.load(from: package)
             try Task.checkCancellation()
             await progress?(.preparingWorkspace)
             await observer?.reached(.afterRead, operation: identity)
             try Task.checkCancellation()
             await record(identity, read.package.projectID, start, .success, nil)
             return LoadedProject(
-                package: read.package,
+                package: package,
                 fingerprint: read.file.fingerprint,
                 history: history,
                 sourceURL: sourceURL
@@ -367,17 +371,21 @@ actor DocumentLifecycleBackend {
                     from: coordinatedURL,
                     expectedProjectID: expectedProjectID
                 )
-                return (coordinatedURL, read)
+                let package = try await Self.attachAvailableResources(
+                    to: read.package,
+                    beside: coordinatedURL
+                )
+                return (coordinatedURL, read, package)
             }
-            let (sourceURL, read) = accessed
+            let (sourceURL, read, package) = accessed
             try Task.checkCancellation()
-            let history = try await historyStore.load(from: read.package)
+            let history = try await historyStore.load(from: package)
             try Task.checkCancellation()
             await observer?.reached(.afterRead, operation: identity)
             try Task.checkCancellation()
             await record(identity, read.package.projectID, start, .success, nil)
             return LoadedProject(
-                package: read.package,
+                package: package,
                 fingerprint: read.file.fingerprint,
                 history: history,
                 sourceURL: sourceURL
@@ -429,6 +437,10 @@ actor DocumentLifecycleBackend {
             try Task.checkCancellation()
             let accessIntent: FileAccessIntent = identity.intent == .autosave ? .autosave : .save
             let completed = try await fileAccess.withAccess(to: url, intent: accessIntent) { [store] coordinatedURL in
+                try await Self.persistAvailableResources(
+                    from: packageWithHistory,
+                    beside: coordinatedURL
+                )
                 let fingerprint = try await store.write(
                     packageWithHistory,
                     to: coordinatedURL,
@@ -458,6 +470,48 @@ actor DocumentLifecycleBackend {
             }
             await record(identity, package.projectID, start, failure == .conflict ? .stale : .failure, failure)
             throw failure
+        }
+    }
+
+    /// Resource bytes remain in the existing content-addressed sidecar. A
+    /// missing or corrupt blob does not destroy canonical AssetID intent when
+    /// opening: the document adopts with no transient bytes and the renderer
+    /// presents its in-bounds recovery placeholder.
+    private static func attachAvailableResources(
+        to package: ProjectPackage,
+        beside packageURL: URL
+    ) async throws -> ProjectPackage {
+        guard let index = try ProjectResourceIndex.decode(from: package) else { return package }
+        let resourceStore = ProjectResourceStore(root: ProjectResourceStore.sidecarURL(for: packageURL))
+        var resources: [ResourceID: Data] = [:]
+        for descriptor in index.resources {
+            do { resources[descriptor.id] = try await resourceStore.data(for: descriptor) }
+            catch ProjectResourceError.missingBlob { continue }
+            catch ProjectResourceError.corruptBlob { continue }
+        }
+        return try package.attachingResourceData(resources)
+    }
+
+    private static func persistAvailableResources(
+        from package: ProjectPackage,
+        beside packageURL: URL
+    ) async throws {
+        guard let index = try ProjectResourceIndex.decode(from: package) else { return }
+        let resourceStore = ProjectResourceStore(root: ProjectResourceStore.sidecarURL(for: packageURL))
+        for descriptor in index.resources {
+            let path = ProjectResourceIndex.blobMemberPath(for: descriptor.sha256)
+            guard let member = package.optionalMembers.first(where: { $0.path == path }) else {
+                // Missing-resource projects remain saveable without erasing
+                // their canonical reference or pretending bytes exist.
+                continue
+            }
+            let stored = try await resourceStore.put(
+                id: descriptor.id,
+                filename: descriptor.filename,
+                mediaType: descriptor.mediaType,
+                data: member.data
+            )
+            guard stored == descriptor else { throw ProjectResourceError.corruptBlob }
         }
     }
 
@@ -909,6 +963,41 @@ final class DocumentLifecycleController: ObservableObject {
         return fileURL == nil || recoveryCandidate.package.document.revision > project.document.revision
     }
     var currentProjectID: ProjectID { project.projectID }
+
+    /// Stages original bytes and the canonical asset command as one in-memory
+    /// commit boundary. If validation or command execution rejects the asset,
+    /// the prior package snapshot is restored so failed import/replace cannot
+    /// leave an orphaned resource member behind.
+    func installingProjectResource<Result>(
+        _ descriptor: ProjectResourceDescriptor,
+        data: Data,
+        perform mutation: () throws -> Result
+    ) throws -> Result {
+        let prior = project
+        do {
+            project = try project.withResource(descriptor, data: data)
+            return try mutation()
+        } catch {
+            project = prior
+            throw error
+        }
+    }
+
+    func projectResourceData(for resourceID: ResourceID) throws -> Data {
+        guard let index = try ProjectResourceIndex.decode(from: project),
+              let descriptor = index.resources.first(where: { $0.id == resourceID }) else {
+            throw ProjectResourceError.missingBlob
+        }
+        return try project.resourceData(for: descriptor)
+    }
+
+    func projectResourceDescriptor(for resourceID: ResourceID) throws -> ProjectResourceDescriptor {
+        guard let index = try ProjectResourceIndex.decode(from: project),
+              let descriptor = index.resources.first(where: { $0.id == resourceID }) else {
+            throw ProjectResourceError.missingBlob
+        }
+        return descriptor
+    }
     var stateSnapshot: DocumentLifecycleStateSnapshot {
         DocumentLifecycleStateSnapshot(
             document: session.document,

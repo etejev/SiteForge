@@ -1,6 +1,19 @@
 # SiteForge Project Status
 
-Last updated: 2026-08-31.
+Last updated: 2026-09-04.
+
+`SF-AUTHORING-019` is verified and complete within its bounded local-raster
+scope. Schema-v5 owns stable image-asset descriptors
+and Image-node references; the existing resource sidecar preserves exact
+original bytes. Assets import/search/rename/replace/reveal/delete, Image
+insertion, Fit/Fill/Stretch, focal point, alt/decorative semantics, renderer
+adoption, history, package, recovery, and fresh-process reopen are integrated.
+Focused model/persistence/renderer coverage passed 116/116, affected metadata,
+transform, navigator, and actual-app image journeys passed, and six
+original-resolution states were reviewed. Final `./sf verify` passed 390 unit/
+integration plus 49 UI tests (439 total), zero failures, with every repository
+gate green on 2026-09-04. The normative SF-0801 and SF-0802 modules remain
+Partial for the explicit deferred scope.
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and

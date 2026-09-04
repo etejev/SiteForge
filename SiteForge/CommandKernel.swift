@@ -12,6 +12,9 @@ enum CommandName: String, CaseIterable, Codable, Sendable {
     case insertGuide = "document.guide.insert"
     case setGuidePosition = "document.guide.position.set"
     case removeGuide = "document.guide.remove"
+    case insertImageAsset = "document.asset.image.insert"
+    case updateImageAsset = "document.asset.image.update"
+    case removeImageAsset = "document.asset.image.remove"
     case batch = "document.batch"
     case undo = "history.undo"
     case redo = "history.redo"
@@ -110,6 +113,19 @@ struct RemoveGuideCommand: Codable, Equatable, Sendable {
     let guideID: GuideID
 }
 
+struct InsertImageAssetCommand: Codable, Equatable, Sendable {
+    let asset: ImageAsset
+    let index: Int
+}
+
+struct UpdateImageAssetCommand: Codable, Equatable, Sendable {
+    let asset: ImageAsset
+}
+
+struct RemoveImageAssetCommand: Codable, Equatable, Sendable {
+    let assetID: AssetID
+}
+
 indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case insertPage(InsertPageCommand)
     case removePage(RemovePageCommand)
@@ -122,6 +138,9 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case insertGuide(InsertGuideCommand)
     case setGuidePosition(SetGuidePositionCommand)
     case removeGuide(RemoveGuideCommand)
+    case insertImageAsset(InsertImageAssetCommand)
+    case updateImageAsset(UpdateImageAssetCommand)
+    case removeImageAsset(RemoveImageAssetCommand)
     case batch([DocumentCommand])
 
     var name: CommandName {
@@ -137,6 +156,9 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
         case .insertGuide: .insertGuide
         case .setGuidePosition: .setGuidePosition
         case .removeGuide: .removeGuide
+        case .insertImageAsset: .insertImageAsset
+        case .updateImageAsset: .updateImageAsset
+        case .removeImageAsset: .removeImageAsset
         case .batch: .batch
         }
     }
@@ -176,6 +198,12 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
             [command.guideID.commandTarget]
         case .removeGuide(let command):
             [command.guideID.commandTarget]
+        case .insertImageAsset(let command):
+            [command.asset.id.commandTarget]
+        case .updateImageAsset(let command):
+            [command.asset.id.commandTarget]
+        case .removeImageAsset(let command):
+            [command.assetID.commandTarget]
         case .batch(let commands):
             commands.flatMap(\.targets)
         }
@@ -235,6 +263,9 @@ struct CommandRegistry {
             CommandDescriptor(name: .insertGuide, title: "Add Guide", mutatesDocument: true),
             CommandDescriptor(name: .setGuidePosition, title: "Move Guide", mutatesDocument: true),
             CommandDescriptor(name: .removeGuide, title: "Remove Guide", mutatesDocument: true),
+            CommandDescriptor(name: .insertImageAsset, title: "Import Image", mutatesDocument: true),
+            CommandDescriptor(name: .updateImageAsset, title: "Edit Image Asset", mutatesDocument: true),
+            CommandDescriptor(name: .removeImageAsset, title: "Delete Image Asset", mutatesDocument: true),
             CommandDescriptor(name: .batch, title: "Grouped Edit", mutatesDocument: true),
             CommandDescriptor(name: .undo, title: "Undo", mutatesDocument: true),
             CommandDescriptor(name: .redo, title: "Redo", mutatesDocument: true),
@@ -381,6 +412,41 @@ struct CommandRegistry {
         case .removeGuide(let value):
             guard document.guides.contains(where: { $0.id == value.guideID }) else {
                 return .disabled(reason: "The guide no longer exists.")
+            }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .insertImageAsset(let value):
+            guard (0...document.imageAssets.count).contains(value.index) else {
+                return .disabled(reason: "The asset insertion position is no longer valid.")
+            }
+            guard !document.imageAssets.contains(where: { $0.id == value.asset.id }) else {
+                return .disabled(reason: "An image asset with this stable identity already exists.")
+            }
+            guard !document.imageAssets.contains(where: { $0.contentHash == value.asset.contentHash }) else {
+                return .disabled(reason: "These image bytes are already imported.")
+            }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .updateImageAsset(let value):
+            guard document.imageAssets.contains(where: { $0.id == value.asset.id }) else {
+                return .disabled(reason: "The image asset no longer exists.")
+            }
+            guard !document.imageAssets.contains(where: {
+                $0.id != value.asset.id && $0.contentHash == value.asset.contentHash
+            }) else {
+                return .disabled(reason: "These image bytes already belong to another asset.")
+            }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .removeImageAsset(let value):
+            guard document.imageAssets.contains(where: { $0.id == value.assetID }) else {
+                return .disabled(reason: "The image asset no longer exists.")
+            }
+            let reference = value.assetID.description
+            guard !document.pages.flatMap(\.nodes).contains(where: {
+                $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
+            }) else {
+                return .disabled(reason: "Detach or remove every Image using this asset before deleting it.")
             }
             return validationAvailability(afterApplying: command, to: document)
 
@@ -624,6 +690,25 @@ struct CommandRegistry {
             return CommandMutation(
                 inverse: .insertGuide(InsertGuideCommand(guide: guide, index: index))
             )
+
+        case .insertImageAsset(let value):
+            document.imageAssets.insert(value.asset, at: value.index)
+            return CommandMutation(inverse: .removeImageAsset(.init(assetID: value.asset.id)))
+
+        case .updateImageAsset(let value):
+            guard let index = document.imageAssets.firstIndex(where: { $0.id == value.asset.id }) else {
+                throw CommandExecutionError.disabled("The image asset no longer exists.")
+            }
+            let previous = document.imageAssets[index]
+            document.imageAssets[index] = value.asset
+            return CommandMutation(inverse: .updateImageAsset(.init(asset: previous)))
+
+        case .removeImageAsset(let value):
+            guard let index = document.imageAssets.firstIndex(where: { $0.id == value.assetID }) else {
+                throw CommandExecutionError.disabled("The image asset no longer exists.")
+            }
+            let asset = document.imageAssets.remove(at: index)
+            return CommandMutation(inverse: .insertImageAsset(.init(asset: asset, index: index)))
 
         case .batch(let commands):
             var inverses: [DocumentCommand] = []

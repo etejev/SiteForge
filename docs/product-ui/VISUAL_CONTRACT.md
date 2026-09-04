@@ -51,8 +51,15 @@ container with 48-point default padding; Stack is vertical/start with 24-point
 padding and gap; Grid is two equal row-major columns with 24-point padding and
 gap. Button, Link, Divider, Navbar, and Footer remain disabled with a specific
 reason and cannot create canonical content, history, or package state. Assets
-and Components are explicit accessible unavailable destinations until their
-separate storage/definition work exists.
+is a functional local-raster library with a direct Import Images action,
+searchable nonwrapping rows, bounded thumbnails, filename, dimensions, format,
+byte size, usage count, rename, replacement, usage reveal, safe deletion, and
+selected-asset insertion. Image is a real Basic element and Insert command;
+its Design controls expose the asset, Fit/Fill/Stretch, bounded Fill focal
+point, and explicit alt/decorative semantics without duplicating Layout
+geometry. Missing bytes preserve the Image and show an in-bounds editor
+placeholder. Components remains an explicit accessible unavailable
+destination until its separate definition work exists.
 
 The inspector order is Design, Layout, Content, Interactions, and
 Accessibility. Design provides bounded ordered solid and linear-gradient fill

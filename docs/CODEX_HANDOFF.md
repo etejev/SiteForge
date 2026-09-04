@@ -2,6 +2,21 @@
 
 ## Current checkpoint
 
+`SF-AUTHORING-019` is **VERIFIED AND DONE**. Schema-v5 adds one image-asset
+catalogue and Image node/reference, retains
+exact local raster bytes in the existing content-addressed resource sidecar,
+and integrates the Assets pane, Elements/Insert commands, identity-gated Image
+Inspector edits, immutable native rendering, history, package/recovery, and
+fresh-process reopen. Focused model/persistence/renderer coverage passed
+116/116, the nonmodal Image-tool regression passed 1/1, and the actual-app
+native import/insert/edit/Undo/Redo/Save/reopen journey passed 1/1. Six
+original-resolution states passed visual review. Final `./sf verify` passed 390
+unit/integration plus 49 UI tests (439 total), zero failures, with all repository
+checks green on 2026-09-04. Do not create a second asset
+store, retain user paths, serialize thumbnail/editor state, or broaden this
+slice into image fills, remote providers, responsive sources, or export. No
+next READY milestone is specified.
+
 `SF-AUTHORING-018` is **VERIFIED AND DONE**. The current tree extends the
 existing breakpoint cascade rather than adding a parallel responsive system:
 Tablet/Mobile overrides cover Section padding, Stack direction/gap/padding/

@@ -71,14 +71,14 @@ enum ElementCatalogAvailability: Equatable {
 }
 
 enum ElementCatalogItem: String, CaseIterable, Identifiable {
-    case section, stack, grid, frame, text, button, link, divider, navbar, footer
+    case section, stack, grid, frame, text, image, button, link, divider, navbar, footer
 
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
     var category: String {
         switch self {
         case .section, .stack, .grid, .frame: "Layout"
-        case .text, .button, .link, .divider: "Basic"
+        case .text, .image, .button, .link, .divider: "Basic"
         case .navbar, .footer: "Site"
         }
     }
@@ -89,6 +89,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .grid: "square.grid.2x2"
         case .frame: "rectangle.dashed"
         case .text: "textformat"
+        case .image: "photo"
         case .button: "capsule"
         case .link: "link"
         case .divider: "minus"
@@ -100,6 +101,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         switch self {
         case .frame: "F"
         case .text: "T"
+        case .image: "I"
         default: "No shortcut"
         }
     }
@@ -110,6 +112,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .grid: .available(.grid)
         case .frame: .available(.frame)
         case .text: .available(.text)
+        case .image: .available(.image)
         case .button, .link, .divider:
             .unavailable("This basic element is not available until its canonical content command is implemented.")
         case .navbar, .footer:
@@ -124,6 +127,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .grid: .grid
         case .frame: .frame
         case .text: .text
+        case .image: .image
         case .button, .link, .divider, .navbar, .footer: nil
         }
     }
@@ -136,6 +140,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .available(.grid): "Arms the transactional Grid insertion path."
         case .available(.frame): "Arms the existing transactional Frame insertion path."
         case .available(.text): "Arms the existing transactional plain-Text insertion path."
+        case .available(.image): "Inserts the selected local image asset through the transactional Image path."
         case .available: "No other insertion capability is currently available."
         case .unavailable(let reason): reason
         }
@@ -626,12 +631,15 @@ struct WorkspaceScenePreparationRequest: Sendable {
     let viewport: CanvasViewportState
     let surfaceID: CanvasRenderSurfaceID
     let breakpoint: ResponsiveBreakpoint
+    let imageResourceData: [AssetID: Data]
 
     init(document: CanonicalDocument, activePageID: PageID?, activeContainerID: NodeID?,
          viewport: CanvasViewportState, surfaceID: CanvasRenderSurfaceID,
-         breakpoint: ResponsiveBreakpoint = .desktop) {
+         breakpoint: ResponsiveBreakpoint = .desktop,
+         imageResourceData: [AssetID: Data] = [:]) {
         self.document = document; self.activePageID = activePageID; self.activeContainerID = activeContainerID
         self.viewport = viewport; self.surfaceID = surfaceID; self.breakpoint = breakpoint
+        self.imageResourceData = imageResourceData
     }
 }
 
@@ -772,6 +780,27 @@ actor WorkspaceScenePreparationWorker {
                     usesFallback: usesFallback
                 )
             }
+            let imageAssetID = node.kind == .image
+                ? node.insertionStringProperty(CanonicalImageStyle.namespace + "assetID").flatMap(AssetID.init(uuidString:))
+                : nil
+            let imageAsset = imageAssetID.flatMap { id in
+                request.document.imageAssets.first(where: { $0.id == id })
+            }
+            let imageFit = node.insertionStringProperty(CanonicalImageStyle.namespace + "fit")
+                .flatMap(CanvasImageFitMode.init(rawValue:))
+            let imageFocalX = node.insertionNumberProperty(CanonicalImageStyle.namespace + "focal.x") ?? 0.5
+            let imageFocalY = node.insertionNumberProperty(CanonicalImageStyle.namespace + "focal.y") ?? 0.5
+            let imageAlt = node.insertionStringProperty(CanonicalImageStyle.namespace + "alt") ?? ""
+            let imageDecorative = node.insertionBooleanProperty(CanonicalImageStyle.namespace + "decorative")
+            let imageAccessibilityLabel: String? = if node.kind == .image {
+                if imageDecorative {
+                    "Decorative image: \(imageAsset?.displayName ?? node.name)"
+                } else if imageAlt.isEmpty {
+                    "Image: \(imageAsset?.displayName ?? node.name); alternative text is empty"
+                } else {
+                    imageAlt
+                }
+            } else { nil }
             renderObjects.append(CanvasRenderObject(
                 id: node.id,
                 frame: frame,
@@ -779,7 +808,7 @@ actor WorkspaceScenePreparationWorker {
                 paintOrder: renderObjects.count,
                 style: style,
                 isVisible: !node.selectionBooleanProperty("hidden"),
-                accessibilityLabel: node.kind == .text ? "Text object" : node.name,
+                accessibilityLabel: node.kind == .text ? "Text object" : (imageAccessibilityLabel ?? node.name),
                 plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
                 displayName: node.kind == .text ? nil : node.name,
                 fillRGBA: nil,
@@ -788,7 +817,14 @@ actor WorkspaceScenePreparationWorker {
                 border: border,
                 cornerRadius: boxStyle?.cornerRadius ?? 0,
                 shadow: shadow,
-                typography: typography
+                typography: typography,
+                imageAssetID: imageAssetID,
+                imageData: imageAssetID.flatMap { request.imageResourceData[$0] },
+                imagePixelWidth: imageAsset?.pixelWidth,
+                imagePixelHeight: imageAsset?.pixelHeight,
+                imageFitMode: imageFit,
+                imageFocalX: imageFocalX,
+                imageFocalY: imageFocalY
             ))
         }
 
@@ -945,6 +981,13 @@ final class WorkspaceShellState: ObservableObject {
     private var responsiveVisibilityAnnouncementContext: InspectorAnnouncementContext?
     @Published private(set) var designInspectorFailure: DesignInspectorError?
     @Published private(set) var lastDesignInspectorAnnouncement = "Design Inspector inactive"
+    @Published var assetSearchText = ""
+    @Published var selectedAssetID: AssetID?
+    @Published private(set) var isImportingImages = false
+    @Published private(set) var lastAssetAnnouncement = "No image asset selected"
+    @Published private(set) var imageThumbnailData: [AssetID: Data] = [:]
+    @Published private(set) var imageInspectorFailure: ImageInspectorError?
+    @Published private(set) var lastImageInspectorAnnouncement = "Image Inspector inactive"
     @Published private(set) var snapResolution: SnapResolution?
     @Published private(set) var isSnappingSuppressed = false
     /// Scene-local editor orientation preference; never canonical project data.
@@ -986,6 +1029,9 @@ final class WorkspaceShellState: ObservableObject {
     private let designInspectorRegistry = DesignInspectorCommandRegistry()
     private let designBoxStyleRegistry = DesignBoxStyleCommandRegistry()
     private let typographyRegistry = TypographyCommandRegistry()
+    private let imageImportWorker = ImageImportWorker()
+    private let imageThumbnailWorker = ImageThumbnailWorker()
+    private let imageInspectorRegistry = ImageInspectorCommandRegistry()
     private let snapResolver = SnapResolver()
     private let guideRegistry = GuideCommandRegistry()
     private let renderSurfaceID = CanvasRenderSurfaceID()
@@ -1015,6 +1061,7 @@ final class WorkspaceShellState: ObservableObject {
     private var activePointerDragTransfer: LocalLayerDragTransfer?
     private var activePointerDropCallback: LocalLayerDragCallbackToken?
     private var pointerDragCallbackGeneration: UInt64 = 0
+    private var thumbnailTasks: [AssetID: Task<Void, Never>] = [:]
 
     init(
         documentSession: DocumentSession = DocumentSession(),
@@ -1049,6 +1096,7 @@ final class WorkspaceShellState: ObservableObject {
                 self.synchronizeViewportDocumentBoundary(document)
             }
         }
+        refreshImageThumbnails(for: documentSession.document)
     }
 
     var canUndo: Bool { documentSession.canUndo }
@@ -1057,6 +1105,315 @@ final class WorkspaceShellState: ObservableObject {
     var nextRedoLabel: String? { documentSession.nextRedoLabel }
     var undoDisabledReason: String? { documentSession.undoAvailability.disabledReason }
     var redoDisabledReason: String? { documentSession.redoAvailability.disabledReason }
+
+    var imageAssets: [ImageAsset] {
+        let query = assetSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return documentSession.document.imageAssets }
+        return documentSession.document.imageAssets.filter {
+            $0.displayName.localizedCaseInsensitiveContains(query)
+                || $0.originalFilename.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    func imageAssetUsageCount(_ assetID: AssetID) -> Int {
+        let reference = assetID.description
+        return documentSession.document.pages.flatMap(\.nodes).filter {
+            $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
+        }.count
+    }
+
+    func imageAssetData(_ assetID: AssetID) -> Data? {
+        guard let asset = documentSession.document.imageAssets.first(where: { $0.id == assetID }) else { return nil }
+        return try? lifecycle.projectResourceData(for: asset.resourceID)
+    }
+
+    func imageAssetThumbnail(_ assetID: AssetID) -> Data? {
+        imageThumbnailData[assetID]
+    }
+
+    private func refreshImageThumbnails(for document: CanonicalDocument) {
+        let liveIDs = Set(document.imageAssets.map(\.id))
+        imageThumbnailData = imageThumbnailData.filter { liveIDs.contains($0.key) }
+        for (id, task) in thumbnailTasks where !liveIDs.contains(id) {
+            task.cancel()
+            thumbnailTasks[id] = nil
+        }
+        for asset in document.imageAssets where imageThumbnailData[asset.id] == nil && thumbnailTasks[asset.id] == nil {
+            guard let bytes = try? lifecycle.projectResourceData(for: asset.resourceID) else { continue }
+            let expectedResourceID = asset.resourceID
+            thumbnailTasks[asset.id] = Task { [weak self] in
+                guard let self else { return }
+                defer { thumbnailTasks[asset.id] = nil }
+                guard let thumbnail = try? await imageThumbnailWorker.thumbnailPNG(from: bytes),
+                      !Task.isCancelled,
+                      documentSession.document.imageAssets.contains(where: {
+                          $0.id == asset.id && $0.resourceID == expectedResourceID
+                      }) else { return }
+                imageThumbnailData[asset.id] = thumbnail
+            }
+        }
+    }
+
+    func insertSelectedImage() {
+        guard selectedAssetID != nil else {
+            lastAssetAnnouncement = "Select an imported image first"
+            announcementPoster.post(lastAssetAnnouncement)
+            return
+        }
+        performDefaultInsertion(.image, provenance: .accessibility)
+    }
+
+    func revealImageUsage(_ assetID: AssetID) {
+        let reference = assetID.description
+        guard let page = documentSession.document.pages.first(where: { page in
+            page.nodes.contains { $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference }
+        }), let node = page.nodes.first(where: {
+            $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
+        }) else {
+            lastAssetAnnouncement = "This image asset is unused"
+            announcementPoster.post(lastAssetAnnouncement)
+            return
+        }
+        if effectiveSelectedPageID != page.id { selectPage(page.id) }
+        navigatorTab = .layers
+        DispatchQueue.main.async { [weak self] in
+            self?.selectLayer(node.id, modifier: .replace)
+        }
+    }
+
+    func replaceImageAsset(_ assetID: AssetID) {
+        guard let url = NativeImageOpenPanel.chooseReplacement() else {
+            lastAssetAnnouncement = "Image replacement cancelled; the project is unchanged"
+            return
+        }
+        let expectedRevision = documentSession.document.revision
+        isImportingImages = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { isImportingImages = false }
+            do {
+                let prepared = try await imageImportWorker.prepare(url: url)
+                guard documentSession.document.revision == expectedRevision,
+                      var existing = documentSession.document.imageAssets.first(where: { $0.id == assetID }) else {
+                    lastAssetAnnouncement = "Replacement ignored because the document changed"
+                    return
+                }
+                if documentSession.document.imageAssets.contains(where: {
+                    $0.id != assetID && $0.contentHash == prepared.asset.contentHash
+                }) {
+                    lastAssetAnnouncement = "That image is already imported as another asset"
+                    return
+                }
+                existing.resourceID = prepared.asset.resourceID
+                existing.originalFilename = prepared.asset.originalFilename
+                existing.format = prepared.asset.format
+                existing.pixelWidth = prepared.asset.pixelWidth
+                existing.pixelHeight = prepared.asset.pixelHeight
+                existing.byteCount = prepared.asset.byteCount
+                existing.contentHash = prepared.asset.contentHash
+                _ = try lifecycle.installingProjectResource(prepared.descriptor, data: prepared.data) {
+                    try documentSession.execute(.updateImageAsset(.init(asset: existing)))
+                }
+                imageThumbnailData[assetID] = nil
+                refreshImageThumbnails(for: documentSession.document)
+                lastAssetAnnouncement = "Replaced image asset and updated \(imageAssetUsageCount(assetID)) use\(imageAssetUsageCount(assetID) == 1 ? "" : "s")"
+                announcementPoster.post(lastAssetAnnouncement)
+            } catch let error as ImageImportError {
+                lastAssetAnnouncement = error.localizedDescription
+                announcementPoster.post(lastAssetAnnouncement)
+            } catch {
+                lastAssetAnnouncement = "The image could not be replaced"
+            }
+        }
+    }
+
+    func importImages(insertFirst: Bool = false) {
+        guard let urls = NativeImageOpenPanel.chooseImages(insertFirst: insertFirst) else {
+            lastAssetAnnouncement = "Image import cancelled; the project is unchanged"
+            announcementPoster.post(lastAssetAnnouncement)
+            return
+        }
+        importImageURLs(urls, insertFirst: insertFirst)
+    }
+
+    /// Production import boundary shared by the native panel and document
+    /// reopen/recovery tests. URLs are consumed only while importing and are
+    /// never retained in canonical state or diagnostics.
+    func importImageURLs(_ urls: [URL], insertFirst: Bool = false) {
+        guard !urls.isEmpty else { return }
+        let expectedDocumentID = documentSession.document.id
+        var expectedRevision = documentSession.document.revision
+        isImportingImages = true
+        lastAssetAnnouncement = "Importing \(urls.count) image\(urls.count == 1 ? "" : "s")…"
+        Task { [weak self] in
+            guard let self else { return }
+            var insertedAssetID: AssetID?
+            var imported = 0
+            var duplicate = 0
+            var lastFailure: ImageImportError?
+            for url in urls {
+                do {
+                    let prepared = try await imageImportWorker.prepare(url: url)
+                    guard documentSession.document.id == expectedDocumentID,
+                          documentSession.document.revision == expectedRevision else {
+                        lastAssetAnnouncement = "Import stopped because the document changed"
+                        break
+                    }
+                    if let existing = documentSession.document.imageAssets.first(where: {
+                        $0.contentHash == prepared.asset.contentHash
+                    }) {
+                        duplicate += 1
+                        selectedAssetID = existing.id
+                        insertedAssetID = insertedAssetID ?? existing.id
+                        continue
+                    }
+                    _ = try lifecycle.installingProjectResource(prepared.descriptor, data: prepared.data) {
+                        try documentSession.execute(.insertImageAsset(.init(
+                            asset: prepared.asset,
+                            index: documentSession.document.imageAssets.count
+                        )))
+                    }
+                    expectedRevision = documentSession.document.revision
+                    refreshImageThumbnails(for: documentSession.document)
+                    selectedAssetID = prepared.asset.id
+                    insertedAssetID = insertedAssetID ?? prepared.asset.id
+                    imported += 1
+                } catch is CancellationError {
+                    lastFailure = .cancelled
+                } catch let error as ImageImportError {
+                    lastFailure = error
+                } catch {
+                    lastFailure = .ioFailure
+                }
+            }
+            isImportingImages = false
+            if let lastFailure, imported == 0, duplicate == 0 {
+                lastAssetAnnouncement = lastFailure.localizedDescription
+            } else {
+                var parts = ["Imported \(imported) image\(imported == 1 ? "" : "s")"]
+                if duplicate > 0 { parts.append("reused \(duplicate) duplicate") }
+                if let lastFailure { parts.append("last failure: \(lastFailure.localizedDescription)") }
+                lastAssetAnnouncement = parts.joined(separator: "; ")
+            }
+            announcementPoster.post(lastAssetAnnouncement)
+            if insertFirst, let insertedAssetID {
+                selectedAssetID = insertedAssetID
+                performDefaultInsertion(.image, provenance: .accessibility)
+            }
+        }
+    }
+
+    func renameImageAsset(_ assetID: AssetID, to rawName: String) {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.utf8.count <= ImageAsset.maximumDisplayNameBytes,
+              var asset = documentSession.document.imageAssets.first(where: { $0.id == assetID }) else {
+            lastAssetAnnouncement = "Asset names cannot be empty"
+            return
+        }
+        asset.displayName = name
+        do {
+            _ = try documentSession.execute(.updateImageAsset(.init(asset: asset)))
+            lastAssetAnnouncement = "Renamed image asset"
+            announcementPoster.post(lastAssetAnnouncement)
+        } catch { lastAssetAnnouncement = error.localizedDescription }
+    }
+
+    func requestDeleteImageAsset(_ assetID: AssetID) {
+        let uses = imageAssetUsageCount(assetID)
+        if uses > 0 {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Delete this image and its uses?"
+            alert.informativeText = "This asset is used by \(uses) Image object\(uses == 1 ? "" : "s"). SiteForge can remove those objects and the asset together as one undoable edit, or leave the project unchanged."
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Delete Uses and Asset")
+            guard alert.runModal() == .alertSecondButtonReturn else {
+                lastAssetAnnouncement = "Asset deletion cancelled; the project is unchanged"
+                announcementPoster.post(lastAssetAnnouncement)
+                return
+            }
+        }
+        deleteImageAssetAndUses(assetID)
+    }
+
+    /// Explicit safe resolution for an in-use asset. Referencing Image nodes
+    /// are leaves by canonical validation, so their removals and the asset
+    /// removal form one exact-inverse batch transaction.
+    func deleteImageAssetAndUses(_ assetID: AssetID) {
+        let reference = assetID.description
+        let nodeRemovals = documentSession.document.pages.flatMap { page in
+            page.nodes.filter {
+                $0.kind == .image && $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
+            }.map { DocumentCommand.removeNode(.init(pageID: page.id, nodeID: $0.id)) }
+        }
+        let command: DocumentCommand = nodeRemovals.isEmpty
+            ? .removeImageAsset(.init(assetID: assetID))
+            : .batch(nodeRemovals + [.removeImageAsset(.init(assetID: assetID))])
+        do {
+            _ = try documentSession.execute(command)
+            if selectedAssetID == assetID { selectedAssetID = nil }
+            imageThumbnailData[assetID] = nil
+            lastAssetAnnouncement = nodeRemovals.isEmpty
+                ? "Deleted unused image asset"
+                : "Deleted image asset and \(nodeRemovals.count) use\(nodeRemovals.count == 1 ? "" : "s")"
+            announcementPoster.post(lastAssetAnnouncement)
+        } catch { lastAssetAnnouncement = error.localizedDescription }
+    }
+
+    func imageInspectorPresentation() -> ImageInspectorPresentation {
+        guard let pageID = effectiveSelectedPageID,
+              let page = documentSession.document.pages.first(where: { $0.id == pageID }),
+              !selectionState.orderedIDs.isEmpty else {
+            return .unavailable("Select an Image to edit image properties.")
+        }
+        let selected = selectionState.orderedIDs.compactMap { id in page.nodes.first(where: { $0.id == id }) }
+        let applicable = selected.filter { $0.kind == .image }
+        guard !applicable.isEmpty else { return .unavailable("Image controls apply only to Image elements.") }
+        let styles = applicable.compactMap(CanonicalImageStyle.resolve)
+        guard styles.count == applicable.count else { return .unavailable("A selected Image has invalid or missing metadata.") }
+        if styles.allSatisfy({ $0 == styles[0] }),
+           let asset = documentSession.document.imageAssets.first(where: { $0.id == styles[0].assetID }) {
+            return .single(styles[0], asset)
+        }
+        return .mixed(applicable: applicable.count, skipped: selected.count - applicable.count)
+    }
+
+    @discardableResult
+    func commitImageInspectorEdit(_ edit: ImageInspectorEdit) -> Bool {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else {
+            imageInspectorFailure = .staleRenderer
+            return false
+        }
+        let identity = ImageInspectorOperationIdentity(
+            documentID: documentSession.document.id, pageID: pageID,
+            revision: documentSession.document.revision,
+            sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration,
+            selectedNodeIDs: selectionState.orderedIDs
+        )
+        do {
+            let prepared = try imageInspectorRegistry.prepare(
+                ImageInspectorCommand(identity: identity, edit: edit),
+                in: documentSession.document, context: transformValidationContext
+            )
+            _ = try documentSession.execute(prepared.command)
+            imageInspectorFailure = nil
+            lastImageInspectorAnnouncement = "Image properties committed for \(prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s")"
+            if !prepared.skippedNodeIDs.isEmpty {
+                lastImageInspectorAnnouncement += "; skipped \(prepared.skippedNodeIDs.count) incompatible object\(prepared.skippedNodeIDs.count == 1 ? "" : "s")"
+            }
+            announcementPoster.post(lastImageInspectorAnnouncement)
+            return true
+        } catch let error as ImageInspectorError {
+            imageInspectorFailure = error
+            lastImageInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastImageInspectorAnnouncement)
+            return false
+        } catch {
+            imageInspectorFailure = .missingTarget
+            return false
+        }
+    }
 
     func selectTool(_ tool: CanvasTool) {
         if selectedTool != tool {
@@ -1073,6 +1430,19 @@ final class WorkspaceShellState: ObservableObject {
         case .grid: armInsertion(.grid)
         case .frame: armInsertion(.frame)
         case .text: armInsertion(.text)
+        case .image:
+            if selectedAssetID != nil {
+                armInsertion(.image)
+            } else {
+                // Tool selection is a scene-local state transition. Opening a
+                // modal import panel here would make programmatic, keyboard,
+                // and accessibility tool selection unexpectedly blocking.
+                // The visible Assets and Insert commands own native import.
+                insertionSession.deactivate()
+                navigatorTab = .assets
+                lastAssetAnnouncement = "Import or select an image before placing an Image"
+                announcementPoster.post(lastAssetAnnouncement)
+            }
         default: insertionSession.deactivate()
         }
     }
@@ -3675,6 +4045,17 @@ final class WorkspaceShellState: ObservableObject {
                 provenance: provenance
             ))
         }
+        if kind == .image {
+            guard let assetID = selectedAssetID,
+                  documentSession.document.imageAssets.contains(where: { $0.id == assetID }) else {
+                return nil
+            }
+            return .image(ImageInsertionCommand(
+                identity: identity, nodeID: nodeID, parentID: parentID,
+                index: parent.childIDs.count, geometry: geometry,
+                assetID: assetID, provenance: provenance
+            ))
+        }
         return .container(ContainerInsertionCommand(
             kind: kind, identity: identity, nodeID: nodeID, parentID: parentID,
             index: parent.childIDs.count, geometry: geometry, provenance: provenance
@@ -3712,6 +4093,12 @@ final class WorkspaceShellState: ObservableObject {
             command = .text(TextInsertionCommand(
                 identity: value.identity, nodeID: value.nodeID, parentID: value.parentID,
                 index: value.index, geometry: geometry, text: value.text, provenance: value.provenance
+            ))
+        } else if kind == .image, case .image(let value) = command {
+            command = .image(ImageInsertionCommand(
+                identity: value.identity, nodeID: value.nodeID, parentID: value.parentID,
+                index: value.index, geometry: geometry, assetID: value.assetID,
+                provenance: value.provenance
             ))
         } else if case .container(let value) = command {
             command = .container(ContainerInsertionCommand(
@@ -3848,6 +4235,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private func synchronizeViewportDocumentBoundary(_ document: CanonicalDocument) {
+        refreshImageThumbnails(for: document)
         if case .committing = dragDropSession.phase {
             // The synchronous drag transaction owns this exact revision transition.
         } else if let identity = dragDropSession.identity,
@@ -3922,13 +4310,18 @@ final class WorkspaceShellState: ObservableObject {
 
     private func scheduleScenePreparation() {
         preparationTask?.cancel()
+        let imageResources: [AssetID: Data] = Dictionary(uniqueKeysWithValues: documentSession.document.imageAssets.compactMap { asset -> (AssetID, Data)? in
+            guard let data = try? lifecycle.projectResourceData(for: asset.resourceID) else { return nil }
+            return (asset.id, data)
+        })
         let request = WorkspaceScenePreparationRequest(
             document: documentSession.document,
             activePageID: effectiveSelectedPageID,
             activeContainerID: selectionState.activeContainerID,
             viewport: viewportState,
             surfaceID: renderSurfaceID,
-            breakpoint: viewportPreset.responsiveBreakpoint
+            breakpoint: viewportPreset.responsiveBreakpoint,
+            imageResourceData: imageResources
         )
         let expectedIdentity = CanvasRenderRequestIdentity(
             documentID: request.document.id,

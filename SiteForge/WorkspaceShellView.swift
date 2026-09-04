@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import QuartzCore
 import UniformTypeIdentifiers
+import ImageIO
 
 struct WorkspaceShellView: View {
     @ObservedObject var state: WorkspaceShellState
@@ -378,7 +379,7 @@ private struct NavigatorView: View {
             } else if state.navigatorTab == .elements {
                 ElementsCatalogView(state: state)
             } else if state.navigatorTab == .assets {
-                FutureNavigatorDestinationView(tab: .assets)
+                AssetsNavigatorView(state: state)
                     .id(NavigatorTab.assets)
             } else if state.navigatorTab == .components {
                 FutureNavigatorDestinationView(tab: .components)
@@ -389,6 +390,146 @@ private struct NavigatorView: View {
         .workspaceChrome(.navigator)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.navigator.rawValue)
+    }
+}
+
+private struct AssetsNavigatorView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Images").font(.headline)
+                Spacer()
+                Button("Import Images…", systemImage: "plus") { state.importImages() }
+                    .labelStyle(.iconOnly)
+                    .help("Import Images…")
+                    .accessibilityLabel("Import Images")
+                    .accessibilityIdentifier("assets.import")
+            }
+            TextField("Search Images", text: $state.assetSearchText)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("assets.search")
+
+            if state.imageAssets.isEmpty {
+                ContentUnavailableView {
+                    Label("No Images", systemImage: "photo.on.rectangle.angled")
+                        .accessibilityIdentifier("assets.empty")
+                } description: {
+                    Text(state.assetSearchText.isEmpty
+                         ? "Import local PNG, JPEG, GIF, TIFF, or HEIC images. Originals stay inside this project."
+                         : "No imported image matches this search.")
+                } actions: {
+                    if state.assetSearchText.isEmpty {
+                        Button("Import Images…") { state.importImages() }
+                            .accessibilityIdentifier("assets.empty.import")
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(state.imageAssets) { asset in
+                            AssetRow(asset: asset, state: state)
+                        }
+                    }
+                }
+                .accessibilityLabel("Imported image assets")
+                .accessibilityIdentifier("assets.list")
+            }
+
+            if state.isImportingImages { ProgressView().controlSize(.small) }
+            Text(state.lastAssetAnnouncement)
+                .font(.caption).foregroundStyle(.secondary)
+                .lineLimit(3)
+                .accessibilityIdentifier("assets.status")
+            HStack {
+                Button("Insert Image") { state.insertSelectedImage() }
+                    .disabled(state.selectedAssetID == nil)
+                    .accessibilityIdentifier("assets.insert.selected")
+                Button("Import and Insert…") { state.importImages(insertFirst: true) }
+                    .accessibilityIdentifier("assets.import.insert")
+            }
+            .controlSize(.small)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Assets")
+        .accessibilityIdentifier("navigator.assets.library")
+    }
+}
+
+private struct AssetRow: View {
+    let asset: ImageAsset
+    @ObservedObject var state: WorkspaceShellState
+    @State private var nameDraft = ""
+    @State private var isRenaming = false
+    @FocusState private var renameFocused: Bool
+
+    var body: some View {
+        Group {
+            if isRenaming {
+                rowContent
+            } else {
+                Button { state.selectedAssetID = asset.id } label: { rowContent }
+                    .buttonStyle(.plain)
+            }
+        }
+        .accessibilityLabel(asset.displayName)
+        .accessibilityValue("\(asset.originalFilename), \(asset.pixelWidth) by \(asset.pixelHeight) pixels, \(asset.format.rawValue), \(state.imageAssetUsageCount(asset.id)) uses")
+        .accessibilityIdentifier("assets.row.\(asset.id.description)")
+        .contextMenu {
+            Button("Insert Image") { state.selectedAssetID = asset.id; state.insertSelectedImage() }
+            Button("Rename") {
+                nameDraft = asset.displayName
+                isRenaming = true
+                DispatchQueue.main.async { renameFocused = true }
+            }
+            Button("Replace…") { state.replaceImageAsset(asset.id) }
+            Button("Reveal Usage") { state.revealImageUsage(asset.id) }
+            Divider()
+            Button("Delete…", role: .destructive) { state.requestDeleteImageAsset(asset.id) }
+        }
+    }
+
+    private var rowContent: some View {
+        HStack(spacing: 8) {
+            Group {
+                if let data = state.imageAssetThumbnail(asset.id), let image = NSImage(data: data) {
+                    Image(nsImage: image).resizable().scaledToFit()
+                } else {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 42, height: 42)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 2) {
+                if isRenaming {
+                    TextField("Asset name", text: $nameDraft)
+                        .focused($renameFocused)
+                        .onSubmit { commitRename() }
+                        .onExitCommand { isRenaming = false; renameFocused = false }
+                        .accessibilityIdentifier("assets.rename.field.\(asset.id.description)")
+                } else {
+                    Text(asset.displayName).lineLimit(1)
+                }
+                Text(asset.originalFilename)
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text("\(asset.pixelWidth) × \(asset.pixelHeight) · \(asset.format.rawValue.uppercased()) · \(ByteCountFormatter.string(fromByteCount: Int64(asset.byteCount), countStyle: .file))")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text("\(state.imageAssetUsageCount(asset.id)) use\(state.imageAssetUsageCount(asset.id) == 1 ? "" : "s")")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 2)
+            if state.selectedAssetID == asset.id { Image(systemName: "checkmark.circle.fill") }
+        }
+        .padding(6).contentShape(Rectangle())
+        .background(state.selectedAssetID == asset.id ? Color.accentColor.opacity(0.14) : .clear,
+                    in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func commitRename() {
+        state.renameImageAsset(asset.id, to: nameDraft)
+        isRenaming = false
     }
 }
 
@@ -905,10 +1046,11 @@ private struct CanvasPlaceholderView: View {
                         VStack(spacing: 10) {
                             Label("Your canvas is empty", systemImage: "rectangle.dashed")
                                 .font(.headline)
-                            Text("Start with a Frame or plain Text. Blank-project roots are structural and are not rendered.")
+                            Text("Start with a Frame, plain Text, or an imported Image. Blank-project roots are structural and are not rendered.")
                                 .multilineTextAlignment(.center)
                                 .font(.callout)
-                            Text("Use the visible Frame or Text actions above the canvas.")
+                            Text("Use the visible Frame or Text actions, or import and insert an Image from Assets.")
+                                .multilineTextAlignment(.center)
                         }
                         // Keep the central world-space canvas available to the
                         // real Frame/Text pointer workflow; these named start
@@ -1918,6 +2060,9 @@ private struct DesignInspectorFieldsView: View {
     @State private var lineHeightDraft = ""
     @State private var trackingDraft = ""
     @State private var message: String?
+    @State private var imageFocalXDraft = ""
+    @State private var imageFocalYDraft = ""
+    @State private var imageAltDraft = ""
 
     /// Includes the current revision and is used to reject a command queued
     /// from a control update after another transaction or selection has won.
@@ -1931,6 +2076,7 @@ private struct DesignInspectorFieldsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
+            imageControls
             Text("Appearance").font(.headline)
             let fill = state.designInspectorFillValue()
             let fillIsApplicable = !isUnavailable(fill)
@@ -2025,6 +2171,13 @@ private struct DesignInspectorFieldsView: View {
         return 100
     }
     private func resetDrafts() {
+        if case .single(let image, _) = state.imageInspectorPresentation() {
+            imageFocalXDraft = String(format: "%.0f", image.focalX * 100)
+            imageFocalYDraft = String(format: "%.0f", image.focalY * 100)
+            imageAltDraft = image.altText
+        } else {
+            imageFocalXDraft = ""; imageFocalYDraft = ""; imageAltDraft = ""
+        }
         switch state.designInspectorFillValue() {
         case .single(let color, _): hexDraft = color.hexadecimalRGBA
         case .mixed: hexDraft = ""
@@ -2053,6 +2206,101 @@ private struct DesignInspectorFieldsView: View {
             trackingDraft = Self.formatTypographyNumber(typography.tracking)
         case .mixed, .unavailable:
             fontFamilyDraft = ""; fontSizeDraft = ""; lineHeightDraft = ""; trackingDraft = ""
+        }
+    }
+
+    @ViewBuilder
+    private var imageControls: some View {
+        switch state.imageInspectorPresentation() {
+        case .unavailable:
+            EmptyView()
+        case .mixed(let applicable, let skipped):
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Image").font(.headline)
+                Text("Mixed image properties across \(applicable) Image\(applicable == 1 ? "" : "s")\(skipped > 0 ? "; \(skipped) incompatible object\(skipped == 1 ? "" : "s") will be skipped" : "").")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.image.mixed")
+            }
+        case .single(let image, let asset):
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Image").font(.headline)
+                HStack(spacing: 8) {
+                    Group {
+                        if let data = state.imageAssetThumbnail(asset.id), let thumbnail = NSImage(data: data) {
+                            Image(nsImage: thumbnail).resizable().scaledToFit()
+                        } else {
+                            Image(systemName: "exclamationmark.triangle")
+                        }
+                    }
+                    .frame(width: 48, height: 40)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(asset.displayName).lineLimit(1)
+                        Text("\(asset.pixelWidth) × \(asset.pixelHeight)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Replace…") { state.replaceImageAsset(asset.id) }
+                        .fixedSize()
+                        .accessibilityIdentifier("inspector.image.replace")
+                }
+                Picker("Fit Mode", selection: Binding(
+                    get: { image.fitMode },
+                    set: { _ = state.commitImageInspectorEdit(.fit($0)) }
+                )) {
+                    ForEach(ImageFitMode.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("inspector.image.fit")
+                HStack(spacing: 6) {
+                    Text("Focal").frame(width: 42, alignment: .leading)
+                    TextField("X %", text: $imageFocalXDraft)
+                        .textFieldStyle(.roundedBorder).monospacedDigit()
+                        .onSubmit { commitImageFocal() }
+                        .accessibilityLabel("Image focal point X percent")
+                        .accessibilityIdentifier("inspector.image.focalX")
+                    TextField("Y %", text: $imageFocalYDraft)
+                        .textFieldStyle(.roundedBorder).monospacedDigit()
+                        .onSubmit { commitImageFocal() }
+                        .accessibilityLabel("Image focal point Y percent")
+                        .accessibilityIdentifier("inspector.image.focalY")
+                    Button("Reset") {
+                        imageFocalXDraft = "50"; imageFocalYDraft = "50"
+                        _ = state.commitImageInspectorEdit(.focal(x: 0.5, y: 0.5))
+                    }
+                    .fixedSize().accessibilityIdentifier("inspector.image.focalReset")
+                }
+                TextField("Alternative text", text: $imageAltDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(image.isDecorative)
+                    .onSubmit { _ = state.commitImageInspectorEdit(.altText(imageAltDraft)) }
+                    .accessibilityLabel("Image alternative text")
+                    .accessibilityIdentifier("inspector.image.alt")
+                Toggle("Decorative image", isOn: Binding(
+                    get: { image.isDecorative },
+                    set: { _ = state.commitImageInspectorEdit(.decorative($0)) }
+                ))
+                .toggleStyle(.checkbox)
+                .accessibilityHint("Decorative Images are ignored by authored-site assistive semantics; editor metadata remains available.")
+                .accessibilityIdentifier("inspector.image.decorative")
+                Text(state.lastImageInspectorAnnouncement)
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.image.status")
+                Divider()
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("inspector.image.fields")
+        }
+    }
+
+    private func commitImageFocal() {
+        guard let x = Double(imageFocalXDraft), let y = Double(imageFocalYDraft),
+              x.isFinite, y.isFinite, (0...100).contains(x), (0...100).contains(y) else {
+            message = ImageInspectorError.invalidFocalPoint.localizedDescription
+            return
+        }
+        if !state.commitImageInspectorEdit(.focal(x: x / 100, y: y / 100)) {
+            message = state.imageInspectorFailure?.localizedDescription
         }
     }
 
@@ -3456,6 +3704,16 @@ struct SiteForgeCommands: Commands {
             }
             .keyboardShortcut("3", modifiers: [.command, .option])
             .disabled(commandState?.insertionAvailability(.grid).isEnabled != true)
+            Divider()
+            Button("Insert Selected Image at Center") {
+                commandState?.insertSelectedImage()
+            }
+            .keyboardShortcut("i", modifiers: [.command, .shift])
+            .disabled(commandState?.selectedAssetID == nil)
+            Button("Import and Insert Image…") {
+                commandState?.importImages(insertFirst: true)
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
         }
 
         CommandMenu("Selection") {
@@ -5184,7 +5442,10 @@ final class CanvasContentTileLayer: CALayer {
             case .sectionSurface: .systemIndigo.withAlphaComponent(0.12)
             case .stackSurface: .systemTeal.withAlphaComponent(0.12)
             case .gridSurface: .systemOrange.withAlphaComponent(0.12)
-            case .imagePlaceholder: .systemPurple.withAlphaComponent(0.22)
+            // Valid images must not inherit editor placeholder color through
+            // transparent source pixels. Missing-resource treatment is drawn
+            // explicitly only after native decode fails below.
+            case .imagePlaceholder: .clear
             case .textPlaceholder: .labelColor.withAlphaComponent(0.12)
             }
             // Object opacity applies once to the complete authored layer
@@ -5216,6 +5477,56 @@ final class CanvasContentTileLayer: CALayer {
                 context.setFillColor(fallback.cgColor)
                 context.fill(rect)
             }
+            var didDrawImage = false
+            if object.style == .imagePlaceholder,
+               let data = object.imageData,
+               let source = CGImageSourceCreateWithData(data as CFData, nil),
+               let image = CGImageSourceCreateImageAtIndex(source, 0, [
+                   kCGImageSourceShouldCache: false,
+                   kCGImageSourceShouldAllowFloat: true,
+               ] as CFDictionary) {
+                let mode = object.imageFitMode ?? .fit
+                guard let resolvedDestination = CanvasImageLayout.destinationRect(
+                    source: .init(width: Double(image.width), height: Double(image.height)),
+                    bounds: .init(
+                        origin: .init(x: rect.origin.x, y: rect.origin.y),
+                        size: .init(width: rect.width, height: rect.height)
+                    ),
+                    mode: mode, focalX: object.imageFocalX, focalY: object.imageFocalY
+                ) else { continue }
+                let destination = CGRect(
+                    x: resolvedDestination.origin.x, y: resolvedDestination.origin.y,
+                    width: resolvedDestination.size.width, height: resolvedDestination.size.height
+                )
+                context.saveGState()
+                context.clip(to: rect)
+                // SiteForge's tile context is top-left/Y-down. CGImage draw is
+                // bottom-left/Y-up, so reflect exactly once around the resolved
+                // destination midpoint. Selection and hit testing keep using
+                // the unchanged authored rect.
+                context.translateBy(x: 0, y: 2 * destination.midY)
+                context.scaleBy(x: 1, y: -1)
+                context.interpolationQuality = .high
+                context.draw(image, in: destination)
+                context.restoreGState()
+                didDrawImage = true
+            }
+            if object.style == .imagePlaceholder, !didDrawImage {
+                context.setFillColor(NSColor.systemPurple.withAlphaComponent(0.14).cgColor)
+                context.fill(rect)
+                let inset = rect.insetBy(dx: max(8, 10 * viewportState.zoom.value), dy: max(8, 10 * viewportState.zoom.value))
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.alignment = .center
+                let missing = NSAttributedString(
+                    string: "Missing image\nUse Replace… in the Image Inspector",
+                    attributes: [
+                        .font: NSFont.systemFont(ofSize: max(10, 12 * viewportState.zoom.value), weight: .medium),
+                        .foregroundColor: NSColor.secondaryLabelColor,
+                        .paragraphStyle: paragraph,
+                    ]
+                )
+                drawAppKitText(missing, in: inset, context: context)
+            }
             if let border = object.border, let color = nsColor(border.rgba), border.width > 0 {
                 context.saveGState()
                 context.addPath(objectPath)
@@ -5228,7 +5539,7 @@ final class CanvasContentTileLayer: CALayer {
                 }
                 context.strokePath()
                 context.restoreGState()
-            } else {
+            } else if object.style != .imagePlaceholder || !didDrawImage {
                 let baseStroke = object.style == .frameSurface
                     ? NSColor.separatorColor.withAlphaComponent(0.85)
                     : NSColor.separatorColor

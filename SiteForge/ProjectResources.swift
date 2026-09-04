@@ -1,12 +1,128 @@
 import CryptoKit
 import Darwin
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
-enum ResourceIdentifierDomain: StableIdentifierDomain {
-    static let diagnosticNamespace = "resource"
+enum ImageImportError: Error, Equatable, LocalizedError, Sendable {
+    case cancelled, permissionDenied, unsupported, corrupt, tooLarge, invalidDimensions, ioFailure
+    var errorDescription: String? {
+        switch self {
+        case .cancelled: "Image import was cancelled."
+        case .permissionDenied: "SiteForge cannot read the selected image. Choose an accessible local file."
+        case .unsupported: "This image type is not supported. Choose PNG, JPEG, GIF, TIFF, or HEIC."
+        case .corrupt: "The selected image is corrupt or cannot be decoded."
+        case .tooLarge: "The selected image exceeds the 16 MB project-resource limit."
+        case .invalidDimensions: "The selected image dimensions exceed the supported range."
+        case .ioFailure: "The selected image could not be imported."
+        }
+    }
+    var diagnosticCategory: String {
+        switch self {
+        case .cancelled: "cancelled"
+        case .permissionDenied: "permission-denied"
+        case .unsupported: "unsupported-format"
+        case .corrupt: "decode-failed"
+        case .tooLarge: "resource-limit"
+        case .invalidDimensions: "dimension-limit"
+        case .ioFailure: "io-failure"
+        }
+    }
 }
 
-typealias ResourceID = StableIdentifier<ResourceIdentifierDomain>
+struct PreparedImageImport: Sendable {
+    let asset: ImageAsset
+    let descriptor: ProjectResourceDescriptor
+    let data: Data
+}
+
+/// Image byte loading and metadata decoding stay actor-isolated. Results are
+/// immutable and identity-tagged before the main actor performs the canonical
+/// transaction, so stale imports can be ignored without publishing drafts.
+actor ImageImportWorker {
+    func prepare(url: URL) throws -> PreparedImageImport {
+        try Task.checkCancellation()
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+        let data: Data
+        do { data = try Data(contentsOf: url, options: [.mappedIfSafe]) }
+        catch CocoaError.fileReadNoPermission { throw ImageImportError.permissionDenied }
+        catch { throw ImageImportError.ioFailure }
+        guard !data.isEmpty else { throw ImageImportError.corrupt }
+        guard data.count <= ProjectResourceIndex.maximumResourceBytes else { throw ImageImportError.tooLarge }
+        try Task.checkCancellation()
+        guard let source = CGImageSourceCreateWithData(data as CFData, [
+            kCGImageSourceShouldCache: false,
+        ] as CFDictionary), CGImageSourceGetCount(source) > 0,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else {
+            throw ImageImportError.corrupt
+        }
+        guard (1...ImageAsset.maximumPixelDimension).contains(width),
+              (1...ImageAsset.maximumPixelDimension).contains(height) else {
+            throw ImageImportError.invalidDimensions
+        }
+        let sourceType = CGImageSourceGetType(source) as String?
+        let format: ImageAssetFormat = switch sourceType {
+        case UTType.png.identifier: .png
+        case UTType.jpeg.identifier: .jpeg
+        case UTType.gif.identifier: .gif
+        case UTType.tiff.identifier: .tiff
+        case UTType.heic.identifier, UTType.heif.identifier: .heic
+        default: throw ImageImportError.unsupported
+        }
+        guard CGImageSourceCreateImageAtIndex(source, 0, [
+            kCGImageSourceShouldCache: false,
+        ] as CFDictionary) != nil else { throw ImageImportError.corrupt }
+        let hash = ProjectResourceStore.digest(data)
+        let resourceID = ResourceID()
+        let filename = String(url.lastPathComponent.prefix(255))
+        let stem = url.deletingPathExtension().lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = stem.isEmpty ? "Imported Image" : String(stem.prefix(255))
+        let descriptor = ProjectResourceDescriptor(
+            id: resourceID, filename: filename, mediaType: format.mediaType,
+            byteCount: data.count, sha256: hash
+        )
+        return PreparedImageImport(
+            asset: ImageAsset(
+                resourceID: resourceID, displayName: displayName,
+                originalFilename: filename, format: format,
+                pixelWidth: width, pixelHeight: height,
+                byteCount: data.count, contentHash: hash
+            ),
+            descriptor: descriptor, data: data
+        )
+    }
+}
+
+/// Produces bounded preview data away from the main actor. The canonical
+/// resource remains byte-for-byte unchanged; this derivative is scene-local
+/// editor state and is never serialized or entered into document history.
+actor ImageThumbnailWorker {
+    func thumbnailPNG(from data: Data, maximumPixelSize: Int = 160) throws -> Data {
+        guard maximumPixelSize > 0,
+              let source = CGImageSourceCreateWithData(data as CFData, [
+                  kCGImageSourceShouldCache: false,
+              ] as CFDictionary),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+                  kCGImageSourceShouldCacheImmediately: true,
+              ] as CFDictionary) else {
+            throw ImageImportError.corrupt
+        }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output, UTType.png.identifier as CFString, 1, nil
+        ) else { throw ImageImportError.ioFailure }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw ImageImportError.ioFailure }
+        return output as Data
+    }
+}
 
 struct ProjectResourceDescriptor: Codable, Equatable, Identifiable, Sendable {
     let id: ResourceID
@@ -35,9 +151,13 @@ extension ProjectResourceDescriptor {
 struct ProjectResourceIndex: Codable, Equatable, Sendable {
     static let currentVersion = 1
     static let packageMemberPath = "resources/index-v1.json"
-    static let maximumResourceCount = 2_000
-    static let maximumResourceBytes = 16 * 1_024 * 1_024
+    static let maximumResourceCount = ImageAsset.maximumAssetCount
+    static let maximumResourceBytes = ImageAsset.maximumResourceBytes
     static let maximumTotalBytes = 2 * 1_024 * 1_024 * 1_024
+
+    static func blobMemberPath(for sha256: String) -> String {
+        "resources/blobs/\(sha256).blob"
+    }
 
     let version: Int
     let resources: [ProjectResourceDescriptor]
@@ -398,12 +518,20 @@ actor ProjectResourceStore {
         return true
     }
 
-    private static func digest(_ data: Data) -> String {
+    static func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
 
 extension ProjectPackage {
+    static func isTransientResourceBlobPath(_ path: String) -> Bool {
+        path.hasPrefix("resources/blobs/") && path.hasSuffix(".blob")
+    }
+
+    var archiveOptionalMembers: [ProjectPackageMember] {
+        optionalMembers.filter { !Self.isTransientResourceBlobPath($0.path) }
+    }
+
     func withResourceIndex(_ index: ProjectResourceIndex) throws -> ProjectPackage {
         let member = try index.encodedMember()
         return ProjectPackage(
@@ -413,6 +541,62 @@ extension ProjectPackage {
             document: document,
             optionalMembers: optionalMembers.filter { $0.path != ProjectResourceIndex.packageMemberPath } + [member],
             compatibility: compatibility
+        )
+    }
+
+    func withResource(_ descriptor: ProjectResourceDescriptor, data: Data) throws -> ProjectPackage {
+        guard descriptor.byteCount == data.count,
+              descriptor.sha256 == ProjectResourceStore.digest(data) else {
+            throw ProjectResourceError.corruptBlob
+        }
+        var resources = try ProjectResourceIndex.decode(from: self)?.resources ?? []
+        resources.removeAll { $0.id == descriptor.id }
+        resources.append(descriptor)
+        let index = ProjectResourceIndex(resources: resources)
+        let indexed = try withResourceIndex(index)
+        let path = ProjectResourceIndex.blobMemberPath(for: descriptor.sha256)
+        let blob = ProjectPackageMember(path: path, role: .resource, data: data)
+        return ProjectPackage(
+            projectID: indexed.projectID,
+            createdAt: indexed.createdAt,
+            modifiedAt: indexed.modifiedAt,
+            document: indexed.document,
+            optionalMembers: indexed.optionalMembers.filter { $0.path != path } + [blob],
+            compatibility: indexed.compatibility
+        )
+    }
+
+    func resourceData(for descriptor: ProjectResourceDescriptor) throws -> Data {
+        let path = ProjectResourceIndex.blobMemberPath(for: descriptor.sha256)
+        guard let member = optionalMembers.first(where: { $0.path == path }) else {
+            throw ProjectResourceError.missingBlob
+        }
+        guard member.role == .resource,
+              member.data.count == descriptor.byteCount,
+              ProjectResourceStore.digest(member.data) == descriptor.sha256 else {
+            throw ProjectResourceError.corruptBlob
+        }
+        return member.data
+    }
+
+    func attachingResourceData(_ resources: [ResourceID: Data]) throws -> ProjectPackage {
+        guard let index = try ProjectResourceIndex.decode(from: self) else { return self }
+        var members = archiveOptionalMembers
+        for descriptor in index.resources {
+            guard let data = resources[descriptor.id] else { continue }
+            guard data.count == descriptor.byteCount,
+                  ProjectResourceStore.digest(data) == descriptor.sha256 else {
+                throw ProjectResourceError.corruptBlob
+            }
+            members.append(.init(
+                path: ProjectResourceIndex.blobMemberPath(for: descriptor.sha256),
+                role: .resource,
+                data: data
+            ))
+        }
+        return ProjectPackage(
+            projectID: projectID, createdAt: createdAt, modifiedAt: modifiedAt,
+            document: document, optionalMembers: members, compatibility: compatibility
         )
     }
 }

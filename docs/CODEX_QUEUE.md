@@ -12,6 +12,42 @@ None.
 
 ## DONE
 
+- [x] `SF-AUTHORING-019` Implement local image assets and Image authoring.
+  - Requirements: bounded production evidence for `SF-0801-001` through
+    `SF-0801-008` and `SF-0802-001` through `SF-0802-008`, plus only the
+    existing insertion, canvas, Inspector, persistence, history, recovery,
+    accessibility, and diagnostic contracts exercised by this vertical slice.
+    Both normative media modules remain Partial outside this local-raster path.
+  - Plan: extend the existing content-addressed `ProjectResourceStore` and
+    package resource index with one versioned canonical image-asset catalogue;
+    import validated local raster bytes off the main actor through the native
+    open panel; add one typed Image node/reference and identity-gated insertion
+    path; snapshot decoded image content into the immutable renderer; expose a
+    searchable accessible Assets pane and bounded Image Inspector for asset,
+    fit/fill/stretch, focal point, and alt/decorative semantics; then prove
+    transactional rename/replace/delete recovery, history, persistence,
+    missing-resource behavior, geometry parity, and the actual maximized and
+    practical-minimum running-app workflow before one authoritative gate.
+  - Explicit exclusions: folders, tags, favorites, bulk organization, remote
+    or stock providers, SVG/video/audio/font assets, advanced image editing,
+    filters, masks, multiple crops/renditions, responsive source sets, metadata
+    policy UI, image fills on non-Image nodes, preview/export parity, and
+    release acceptance.
+  - Result: schema-v5 owns stable image-asset descriptors and Image-node
+    references while the existing content-addressed resource sidecar preserves
+    original bytes. The native Assets pane and open-panel import path,
+    Elements/Insert commands, bounded Image Inspector, immutable renderer,
+    history, persistence, recovery, missing-resource placeholder, and
+    accessibility geometry form one production path.
+  - Evidence: focused resource/insertion/command/package/renderer coverage
+    passed 116/116; affected architecture, metadata, transform, navigator, and
+    actual-app image journeys passed. The final `./sf verify` passed 390 unit/
+    integration plus 49 UI tests (439 total), zero failures, with repository,
+    security, traceability, architecture, migration, and evidence checks green
+    on 2026-09-04. Six original-resolution maximized-window states passed
+    visual review; see
+    `docs/evidence/SF-AUTHORING-019-LOCAL-IMAGE-AUTHORING.md`.
+
 - [x] `SF-AUTHORING-018` Add responsive container layout and breakpoint
   visibility.
   - Requirements: bounded continuation of `SF-0601-001` through

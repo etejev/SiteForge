@@ -152,7 +152,7 @@ enum ResponsiveVisibilitySource: Equatable, Sendable {
 
 enum ResponsiveVisibilityResolver {
     static let namespace = "responsive.visibility.v1"
-    static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid]
+    static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image]
     static func supports(_ node: DocumentNode) -> Bool { supportedKinds.contains(node.kind) && node.insertionGeometry != nil }
     static func key(_ breakpoint: ResponsiveBreakpoint) -> String {
         "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).visible"
@@ -177,6 +177,7 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
     case section
     case stack
     case grid
+    case image
 
     var nodeKind: NodeKind {
         switch self {
@@ -185,6 +186,7 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
         case .section: .section
         case .stack: .stack
         case .grid: .grid
+        case .image: .image
         }
     }
 
@@ -194,6 +196,7 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
         case .section: "SF-0405-001"
         case .stack: "SF-0502-001"
         case .grid: "SF-0503-001"
+        case .image: "SF-0802-002"
         }
     }
 }
@@ -220,6 +223,7 @@ struct InsertionGeometry: Codable, Equatable, Sendable {
         case .text: WorldSize(width: 120, height: 24)
         case .section: WorldSize(width: 960, height: 320)
         case .stack, .grid: WorldSize(width: 240, height: 160)
+        case .image: WorldSize(width: 320, height: 240)
         }
         return Self(origin: point, size: size)
     }
@@ -261,16 +265,28 @@ struct ContainerInsertionCommand: Equatable, Sendable {
     let provenance: InsertionProvenance
 }
 
+struct ImageInsertionCommand: Equatable, Sendable {
+    let identity: InsertionOperationIdentity
+    let nodeID: NodeID
+    let parentID: NodeID
+    let index: Int
+    let geometry: InsertionGeometry
+    let assetID: AssetID
+    let provenance: InsertionProvenance
+}
+
 enum AuthoringInsertionCommand: Equatable, Sendable {
     case frame(FrameInsertionCommand)
     case text(TextInsertionCommand)
     case container(ContainerInsertionCommand)
+    case image(ImageInsertionCommand)
 
     var kind: InsertionKind {
         switch self {
         case .frame: .frame
         case .text: .text
         case .container(let value): value.kind
+        case .image: .image
         }
     }
 
@@ -279,6 +295,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .frame(let value): value.identity
         case .text(let value): value.identity
         case .container(let value): value.identity
+        case .image(let value): value.identity
         }
     }
 
@@ -287,6 +304,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .frame(let value): value.nodeID
         case .text(let value): value.nodeID
         case .container(let value): value.nodeID
+        case .image(let value): value.nodeID
         }
     }
 
@@ -295,6 +313,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .frame(let value): value.parentID
         case .text(let value): value.parentID
         case .container(let value): value.parentID
+        case .image(let value): value.parentID
         }
     }
 
@@ -303,6 +322,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .frame(let value): value.index
         case .text(let value): value.index
         case .container(let value): value.index
+        case .image(let value): value.index
         }
     }
 
@@ -311,6 +331,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .frame(let value): value.geometry
         case .text(let value): value.geometry
         case .container(let value): value.geometry
+        case .image(let value): value.geometry
         }
     }
 
@@ -319,12 +340,18 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .frame(let value): value.provenance
         case .text(let value): value.provenance
         case .container(let value): value.provenance
+        case .image(let value): value.provenance
         }
     }
 
     var text: String? {
         guard case .text(let value) = self else { return nil }
         return value.text
+    }
+
+    var imageAssetID: AssetID? {
+        guard case .image(let value) = self else { return nil }
+        return value.assetID
     }
 }
 
@@ -373,6 +400,7 @@ enum InsertionError: Error, Equatable, LocalizedError, Sendable {
     case depthLimitExceeded
     case textLimitExceeded
     case invalidText
+    case invalidImageAsset
     case cancelled
 
     var errorDescription: String? {
@@ -396,6 +424,7 @@ enum InsertionError: Error, Equatable, LocalizedError, Sendable {
         case .depthLimitExceeded: "The destination exceeds the bounded nesting depth."
         case .textLimitExceeded: "Plain text exceeds the bounded UTF-8 size limit."
         case .invalidText: "Plain text contains unsupported control input."
+        case .invalidImageAsset: "The selected image asset is no longer available in this project."
         case .cancelled: "Insertion was cancelled; the committed document is unchanged."
         }
     }
@@ -501,6 +530,10 @@ struct InsertionCommandRegistry: Sendable {
                 CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t"
             }) else { throw InsertionError.invalidText }
         }
+        if let assetID = command.imageAssetID,
+           !document.imageAssets.contains(where: { $0.id == assetID }) {
+            throw InsertionError.invalidImageAsset
+        }
         guard !cancellation.isCancelled() else { throw InsertionError.cancelled }
         let node = makeNode(for: command)
         let documentCommand = DocumentCommand.insertNode(
@@ -586,6 +619,16 @@ struct InsertionCommandRegistry: Sendable {
                 property(command.nodeID, "layout.grid.columns", .number(2), .defaulted),
                 property(command.nodeID, "layout.grid.placement", .string("row-major"), .defaulted),
             ]
+        case .image:
+            guard let assetID = command.imageAssetID else { break }
+            properties += [
+                property(command.nodeID, "content.image.v1.assetID", .string(assetID.description), .authored),
+                property(command.nodeID, "content.image.v1.fit", .string(ImageFitMode.fit.rawValue), .defaulted),
+                property(command.nodeID, "content.image.v1.focal.x", .number(0.5), .defaulted),
+                property(command.nodeID, "content.image.v1.focal.y", .number(0.5), .defaulted),
+                property(command.nodeID, "content.image.v1.alt", .string(""), .defaulted),
+                property(command.nodeID, "content.image.v1.decorative", .boolean(false), .defaulted),
+            ]
         case .frame, .text: break
         }
         if let text = command.text {
@@ -637,31 +680,6 @@ struct InsertionCommandRegistry: Sendable {
 }
 
 extension DocumentNode {
-    func insertionProperty(_ key: String) -> NodeProperty? {
-        properties.first { $0.key.rawValue == key }
-    }
-
-    func insertionNumberProperty(_ key: String) -> Double? {
-        guard let property = insertionProperty(key), case .number(let value) = property.value else {
-            return nil
-        }
-        return value
-    }
-
-    func insertionStringProperty(_ key: String) -> String? {
-        guard let property = insertionProperty(key), case .string(let value) = property.value else {
-            return nil
-        }
-        return value
-    }
-
-    func insertionBooleanProperty(_ key: String) -> Bool {
-        guard let property = insertionProperty(key), case .boolean(let value) = property.value else {
-            return false
-        }
-        return value
-    }
-
     var insertionGeometry: InsertionGeometry? {
         guard let x = insertionNumberProperty("layout.x"),
               let y = insertionNumberProperty("layout.y"),

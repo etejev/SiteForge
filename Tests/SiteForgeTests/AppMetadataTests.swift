@@ -116,16 +116,17 @@ final class AppMetadataTests: XCTestCase {
     @MainActor
     func testElementsCatalogIsOrderedTruthfulAndDoesNotCreateCanonicalState() {
         XCTAssertEqual(ElementCatalogItem.allCases.map(\.rawValue), [
-            "section", "stack", "grid", "frame", "text", "button", "link", "divider", "navbar", "footer"
+            "section", "stack", "grid", "frame", "text", "image", "button", "link", "divider", "navbar", "footer"
         ])
         XCTAssertEqual(ElementCatalogItem.section.availability, .available(.section))
         XCTAssertEqual(ElementCatalogItem.stack.availability, .available(.stack))
         XCTAssertEqual(ElementCatalogItem.grid.availability, .available(.grid))
         XCTAssertEqual(ElementCatalogItem.frame.availability, .available(.frame))
         XCTAssertEqual(ElementCatalogItem.text.availability, .available(.text))
+        XCTAssertEqual(ElementCatalogItem.image.availability, .available(.image))
         XCTAssertTrue(ElementCatalogItem.frame.capabilityContract.contains("transactional Frame"))
         XCTAssertTrue(ElementCatalogItem.text.capabilityContract.contains("plain-Text"))
-        for item in ElementCatalogItem.allCases where ![.section, .stack, .grid, .frame, .text].contains(item) {
+        for item in ElementCatalogItem.allCases where ![.section, .stack, .grid, .frame, .text, .image].contains(item) {
             guard case .unavailable(let reason) = item.availability else {
                 return XCTFail("\(item) must not expose an unimplemented authoring command")
             }

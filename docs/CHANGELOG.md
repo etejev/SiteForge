@@ -17,6 +17,17 @@ This file records user-visible behavior during development. It is not a substitu
 
 ### Added
 
+- Added local raster-image authoring. The Assets pane now imports validated
+  PNG, JPEG, GIF, TIFF, and HEIC originals into the existing content-addressed
+  project-resource store; exposes searchable thumbnails, dimensions, format,
+  size, usage, rename, replacement, usage reveal, and safe in-use deletion;
+  and preserves stable asset identity without local paths. Image is now a real
+  Elements/Insert command with Fit, Fill, Stretch, focal point, and explicit
+  alt/decorative controls. Renderer, selection, accessibility, Undo/Redo,
+  recovery, native Save, and fresh-process reopen share one NodeID/AssetID and
+  geometry contract. Missing bytes retain authored intent and show an in-bounds
+  recovery placeholder.
+
 - Added responsive structural layout and breakpoint visibility. Tablet and
   Mobile can now override/reset Section padding; Stack direction, gap, padding,
   and alignment; and Grid columns, gap, and padding through the existing

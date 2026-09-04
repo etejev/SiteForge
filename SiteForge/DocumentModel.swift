@@ -66,12 +66,122 @@ enum GuideIdentifierDomain: StableIdentifierDomain {
     static let diagnosticNamespace = "guide"
 }
 
+enum ResourceIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "resource"
+}
+
+enum AssetIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "asset"
+}
+
 typealias DocumentID = StableIdentifier<DocumentIdentifierDomain>
 typealias PageID = StableIdentifier<PageIdentifierDomain>
 typealias NodeID = StableIdentifier<NodeIdentifierDomain>
 typealias PropertyID = StableIdentifier<PropertyIdentifierDomain>
 typealias TemplateID = StableIdentifier<TemplateIdentifierDomain>
 typealias GuideID = StableIdentifier<GuideIdentifierDomain>
+typealias ResourceID = StableIdentifier<ResourceIdentifierDomain>
+typealias AssetID = StableIdentifier<AssetIdentifierDomain>
+
+enum ImageAssetFormat: String, Codable, CaseIterable, Sendable {
+    case png, jpeg, gif, tiff, heic
+
+    var mediaType: String {
+        switch self {
+        case .png: "image/png"
+        case .jpeg: "image/jpeg"
+        case .gif: "image/gif"
+        case .tiff: "image/tiff"
+        case .heic: "image/heic"
+        }
+    }
+}
+
+enum ImageAssetProvenance: String, Codable, Sendable {
+    case imported
+}
+
+/// Canonical image-library metadata. Original bytes remain in the existing
+/// content-addressed resource store; canonical state never retains a user
+/// path, a decoded bitmap, or an editor thumbnail.
+struct ImageAsset: Codable, Equatable, Identifiable, Sendable {
+    static let maximumAssetCount = 2_000
+    static let maximumResourceBytes = 16 * 1_024 * 1_024
+    static let maximumDisplayNameBytes = 1_024
+    static let maximumOriginalFilenameBytes = 1_024
+    static let maximumPixelDimension = 65_535
+
+    let id: AssetID
+    var resourceID: ResourceID
+    var displayName: String
+    var originalFilename: String
+    var format: ImageAssetFormat
+    var pixelWidth: Int
+    var pixelHeight: Int
+    var byteCount: Int
+    var contentHash: String
+    var provenance: ImageAssetProvenance
+
+    init(
+        id: AssetID = AssetID(), resourceID: ResourceID,
+        displayName: String, originalFilename: String,
+        format: ImageAssetFormat, pixelWidth: Int, pixelHeight: Int,
+        byteCount: Int, contentHash: String,
+        provenance: ImageAssetProvenance = .imported
+    ) {
+        self.id = id
+        self.resourceID = resourceID
+        self.displayName = displayName
+        self.originalFilename = originalFilename
+        self.format = format
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.byteCount = byteCount
+        self.contentHash = contentHash
+        self.provenance = provenance
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, resourceID, displayName, originalFilename, format, pixelWidth,
+             pixelHeight, byteCount, contentHash, provenance
+    }
+
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(AssetID.self, forKey: .id)
+        resourceID = try container.decode(ResourceID.self, forKey: .resourceID)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        originalFilename = try container.decode(String.self, forKey: .originalFilename)
+        format = try container.decode(ImageAssetFormat.self, forKey: .format)
+        pixelWidth = try container.decode(Int.self, forKey: .pixelWidth)
+        pixelHeight = try container.decode(Int.self, forKey: .pixelHeight)
+        byteCount = try container.decode(Int.self, forKey: .byteCount)
+        contentHash = try container.decode(String.self, forKey: .contentHash)
+        provenance = try container.decode(ImageAssetProvenance.self, forKey: .provenance)
+    }
+
+    func validate() throws {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              displayName.utf8.count <= Self.maximumDisplayNameBytes,
+              !originalFilename.isEmpty,
+              originalFilename.utf8.count <= Self.maximumOriginalFilenameBytes,
+              !originalFilename.contains("/"), !originalFilename.contains("\\"),
+              (1...Self.maximumPixelDimension).contains(pixelWidth),
+              (1...Self.maximumPixelDimension).contains(pixelHeight),
+              byteCount > 0, byteCount <= Self.maximumResourceBytes,
+              contentHash.count == 64,
+              contentHash == contentHash.lowercased(),
+              contentHash.allSatisfy(\.isHexDigit) else {
+            throw ModelValidationError.invalidImageAsset
+        }
+    }
+}
+
+enum ImageFitMode: String, Codable, CaseIterable, Sendable {
+    case fit, fill, stretch
+}
 
 enum GuideAxis: String, Codable, CaseIterable, Sendable {
     case horizontal
@@ -394,6 +504,63 @@ struct DocumentNode: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+extension DocumentNode {
+    func insertionProperty(_ key: String) -> NodeProperty? {
+        properties.first { $0.key.rawValue == key }
+    }
+
+    func insertionNumberProperty(_ key: String) -> Double? {
+        guard let property = insertionProperty(key), case .number(let value) = property.value else {
+            return nil
+        }
+        return value
+    }
+
+    func insertionStringProperty(_ key: String) -> String? {
+        guard let property = insertionProperty(key), case .string(let value) = property.value else {
+            return nil
+        }
+        return value
+    }
+
+    func insertionBooleanProperty(_ key: String) -> Bool {
+        guard let property = insertionProperty(key), case .boolean(let value) = property.value else {
+            return false
+        }
+        return value
+    }
+}
+
+struct CanonicalImageStyle: Equatable, Sendable {
+    static let namespace = "content.image.v1."
+    let assetID: AssetID
+    let fitMode: ImageFitMode
+    let focalX: Double
+    let focalY: Double
+    let altText: String
+    let isDecorative: Bool
+
+    static func resolve(_ node: DocumentNode) -> CanonicalImageStyle? {
+        guard node.kind == .image,
+              let rawAsset = node.insertionStringProperty(namespace + "assetID"),
+              let assetID = AssetID(uuidString: rawAsset),
+              let rawFit = node.insertionStringProperty(namespace + "fit"),
+              let fit = ImageFitMode(rawValue: rawFit),
+              let focalX = node.insertionNumberProperty(namespace + "focal.x"),
+              let focalY = node.insertionNumberProperty(namespace + "focal.y"),
+              focalX.isFinite, focalY.isFinite,
+              (0...1).contains(focalX), (0...1).contains(focalY) else { return nil }
+        return CanonicalImageStyle(
+            assetID: assetID,
+            fitMode: fit,
+            focalX: focalX,
+            focalY: focalY,
+            altText: node.insertionStringProperty(namespace + "alt") ?? "",
+            isDecorative: node.insertionBooleanProperty(namespace + "decorative")
+        )
+    }
+}
+
 struct DocumentPage: Codable, Equatable, Identifiable, Sendable {
     let id: PageID
     var name: String
@@ -521,6 +688,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
     var templateID: TemplateID?
     var pages: [DocumentPage]
     var guides: [AuthoredGuide]
+    var imageAssets: [ImageAsset]
 
     init(
         id: DocumentID = DocumentID(),
@@ -528,7 +696,8 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         creationKind: ProjectCreationKind = .blank,
         templateID: TemplateID? = nil,
         pages: [DocumentPage]? = nil,
-        guides: [AuthoredGuide] = []
+        guides: [AuthoredGuide] = [],
+        imageAssets: [ImageAsset] = []
     ) {
         self.id = id
         self.revision = revision
@@ -536,11 +705,12 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         self.templateID = templateID
         self.pages = pages ?? BlankProjectDefaults.pages()
         self.guides = guides
+        self.imageAssets = imageAssets
     }
 
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case id, revision, creationKind, templateID, pages, guides
+        case id, revision, creationKind, templateID, pages, guides, imageAssets
     }
 
     init(from decoder: Decoder) throws {
@@ -561,6 +731,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         templateID = try container.decodeIfPresent(TemplateID.self, forKey: .templateID)
         pages = try container.decode([DocumentPage].self, forKey: .pages)
         guides = try container.decode([AuthoredGuide].self, forKey: .guides)
+        imageAssets = try container.decode([ImageAsset].self, forKey: .imageAssets)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -575,6 +746,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         }
         try container.encode(pages, forKey: .pages)
         try container.encode(guides, forKey: .guides)
+        try container.encode(imageAssets, forKey: .imageAssets)
     }
 }
 
@@ -676,6 +848,11 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case invalidResponsiveGeometryState
     case invalidResponsiveContainerState
     case invalidResponsiveVisibilityState
+    case duplicateAssetID
+    case duplicateAssetResourceID
+    case duplicateAssetContent
+    case invalidImageAsset
+    case invalidImageReference
 
     var errorDescription: String? {
         switch self {
@@ -710,6 +887,11 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .invalidResponsiveGeometryState: "The document contains invalid responsive geometry state."
         case .invalidResponsiveContainerState: "The document contains invalid responsive container-layout state."
         case .invalidResponsiveVisibilityState: "The document contains invalid responsive visibility state."
+        case .duplicateAssetID: "Image asset identifiers must be unique."
+        case .duplicateAssetResourceID: "Each image asset must own one stable project resource identity."
+        case .duplicateAssetContent: "Duplicate image bytes must resolve to the existing asset identity."
+        case .invalidImageAsset: "The document contains invalid image asset metadata."
+        case .invalidImageReference: "An Image node must reference an existing canonical image asset."
         }
     }
 }
@@ -721,7 +903,7 @@ enum CanonicalResponsiveGeometryNamespaceValidator {
         "60000000-0000-4000-8000-000000000003",
     ]
     private static let fields: Set<String> = ["x", "y", "width", "height"]
-    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image]
 
     static func validate(_ node: DocumentNode) throws {
         let properties = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
@@ -911,6 +1093,37 @@ enum CanonicalTypographyNamespaceValidator {
     }
 }
 
+enum CanonicalImageNamespaceValidator {
+    static let root = "content.image.v1."
+    private static let required: Set<String> = [
+        "assetID", "fit", "focal.x", "focal.y", "alt", "decorative",
+    ]
+
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
+        guard !owned.isEmpty else { return }
+        guard node.kind == .image else { throw ModelValidationError.invalidImageReference }
+        let suffixes = owned.map { String($0.key.rawValue.dropFirst(root.count)) }
+        guard Set(suffixes) == required, suffixes.count == required.count else {
+            throw ModelValidationError.invalidImageReference
+        }
+        let values = Dictionary(uniqueKeysWithValues: owned.map {
+            (String($0.key.rawValue.dropFirst(root.count)), $0.value)
+        })
+        guard case .string(let asset)? = values["assetID"], AssetID(uuidString: asset) != nil,
+              case .string(let fit)? = values["fit"], ImageFitMode(rawValue: fit) != nil,
+              case .number(let x)? = values["focal.x"], x.isFinite, (0...1).contains(x),
+              case .number(let y)? = values["focal.y"], y.isFinite, (0...1).contains(y),
+              case .string(let alt)? = values["alt"], alt.utf8.count <= 4_096,
+              !alt.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t"
+              }),
+              case .boolean? = values["decorative"] else {
+            throw ModelValidationError.invalidImageReference
+        }
+    }
+}
+
 /// Headless canonical validation for the versioned fill-layer namespace.
 ///
 /// The richer typed projection lives in `TransformModel`, but document
@@ -1041,6 +1254,24 @@ extension CanonicalDocument {
             guard templateID == nil else { throw ModelValidationError.invalidCreationProvenance }
         }
 
+        guard imageAssets.count <= ImageAsset.maximumAssetCount else {
+            throw ModelValidationError.invalidImageAsset
+        }
+        guard Set(imageAssets.map(\.id)).count == imageAssets.count else {
+            throw ModelValidationError.duplicateAssetID
+        }
+        guard Set(imageAssets.map(\.resourceID)).count == imageAssets.count else {
+            throw ModelValidationError.duplicateAssetResourceID
+        }
+        guard Set(imageAssets.map(\.contentHash)).count == imageAssets.count else {
+            throw ModelValidationError.duplicateAssetContent
+        }
+        for asset in imageAssets {
+            do { try asset.validate() }
+            catch { throw ModelValidationError.invalidImageAsset }
+        }
+        let assetIDs = Set(imageAssets.map(\.id))
+
         var documentNodeIDs = Set<NodeID>()
         var documentPropertyIDs = Set<PropertyID>()
         for page in pages {
@@ -1048,6 +1279,7 @@ extension CanonicalDocument {
             try page.validate(
                 documentNodeIDs: &documentNodeIDs,
                 documentPropertyIDs: &documentPropertyIDs,
+                assetIDs: assetIDs,
                 checkpoint: checkpoint
             )
         }
@@ -1073,6 +1305,7 @@ private extension DocumentPage {
     func validate(
         documentNodeIDs: inout Set<NodeID>,
         documentPropertyIDs: inout Set<PropertyID>,
+        assetIDs: Set<AssetID>,
         checkpoint: () throws -> Void
     ) throws {
         try checkpoint()
@@ -1163,9 +1396,24 @@ private extension DocumentPage {
             try CanonicalFillLayerNamespaceValidator.validate(node)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
+            try CanonicalImageNamespaceValidator.validate(node)
             try CanonicalResponsiveGeometryNamespaceValidator.validate(node)
             try CanonicalResponsiveContainerNamespaceValidator.validate(node)
             try CanonicalResponsiveVisibilityNamespaceValidator.validate(node)
+            if node.kind == .image {
+                guard let reference = node.insertionStringProperty(CanonicalImageStyle.namespace + "assetID"),
+                      let assetID = AssetID(uuidString: reference), assetIDs.contains(assetID),
+                      let fit = node.insertionStringProperty(CanonicalImageStyle.namespace + "fit"),
+                      ImageFitMode(rawValue: fit) != nil,
+                      let focalX = node.insertionNumberProperty(CanonicalImageStyle.namespace + "focal.x"),
+                      let focalY = node.insertionNumberProperty(CanonicalImageStyle.namespace + "focal.y"),
+                      (0...1).contains(focalX), (0...1).contains(focalY),
+                      focalX.isFinite, focalY.isFinite,
+                      node.insertionBooleanProperty(CanonicalImageStyle.namespace + "decorative")
+                        || node.insertionStringProperty(CanonicalImageStyle.namespace + "alt") != nil else {
+                    throw ModelValidationError.invalidImageReference
+                }
+            }
             try node.validateStructuralDefaults()
         }
 
@@ -1247,10 +1495,10 @@ enum DocumentSerializationError: Error, Equatable, LocalizedError {
 }
 
 enum DocumentSerializer {
-    // Schema 4 introduces the validated Section, Stack, and Grid canonical
-    // node semantics. Schema 3 remains decodable as an immutable historical
-    // shape; it is re-emitted as v4 on the next deterministic save.
-    static let currentSchemaVersion = 4
+    // Schema 5 adds the canonical image-asset catalogue and versioned Image
+    // reference namespace. Schema 4 remains an immutable historical shape and
+    // is re-emitted as v5 on the next deterministic save.
+    static let currentSchemaVersion = 5
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -1306,7 +1554,7 @@ enum DocumentSerializer {
 
     private struct SchemaThreeEnvelope: Decodable {
         let schemaVersion: Int
-        let document: CanonicalDocument
+        let document: SchemaFourDocument
 
         private enum CodingKeys: String, CodingKey, CaseIterable { case schemaVersion, document }
 
@@ -1314,7 +1562,48 @@ enum DocumentSerializer {
             try requireExactKeys(CodingKeys.self, in: decoder)
             let container = try decoder.container(keyedBy: CodingKeys.self)
             schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-            document = try container.decode(CanonicalDocument.self, forKey: .document)
+            document = try container.decode(SchemaFourDocument.self, forKey: .document)
+        }
+    }
+
+    private struct SchemaFourEnvelope: Decodable {
+        let schemaVersion: Int
+        let document: SchemaFourDocument
+        private enum CodingKeys: String, CodingKey, CaseIterable { case schemaVersion, document }
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+            document = try container.decode(SchemaFourDocument.self, forKey: .document)
+        }
+    }
+
+    private struct SchemaFourDocument: Decodable {
+        let id: DocumentID
+        let revision: UInt64
+        let creationKind: ProjectCreationKind
+        let templateID: TemplateID?
+        let pages: [DocumentPage]
+        let guides: [AuthoredGuide]
+        private enum CodingKeys: String, CodingKey, CaseIterable {
+            case id, revision, creationKind, templateID, pages, guides
+        }
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(DocumentID.self, forKey: .id)
+            revision = try container.decode(UInt64.self, forKey: .revision)
+            creationKind = try container.decode(ProjectCreationKind.self, forKey: .creationKind)
+            guard container.contains(.templateID) else {
+                throw DecodingError.keyNotFound(CodingKeys.templateID, .init(codingPath: decoder.codingPath, debugDescription: "Schema 4 requires templateID."))
+            }
+            templateID = try container.decodeIfPresent(TemplateID.self, forKey: .templateID)
+            pages = try container.decode([DocumentPage].self, forKey: .pages)
+            guides = try container.decode([AuthoredGuide].self, forKey: .guides)
+        }
+        func migrated() -> CanonicalDocument {
+            CanonicalDocument(id: id, revision: revision, creationKind: creationKind,
+                              templateID: templateID, pages: pages, guides: guides, imageAssets: [])
         }
     }
 
@@ -1492,7 +1781,15 @@ enum DocumentSerializer {
             do {
                 let historicalDecoder = JSONDecoder()
                 historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
-                document = try historicalDecoder.decode(SchemaThreeEnvelope.self, from: data).document
+                document = try historicalDecoder.decode(SchemaThreeEnvelope.self, from: data).document.migrated()
+            } catch {
+                throw DocumentSerializationError.malformedInput
+            }
+        case 4:
+            do {
+                let historicalDecoder = JSONDecoder()
+                historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                document = try historicalDecoder.decode(SchemaFourEnvelope.self, from: data).document.migrated()
             } catch {
                 throw DocumentSerializationError.malformedInput
             }
