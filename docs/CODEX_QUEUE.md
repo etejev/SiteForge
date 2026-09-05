@@ -8,7 +8,18 @@ None.
 
 ## IN PROGRESS
 
-None.
+- [ ] `SF-AUTHORING-019` Final native Save availability follow-up.
+  - Requirements: `SF-0301-005`, `SF-0306-003`–`005`, supporting
+    `SF-0801-005` and `SF-0802-005`.
+  - Actions `33986611685` attempt 2 passed 392 non-UI and 48/49 UI tests;
+    typography exposed disabled Save during recovery autosave/menu tracking.
+  - Keep native Save enabled during recovery autosave using the existing
+    cancel/drain boundary. Strengthen its deterministic lifecycle regression,
+    rerun only that regression and typography persistence, then validate on CI.
+  - Hosted job headroom permits completion/artifact retention beyond measured
+    30-minute runtime; no XCTest timeout or assertion changes.
+  - Prior completed gates below remain historical evidence, not proof of this
+    final follow-up. See the Inspector repair evidence for current results.
 
 ## DONE
 

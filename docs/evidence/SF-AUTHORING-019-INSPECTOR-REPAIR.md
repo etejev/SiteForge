@@ -1,7 +1,8 @@
 # Inspector autosave repair
 
 Requirements: supporting SF-0502-002, SF-0505-002, SF-0801-005,
-SF-0802-005 and SF-1902-008. Status: verified and complete for this correction.
+SF-0802-005 and SF-1902-008. Earlier correction verified; final native Save
+availability follow-up is IN PROGRESS pending hosted acceptance.
 
 | Symptom | Evidence and cause | Correction | Regression |
 |---|---|---|---|
@@ -94,3 +95,34 @@ were rerun: 2/2 passed in
 `focused-74dfcced-68ff-4bfb-bc5a-a77025ac1c33.xcresult`.
 The production-tree full verification and original-failure repetitions above
 remain the evidence for unchanged application code.
+
+## Native Save availability during recovery autosave
+
+Actions `33986611685` attempt 1 reached 392 non-UI and 45 UI passes without
+assertion failures before the 30-minute job deadline. Its single justified
+retry completed all tests: 392 non-UI and 48/49 UI passed. Typography failed
+at the native Save availability assertion during File-menu tracking. The
+job deadline then interrupted failure-artifact upload; the run log is retained.
+
+`DocumentLifecycleController.canSave` still excluded `.autosaving`, although
+recovery autosave does not make the document durably Saved. The native menu
+could therefore open with Save disabled while recovery ran. Manual `save()`
+already cancels/drains recovery before taking its durable snapshot. The
+availability predicate now permits that existing safe operation. Clean durable
+documents and active manual saves remain disabled. No helper assertion changed.
+
+`testExecutingAutosaveIsCancelledAndDrainedBeforeManualSave` now additionally
+asserts clean-disabled, modified-enabled, executing-autosave-enabled, and
+saved-disabled states around its real backend checkpoint. It passed 1/1 in
+`focused-7148e99f-42fe-4e26-9b52-af3e2340272d.xcresult`.
+The paired UI attempt was obstructed at the Design tab by an unrelated macOS
+notification, confirmed from its recording, before reaching Save.
+After diagnosing that obstruction, the unchanged typography journey passed
+1/1 in `focused-23485c04-5d91-41a2-89d3-f81bab7ffb73.xcresult` (70.138 seconds).
+Its reopened screenshot `D0AB8830-C84B-4B9B-9301-A66D83FA4A84.png` was reviewed:
+Saved status, preserved typography intent/fallback, upright text, and aligned
+selection remain visible. No additional local full suite was run.
+
+The hosted job has 40-minute bounded headroom because two measured full runs
+reached its former 30-minute cutoff, including artifact upload. Individual
+XCTest waits, test selection, assertions, and performance budgets are unchanged.

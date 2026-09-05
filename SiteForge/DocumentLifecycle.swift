@@ -956,7 +956,11 @@ final class DocumentLifecycleController: ObservableObject {
         case .recovered: "Recovered — save to make durable"
         }
     }
-    var canSave: Bool { (fileURL == nil || isModified) && phase != .saving && phase != .autosaving }
+    // Recovery autosave is not a durable save. The native Save command must
+    // remain available while recovery runs: save() already cancels and drains
+    // that work before committing. Disabling it can freeze a disabled menu
+    // snapshot for the duration of AppKit menu tracking.
+    var canSave: Bool { (fileURL == nil || isModified) && phase != .saving }
     var canRevert: Bool { fileURL != nil && isModified && phase != .saving && phase != .autosaving }
     var canRestoreRecovery: Bool {
         guard let recoveryCandidate else { return false }

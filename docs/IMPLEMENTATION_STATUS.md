@@ -2,6 +2,11 @@
 
 Last updated: 2026-09-05.
 
+SF-AUTHORING-019 final Save follow-up is IN PROGRESS pending hosted acceptance.
+Recovery autosave must not disable the native durable Save command; the existing
+cancel/drain operation owns the transition. Historical gate totals below are
+not substituted for the current follow-up result.
+
 Current SF-AUTHORING-019 repair evidence supersedes the earlier AX-only
 explanation in the historical checkpoint row: immutable-snapshot autosave
 was disabling the shared Inspector validation context. Editing now remains

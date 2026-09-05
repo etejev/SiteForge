@@ -2,6 +2,12 @@
 
 Last updated: 2026-09-05.
 
+Final native Save follow-up is IN PROGRESS: recovery autosave incorrectly
+disabled the command during menu tracking in Actions `33986611685` attempt 2.
+The bounded correction reuses Save's existing recovery cancel/drain operation;
+its focused and hosted results are tracked in the Inspector repair evidence.
+Earlier complete-gate results below refer to their explicit historical SHA.
+
 `SF-AUTHORING-019` and its hosted Inspector/autosave correction are complete
 within the bounded local-raster authoring scope. Schema-v5 preserves stable
 image assets/references and exact original resource bytes. Native import,

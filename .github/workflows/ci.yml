@@ -15,7 +15,10 @@ concurrency:
 jobs:
   verify:
     runs-on: macos-latest
-    timeout-minutes: 30
+    # Full verification takes about 30 minutes on hosted macOS. Leave bounded
+    # headroom for build variance and failure-artifact upload; XCTest waits
+    # and assertions are unchanged.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
       - name: Select Xcode
