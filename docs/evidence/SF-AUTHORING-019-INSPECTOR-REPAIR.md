@@ -1,7 +1,7 @@
 # Inspector autosave repair
 
 Requirements: supporting SF-0502-002, SF-0505-002, SF-0801-005,
-SF-0802-005 and SF-1902-008. Image milestone hosted acceptance remains pending.
+SF-0802-005 and SF-1902-008. Status: verified and complete for this correction.
 
 | Symptom | Evidence and cause | Correction | Regression |
 |---|---|---|---|
@@ -55,4 +55,18 @@ integrated verification passed: `./sf verify` completed with 392 unit/integratio
 and 49 UI tests (441 total), zero failures, in
 `full-b7d9246a-569f-4741-ad2b-f724a4d6a03e.xcresult` on 2026-09-05.
 Repository/security/traceability/evidence checks passed, and no SiteForge
-runner remained active. Hosted main confirmation remains the final gate.
+runner remained active. Actions `33982941555` then passed the same full
+392 unit/integration and 49 UI tests (441/441), with repository checks green,
+for production commit `f6c58ef`:
+https://github.com/etejev/SiteForge/actions/runs/33982941555
+
+The three originally failing journeys then passed three consecutive focused
+groups on the unchanged production commit `f6c58ef` (9/9, zero failures).
+Each journey launched a fresh app process. Retained result bundles:
+
+- `focused-518e7ce6-903c-4764-bfae-599ae530b33c.xcresult` — 3/3.
+- `focused-f3956cde-a6d4-428d-9d11-70555e777dc7.xcresult` — 3/3.
+- `focused-259ed511-5b60-434f-841e-fea181b6c8ff.xcresult` — 3/3.
+
+These repetitions ran only typography persistence, local-image authoring /
+reopen, and structural Inspector layout. No complete local suite was repeated.

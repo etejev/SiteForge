@@ -9,7 +9,9 @@ This file records user-visible behavior during development. It is not a substitu
   available while autosave works; existing revision guards preserve newer edits.
   The focused hosted regression plus both affected UI journeys passed 3/3 in
   Actions `33980431383`. Final local verification passed 441/441 tests;
-  hosted main acceptance remains pending.
+  Actions `33982941555` confirmed the same hosted 441/441 gate. The three
+  originally failing journeys also passed three consecutive focused groups
+  (9/9), without repeating another local full suite.
   Stack Alignment now labels its native segments on a separate line to avoid
   wrapping at the compact Inspector width.
 
