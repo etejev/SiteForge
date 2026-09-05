@@ -1201,6 +1201,22 @@ final class SiteForgeLaunchTests: XCTestCase {
         let assetRow = application.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@", "assets.row.", "siteforge-image"
         )).firstMatch
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "exists == false"),
+                    object: pathField
+                )],
+                timeout: 5
+            ),
+            .completed
+        )
+        // Go to Folder selects the exact file. Activate the native panel's
+        // default Import action from that selection, avoiding unstable AX
+        // proxies for Finder's column browser and filename field.
+        if !assetRow.exists {
+            application.typeKey(.return, modifierFlags: [])
+        }
         let importCompletedOrAwaitsConfirmation = XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(
                 predicate: NSPredicate { [weak application] _, _ in
@@ -2350,9 +2366,14 @@ final class SiteForgeLaunchTests: XCTestCase {
             in: application
         )
         XCTAssertTrue(alignment.waitForExistence(timeout: 3)); alignment.click()
-        application.typeKey("c", modifierFlags: [])
+        application.typeKey(.downArrow, modifierFlags: [])
         application.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Alignment committed", timeout: 3))
+        XCTAssertTrue(waitForValue(
+            application.descendants(matching: .any)["inspector.layout.container.alignment"],
+            containing: "center",
+            timeout: 3
+        ))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack gap alignment")
 
         selectStructuralLayer("Section", in: application)

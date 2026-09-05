@@ -23,7 +23,10 @@ None.
     Actions `33929806075` passed 48 of 49 UI journeys and exposed one remaining
     narrow-display assumption: after leading-edge import, the trailing Redo
     toolbar control was outside the unchanged 1100-point window's visible
-    intersection.
+    intersection. Actions `33931671075` then passed 47 of 49 UI journeys and
+    exposed two final native-control assumptions: Go to Folder had selected an
+    exact file without committing the open panel, while type-ahead did not
+    commit the structural alignment popup on the hosted OS.
   - Correction: Save now resolves either live autosave completion or a live
     enabled Save command before preserving the same reopen proof. Leading-
     control journeys opt into the existing left-edge test placement only when
@@ -35,7 +38,10 @@ None.
     tests (440 total) from the preceding correction; unchanged broad coverage
     was not repeated. The image journey now proves exact undo/redo via native
     Command-Z and Shift-Command-Z plus live alt-text restoration; that affected
-    journey passes 1/1.
+    journey passes 1/1. The open-panel journey now confirms the Go to Folder
+    field closes and activates the native default Import action; structural
+    alignment uses Down Arrow and Return from the live popup. The latest
+    affected runs passed image import 1/1 and structural alignment 1/1.
   - Remaining gate: require a green replacement hosted run before returning
     this item to DONE or continuing SF-AUTHORING-020 source work.
 

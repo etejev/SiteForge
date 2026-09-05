@@ -13,7 +13,11 @@ This file records user-visible behavior during development. It is not a substitu
   open panel completing a full-path choice immediately, and drives structural
   alignment through the live popup's standard keyboard-selection path. Image
   undo/redo proof uses the standard macOS shortcuts so both leading import and
-  history remain operable on displays narrower than the product minimum.
+  history remain operable on displays narrower than the product minimum. A
+  later hosted pass showed that exact-path navigation selects rather than opens
+  a file on that macOS revision; the journey now confirms the path sheet closed
+  and activates the native panel's default Import action. Structural alignment
+  uses the popup's Down Arrow and Return path instead of type-ahead.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,

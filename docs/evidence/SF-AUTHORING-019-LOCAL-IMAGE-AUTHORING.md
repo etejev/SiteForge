@@ -101,6 +101,16 @@ alt-text value changes and restores exactly. This preserves the product minimum
 and strengthens history proof without relying on offscreen chrome; the focused
 image journey passed 1/1.
 
+Actions `33931671075` passed all repository and non-UI gates and 47/49 UI
+journeys. Its log proved that Go to Folder selected the exact image but did not
+activate the open panel's default action, and that popup type-ahead did not
+commit Center on the hosted OS. The image journey now waits for the native path
+sheet to close and activates the panel's default Import action; the structural
+journey uses Down Arrow and Return on the live alignment popup. The corrected
+image journey passed 1/1 in
+`focused-eb0993c6-03f5-4713-bad9-0c2f7155a22c.xcresult`; the structural
+journey passed 1/1 in the immediately preceding two-test focused run.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

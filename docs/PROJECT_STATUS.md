@@ -27,6 +27,11 @@ journeys pass together locally (2/2). Actions `33929806075` then passed 48/49
 UI journeys and exposed an offscreen trailing Redo toolbar assumption in the
 leading-edge image journey. Native shortcut undo/redo with exact live value
 restoration now passes that journey locally (1/1); hosted confirmation remains.
+Actions `33931671075` subsequently passed 47/49 UI journeys and showed that
+hosted Go to Folder selected the exact image without activating Import, while
+popup type-ahead did not commit Center. The focused journeys now use the native
+default Import action after the path sheet closes and Down Arrow/Return on the
+live alignment popup; both affected paths pass locally (1/1 each).
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and
