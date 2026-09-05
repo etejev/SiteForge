@@ -32,6 +32,12 @@ None.
   - Hosted acceptance: Actions `33982941555` passed for production commit
     `f6c58ef`. See
     `docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md`.
+  - Test-only follow-up: Actions `33984707264` passed all 49 UI tests but
+    exposed an unordered-task assumption in one save-lifecycle unit test.
+    Its artificial delay/yield was replaced by the existing filesystem
+    checkpoint barrier; exact save/revision assertions were strengthened.
+    The corrected test and adjacent save-race regression passed 2/2. No
+    production code changed and no broad local suite was repeated.
 
 - [x] `SF-AUTHORING-019` Initial local image assets and Image authoring checkpoint.
   - Requirements: bounded production evidence for `SF-0801-001` through

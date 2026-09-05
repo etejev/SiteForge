@@ -794,7 +794,7 @@ private struct LifecycleRaceContext {
     let durableBytes: Data
 }
 
-private struct CompletedLifecycleWrite: Equatable, Sendable {
+struct CompletedLifecycleWrite: Equatable, Sendable {
     let intent: LifecycleOperationIntent
     let revision: UInt64
 }
@@ -889,7 +889,7 @@ final class ManualLifecycleAutosaveDebouncer: LifecycleAutosaveDebouncing, @unch
     }
 }
 
-private actor LifecycleBackendProbe: LifecycleBackendObserving {
+actor LifecycleBackendProbe: LifecycleBackendObserving {
     private struct BarrierRule {
         let checkpoint: LifecycleBackendCheckpoint
         let intent: LifecycleOperationIntent

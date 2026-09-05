@@ -23,6 +23,12 @@ hosted verification each passed 392 unit/integration plus 49 UI tests
 alignment evidence are recorded in
 `docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md`.
 
+The later documentation-only run passed all UI tests but exposed an unrelated
+save-test ordering assumption. The test now uses the existing filesystem
+checkpoint barrier, not a delay/yield; its focused pair passed 2/2 with stronger
+write-order and final-state assertions. Production code is unchanged. Preserve
+this deterministic synchronization when extending lifecycle tests.
+
 Do not discard the separate pre-existing Button/Link branch work; it was
 deliberately excluded from this repair. Main has no next READY item. Do not
 create another asset store or expand into image fills, remote providers,

@@ -12,6 +12,11 @@ repository checks green. Actions `33982941555` confirmed the same 441/441
 hosted gate for production commit `f6c58ef`; see
 `docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md`.
 
+The subsequent documentation-only run `33984707264` retained 49/49 UI passes
+but exposed an unordered-task assumption in a save unit test. Its deterministic
+checkpoint-barrier correction and adjacent save-race test passed 2/2; no
+application code changed. See the same evidence note for exact assertions.
+
 | Requirement or work item | Status | Implementation | Automated evidence | Manual evidence | Notes |
 |---|---|---|---|---|---|
 | SF-AUTHORING-019 / bounded SF-0801-001–008; SF-0802-001–008 | **Verified bounded local-raster slice and hosted Inspector/autosave correction; both modules remain Partial overall** | Schema-v5 owns stable asset descriptors and Image references; original bytes remain in the existing resource sidecar. Shared Inspector edits stay available during revision-guarded immutable snapshot saves. Native Save handles already-Saved state; narrow displays retain the 1100-point minimum; live native controls retain focus and readable compact Alignment labels. | Seven distinct affected selectors passed; three consecutive original-failure groups passed 9/9. Final local and hosted verification each passed 392 unit/integration plus 49 UI tests (441/441), zero failures. Actions 33982941555 passed for production commit f6c58ef; repository checks passed. See docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md. | Retained original-resolution typography/image/structural reopen states and Alignment screenshots were reviewed for Saved status, preserved content, readable controls, upright rendering, and aligned selection. | Folders/tags/favorites, bulk organization, drag-to-artboard, remote providers, SVG/video/audio/fonts, advanced editing, masks/renditions, responsive source sets, metadata-policy UI, non-Image fills, preview/export parity, broad accessibility matrices, and release acceptance remain deferred. |

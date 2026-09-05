@@ -4,6 +4,11 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
+- Made the save-order regression deterministic with the existing backend
+  checkpoint barrier instead of an artificial delay and task-yield assumption.
+  Both focused save-race checks pass with stronger revision/write assertions;
+  production save behavior is unchanged.
+
 - Fixed Inspector controls becoming disabled during background snapshot saves.
   Geometry and structural-layout edits retain keyboard focus and remain
   available while autosave works; existing revision guards preserve newer edits.

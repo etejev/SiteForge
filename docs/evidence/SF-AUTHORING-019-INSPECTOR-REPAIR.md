@@ -70,3 +70,27 @@ Each journey launched a fresh app process. Retained result bundles:
 
 These repetitions ran only typography persistence, local-image authoring /
 reopen, and structural Inspector layout. No complete local suite was repeated.
+
+## Deterministic save-order test follow-up
+
+The documentation-only Actions run `33984707264` passed all 49 UI journeys
+but exposed one non-UI failure at `DocumentLifecycleTests.swift:206` in
+`testStaleSaveSuppressionAndMainActorResponsiveness`. Its 200 ms backend delay
+and one `Task.yield()` did not establish that the first save had entered before
+the second task was created. Task creation order is not operation-entry order.
+The second Boolean assertion failed while the final document-content assertion
+still passed; this is not evidence of lost persisted content.
+
+The test now reuses `LifecycleBackendProbe` to hold the actual first snapshot
+at `beforeFilesystemWrite`, then runs real main-actor work and authors the
+second revision. It retains the second-save and exact-document assertions and
+adds successful first-save, ordered written revisions, final revision, and clean
+phase assertions. No production implementation changed, and no timing delay,
+retry, or relaxed assertion was added.
+
+Only the corrected selector and
+`DocumentLifecycleRaceTests/testEditDuringSaveKeepsSavedRevisionDurableAndNewerRevisionRecoverable`
+were rerun: 2/2 passed in
+`focused-74dfcced-68ff-4bfb-bc5a-a77025ac1c33.xcresult`.
+The production-tree full verification and original-failure repetitions above
+remain the evidence for unchanged application code.

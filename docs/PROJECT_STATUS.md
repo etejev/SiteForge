@@ -29,6 +29,13 @@ bundle names, and hosted evidence are recorded in
 The separate pre-existing Button/Link development work was not included in
 this repair checkpoint. No next feature was started during the correction.
 
+A documentation-only follow-up retained all 49 UI passes but exposed one
+save-test scheduling assumption. The existing backend checkpoint barrier now
+establishes real save order instead of a delay/yield. Two directly affected
+tests pass with stronger write/revision assertions; application code is
+unchanged. This focused correction does not introduce another feature or
+repeat broad local verification.
+
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and
 SF-0603. The existing Desktop-base cascade now authors isolated Tablet/Mobile
