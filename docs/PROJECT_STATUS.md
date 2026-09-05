@@ -54,6 +54,16 @@ pattern already used for direction. Practical-minimum reachability passes 1/1,
 and the complete structural journey passes 1/1 in
 `focused-0a15d65a-83d5-45b6-8064-c113cadddacd.xcresult`.
 
+Actions `33940565832` passed every repository/non-UI gate and 48/49 UI
+journeys. The sole failure was not a canonical layout failure: the 1100-point
+minimum window placed the persistent Center segment beneath the Dock on the
+1024×768 runner, while XCTest still exposed it as hittable. The common
+structural-control reveal path now requires the freshly queried control frame
+to be contained by the Inspector's intersection with the real AppKit
+`visibleFrame` before clicking. A local two-selector run compiled the change
+but macOS timed out enabling UI automation before executing either test body;
+replacement hosted confirmation remains the closing gate.
+
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and
 SF-0603. The existing Desktop-base cascade now authors isolated Tablet/Mobile

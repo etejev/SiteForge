@@ -139,6 +139,20 @@ structural journey clicks the visible Center segment, requires the canonical
 commit announcement, re-queries the live semantic group value, and passed 1/1
 in `focused-0a15d65a-83d5-45b6-8064-c113cadddacd.xcresult`.
 
+Actions `33940565832` passed all repository/non-UI gates and 48/49 UI
+journeys. Its sole failure attachment showed the persistent Center segment at
+the bottom of the Inspector beneath the Dock on the 1024×768 hosted display.
+Although XCTest reported that segment as hittable, its pointer event landed in
+system UI and no alignment transaction was published. The shared structural
+control reveal helper now intersects the Inspector viewport with the AppKit
+`NSScreen.visibleFrame`, converts that usable frame once into XCTest's Y-down
+coordinates, and scrolls until the freshly queried shipping control is fully
+inside that intersection before clicking. The 1100-point product minimum is
+unchanged. A focused two-selector run built the application and tests, but the
+local macOS runner timed out enabling automation before either test body; this
+environment failure does not replace the prior passing 1/1 product evidence,
+and a replacement hosted run remains required.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

@@ -25,7 +25,11 @@ This file records user-visible behavior during development. It is not a substitu
   runners, so Stack cross-axis alignment now uses a persistent native segmented
   picker, matching Stack direction. Its visible Center action publishes the
   same canonical transaction and semantic accessibility value without relying
-  on transient menu ownership.
+  on transient menu ownership. Hosted execution then exposed that XCTest can
+  call such a segment hittable while the 1100-point minimum window places it
+  beneath the Dock on a 1024×768 screen. Structural pointer journeys now scroll
+  the live Inspector control into the actual `NSScreen.visibleFrame`
+  intersection before clicking, without shrinking the production window.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,

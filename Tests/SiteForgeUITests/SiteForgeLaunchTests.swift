@@ -3261,10 +3261,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         let identifier = element.identifier
         let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
         var liveElement = liveStructuralLayoutControl(identifier, in: application)
-        for _ in 0..<10 where !liveElement.isHittable {
+        for _ in 0..<10 where !isSafelyVisibleForPointer(liveElement, inside: scroll) {
             let targetFrame = liveElement.frame
-            let viewportFrame = scroll.frame
-            let deltaY: CGFloat = targetFrame.minY < viewportFrame.minY + 8 ? 180 : -180
+            let safeViewport = pointerSafeIntersection(for: scroll.frame)
+            let deltaY: CGFloat = targetFrame.minY < safeViewport.minY + 8 ? 180 : -180
             scroll.scroll(byDeltaX: 0, deltaY: deltaY)
             // Undo/redo and reset can replace the SwiftUI control host. A
             // fresh, role-preserving AX query observes the live shipping
@@ -3272,8 +3272,38 @@ final class SiteForgeLaunchTests: XCTestCase {
             // the non-hittable SwiftUI wrapper that shares its identifier.
             liveElement = liveStructuralLayoutControl(identifier, in: application)
         }
-        XCTAssertTrue(liveElement.isHittable, "Inspector control \(identifier) must remain reachable")
+        XCTAssertTrue(
+            isSafelyVisibleForPointer(liveElement, inside: scroll),
+            "Inspector control \(identifier) must remain inside the usable display and reachable"
+        )
         return liveElement
+    }
+
+    /// XCTest can report a control as hittable when an oversized product
+    /// window extends beneath the Dock on a display narrower or shorter than
+    /// the supported minimum. Pointer journeys must scroll the shipping
+    /// control into the real AppKit usable screen before clicking it.
+    private func isSafelyVisibleForPointer(
+        _ element: XCUIElement,
+        inside scroll: XCUIElement
+    ) -> Bool {
+        guard element.exists, element.isHittable else { return false }
+        return pointerSafeIntersection(for: scroll.frame).contains(element.frame)
+    }
+
+    private func pointerSafeIntersection(for viewport: CGRect) -> CGRect {
+        guard let screen = NSScreen.main else { return viewport.insetBy(dx: 0, dy: 8) }
+        let visible = screen.visibleFrame
+        // AppKit screen geometry is Y-up; XCTest screen geometry is Y-down.
+        // This is the one conversion needed to compare a native visibleFrame
+        // with an XCUIElement frame on the main display.
+        let visibleInXCUI = CGRect(
+            x: visible.minX,
+            y: screen.frame.maxY - visible.maxY,
+            width: visible.width,
+            height: visible.height
+        )
+        return viewport.intersection(visibleInXCUI).insetBy(dx: 0, dy: 8)
     }
 
     private func liveStructuralLayoutControl(

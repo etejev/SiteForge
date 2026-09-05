@@ -36,7 +36,10 @@ None.
     Actions `33937301726` then proved that even popup-targeted key synthesis
     did not commit that transient AppKit menu on the hosted OS; its justified
     retry passed every repository/non-UI gate and isolated the same one UI
-    boundary.
+    boundary. Actions `33940565832` passed every repository/non-UI gate and
+    48/49 UI journeys. Its sole failure showed the persistent Center segment
+    beneath the Dock on the 1024×768 runner: XCTest reported the obscured
+    control as hittable even though its frame was outside `NSScreen.visibleFrame`.
   - Correction: Save now resolves either live autosave completion or a live
     enabled Save command before preserving the same reopen proof. Leading-
     control journeys opt into the existing left-edge test placement only when
@@ -56,7 +59,14 @@ None.
     announcement and the re-queried semantic group value. The exact corrected
     structural journey passes 1/1; practical-minimum reachability also passes
     1/1 with the segmented control. The latest affected runs passed image
-    import 1/1 and structural alignment 1/1.
+    import 1/1 and structural alignment 1/1. The shared structural-control
+    reveal helper now requires the live control to lie inside the Inspector's
+    intersection with the usable AppKit screen before issuing a pointer event,
+    preserving the product minimum without clicking through the Dock. A local
+    two-selector confirmation built successfully but the macOS test runner
+    timed out while enabling automation before either test body; the retained
+    prior 1/1 focused results remain the local product evidence and the
+    replacement hosted run is authoritative for this runner-specific boundary.
   - Remaining gate: require a green replacement hosted run before returning
     this item to DONE or continuing SF-AUTHORING-020 source work.
 
