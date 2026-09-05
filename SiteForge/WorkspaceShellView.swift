@@ -3140,12 +3140,18 @@ private struct ContainerLayoutInspectorView: View {
                 EmptyView()
             } else {
                 VStack(alignment: .leading, spacing: 4) {
+                    // Four intrinsic-width segments must not compress the label
+                    // into a column at the supported compact Inspector width.
+                    Text("Alignment")
+                        .fixedSize(horizontal: true, vertical: false)
+                        .accessibilityIdentifier("inspector.layout.container.alignment.label")
                     Picker("Alignment", selection: alignmentBinding(selection)) {
                         ForEach(ContainerLayoutAlignment.allCases, id: \.self) { alignment in
                             Text(alignment.rawValue.capitalized).tag(alignment as ContainerLayoutAlignment?)
                         }
                     }
                     .pickerStyle(.segmented)
+                    .labelsHidden()
                     .accessibilityLabel("Stack cross-axis alignment")
                     .disabled(!availability.isEnabled)
                     .accessibilityValue(accessibilityValue(selection, field: .alignment))

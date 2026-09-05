@@ -1,36 +1,45 @@
 # Codex Continuation Handoff
 
+Final SF-AUTHORING-019 Save availability acceptance: production `f951df7` is
+hosted-green in Actions `33991018406` (392 unit/integration + 49 UI = 441,
+zero failures). Recovery autosave does not disable native Save; the existing
+cancel/drain operation owns durable saving. Both focused follow-up checks
+passed. Preserve the separate pre-existing Button/Link work; no new feature
+was included in this repair. See the Inspector repair evidence for chronology.
+
 ## Current checkpoint
 
-`SF-AUTHORING-019` is **LOCALLY VERIFIED; HOSTED ACTIVATION FOLLOW-UP IN
-PROGRESS**. Schema-v5 adds one image-asset
-catalogue and Image node/reference, retains
-exact local raster bytes in the existing content-addressed resource sidecar,
-and integrates the Assets pane, Elements/Insert commands, identity-gated Image
-Inspector edits, immutable native rendering, history, package/recovery, and
-fresh-process reopen. Focused model/persistence/renderer coverage passed
-116/116, the nonmodal Image-tool regression passed 1/1, and the actual-app
-native import/insert/edit/Undo/Redo/Save/reopen journey passed 1/1. Six
-original-resolution states passed visual review. The hosted stabilization
-correction accepts either a live Modified document requiring Save or a document
-already made Saved by autosave, preserves the 1100-point minimum on narrow
-screens, and reactivates/re-queries live structural fields before keyboard
-input. The three affected journeys passed independently and in three grouped
-repetitions; the complete UI target passed 49/49. Final `./sf verify` passed 391
-unit/integration plus 49 UI tests (440 total), zero failures, with all repository
-checks green locally on 2026-09-04. Hosted stabilization Actions
-`33942209770` passed the same complete 440-test gate on 2026-09-05 after
-pointer journeys stopped trusting obscured `isHittable` results beneath the
-Dock. Later runs proved the shipping AppKit window remained key/main and its
-live segment enabled while XCTest exposed the AXApplication and AXWindow
-containers as Disabled. Actions `33946638814` confirmed that the AXWindow flag
-was also inherited metadata rather than the live control state. The helper now
-gates the foreground process and actual group/segment rather than those flags, avoids redundant
-activation, and observes the live replacement announcement. Hosted replacement
-confirmation remains required. Do not create a second asset
-store, retain user paths, serialize thumbnail/editor state, or broaden this
-slice into image fills, remote providers, responsive sources, or export. No
-next READY milestone is specified.
+`SF-AUTHORING-019` and the hosted Inspector/autosave repair are
+**VERIFIED AND DONE** within the bounded local-raster scope.
+The existing schema-v5 resource catalogue, Image references, native Assets /
+Inspector workflow, immutable renderer, history, recovery, and persistence
+remain unchanged by the repair.
+
+The actual shared defect was disabling Inspector validation during immutable
+snapshot saving/autosaving. Editing now remains available with revision guards,
+as insertion and inline editing already did. Native Save handles already-Saved
+state; window assertions preserve the 1100-point production minimum; helpers
+query and operate the genuine enabled, safely visible field/segment.
+The compact Alignment label is separately readable on one line.
+
+Seven distinct affected selectors passed. The three originally failing UI
+journeys passed three consecutive fresh-process groups (9/9). Final local and
+hosted verification each passed 392 unit/integration plus 49 UI tests
+(441/441), zero failures. Actions `33982941555` verified production commit
+`f6c58ef`. Repository checks and reviewed original-resolution persistence /
+alignment evidence are recorded in
+`docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md`.
+
+The later documentation-only run passed all UI tests but exposed an unrelated
+save-test ordering assumption. The test now uses the existing filesystem
+checkpoint barrier, not a delay/yield; its focused pair passed 2/2 with stronger
+write-order and final-state assertions. Production code is unchanged. Preserve
+this deterministic synchronization when extending lifecycle tests.
+
+Do not discard the separate pre-existing Button/Link branch work; it was
+deliberately excluded from this repair. Main has no next READY item. Do not
+create another asset store or expand into image fills, remote providers,
+responsive source sets, or export without an authorized bounded queue item.
 
 `SF-AUTHORING-018` is **VERIFIED AND DONE**. The current tree extends the
 existing breakpoint cascade rather than adding a parallel responsive system:
@@ -165,8 +174,8 @@ broader deferred scope is unchanged.
 ## Next task
 
 No queue item is READY. Establish the next specification-backed bounded slice
-before implementation; do not silently expand SF-AUTHORING-017 into responsive
-container properties, advanced Stack/Grid semantics, preview/export, or
+before implementation; do not silently expand SF-AUTHORING-019 into advanced
+asset organization, remote sources, preview/export, or
 release acceptance.
 
 ## Stop/escalate conditions
@@ -176,4 +185,4 @@ product choice with broad downstream effect or an incompatible migration.
 Do not commit generated artifacts, local result bundles, secrets, or machine
 paths. External signing, notarization, publication, credentials, or a genuinely
 unavailable external dependency remain owner boundaries. Do not begin a
-feature beyond SF-AUTHORING-017 until a READY queue item defines its scope.
+feature beyond SF-AUTHORING-019 until a READY queue item defines its scope.

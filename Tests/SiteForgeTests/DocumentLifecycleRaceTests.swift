@@ -193,11 +193,16 @@ final class DocumentLifecycleRaceTests: XCTestCase {
         let probe = LifecycleBackendProbe()
         let debouncer = ManualLifecycleAutosaveDebouncer()
         let context = try await makeContext("ExecutingThenSave", probe: probe, debouncer: debouncer)
+        XCTAssertFalse(context.controller.canSave, "A clean durable document needs no save")
         try addPage("Explicit save wins", to: context.controller)
+        XCTAssertTrue(context.controller.canSave)
         await debouncer.waitUntilPending()
         await probe.block(.beforeFilesystemWrite, intent: .autosave)
         debouncer.fireAll()
         await probe.waitUntilBlocked()
+
+        XCTAssertEqual(context.controller.phase, .autosaving)
+        XCTAssertTrue(context.controller.canSave, "Native Save must remain operable during recovery autosave")
 
         let save = Task { await context.controller.save() }
         await waitUntil { !context.controller.hasPendingAutosaveWork }
@@ -212,6 +217,7 @@ final class DocumentLifecycleRaceTests: XCTestCase {
         XCTAssertEqual(saveWrites, 1)
         XCTAssertEqual(durableDocument, context.controller.session.document)
         XCTAssertEqual(context.controller.phase, .clean)
+        XCTAssertFalse(context.controller.canSave)
     }
 
     // SF-0301-005, SF-0306-003, SF-0306-004, SF-0306-005 — a cancelled
@@ -794,7 +800,7 @@ private struct LifecycleRaceContext {
     let durableBytes: Data
 }
 
-private struct CompletedLifecycleWrite: Equatable, Sendable {
+struct CompletedLifecycleWrite: Equatable, Sendable {
     let intent: LifecycleOperationIntent
     let revision: UInt64
 }
@@ -889,7 +895,7 @@ final class ManualLifecycleAutosaveDebouncer: LifecycleAutosaveDebouncing, @unch
     }
 }
 
-private actor LifecycleBackendProbe: LifecycleBackendObserving {
+actor LifecycleBackendProbe: LifecycleBackendObserving {
     private struct BarrierRule {
         let checkpoint: LifecycleBackendCheckpoint
         let intent: LifecycleOperationIntent

@@ -190,23 +190,36 @@ final class DocumentLifecycleTests: XCTestCase {
     }
 
     func testStaleSaveSuppressionAndMainActorResponsiveness() async throws {
-        let backend = DocumentLifecycleBackend()
-        await backend.configureForTesting(delayNanoseconds: 200_000_000)
-        let controller = makeController(backend: backend)
+        let probe = LifecycleBackendProbe()
+        let backend = DocumentLifecycleBackend(observer: probe)
+        let controller = makeController(
+            backend: backend, autosaveDebouncer: ManualLifecycleAutosaveDebouncer()
+        )
         let url = fixture("Stale.siteforge")
         try addPage("First", to: controller)
+        let firstRevision = controller.session.document.revision
+        // Task creation/yield is not a save-entry ordering guarantee. Hold
+        // the real first snapshot at the existing filesystem checkpoint.
+        await probe.block(.beforeFilesystemWrite, intent: .saveAs)
         let first = Task { await controller.save(to: url) }
-        await Task.yield()
-        var mainActorRan = false
-        mainActorRan = true
+        await probe.waitUntilBlocked()
+        XCTAssertEqual(controller.phase, .saving)
+        let mainActorRan = await Task { @MainActor in true }.value
         try addPage("Second", to: controller)
+        let secondRevision = controller.session.document.revision
         let second = Task { await controller.save(to: url) }
-        _ = await first.value
+        await probe.release()
+        let firstSaved = await first.value
         let secondSaved = await second.value
+        XCTAssertTrue(firstSaved)
         XCTAssertTrue(secondSaved)
         XCTAssertTrue(mainActorRan)
         let loaded = try await ProjectPackageStore().read(from: url)
         XCTAssertEqual(loaded.document.pages.map(\.name), ["Home", "Not Found", "First", "Second"])
+        let writes = await probe.completedWriteOrder()
+        XCTAssertEqual(writes.map(\.revision), [firstRevision, secondRevision])
+        XCTAssertEqual(loaded.document.revision, secondRevision)
+        XCTAssertEqual(controller.phase, .clean)
     }
 
     func testDiagnosticsRedactPathsAndContent() async throws {

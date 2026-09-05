@@ -2358,10 +2358,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack horizontal")
         let gap = application.textFields["inspector.layout.container.gap"]
         replaceStructuralLayoutField(gap, with: "36", in: application)
-        _ = revealStructuralLayoutControl(
-            application.descendants(matching: .any)["inspector.layout.container.alignment"],
-            in: application
-        )
+        // The radio-group container need not itself be a pointer target.
+        // Reveal and validate the actual native Center segment below.
         clickStructuralLayoutRadioButton(
             "Center",
             groupIdentifier: "inspector.layout.container.alignment",
@@ -2378,6 +2376,13 @@ final class SiteForgeLaunchTests: XCTestCase {
             identifier: "inspector.layout.container.alignment",
             containing: "center"
         ))
+        let alignmentLabel = application.staticTexts[
+            "inspector.layout.container.alignment.label"
+        ]
+        XCTAssertTrue(alignmentLabel.exists)
+        XCTAssertGreaterThan(alignmentLabel.frame.width, 40)
+        XCTAssertLessThanOrEqual(alignmentLabel.frame.height, 24,
+            "Alignment must remain a readable single-line Inspector label")
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack gap alignment")
 
         selectStructuralLayer("Section", in: application)

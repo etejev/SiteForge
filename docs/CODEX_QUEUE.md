@@ -27,39 +27,50 @@ None.
     CMS/data binding, components, broad performance/accessibility matrices,
     and release acceptance.
 
-- [ ] `SF-AUTHORING-019` Close the hosted structural-control activation follow-up.
-  - Requirements: bounded `SF-0801-001` through `SF-0801-008` and
-    `SF-0802-001` through `SF-0802-008`, plus supporting native window,
-    keyboard, and accessibility contracts.
-  - Evidence: Actions `33942209770` passed the complete 440-test gate. The
-    subsequent documentation-only Actions run `33943569279` passed 48/49 UI
-    journeys but exposed an independent foreground-ownership race in the same
-    structural journey: the Center segment was safely above the Dock, then the
-    application/window became disabled and the prior Gap announcement remained.
-  - Correction: segmented structural actions now re-query the concrete live
-    radio segment after scrolling, require a foreground process and enabled
-    window/control ownership with no sheet/dialog, require the segment inside
-    the usable screen, then re-query the live replacement announcement after
-    the click. Actions `33945148753` proved the AppKit window remained key/main
-    and the concrete segment enabled/hittable while XCTest exposed its
-    AXApplication and AXWindow containers as Disabled. The helper no longer
-    treats inherited container flags as control authority or needlessly
-    reactivates an already foreground app. A focused local run compiled but macOS failed the
-    launch helper while SiteForge remained Running Background, before the
-    changed structural interaction was reached.
-  - Latest evidence: Actions `33946638814` reproduced only the inherited
-    AXWindow Disabled flag while the concrete Horizontal segment remained
-    enabled/hittable and the native key/main probe stayed healthy. Readiness now
-    gates the actual live group/segment rather than that container metadata.
-  - Remaining gate: require a green replacement hosted run before closing the
-    follow-up again.
-  - Production finding: Actions `33947877755` showed visibly disabled native
-    controls during autosave. The shared transform validation now permits
-    immutable-snapshot save overlap; the focused autosave regression passes
-    1/1. See `docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md` for the
-    corrected diagnosis and focused hosted diagnostic evidence.
 
 ## DONE
+
+- [x] `SF-AUTHORING-019` Final native Save availability follow-up.
+  - Requirements: `SF-0301-005`, `SF-0306-003`–`005`, supporting
+    `SF-0801-005` and `SF-0802-005`.
+  - Actions `33986611685` attempt 2 passed 392 non-UI and 48/49 UI tests;
+    typography exposed disabled Save during recovery autosave/menu tracking.
+  - Native Save remains enabled during recovery autosave using the existing
+    cancel/drain boundary. Its strengthened deterministic lifecycle regression
+    and typography persistence journey passed individually (2/2).
+  - Hosted job headroom permits completion/artifact retention beyond measured
+    30-minute runtime; no XCTest timeout or assertion changes.
+  - Actions `33991018406` passed final production correction `f951df7`:
+    392 unit/integration plus 49 UI tests (441/441), zero failures; repository
+    checks passed. Reviewed reopen evidence confirms Saved status, preserved
+    typography, upright text and aligned selection. No local broad rerun.
+
+- [x] `SF-AUTHORING-019` Close the hosted Inspector/autosave correction.
+  - Requirements: supporting `SF-0502-002`, `SF-0505-002`,
+    `SF-0801-005`, `SF-0802-005`, and `SF-1902-008`; the bounded
+    local-raster scope and explicit exclusions below remain unchanged.
+  - Root cause: snapshot autosave disabled the shared Inspector validation
+    context between native pointer and keyboard events. Editing now remains
+    available during immutable-snapshot saving/autosaving with existing
+    revision, conflict, and read-only guards intact.
+  - Native Save accepts already-Saved state without requiring an enabled
+    command; narrow displays preserve the 1100-point window minimum. Helpers
+    re-query live fields and operate genuine enabled, safely visible segments.
+    Alignment has a readable single-line label at compact Inspector widths.
+  - Evidence: seven distinct affected selectors passed; the three original
+    failing journeys passed three consecutive fresh-process groups (9/9).
+    Final local and hosted verification each passed 392 unit/integration plus
+    49 UI tests (441/441), zero failures. Repository checks and diff hygiene
+    passed. Original-resolution persistence and alignment evidence was reviewed.
+  - Hosted acceptance: Actions `33982941555` passed for production commit
+    `f6c58ef`. See
+    `docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md`.
+  - Test-only follow-up: Actions `33984707264` passed all 49 UI tests but
+    exposed an unordered-task assumption in one save-lifecycle unit test.
+    Its artificial delay/yield was replaced by the existing filesystem
+    checkpoint barrier; exact save/revision assertions were strengthened.
+    The corrected test and adjacent save-race regression passed 2/2. No
+    production code changed and no broad local suite was repeated.
 
 - [x] `SF-AUTHORING-019` Initial local image assets and Image authoring checkpoint.
   - Requirements: bounded production evidence for `SF-0801-001` through
