@@ -111,6 +111,15 @@ image journey passed 1/1 in
 `focused-eb0993c6-03f5-4713-bad9-0c2f7155a22c.xcresult`; the structural
 journey passed 1/1 in the immediately preceding two-test focused run.
 
+Actions `33933806330` passed every repository and non-UI gate plus 48/49 UI
+journeys. Image import passed. The structural journey's production command
+published `Alignment committed`, but its following assertion retained a stale
+popup query and depended on presentation capitalization. The assertion now
+re-queries the live SwiftUI/AppKit replacement control and compares the
+semantic accessibility value case-insensitively. The exact structural journey
+passed 1/1 in
+`focused-8a3bef0d-5ce9-4ba7-a54f-f0a4cba63314.xcresult`.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

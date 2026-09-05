@@ -31,7 +31,13 @@ Actions `33931671075` subsequently passed 47/49 UI journeys and showed that
 hosted Go to Folder selected the exact image without activating Import, while
 popup type-ahead did not commit Center. The focused journeys now use the native
 default Import action after the path sheet closes and Down Arrow/Return on the
-live alignment popup; both affected paths pass locally (1/1 each).
+live alignment popup; both affected paths pass locally (1/1 each). Actions
+`33933806330` passed 48/49 UI journeys and confirmed image import. Its sole
+remaining failure occurred after the structural command's successful commit
+announcement, where a stale case-sensitive AX popup query did not observe the
+replacement control. The assertion now re-queries the live popup and validates
+its semantic value independent of AppKit presentation capitalization; the
+exact structural journey passes locally 1/1.
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and

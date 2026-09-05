@@ -2369,8 +2369,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey(.downArrow, modifierFlags: [])
         application.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Alignment committed", timeout: 3))
-        XCTAssertTrue(waitForValue(
-            application.descendants(matching: .any)["inspector.layout.container.alignment"],
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.alignment",
             containing: "center",
             timeout: 3
         ))
@@ -3176,6 +3177,31 @@ final class SiteForgeLaunchTests: XCTestCase {
         }
         return XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
+            timeout: timeout
+        ) == .completed
+    }
+
+    /// SwiftUI may replace a native control after committing its binding. Re-query
+    /// the live accessibility element so the assertion observes the committed
+    /// control rather than a stale proxy, and compare semantic values without
+    /// depending on AppKit's presentation capitalization.
+    private func waitForLiveValue(
+        in application: XCUIApplication,
+        identifier: String,
+        containing text: String,
+        timeout: TimeInterval = 2
+    ) -> Bool {
+        let expected = text.lowercased()
+        let predicate = NSPredicate { [weak application] _, _ in
+            guard let application else { return false }
+            let element = application.descendants(matching: .any)[identifier].firstMatch
+            guard element.exists else { return false }
+            return String(describing: element.value ?? "")
+                .lowercased()
+                .contains(expected)
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
             timeout: timeout
         ) == .completed
     }

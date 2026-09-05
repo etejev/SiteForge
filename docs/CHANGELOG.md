@@ -17,7 +17,8 @@ This file records user-visible behavior during development. It is not a substitu
   later hosted pass showed that exact-path navigation selects rather than opens
   a file on that macOS revision; the journey now confirms the path sheet closed
   and activates the native panel's default Import action. Structural alignment
-  uses the popup's Down Arrow and Return path instead of type-ahead.
+  uses the popup's Down Arrow and Return path instead of type-ahead, then
+  re-queries the live replacement popup before validating its semantic value.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,
