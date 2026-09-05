@@ -2668,6 +2668,83 @@ enum ImageInspectorError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
+enum LinkInspectorEdit: Equatable, Sendable {
+    case label(String?)
+    case target(CanonicalLinkTarget?)
+    case context(CanonicalLinkContext?)
+}
+
+struct LinkInspectorCommandRegistry: Sendable {
+    /// SF-0806-002/005, SF-1102-002/005. Existing property commands own the
+    /// inverse, including removed property IDs and provenance.
+    func prepare(
+        _ edit: LinkInspectorEdit,
+        identity: ImageInspectorOperationIdentity,
+        in document: CanonicalDocument,
+        context: TransformValidationContext,
+        cancelled: Bool = false
+    ) throws -> PreparedImageInspectorEdit {
+        if cancelled { throw ImageInspectorError.cancelled }
+        guard identity.documentID == document.id else { throw ImageInspectorError.staleDocument }
+        guard identity.revision == document.revision else { throw ImageInspectorError.staleRevision }
+        guard identity.sceneID == context.currentSceneID,
+              identity.rendererGeneration == context.rendererGeneration else { throw ImageInspectorError.staleRenderer }
+        guard context.isLifecycleAvailable else { throw TransformError.lifecycleUnavailable(context.lifecycleDisabledReason ?? "Editing is unavailable.") }
+        guard identity.pageID == context.activePageID,
+              let page = document.pages.first(where: { $0.id == identity.pageID }) else { throw ImageInspectorError.pageUnavailable }
+        guard !identity.selectedNodeIDs.isEmpty else { throw ImageInspectorError.emptySelection }
+        guard Set(identity.selectedNodeIDs).count == identity.selectedNodeIDs.count else { throw ImageInspectorError.duplicateTarget }
+        guard identity.selectedNodeIDs == context.selectedNodeIDs else { throw ImageInspectorError.selectionMismatch }
+        guard document.revision < UInt64.max - 1 else { throw ImageInspectorError.revisionExhausted }
+        if case .label(let label?) = edit {
+            guard label.utf8.count <= 4096, label.rangeOfCharacter(from: .controlCharacters) == nil else { throw CanonicalLinkError.invalidLabel }
+        }
+        if case .target(.external(let url)) = edit, !CanonicalLinkTarget.validateExternal(url) { throw CanonicalLinkError.invalidTarget }
+        var commands: [DocumentCommand] = []
+        var applicable: [NodeID] = [], skipped: [NodeID] = []
+        for id in identity.selectedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw ImageInspectorError.missingTarget }
+            guard node.kind.isLinkControl else { skipped.append(id); continue }
+            if node.insertionBooleanProperty("locked") { throw ImageInspectorError.lockedTarget }
+            if node.insertionBooleanProperty("hidden") { throw ImageInspectorError.hiddenTarget }
+            guard context.availableNodeIDs.contains(id) else { throw ImageInspectorError.unavailableTarget }
+            applicable.append(id)
+            let replacements: [(String, PropertyValue)]
+            let owned: Set<String>
+            let origin: PropertyOrigin
+            switch edit {
+            case .label(let label):
+                replacements = [(CanonicalLinkTarget.labelKey, .string(label ?? node.kind.rawValue.capitalized))]
+                owned = [CanonicalLinkTarget.labelKey]
+                origin = label == nil ? .defaulted : .authored
+            case .target(let target):
+                replacements = target?.properties ?? []
+                owned = Set(["kind", "pageID", "nodeID", "url"].map { CanonicalLinkTarget.namespace + $0 })
+                origin = .authored
+            case .context(let value):
+                replacements = value.map { [(CanonicalLinkTarget.namespace + "context", .string($0.rawValue))] } ?? []
+                owned = [CanonicalLinkTarget.namespace + "context"]
+                origin = .authored
+            }
+            let keys = Set(replacements.map(\.0))
+            for previous in node.properties where owned.contains(previous.key.rawValue) && !keys.contains(previous.key.rawValue) {
+                commands.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: previous.id)))
+            }
+            for (key, value) in replacements {
+                let previous = node.insertionProperty(key)
+                if previous?.value == value && previous?.origin == origin { continue }
+                commands.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                    property: .init(id: previous?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: origin))))
+            }
+        }
+        guard !applicable.isEmpty else { throw ImageInspectorError.noApplicableTarget }
+        guard !commands.isEmpty else { throw ContainerLayoutError.noChanges }
+        let command: DocumentCommand = commands.count == 1 ? commands[0] : .batch(commands)
+        guard CommandRegistry().availability(for: command, in: document).isEnabled else { throw CanonicalLinkError.invalidTarget }
+        return .init(command: command, applicableNodeIDs: applicable, skippedNodeIDs: skipped)
+    }
+}
+
 struct ImageInspectorCommandRegistry: Sendable {
     func prepare(
         _ input: ImageInspectorCommand,

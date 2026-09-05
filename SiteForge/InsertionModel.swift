@@ -152,7 +152,7 @@ enum ResponsiveVisibilitySource: Equatable, Sendable {
 
 enum ResponsiveVisibilityResolver {
     static let namespace = "responsive.visibility.v1"
-    static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image]
+    static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link]
     static func supports(_ node: DocumentNode) -> Bool { supportedKinds.contains(node.kind) && node.insertionGeometry != nil }
     static func key(_ breakpoint: ResponsiveBreakpoint) -> String {
         "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).visible"
@@ -178,6 +178,8 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
     case stack
     case grid
     case image
+    case button
+    case link
 
     var nodeKind: NodeKind {
         switch self {
@@ -187,6 +189,8 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
         case .stack: .stack
         case .grid: .grid
         case .image: .image
+        case .button: .button
+        case .link: .link
         }
     }
 
@@ -197,6 +201,7 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
         case .stack: "SF-0502-001"
         case .grid: "SF-0503-001"
         case .image: "SF-0802-002"
+        case .button, .link: "SF-1102-002"
         }
     }
 }
@@ -224,6 +229,8 @@ struct InsertionGeometry: Codable, Equatable, Sendable {
         case .section: WorldSize(width: 960, height: 320)
         case .stack, .grid: WorldSize(width: 240, height: 160)
         case .image: WorldSize(width: 320, height: 240)
+        case .button: WorldSize(width: 160, height: 44)
+        case .link: WorldSize(width: 120, height: 24)
         }
         return Self(origin: point, size: size)
     }
@@ -275,11 +282,22 @@ struct ImageInsertionCommand: Equatable, Sendable {
     let provenance: InsertionProvenance
 }
 
+struct ControlInsertionCommand: Equatable, Sendable {
+    let kind: InsertionKind
+    let identity: InsertionOperationIdentity
+    let nodeID: NodeID
+    let parentID: NodeID
+    let index: Int
+    let geometry: InsertionGeometry
+    let provenance: InsertionProvenance
+}
+
 enum AuthoringInsertionCommand: Equatable, Sendable {
     case frame(FrameInsertionCommand)
     case text(TextInsertionCommand)
     case container(ContainerInsertionCommand)
     case image(ImageInsertionCommand)
+    case control(ControlInsertionCommand)
 
     var kind: InsertionKind {
         switch self {
@@ -287,6 +305,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .text: .text
         case .container(let value): value.kind
         case .image: .image
+        case .control(let value): value.kind
         }
     }
 
@@ -296,6 +315,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .text(let value): value.identity
         case .container(let value): value.identity
         case .image(let value): value.identity
+        case .control(let value): value.identity
         }
     }
 
@@ -305,6 +325,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .text(let value): value.nodeID
         case .container(let value): value.nodeID
         case .image(let value): value.nodeID
+        case .control(let value): value.nodeID
         }
     }
 
@@ -314,6 +335,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .text(let value): value.parentID
         case .container(let value): value.parentID
         case .image(let value): value.parentID
+        case .control(let value): value.parentID
         }
     }
 
@@ -323,6 +345,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .text(let value): value.index
         case .container(let value): value.index
         case .image(let value): value.index
+        case .control(let value): value.index
         }
     }
 
@@ -332,6 +355,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .text(let value): value.geometry
         case .container(let value): value.geometry
         case .image(let value): value.geometry
+        case .control(let value): value.geometry
         }
     }
 
@@ -341,10 +365,12 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
         case .text(let value): value.provenance
         case .container(let value): value.provenance
         case .image(let value): value.provenance
+        case .control(let value): value.provenance
         }
     }
 
     var text: String? {
+        if case .control(let value) = self { return value.kind.rawValue.capitalized }
         guard case .text(let value) = self else { return nil }
         return value.text
     }
@@ -482,6 +508,9 @@ struct InsertionCommandRegistry: Sendable {
         cancellation: InsertionCancellation = .never
     ) throws -> PreparedInsertion {
         guard !cancellation.isCancelled() else { throw InsertionError.cancelled }
+        if case .control(let control) = command, ![InsertionKind.button, .link].contains(control.kind) {
+            throw InsertionError.incompatibleParent
+        }
         guard context.isLifecycleAvailable else {
             throw InsertionError.lifecycleUnavailable(
                 context.lifecycleDisabledReason ?? "Insertion is unavailable during the current document operation."
@@ -593,8 +622,8 @@ struct InsertionCommandRegistry: Sendable {
             // These deterministic canonical defaults are authored appearance;
             // the selection outline and contextual measurement label remain
             // editor-only overlays.
-            property(command.nodeID, "style.fill", .string(command.kind == .text ? "text-placeholder" : "surface"), .defaulted),
-            property(command.nodeID, "style.border", .string(command.kind == .text ? "none" : "subtle"), .defaulted),
+            property(command.nodeID, "style.fill", .string([InsertionKind.text, .link].contains(command.kind) ? "text-placeholder" : "surface"), .defaulted),
+            property(command.nodeID, "style.border", .string([InsertionKind.text, .link].contains(command.kind) ? "none" : "subtle"), .defaulted),
         ]
         switch command.kind {
         case .section:
@@ -629,10 +658,13 @@ struct InsertionCommandRegistry: Sendable {
                 property(command.nodeID, "content.image.v1.alt", .string(""), .defaulted),
                 property(command.nodeID, "content.image.v1.decorative", .boolean(false), .defaulted),
             ]
+        case .button, .link:
+            properties += [property(command.nodeID, CanonicalLinkTarget.namespace + "kind", .string("none"), .defaulted),
+                           property(command.nodeID, CanonicalLinkTarget.namespace + "context", .string("same"), .defaulted)]
         case .frame, .text: break
         }
         if let text = command.text {
-            properties.append(property(command.nodeID, "content.text", .string(text), .defaulted))
+            properties.append(property(command.nodeID, command.kind.nodeKind.isLinkControl ? CanonicalLinkTarget.labelKey : "content.text", .string(text), .defaulted))
             let typography = CanonicalTypography.defaultValue
             properties += [
                 property(command.nodeID, CanonicalTypography.namespace + "family", .string(typography.family), .defaulted),
@@ -640,7 +672,7 @@ struct InsertionCommandRegistry: Sendable {
                 property(command.nodeID, CanonicalTypography.namespace + "size", .number(typography.size), .defaulted),
                 property(command.nodeID, CanonicalTypography.namespace + "lineHeight", .number(typography.lineHeight), .defaulted),
                 property(command.nodeID, CanonicalTypography.namespace + "tracking", .number(typography.tracking), .defaulted),
-                property(command.nodeID, CanonicalTypography.namespace + "alignment", .string(typography.alignment.rawValue), .defaulted),
+                property(command.nodeID, CanonicalTypography.namespace + "alignment", .string(command.kind == .button ? "center" : typography.alignment.rawValue), .defaulted),
             ]
         }
         return DocumentNode(
@@ -872,7 +904,7 @@ extension DocumentPage {
                     )
                     result[child.id] = geometry
                 }
-            case .frame, .text, .image, .component: break
+            case .frame, .text, .image, .button, .link, .component: break
             }
         }
         return result

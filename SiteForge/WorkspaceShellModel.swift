@@ -19,6 +19,8 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case frame
     case text
     case image
+    case button
+    case link
     case component
 
     var id: String { rawValue }
@@ -36,6 +38,8 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .frame: "square.dashed"
         case .text: "textformat"
         case .image: "photo"
+        case .button: "capsule"
+        case .link: "link"
         case .component: "square.stack.3d.up"
         }
     }
@@ -49,6 +53,8 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .frame: "f"
         case .text: "t"
         case .image: "i"
+        case .button: "b"
+        case .link: "l"
         case .component: "c"
         }
     }
@@ -113,7 +119,9 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .frame: .available(.frame)
         case .text: .available(.text)
         case .image: .available(.image)
-        case .button, .link, .divider:
+        case .button: .available(.button)
+        case .link: .available(.link)
+        case .divider:
             .unavailable("This basic element is not available until its canonical content command is implemented.")
         case .navbar, .footer:
             .unavailable("Site sections are not available until responsive site structure is implemented.")
@@ -128,7 +136,9 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .frame: .frame
         case .text: .text
         case .image: .image
-        case .button, .link, .divider, .navbar, .footer: nil
+        case .button: .button
+        case .link: .link
+        case .divider, .navbar, .footer: nil
         }
     }
     /// The precise bounded behavior this row is allowed to expose.  This is
@@ -724,6 +734,8 @@ actor WorkspaceScenePreparationWorker {
             case .stack: .stackSurface
             case .grid: .gridSurface
             case .text: .textPlaceholder
+            case .button: .frameSurface
+            case .link: .textPlaceholder
             case .image: .imagePlaceholder
             case .component: .container
             }
@@ -818,8 +830,8 @@ actor WorkspaceScenePreparationWorker {
                 style: style,
                 isVisible: !node.selectionBooleanProperty("hidden"),
                 accessibilityLabel: node.kind == .text ? "Text object" : (imageAccessibilityLabel ?? node.name),
-                plainText: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
-                displayName: node.kind == .text ? nil : node.name,
+                plainText: node.kind.isTextual ? node.insertionStringProperty(node.kind.isLinkControl ? CanonicalLinkTarget.labelKey : "content.text") : nil,
+                displayName: node.kind.isTextual ? nil : node.name,
                 fillRGBA: nil,
                 fillLayers: fillLayers,
                 opacity: DesignInspectorCommandRegistry.resolvedOpacity(for: node)?.0 ?? 1,
@@ -1439,6 +1451,8 @@ final class WorkspaceShellState: ObservableObject {
         case .grid: armInsertion(.grid)
         case .frame: armInsertion(.frame)
         case .text: armInsertion(.text)
+        case .button: armInsertion(.button)
+        case .link: armInsertion(.link)
         case .image:
             if selectedAssetID != nil {
                 armInsertion(.image)
@@ -4067,6 +4081,12 @@ final class WorkspaceShellState: ObservableObject {
                 identity: identity, nodeID: nodeID, parentID: parentID,
                 index: parent.childIDs.count, geometry: geometry,
                 assetID: assetID, provenance: provenance
+            ))
+        }
+        if kind == .button || kind == .link {
+            return .control(ControlInsertionCommand(
+                kind: kind, identity: identity, nodeID: nodeID, parentID: parentID,
+                index: parent.childIDs.count, geometry: geometry, provenance: provenance
             ))
         }
         return .container(ContainerInsertionCommand(

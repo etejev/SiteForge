@@ -339,14 +339,19 @@ enum NodeKind: String, Codable, CaseIterable, Sendable {
     case stack
     case grid
     case image
+    case button
+    case link
     case component
 
     var acceptsAuthoredChildren: Bool {
         switch self {
         case .frame, .section, .stack, .grid: true
-        case .text, .image, .component: false
+        case .text, .image, .button, .link, .component: false
         }
     }
+
+    var isTextual: Bool { [.text, .button, .link].contains(self) }
+    var isLinkControl: Bool { self == .button || self == .link }
 }
 
 // SF-0507-001...008 — typography is canonical document data, so its closed
@@ -528,6 +533,114 @@ extension DocumentNode {
             return false
         }
         return value
+    }
+}
+
+// SF-0806-001, SF-1102-001: editor loading never follows these references.
+// Page/section identities survive naming and route changes; missing targets
+// stay representable so the Inspector can offer repair or removal.
+enum CanonicalLinkContext: String, CaseIterable, Sendable {
+    case same, new
+}
+
+enum CanonicalLinkTarget: Equatable, Sendable {
+    case none
+    case page(PageID)
+    case section(pageID: PageID, nodeID: NodeID)
+    case external(String)
+
+    static let namespace = "interaction.link.v1."
+    static let labelKey = "content.control.v1.label"
+
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix(namespace) || $0.key.rawValue.hasPrefix("content.control.") }
+        guard node.kind.isLinkControl else {
+            guard owned.isEmpty else { throw CanonicalLinkError.invalidTarget }
+            return
+        }
+        let allowed = Set(["kind", "pageID", "nodeID", "url", "context"].map { namespace + $0 } + [labelKey])
+        guard owned.allSatisfy({ allowed.contains($0.key.rawValue) }),
+              let label = node.insertionStringProperty(labelKey),
+              label.utf8.count <= 4096,
+              label.rangeOfCharacter(from: .controlCharacters) == nil else { throw CanonicalLinkError.invalidLabel }
+        if let context = node.insertionProperty(namespace + "context") {
+            guard case .string(let value) = context.value, CanonicalLinkContext(rawValue: value) != nil
+            else { throw CanonicalLinkError.invalidTarget }
+        }
+        _ = try resolve(node)
+    }
+
+    var properties: [(String, PropertyValue)] {
+        switch self {
+        case .none: [(Self.namespace + "kind", .string("none"))]
+        case .page(let id): [
+            (Self.namespace + "kind", .string("page")),
+            (Self.namespace + "pageID", .string(id.description))]
+        case .section(let pageID, let nodeID): [
+            (Self.namespace + "kind", .string("section")),
+            (Self.namespace + "pageID", .string(pageID.description)),
+            (Self.namespace + "nodeID", .string(nodeID.description))]
+        case .external(let url): [
+            (Self.namespace + "kind", .string("external")),
+            (Self.namespace + "url", .string(url))]
+        }
+    }
+
+    static func validateExternal(_ value: String) -> Bool {
+        guard !value.isEmpty, value.utf8.count <= 8192,
+              !value.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0)
+                  || CharacterSet.controlCharacters.contains($0) }),
+              !value.contains("\\"),
+              let components = URLComponents(string: value),
+              ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+              let host = components.host, !host.isEmpty,
+              components.user == nil, components.password == nil,
+              components.url != nil else { return false }
+        if let port = components.port, !(1...65535).contains(port) { return false }
+        return true
+    }
+
+    static func resolve(_ node: DocumentNode) throws -> CanonicalLinkTarget {
+        let targetKeys = ["kind", "pageID", "nodeID", "url"].map { namespace + $0 }
+        let present = Set(node.properties.filter { targetKeys.contains($0.key.rawValue) }.map { $0.key.rawValue })
+        if present.isEmpty { return .none }
+        func exact(_ suffixes: [String]) -> Bool { present == Set(suffixes.map { namespace + $0 }) }
+        switch node.insertionStringProperty(namespace + "kind") {
+        case "none" where exact(["kind"]): return .none
+        case "page" where exact(["kind", "pageID"]):
+            guard let value = node.insertionStringProperty(namespace + "pageID"),
+                  let id = PageID(uuidString: value) else { throw CanonicalLinkError.invalidTarget }
+            return .page(id)
+        case "section" where exact(["kind", "pageID", "nodeID"]):
+            guard let page = node.insertionStringProperty(namespace + "pageID"), let pageID = PageID(uuidString: page),
+                  let node = node.insertionStringProperty(namespace + "nodeID"), let nodeID = NodeID(uuidString: node)
+            else { throw CanonicalLinkError.invalidTarget }
+            return .section(pageID: pageID, nodeID: nodeID)
+        case "external" where exact(["kind", "url"]):
+            guard let value = node.insertionStringProperty(namespace + "url"), validateExternal(value)
+            else { throw CanonicalLinkError.invalidTarget }
+            return .external(value)
+        default: throw CanonicalLinkError.invalidTarget
+        }
+    }
+
+    func isMissing(in document: CanonicalDocument) -> Bool {
+        switch self {
+        case .none, .external: false
+        case .page(let id): !document.pages.contains { $0.id == id }
+        case .section(let pageID, let nodeID):
+            !document.pages.contains { $0.id == pageID && $0.nodes.contains { $0.id == nodeID && $0.kind == .section } }
+        }
+    }
+}
+
+enum CanonicalLinkError: Error, Equatable, LocalizedError, Sendable {
+    case invalidTarget, invalidLabel
+    var errorDescription: String? {
+        switch self {
+        case .invalidTarget: "Choose a page or section, or enter a complete HTTP or HTTPS URL without credentials."
+        case .invalidLabel: "Enter a label of at most 4,096 UTF-8 bytes without control characters."
+        }
     }
 }
 
@@ -903,7 +1016,7 @@ enum CanonicalResponsiveGeometryNamespaceValidator {
         "60000000-0000-4000-8000-000000000003",
     ]
     private static let fields: Set<String> = ["x", "y", "width", "height"]
-    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link]
 
     static func validate(_ node: DocumentNode) throws {
         let properties = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
@@ -1051,7 +1164,7 @@ enum CanonicalTypographyNamespaceValidator {
     static func validate(_ node: DocumentNode) throws {
         let owned = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
         guard !owned.isEmpty else { return }
-        guard node.kind == .text else { throw ModelValidationError.invalidTypographyState }
+        guard [.text, .button, .link].contains(node.kind) else { throw ModelValidationError.invalidTypographyState }
         let suffixes = owned.map { String($0.key.rawValue.dropFirst(root.count)) }
         let allowed: Set<String> = ["family", "weight", "size", "lineHeight", "tracking", "alignment"]
         guard Set(suffixes).count == suffixes.count, Set(suffixes).isSubset(of: allowed) else {
@@ -1396,6 +1509,7 @@ private extension DocumentPage {
             try CanonicalFillLayerNamespaceValidator.validate(node)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
+            try CanonicalLinkTarget.validate(node)
             try CanonicalImageNamespaceValidator.validate(node)
             try CanonicalResponsiveGeometryNamespaceValidator.validate(node)
             try CanonicalResponsiveContainerNamespaceValidator.validate(node)
@@ -1475,7 +1589,7 @@ private extension DocumentNode {
                   string("layout.grid.placement", equals: "row-major") else {
                 throw ModelValidationError.invalidStructuralDefaults
             }
-        case .frame, .text, .image, .component: break
+        case .frame, .text, .image, .button, .link, .component: break
         }
     }
 }
@@ -1498,7 +1612,7 @@ enum DocumentSerializer {
     // Schema 5 adds the canonical image-asset catalogue and versioned Image
     // reference namespace. Schema 4 remains an immutable historical shape and
     // is re-emitted as v5 on the next deterministic save.
-    static let currentSchemaVersion = 5
+    static let currentSchemaVersion = 6
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -1793,11 +1907,15 @@ enum DocumentSerializer {
             } catch {
                 throw DocumentSerializationError.malformedInput
             }
-        case currentSchemaVersion:
+        case 5, currentSchemaVersion:
             do {
                 let strictDecoder = JSONDecoder()
                 strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
                 document = try strictDecoder.decode(CurrentEnvelope.self, from: data).document
+                if header.schemaVersion == 5,
+                   document.pages.contains(where: { $0.nodes.contains { [.button, .link].contains($0.kind) } }) {
+                    throw DocumentSerializationError.malformedInput
+                }
             } catch {
                 throw DocumentSerializationError.malformedInput
             }
