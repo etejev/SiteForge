@@ -46,6 +46,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         }
     }
 
+    /// The product deliberately preserves its 1100-point minimum on a
+    /// narrower display. Journeys whose pointer contract is entirely in the
+    /// navigator opt into the existing leading-edge constrained placement on
+    /// those displays; ordinary displays continue to exercise the normal
+    /// maximized window policy.
+    private var leadingEdgeAlignmentOnNarrowDisplay: TestWindowAlignment? {
+        guard let visibleWidth = NSScreen.main?.visibleFrame.width,
+              visibleWidth < 1_100 else { return nil }
+        return .left
+    }
+
     // SF-0201-002, SF-0201-008 — the UI harness recognizes every canonical
     // native-window readiness path and rejects merely similar phase names.
     func testLaunchLifecycleReadinessVocabularyIsExact() {
@@ -294,28 +305,16 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(heightField.waitForExistence(timeout: 5))
         XCTAssertEqual(xField.label, "X geometry")
         XCTAssertTrue((xField.value as? String)?.contains("authored") == true)
-        xField.click()
-        xField.typeKey("a", modifierFlags: .command)
-        xField.typeText("121")
-        xField.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(xField, with: "121", in: application)
         XCTAssertTrue(waitForValueToChange(geometry, from: afterPointerResize))
         let afterNumericMove = try XCTUnwrap(geometry.value as? String)
-        yField.click()
-        yField.typeKey("a", modifierFlags: .command)
-        yField.typeText("122")
-        yField.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(yField, with: "122", in: application)
         XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericMove))
         let afterNumericY = try XCTUnwrap(geometry.value as? String)
-        widthField.click()
-        widthField.typeKey("a", modifierFlags: .command)
-        widthField.typeText("241")
-        widthField.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(widthField, with: "241", in: application)
         XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericY))
         let afterNumericWidth = try XCTUnwrap(geometry.value as? String)
-        heightField.click()
-        heightField.typeKey("a", modifierFlags: .command)
-        heightField.typeText("161")
-        heightField.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(heightField, with: "161", in: application)
         XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericWidth))
 
         // Native focus loss commits a complete draft through the same typed
@@ -1163,9 +1162,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         let imageURL = try makeLocalImageFixture(named: "siteforge-image.png")
         let fixture = legacyFixtureURL(named: "schema-v4-legacy-surface")
         let project = fixtureRoot.appendingPathComponent("local-image-authoring.siteforge")
-        var application = launchIntegrationOpen(project, base64Fixture: fixture)
+        var application = launchIntegrationOpen(
+            project,
+            base64Fixture: fixture,
+            windowAlignment: leadingEdgeAlignmentOnNarrowDisplay
+        )
         XCTAssertTrue(waitForWorkspaceReady(application))
-        assertNormalWindowPolicy(in: application)
+        assertNormalWindowPolicy(
+            in: application,
+            permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay:
+                leadingEdgeAlignmentOnNarrowDisplay != nil
+        )
 
         application.buttons["navigator.tab.assets"].click()
         let empty = application.descendants(matching: .any)["assets.empty"]
@@ -1179,13 +1186,46 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(pathField.waitForExistence(timeout: 3))
         pathField.typeText(imageURL.path)
         application.typeKey(.return, modifierFlags: [])
-        let nativeImport = application.buttons["OKButton"]
-        XCTAssertTrue(waitForEnabled(nativeImport))
-        nativeImport.click()
-
         let assetRow = application.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@", "assets.row.", "siteforge-image"
         )).firstMatch
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "exists == false"),
+                    object: pathField
+                )],
+                timeout: 5
+            ),
+            .completed
+        )
+        // Go to Folder selects the exact file. Activate the native panel's
+        // default Import action from that selection, avoiding unstable AX
+        // proxies for Finder's column browser and filename field.
+        if !assetRow.exists {
+            application.typeKey(.return, modifierFlags: [])
+        }
+        let importCompletedOrAwaitsConfirmation = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { [weak application] _, _ in
+                    guard let application else { return false }
+                    if assetRow.exists { return true }
+                    let liveImport = application.buttons["OKButton"]
+                    return liveImport.exists && liveImport.isEnabled
+                },
+                object: application
+            )],
+            timeout: 8
+        ) == .completed
+        XCTAssertTrue(
+            importCompletedOrAwaitsConfirmation,
+            "The native panel must either import the chosen file or expose an enabled Import action"
+        )
+        if !assetRow.exists {
+            let liveImport = application.buttons["OKButton"]
+            XCTAssertTrue(liveImport.exists && liveImport.isEnabled)
+            liveImport.click()
+        }
         XCTAssertTrue(assetRow.waitForExistence(timeout: 8))
         XCTAssertTrue((assetRow.value as? String)?.contains("siteforge-image.png, 320 by 180 pixels") == true)
         assetRow.click()
@@ -1214,10 +1254,24 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.image.status"], containing: "committed"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-019 Image Fill focal alt")
 
-        let undo = application.buttons["toolbar.undo"]
-        XCTAssertTrue(waitForEnabled(undo)); undo.click()
-        let redo = application.buttons["toolbar.redo"]
-        XCTAssertTrue(waitForEnabled(redo)); redo.click()
+        let committedAlt = "A generated orange and teal test image"
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { [weak application] _, _ in
+                    guard let application else { return false }
+                    return (application.textFields["inspector.image.alt"].value as? String) != committedAlt
+                },
+                object: application
+            )],
+            timeout: 5
+        ) == .completed)
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(
+            application.textFields["inspector.image.alt"],
+            containing: committedAlt,
+            timeout: 5
+        ))
         attachWindowScreenshot(application, named: "SF-AUTHORING-019 Image undo redo")
 
         application.menuBars.menuBarItems["File"].click()
@@ -1227,7 +1281,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         terminateAndWait(application)
 
         let reopenRecovery = fixtureRoot.appendingPathComponent("image-reopen-recovery", isDirectory: true)
-        application = launchExistingIntegrationProject(project, recoveryDirectory: reopenRecovery)
+        application = launchExistingIntegrationProject(
+            project,
+            recoveryDirectory: reopenRecovery,
+            windowAlignment: leadingEdgeAlignmentOnNarrowDisplay
+        )
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 8))
         application.buttons["navigator.tab.layers"].click()
         let imageLayer = application.descendants(matching: .any).matching(NSPredicate(
@@ -1434,6 +1492,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     private func launchScenario(
         _ scenario: String,
         reduceMotion: Bool = false,
+        windowAlignment: TestWindowAlignment? = nil,
         extraArguments: [String] = []
     ) -> XCUIApplication {
         continueAfterFailure = false
@@ -1443,6 +1502,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         ]
         if reduceMotion {
             application.launchArguments += ["-SiteForgeReduceMotion", "YES"]
+        }
+        if let windowAlignment {
+            application.launchArguments += ["-SiteForgeUITestWindowAlignment", windowAlignment.rawValue]
         }
         application.launchArguments += extraArguments
         recordLaunchState("before-launch", application)
@@ -1698,10 +1760,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         let windowExists = window.exists
         let details = """
         control=\(control.identifier)
+        application={state=\(application.state.rawValue);enabled=\(application.isEnabled);sheets=\(application.sheets.count);dialogs=\(application.dialogs.count)}
         state={exists=\(controlExists);enabled=\(controlExists && control.isEnabled);hittable=\(controlExists && control.isHittable);focused=\(controlExists && hasKeyboardFocus(control))}
         controlFrame=\(controlExists ? sanitizedFrame(control.frame) : "unavailable")
         visibleScreen={x=0.0;y=0.0;width=\(screenSize.width);height=\(screenSize.height)}
-        window={identifier=\(windowExists ? window.identifier : "unavailable");frame=\(windowExists ? sanitizedFrame(window.frame) : "unavailable")}
+        window={identifier=\(windowExists ? window.identifier : "unavailable");enabled=\(windowExists && window.isEnabled);frame=\(windowExists ? sanitizedFrame(window.frame) : "unavailable")}
         history=\(history)
         textPhase=\(textStatus.exists ? ((textStatus.value as? String) ?? "unavailable") : "unavailable")
         responder=\(focusStatus.exists ? ((focusStatus.value as? String) ?? "unavailable") : "unavailable")
@@ -1823,7 +1886,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         _ url: URL,
         base64Fixture: URL,
         startMalformed: Bool = false,
-        retryBase64Fixture: URL? = nil
+        retryBase64Fixture: URL? = nil,
+        windowAlignment: TestWindowAlignment? = nil
     ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
@@ -1834,6 +1898,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         if startMalformed { application.launchArguments.append("-SiteForgeIntegrationStartMalformed") }
         if let retryBase64Fixture {
             application.launchArguments += ["-SiteForgeIntegrationRetryBase64", retryBase64Fixture.path]
+        }
+        if let windowAlignment {
+            application.launchArguments += ["-SiteForgeUITestWindowAlignment", windowAlignment.rawValue]
         }
         recordLaunchState("before-launch", application)
         application.launch()
@@ -1849,13 +1916,17 @@ final class SiteForgeLaunchTests: XCTestCase {
     /// from the preceding app lifetime cannot be replaced by a test fixture.
     private func launchExistingIntegrationProject(
         _ url: URL,
-        recoveryDirectory: URL? = nil
+        recoveryDirectory: URL? = nil,
+        windowAlignment: TestWindowAlignment? = nil
     ) -> XCUIApplication {
         continueAfterFailure = false
         let application = trackedApplication()
         application.launchArguments += baseLaunchArguments(recoveryDirectory: recoveryDirectory) + [
             "-SiteForgeIntegrationOpenProject", url.path,
         ]
+        if let windowAlignment {
+            application.launchArguments += ["-SiteForgeUITestWindowAlignment", windowAlignment.rawValue]
+        }
         recordLaunchState("before-reopen", application)
         application.launch()
         recordLaunchState("after-reopen", application)
@@ -2049,7 +2120,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     // SF-0201-002, SF-0201-006, SF-0201-008
     @MainActor
     func testProductNavigatorProvidesTruthfulElementsAssetsAndComponentsDestinations() throws {
-        let application = launchWorkspace()
+        let application = launchWorkspace(windowAlignment: leadingEdgeAlignmentOnNarrowDisplay)
 
         let elements = application.buttons["navigator.tab.elements"]
         XCTAssertTrue(waitForHittable(elements, in: application))
@@ -2273,18 +2344,40 @@ final class SiteForgeLaunchTests: XCTestCase {
         let axis = application.descendants(matching: .any)["inspector.layout.container.axis"]
         revealStructuralLayoutControl(axis, in: application)
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack vertical default")
-        let horizontal = axis.radioButtons["Horizontal"]
-        XCTAssertTrue(horizontal.waitForExistence(timeout: 3)); horizontal.click()
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Direction committed", timeout: 3))
+        clickStructuralLayoutRadioButton(
+            "Horizontal",
+            groupIdentifier: "inspector.layout.container.axis",
+            in: application
+        )
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.announcement",
+            containing: "Direction committed",
+            timeout: 3
+        ))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack horizontal")
         let gap = application.textFields["inspector.layout.container.gap"]
         replaceStructuralLayoutField(gap, with: "36", in: application)
-        let alignment = application.descendants(matching: .any)["inspector.layout.container.alignment"]
-        revealStructuralLayoutControl(alignment, in: application)
-        XCTAssertTrue(alignment.waitForExistence(timeout: 3)); alignment.click()
-        let center = alignment.menuItems["Center"]
-        XCTAssertTrue(center.waitForExistence(timeout: 3)); center.click()
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Alignment committed", timeout: 3))
+        _ = revealStructuralLayoutControl(
+            application.descendants(matching: .any)["inspector.layout.container.alignment"],
+            in: application
+        )
+        clickStructuralLayoutRadioButton(
+            "Center",
+            groupIdentifier: "inspector.layout.container.alignment",
+            in: application
+        )
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.announcement",
+            containing: "Alignment committed",
+            timeout: 3
+        ))
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.alignment",
+            containing: "center"
+        ))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack gap alignment")
 
         selectStructuralLayer("Section", in: application)
@@ -2619,7 +2712,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     // SF-0201-006, SF-0602-006, SF-1902-006
     @MainActor
     func testKeyboardFocusTraversesWorkspaceForwardAndReverse() throws {
-        let application = launchWorkspace()
+        let application = launchWorkspace(windowAlignment: leadingEdgeAlignmentOnNarrowDisplay)
         let pages = application.buttons["navigator.tab.pages"]
         let accessibility = application.buttons["inspector.tab.accessibility"]
 
@@ -3091,6 +3184,30 @@ final class SiteForgeLaunchTests: XCTestCase {
         ) == .completed
     }
 
+    /// A committed SwiftUI control may be replaced after publishing its
+    /// binding. Re-query the live accessibility value so the assertion observes
+    /// the current semantic state rather than a stale native proxy.
+    private func waitForLiveValue(
+        in application: XCUIApplication,
+        identifier: String,
+        containing text: String,
+        timeout: TimeInterval = 2
+    ) -> Bool {
+        let expected = text.lowercased()
+        let predicate = NSPredicate { [weak application] _, _ in
+            guard let application else { return false }
+            let element = application.descendants(matching: .any)[identifier].firstMatch
+            guard element.exists else { return false }
+            return String(describing: element.value ?? "")
+                .lowercased()
+                .contains(expected)
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
+            timeout: timeout
+        ) == .completed
+    }
+
     /// Renderer adoption may replace the virtual canvas accessibility node.
     /// Query the live production node for an adopted render-plan assertion;
     /// retaining the original AX proxy would test a stale accessibility
@@ -3148,10 +3265,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         let identifier = element.identifier
         let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
         var liveElement = liveStructuralLayoutControl(identifier, in: application)
-        for _ in 0..<10 where !liveElement.isHittable {
+        for _ in 0..<10 where !isSafelyVisibleForPointer(liveElement, inside: scroll) {
             let targetFrame = liveElement.frame
-            let viewportFrame = scroll.frame
-            let deltaY: CGFloat = targetFrame.minY < viewportFrame.minY + 8 ? 180 : -180
+            let safeViewport = pointerSafeIntersection(for: scroll.frame)
+            let deltaY: CGFloat = targetFrame.minY < safeViewport.minY + 8 ? 180 : -180
             scroll.scroll(byDeltaX: 0, deltaY: deltaY)
             // Undo/redo and reset can replace the SwiftUI control host. A
             // fresh, role-preserving AX query observes the live shipping
@@ -3159,8 +3276,38 @@ final class SiteForgeLaunchTests: XCTestCase {
             // the non-hittable SwiftUI wrapper that shares its identifier.
             liveElement = liveStructuralLayoutControl(identifier, in: application)
         }
-        XCTAssertTrue(liveElement.isHittable, "Inspector control \(identifier) must remain reachable")
+        XCTAssertTrue(
+            isSafelyVisibleForPointer(liveElement, inside: scroll),
+            "Inspector control \(identifier) must remain inside the usable display and reachable"
+        )
         return liveElement
+    }
+
+    /// XCTest can report a control as hittable when an oversized product
+    /// window extends beneath the Dock on a display narrower or shorter than
+    /// the supported minimum. Pointer journeys must scroll the shipping
+    /// control into the real AppKit usable screen before clicking it.
+    private func isSafelyVisibleForPointer(
+        _ element: XCUIElement,
+        inside scroll: XCUIElement
+    ) -> Bool {
+        guard element.exists, element.isHittable else { return false }
+        return pointerSafeIntersection(for: scroll.frame).contains(element.frame)
+    }
+
+    private func pointerSafeIntersection(for viewport: CGRect) -> CGRect {
+        guard let screen = NSScreen.main else { return viewport.insetBy(dx: 0, dy: 8) }
+        let visible = screen.visibleFrame
+        // AppKit screen geometry is Y-up; XCTest screen geometry is Y-down.
+        // This is the one conversion needed to compare a native visibleFrame
+        // with an XCUIElement frame on the main display.
+        let visibleInXCUI = CGRect(
+            x: visible.minX,
+            y: screen.frame.maxY - visible.maxY,
+            width: visible.width,
+            height: visible.height
+        )
+        return viewport.intersection(visibleInXCUI).insetBy(dx: 0, dy: 8)
     }
 
     private func liveStructuralLayoutControl(
@@ -3170,12 +3317,72 @@ final class SiteForgeLaunchTests: XCTestCase {
         if identifier.hasSuffix(".reset") {
             return application.buttons[identifier]
         }
-        if identifier.hasSuffix(".padding")
+        if ["inspector.layout.x", "inspector.layout.y", "inspector.layout.width", "inspector.layout.height"].contains(identifier)
+            || identifier.hasSuffix(".padding")
             || identifier.hasSuffix(".gap")
             || identifier.hasSuffix(".columns") {
             return application.textFields[identifier]
         }
         return application.descendants(matching: .any)[identifier].firstMatch
+    }
+
+    /// Segmented SwiftUI pickers expose native radio buttons. Re-query the
+    /// concrete segment after foreground adoption and scrolling so a retained
+    /// group proxy cannot route the pointer after AppKit has yielded the app.
+    private func clickStructuralLayoutRadioButton(
+        _ label: String,
+        groupIdentifier: String,
+        in application: XCUIApplication
+    ) {
+        let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
+        var group = liveStructuralLayoutControl(groupIdentifier, in: application)
+        var button = group.radioButtons[label]
+
+        for _ in 0..<10 where !isSafelyVisibleForPointer(button, inside: scroll) {
+            let targetFrame = button.frame
+            let safeViewport = pointerSafeIntersection(for: scroll.frame)
+            let deltaY: CGFloat = targetFrame.minY < safeViewport.minY + 8 ? 180 : -180
+            scroll.scroll(byDeltaX: 0, deltaY: deltaY)
+            group = liveStructuralLayoutControl(groupIdentifier, in: application)
+            button = group.radioButtons[label]
+        }
+
+        if application.state != .runningForeground {
+            application.activate()
+        }
+        let safeViewport = pointerSafeIntersection(for: scroll.frame)
+        let ready = NSPredicate { [weak application] _, _ in
+            // Hosted macOS can expose AXEnabled=false on the Application and
+            // Window containers even while the native window remains key/main
+            // and its concrete control is enabled. Gate the genuine interaction
+            // surface instead of inherited container metadata.
+            guard let application,
+                  application.state == .runningForeground,
+                  application.sheets.count == 0,
+                  application.dialogs.count == 0 else { return false }
+            let window = application.windows.firstMatch
+            let liveGroup = application.descendants(matching: .any)[groupIdentifier].firstMatch
+            let liveButton = liveGroup.radioButtons[label]
+            return window.exists
+                && liveGroup.exists
+                && liveGroup.isEnabled
+                && liveButton.exists
+                && liveButton.isEnabled
+                && liveButton.isHittable
+                && safeViewport.contains(liveButton.frame)
+        }
+        guard XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: ready, object: application)],
+            timeout: 5
+        ) == .completed else {
+            attachPointerDiagnostics(control: button, application: application)
+            XCTFail("Inspector segment \(groupIdentifier).\(label) did not become foreground, enabled, and safely visible")
+            return
+        }
+
+        group = liveStructuralLayoutControl(groupIdentifier, in: application)
+        button = group.radioButtons[label]
+        button.click()
     }
 
     private func replaceStructuralLayoutField(
@@ -3274,18 +3481,40 @@ final class SiteForgeLaunchTests: XCTestCase {
             "Document status must be Modified or Saved before persistence"
         )
         application.menuBars.menuBarItems["File"].click()
-        if waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 1) {
+        let saveBecamePossibleOrUnnecessary = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { [weak application] _, _ in
+                    guard let application else { return false }
+                    let status = application.descendants(matching: .any)["status.document"].firstMatch
+                    if status.label.contains("Saved")
+                        || (status.value as? String)?.contains("Saved") == true {
+                        return true
+                    }
+                    let liveSave = application.menuItems["Save"]
+                    return liveSave.exists && liveSave.isEnabled
+                },
+                object: application
+            )],
+            timeout: 5
+        ) == .completed
+        XCTAssertTrue(
+            saveBecamePossibleOrUnnecessary,
+            "Autosave must either finish or leave the native Save command enabled"
+        )
+        if waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 0.25) {
             application.typeKey(.escape, modifierFlags: [])
             return
         }
-        XCTAssertTrue(application.menuItems["Save"].waitForExistence(timeout: 3))
-        XCTAssertTrue(waitForEnabled(application.menuItems["Save"], timeout: 3))
-        application.menuItems["Save"].click()
+        let liveSave = application.menuItems["Save"]
+        XCTAssertTrue(liveSave.exists)
+        XCTAssertTrue(liveSave.isEnabled)
+        liveSave.click()
         XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 8))
     }
 
     private func assertNormalWindowPolicy(
         in application: XCUIApplication,
+        permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay: Bool = false,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -3304,9 +3533,20 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTAssertEqual(window.frame.width, visible.width, accuracy: 3, file: file, line: line)
         } else {
             XCTAssertEqual(window.frame.width, 1_100, accuracy: 3, file: file, line: line)
-            XCTAssertEqual(window.frame.maxX, visible.maxX, accuracy: 3, file: file, line: line)
+            if permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay {
+                XCTAssertEqual(
+                    window.frame.minX,
+                    visible.minX + TestWindowGeometry.safeScreenInset,
+                    accuracy: 3,
+                    file: file,
+                    line: line
+                )
+            } else {
+                XCTAssertEqual(window.frame.maxX, visible.maxX, accuracy: 3, file: file, line: line)
+            }
         }
-        if visible.height >= window.frame.height - 3 {
+        if !permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay,
+           visible.height >= window.frame.height - 3 {
             XCTAssertEqual(window.frame.height, visible.height, accuracy: 3, file: file, line: line)
         }
         XCTAssertLessThan(
@@ -3415,7 +3655,11 @@ final class SiteForgeLaunchTests: XCTestCase {
             ("inactive", ["-SiteForgeWindowInactive", "YES"]),
         ]
         for (name, arguments) in variants {
-            let application = launchScenario("workspace", extraArguments: arguments)
+            let application = launchScenario(
+                "workspace",
+                windowAlignment: leadingEdgeAlignmentOnNarrowDisplay,
+                extraArguments: arguments
+            )
             XCTAssertTrue(application.descendants(matching: .any)["shell.navigator"].exists)
             XCTAssertTrue(waitForHittable(application.buttons["navigator.tab.pages"]))
             XCTAssertEqual(

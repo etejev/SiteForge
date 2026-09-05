@@ -3165,8 +3165,12 @@ final class WorkspaceShellState: ObservableObject {
         } else {
             switch lifecycle.phase {
             case .saving, .autosaving:
-                lifecycleAvailable = false
-                reason = "Wait for the current save operation to finish."
+                // Saves own immutable snapshots. Later edits advance the
+                // revision and remain Modified when that snapshot finishes.
+                // Disabling Inspector controls here also drops native field
+                // focus when autosave starts between pointer and key events.
+                lifecycleAvailable = true
+                reason = nil
             case .conflicted:
                 lifecycleAvailable = false
                 reason = "Resolve the file conflict before transforming content."

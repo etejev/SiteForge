@@ -71,6 +71,118 @@ tests (440 total), zero failures, on 2026-09-04. Repository security,
 traceability, architecture, migration, evidence, and fixture-hygiene checks
 also passed.
 
+Actions `33922908106` subsequently passed all 391 non-UI tests and exposed five
+UI-only assumptions. The typography persistence journey observed Save after
+autosave had already made it unnecessary. Four other journeys targeted leading
+navigator or Assets controls while the unchanged 1100-point product window was
+aligned to the trailing edge of a 1024-point runner. The correction re-queries
+live Save/status elements and accepts only the truthful states: already Saved,
+or Modified with Save enabled. Leading-control journeys use the established
+left-edge test placement only below the product minimum. Final local
+`./sf verify` again passed 391 unit/integration plus 49 UI tests (440 total).
+Hosted confirmation for the replacement commit remains required.
+
+Replacement Actions `33927510205` passed all 391 non-UI tests and reduced the
+UI failures to two system-control differences. On the hosted macOS build, a
+full file path could complete the native open-panel import before the retired
+Import button proxy became enabled. The journey now requires either the real
+asset row or a freshly queried enabled Import action. The structural layout
+journey now selects Center through the live native popup's standard keyboard
+path when its transient menu item is absent from AX. The two affected journeys
+passed together locally (2/2); the prior 440-test `./sf verify` remains the
+authoritative full local gate because no production code changed.
+
+Actions `33929806075` passed every repository and non-UI gate plus 48/49 UI
+journeys. The remaining image failure was an offscreen trailing Redo toolbar
+button after the journey deliberately left-aligned the 1100-point window to
+reach native leading import controls on a 1024-point display. The journey now
+uses the standard macOS Command-Z and Shift-Command-Z paths and asserts the live
+alt-text value changes and restores exactly. This preserves the product minimum
+and strengthens history proof without relying on offscreen chrome; the focused
+image journey passed 1/1.
+
+Actions `33931671075` passed all repository and non-UI gates and 47/49 UI
+journeys. Its log proved that Go to Folder selected the exact image but did not
+activate the open panel's default action, and that popup type-ahead did not
+commit Center on the hosted OS. The image journey now waits for the native path
+sheet to close and activates the panel's default Import action; the structural
+journey uses Down Arrow and Return on the live alignment popup. The corrected
+image journey passed 1/1 in
+`focused-eb0993c6-03f5-4713-bad9-0c2f7155a22c.xcresult`; the structural
+journey passed 1/1 in the immediately preceding two-test focused run.
+
+Actions `33933806330` passed every repository and non-UI gate plus 48/49 UI
+journeys. Image import passed. The structural journey's production command
+published `Alignment committed`, but its following assertion retained a stale
+popup query and depended on presentation capitalization. The assertion now
+re-queries the live SwiftUI/AppKit replacement control and compares the
+semantic accessibility value case-insensitively. The exact structural journey
+passed 1/1 in
+`focused-8a3bef0d-5ce9-4ba7-a54f-f0a4cba63314.xcresult`.
+
+Actions `33935713623` again passed all repository/non-UI gates and 48/49 UI
+journeys. Its sole trace showed the popup was clicked, but Down Arrow and
+Return were synthesized against the application and no commit announcement
+followed. Both keys now target the re-queried live popup. The exact structural
+journey passed 1/1 in
+`focused-a0219a8d-e4f3-4169-abe0-eeb819c73755.xcresult`.
+
+Actions `33937301726` passed every repository/non-UI gate. Its first attempt
+lost the workspace AX boundary before product assertions; the one justified
+retry reached the structural control and proved that even popup-targeted key
+events did not commit the transient hosted AppKit menu. The production Stack
+alignment control now uses a persistent native segmented picker, matching the
+existing direction control and retaining the same canonical registry path.
+The practical-minimum control journey passed 1/1 in
+`focused-0a9e4685-c6b4-46e7-8fe0-b91a0764d3e6.xcresult`; the complete
+structural journey clicks the visible Center segment, requires the canonical
+commit announcement, re-queries the live semantic group value, and passed 1/1
+in `focused-0a15d65a-83d5-45b6-8064-c113cadddacd.xcresult`.
+
+Actions `33940565832` passed all repository/non-UI gates and 48/49 UI
+journeys. Its sole failure attachment showed the persistent Center segment at
+the bottom of the Inspector beneath the Dock on the 1024×768 hosted display.
+Although XCTest reported that segment as hittable, its pointer event landed in
+system UI and no alignment transaction was published. The shared structural
+control reveal helper now intersects the Inspector viewport with the AppKit
+`NSScreen.visibleFrame`, converts that usable frame once into XCTest's Y-down
+coordinates, and scrolls until the freshly queried shipping control is fully
+inside that intersection before clicking. The 1100-point product minimum is
+unchanged. A focused two-selector run built the application and tests, but the
+local macOS runner timed out enabling automation before either test body; this
+environment failure does not replace the prior passing 1/1 product evidence,
+and a replacement hosted run remained the authoritative confirmation.
+
+Actions `33942209770` passed every repository gate plus all 391
+unit/integration and 49 UI tests (440 total). This confirms the shared
+usable-screen reveal policy on the 1024×768 hosted display and closes the
+SF-AUTHORING-019 checkpoint without changing the 1100-point product minimum.
+
+The subsequent documentation-only Actions run `33943569279` passed all
+repository/non-UI gates and 48/49 UI journeys. Its structural failure showed
+the Center segment safely at `y=518`, above the Dock, but the application and
+window had yielded foreground/enabled ownership and the previous Gap
+announcement remained. Structural segmented actions now activate the real
+application, wait for a foreground enabled window with no sheet/dialog,
+re-query the enabled concrete native radio segment, require its frame inside
+the usable screen, and re-query the live announcement after the click. A local
+focused run compiled and entered the test but failed in the launch helper when
+macOS left SiteForge Running Background, before reaching this changed path;
+replacement hosted execution remains the authoritative confirmation.
+
+Actions `33945148753` retained the decisive follow-up diagnostics. AppKit's
+shipping focus probe reported the workspace window key/main with its command
+route attached, and the concrete Horizontal radio segment was enabled,
+hittable, and inside the usable display. XCTest exposed the AXApplication
+container as Disabled. Actions `33946638814` repeated the healthy native probe
+and live enabled/hittable segment while exposing AXWindow Disabled as inherited
+container metadata too. Structural pointer readiness therefore
+uses the foreground process plus live group/segment and modal/geometry
+state, does not reactivate an already foreground app, and records the
+top-level proxy flag only as diagnostics. This preserves the real pointer and
+commit assertions without mistaking an AX container discrepancy for a disabled
+shipping control. A replacement hosted run is still required for closure.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

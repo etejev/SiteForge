@@ -2,7 +2,8 @@
 
 ## Current checkpoint
 
-`SF-AUTHORING-019` is **VERIFIED AND DONE**. Schema-v5 adds one image-asset
+`SF-AUTHORING-019` is **LOCALLY VERIFIED; HOSTED ACTIVATION FOLLOW-UP IN
+PROGRESS**. Schema-v5 adds one image-asset
 catalogue and Image node/reference, retains
 exact local raster bytes in the existing content-addressed resource sidecar,
 and integrates the Assets pane, Elements/Insert commands, identity-gated Image
@@ -17,7 +18,16 @@ screens, and reactivates/re-queries live structural fields before keyboard
 input. The three affected journeys passed independently and in three grouped
 repetitions; the complete UI target passed 49/49. Final `./sf verify` passed 391
 unit/integration plus 49 UI tests (440 total), zero failures, with all repository
-checks green on 2026-09-04. Do not create a second asset
+checks green locally on 2026-09-04. Hosted stabilization Actions
+`33942209770` passed the same complete 440-test gate on 2026-09-05 after
+pointer journeys stopped trusting obscured `isHittable` results beneath the
+Dock. Later runs proved the shipping AppKit window remained key/main and its
+live segment enabled while XCTest exposed the AXApplication and AXWindow
+containers as Disabled. Actions `33946638814` confirmed that the AXWindow flag
+was also inherited metadata rather than the live control state. The helper now
+gates the foreground process and actual group/segment rather than those flags, avoids redundant
+activation, and observes the live replacement announcement. Hosted replacement
+confirmation remains required. Do not create a second asset
 store, retain user paths, serialize thumbnail/editor state, or broaden this
 slice into image fills, remote providers, responsive sources, or export. No
 next READY milestone is specified.

@@ -3145,6 +3145,7 @@ private struct ContainerLayoutInspectorView: View {
                             Text(alignment.rawValue.capitalized).tag(alignment as ContainerLayoutAlignment?)
                         }
                     }
+                    .pickerStyle(.segmented)
                     .accessibilityLabel("Stack cross-axis alignment")
                     .disabled(!availability.isEnabled)
                     .accessibilityValue(accessibilityValue(selection, field: .alignment))

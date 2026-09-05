@@ -1,9 +1,9 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-04.
+Last updated: 2026-09-05.
 
-`SF-AUTHORING-019` is verified and complete within its bounded local-raster
-scope. Schema-v5 owns stable image-asset descriptors
+`SF-AUTHORING-019` remains locally verified within its bounded local-raster
+scope, with one hosted activation follow-up in progress. Schema-v5 owns stable image-asset descriptors
 and Image-node references; the existing resource sidecar preserves exact
 original bytes. Assets import/search/rename/replace/reveal/delete, Image
 insertion, Fit/Fill/Stretch, focal point, alt/decorative semantics, renderer
@@ -17,7 +17,64 @@ three affected journeys passed independently and in three consecutive grouped
 runs; the complete UI target passed 49/49. Final `./sf verify` passed 391 unit/
 integration plus 49 UI tests (440 total), zero failures, with every repository
 gate green on 2026-09-04. The normative SF-0801 and SF-0802 modules remain
-Partial for the explicit deferred scope.
+Partial for the explicit deferred scope. Actions `33922908106` passed all 391
+non-UI tests but exposed a live autosave/Save-menu race and four leading-control
+journeys outside a 1024-point runner after the 1100-point minimum window was
+right-aligned. The bounded correction passed final local `./sf verify`
+(440/440). Replacement Actions `33927510205` narrowed the remaining failures
+to native open-panel and popup-menu AX publication differences; both corrected
+journeys pass together locally (2/2). Actions `33929806075` then passed 48/49
+UI journeys and exposed an offscreen trailing Redo toolbar assumption in the
+leading-edge image journey. Native shortcut undo/redo with exact live value
+restoration passed that journey locally (1/1) and in the closing hosted gate.
+Actions `33931671075` subsequently passed 47/49 UI journeys and showed that
+hosted Go to Folder selected the exact image without activating Import, while
+popup type-ahead did not commit Center. The focused journeys now use the native
+default Import action after the path sheet closes and Down Arrow/Return on the
+live alignment popup; both affected paths pass locally (1/1 each). Actions
+`33933806330` passed 48/49 UI journeys and confirmed image import. Its sole
+remaining failure occurred after the structural command's successful commit
+announcement, where a stale case-sensitive AX popup query did not observe the
+replacement control. The assertion now re-queries the live popup and validates
+its semantic value independent of AppKit presentation capitalization; the
+exact structural journey passes locally 1/1.
+
+Actions `33935713623` passed all repository/non-UI gates and 48/49 UI
+journeys. The sole failure moved to the preceding commit announcement and its
+event trace proved Down Arrow/Return were synthesized against the application,
+not the native popup. The journey now sends both keys to the re-queried live
+popup; the exact journey passes locally 1/1 in
+`focused-a0219a8d-e4f3-4169-abe0-eeb819c73755.xcresult`.
+
+Actions `33937301726` passed all repository/non-UI gates and isolated the same
+single structural UI boundary after one unrelated AX-launch retry. It proved
+that even popup-targeted keys did not commit the transient hosted AppKit menu.
+Stack cross-axis alignment now uses the persistent native segmented-picker
+pattern already used for direction. Practical-minimum reachability passes 1/1,
+and the complete structural journey passes 1/1 in
+`focused-0a15d65a-83d5-45b6-8064-c113cadddacd.xcresult`.
+
+Actions `33940565832` passed every repository/non-UI gate and 48/49 UI
+journeys. The sole failure was not a canonical layout failure: the 1100-point
+minimum window placed the persistent Center segment beneath the Dock on the
+1024×768 runner, while XCTest still exposed it as hittable. The common
+structural-control reveal path now requires the freshly queried control frame
+to be contained by the Inspector's intersection with the real AppKit
+`visibleFrame` before clicking. A local two-selector run compiled the change
+but macOS timed out enabling UI automation before executing either test body.
+The authoritative replacement Actions run `33942209770` then passed all 391
+unit/integration and 49 UI tests (440 total), with every repository gate green.
+The subsequent documentation-only Actions run `33943569279` passed 48/49 UI
+journeys but exposed a distinct AX activation boundary before Center committed.
+Actions `33945148753` retained the decisive distinction: AppKit still reported
+the shipping workspace window key/main and attached, and the concrete segment
+remained enabled/hittable in the usable display, while XCTest reported its
+AXApplication and AXWindow containers Disabled. Actions `33946638814`
+confirmed the same inherited AXWindow discrepancy. The segment helper now avoids
+reactivating an already foreground app and gates the live group, segment,
+modal absence, and safe geometry instead of those container flags; it
+still observes the freshly queried commit announcement. Replacement hosted
+confirmation remains required.
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and

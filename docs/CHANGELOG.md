@@ -4,11 +4,40 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
-- Stabilized the SF-AUTHORING-019 hosted checkpoint. Native Save/reopen now
-  accepts a document already durably saved by autosave, normal windows preserve
-  the supported 1100-point width and trailing controls on narrower displays,
-  and structural Inspector keyboard edits reactivate the app and target the
-  current live accessibility field after SwiftUI replacement.
+- Continued stabilizing the SF-AUTHORING-019 hosted checkpoint after Actions
+  `33922908106`. Save/reopen now accepts a document already durably saved by
+  autosave. On displays narrower than the supported 1100-point minimum, UI
+  journeys that operate leading controls explicitly use the existing left-edge
+  test placement; normal-width automation and production policy are unchanged.
+  A second hosted pass also made native image import tolerant of the system
+  open panel completing a full-path choice immediately, and drives structural
+  alignment through the live popup's standard keyboard-selection path. Image
+  undo/redo proof uses the standard macOS shortcuts so both leading import and
+  history remain operable on displays narrower than the product minimum. A
+  later hosted pass showed that exact-path navigation selects rather than opens
+  a file on that macOS revision; the journey now confirms the path sheet closed
+  and activates the native panel's default Import action. Structural alignment
+  uses the popup's Down Arrow and Return path instead of type-ahead, then
+  re-queries the live replacement popup before validating its semantic value.
+  Those keyboard events are delivered to the popup itself so hosted AppKit
+  menu tracking cannot redirect them to the application. A subsequent hosted
+  run proved that transient popup menu selection still differed across macOS
+  runners, so Stack cross-axis alignment now uses a persistent native segmented
+  picker, matching Stack direction. Its visible Center action publishes the
+  same canonical transaction and semantic accessibility value without relying
+  on transient menu ownership. Hosted execution then exposed that XCTest can
+  call such a segment hittable while the 1100-point minimum window places it
+  beneath the Dock on a 1024×768 screen. Structural pointer journeys now scroll
+  the live Inspector control into the actual `NSScreen.visibleFrame`
+  intersection before clicking, without shrinking the production window.
+  Actions `33942209770` passed the complete hosted 440-test verification gate.
+  A later run exposed a hosted AX distinction before the same segment click:
+  the AppKit window remained key/main and the concrete segment remained
+  enabled/hittable while XCTest marked its Application and Window containers
+  Disabled. Segmented structural actions therefore gate the foreground
+  process, live window/group/segment, modal absence, and usable geometry rather
+  than inherited container flags, avoid reactivating an already foreground app, and
+  re-query the replacement announcement after commit.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,

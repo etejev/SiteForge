@@ -27,9 +27,41 @@ None.
     CMS/data binding, components, broad performance/accessibility matrices,
     and release acceptance.
 
+- [ ] `SF-AUTHORING-019` Close the hosted structural-control activation follow-up.
+  - Requirements: bounded `SF-0801-001` through `SF-0801-008` and
+    `SF-0802-001` through `SF-0802-008`, plus supporting native window,
+    keyboard, and accessibility contracts.
+  - Evidence: Actions `33942209770` passed the complete 440-test gate. The
+    subsequent documentation-only Actions run `33943569279` passed 48/49 UI
+    journeys but exposed an independent foreground-ownership race in the same
+    structural journey: the Center segment was safely above the Dock, then the
+    application/window became disabled and the prior Gap announcement remained.
+  - Correction: segmented structural actions now re-query the concrete live
+    radio segment after scrolling, require a foreground process and enabled
+    window/control ownership with no sheet/dialog, require the segment inside
+    the usable screen, then re-query the live replacement announcement after
+    the click. Actions `33945148753` proved the AppKit window remained key/main
+    and the concrete segment enabled/hittable while XCTest exposed its
+    AXApplication and AXWindow containers as Disabled. The helper no longer
+    treats inherited container flags as control authority or needlessly
+    reactivates an already foreground app. A focused local run compiled but macOS failed the
+    launch helper while SiteForge remained Running Background, before the
+    changed structural interaction was reached.
+  - Latest evidence: Actions `33946638814` reproduced only the inherited
+    AXWindow Disabled flag while the concrete Horizontal segment remained
+    enabled/hittable and the native key/main probe stayed healthy. Readiness now
+    gates the actual live group/segment rather than that container metadata.
+  - Remaining gate: require a green replacement hosted run before closing the
+    follow-up again.
+  - Production finding: Actions `33947877755` showed visibly disabled native
+    controls during autosave. The shared transform validation now permits
+    immutable-snapshot save overlap; the focused autosave regression passes
+    1/1. See `docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md` for the
+    corrected diagnosis and focused hosted diagnostic evidence.
+
 ## DONE
 
-- [x] `SF-AUTHORING-019` Implement local image assets and Image authoring.
+- [x] `SF-AUTHORING-019` Initial local image assets and Image authoring checkpoint.
   - Requirements: bounded production evidence for `SF-0801-001` through
     `SF-0801-008` and `SF-0802-001` through `SF-0802-008`, plus only the
     existing insertion, canvas, Inspector, persistence, history, recovery,
@@ -66,6 +98,11 @@ None.
     and evidence checks green on 2026-09-04. Six original-resolution
     maximized-window states passed visual review; see
     `docs/evidence/SF-AUTHORING-019-LOCAL-IMAGE-AUTHORING.md`.
+    Hosted stabilization passed in Actions `33942209770`, which passed the
+    complete 391 unit/integration plus 49 UI gate after the shared structural
+    pointer helper required controls to be inside the usable display rather
+    than trusting an obscured `isHittable` result. The subsequent
+    foreground-ownership follow-up is tracked above.
 
 - [x] `SF-AUTHORING-018` Add responsive container layout and breakpoint
   visibility.
