@@ -18,12 +18,16 @@ None.
     structural journey: the Center segment was safely above the Dock, then the
     application/window became disabled and the prior Gap announcement remained.
   - Correction: segmented structural actions now re-query the concrete live
-    radio segment after scrolling, require foreground application and enabled
-    window ownership with no sheet/dialog, require the segment to be enabled,
-    hittable, and inside the usable screen, then re-query the live replacement
-    announcement after the click. A focused local run compiled and entered the
-    test but macOS failed the launch helper while SiteForge remained Running
-    Background, before the changed structural interaction was reached.
+    radio segment after scrolling, require a foreground process and enabled
+    window/control ownership with no sheet/dialog, require the segment inside
+    the usable screen, then re-query the live replacement announcement after
+    the click. Actions `33945148753` proved the AppKit window remained key/main
+    and the concrete segment enabled/hittable while XCTest alone exposed its
+    top-level AXApplication container as Disabled. The helper no longer treats
+    that proxy-only flag as control authority or needlessly reactivates an
+    already foreground app. A focused local run compiled but macOS failed the
+    launch helper while SiteForge remained Running Background, before the
+    changed structural interaction was reached.
   - Remaining gate: require a green replacement hosted run before closing the
     follow-up again.
 

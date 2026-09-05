@@ -65,11 +65,14 @@ but macOS timed out enabling UI automation before executing either test body.
 The authoritative replacement Actions run `33942209770` then passed all 391
 unit/integration and 49 UI tests (440 total), with every repository gate green.
 The subsequent documentation-only Actions run `33943569279` passed 48/49 UI
-journeys but exposed a distinct foreground race: Center was safely above the
-Dock, yet SiteForge and its window became disabled before the alignment
-announcement changed. The concrete radio-segment path now reactivates and
-requires a foreground/enabled live application, window, group, and segment,
-then observes the freshly queried announcement. Replacement hosted
+journeys but exposed a distinct AX activation boundary before Center committed.
+Actions `33945148753` retained the decisive distinction: AppKit still reported
+the shipping workspace window key/main and attached, and the concrete segment
+remained enabled/hittable in the usable display, while XCTest alone reported
+its top-level AXApplication container Disabled. The segment helper now avoids
+reactivating an already foreground app and gates the live window, group,
+segment, modal absence, and safe geometry instead of that proxy-only flag; it
+still observes the freshly queried commit announcement. Replacement hosted
 confirmation remains required.
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive

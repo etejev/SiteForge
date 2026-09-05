@@ -21,10 +21,12 @@ unit/integration plus 49 UI tests (440 total), zero failures, with all repositor
 checks green locally on 2026-09-04. Hosted stabilization Actions
 `33942209770` passed the same complete 440-test gate on 2026-09-05 after
 pointer journeys stopped trusting obscured `isHittable` results beneath the
-Dock. A later documentation-only run exposed foreground ownership yielding
-before the safely visible Center segment committed; the live segment path now
-requires foreground/enabled application and window ownership and live
-announcement adoption. Do not create a second asset
+Dock. Later runs proved the shipping AppKit window remained key/main and its
+live segment enabled while XCTest alone exposed the top-level AXApplication
+container as Disabled. The helper now gates the foreground process and actual
+window/group/segment rather than that proxy-only flag, avoids redundant
+activation, and observes the live replacement announcement. Hosted replacement
+confirmation remains required. Do not create a second asset
 store, retain user paths, serialize thumbnail/editor state, or broaden this
 slice into image fills, remote providers, responsive sources, or export. No
 next READY milestone is specified.

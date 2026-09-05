@@ -1772,10 +1772,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         let windowExists = window.exists
         let details = """
         control=\(control.identifier)
+        application={state=\(application.state.rawValue);enabled=\(application.isEnabled);sheets=\(application.sheets.count);dialogs=\(application.dialogs.count)}
         state={exists=\(controlExists);enabled=\(controlExists && control.isEnabled);hittable=\(controlExists && control.isHittable);focused=\(controlExists && hasKeyboardFocus(control))}
         controlFrame=\(controlExists ? sanitizedFrame(control.frame) : "unavailable")
         visibleScreen={x=0.0;y=0.0;width=\(screenSize.width);height=\(screenSize.height)}
-        window={identifier=\(windowExists ? window.identifier : "unavailable");frame=\(windowExists ? sanitizedFrame(window.frame) : "unavailable")}
+        window={identifier=\(windowExists ? window.identifier : "unavailable");enabled=\(windowExists && window.isEnabled);frame=\(windowExists ? sanitizedFrame(window.frame) : "unavailable")}
         history=\(history)
         textPhase=\(textStatus.exists ? ((textStatus.value as? String) ?? "unavailable") : "unavailable")
         responder=\(focusStatus.exists ? ((focusStatus.value as? String) ?? "unavailable") : "unavailable")
@@ -3357,12 +3358,16 @@ final class SiteForgeLaunchTests: XCTestCase {
             button = group.radioButtons[label]
         }
 
-        application.activate()
+        if application.state != .runningForeground {
+            application.activate()
+        }
         let safeViewport = pointerSafeIntersection(for: scroll.frame)
         let ready = NSPredicate { [weak application] _, _ in
+            // The AXApplication container can transiently expose AXEnabled=false
+            // on hosted macOS even while its key window and concrete controls
+            // remain enabled. Gate the genuine interaction surfaces instead.
             guard let application,
                   application.state == .runningForeground,
-                  application.isEnabled,
                   application.sheets.count == 0,
                   application.dialogs.count == 0 else { return false }
             let window = application.windows.firstMatch

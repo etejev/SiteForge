@@ -170,6 +170,17 @@ focused run compiled and entered the test but failed in the launch helper when
 macOS left SiteForge Running Background, before reaching this changed path;
 replacement hosted execution remains the authoritative confirmation.
 
+Actions `33945148753` retained the decisive follow-up diagnostics. AppKit's
+shipping focus probe reported the workspace window key/main with its command
+route attached, and the concrete Horizontal radio segment was enabled,
+hittable, and inside the usable display. XCTest alone exposed the top-level
+AXApplication container as Disabled. Structural pointer readiness therefore
+uses the foreground process plus live window/group/segment and modal/geometry
+state, does not reactivate an already foreground app, and records the
+top-level proxy flag only as diagnostics. This preserves the real pointer and
+commit assertions without mistaking an AX container discrepancy for a disabled
+shipping control. A replacement hosted run is still required for closure.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:
