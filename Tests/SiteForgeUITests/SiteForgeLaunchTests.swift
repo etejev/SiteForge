@@ -3363,9 +3363,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         }
         let safeViewport = pointerSafeIntersection(for: scroll.frame)
         let ready = NSPredicate { [weak application] _, _ in
-            // The AXApplication container can transiently expose AXEnabled=false
-            // on hosted macOS even while its key window and concrete controls
-            // remain enabled. Gate the genuine interaction surfaces instead.
+            // Hosted macOS can expose AXEnabled=false on the Application and
+            // Window containers even while the native window remains key/main
+            // and its concrete control is enabled. Gate the genuine interaction
+            // surface instead of inherited container metadata.
             guard let application,
                   application.state == .runningForeground,
                   application.sheets.count == 0,
@@ -3374,7 +3375,6 @@ final class SiteForgeLaunchTests: XCTestCase {
             let liveGroup = application.descendants(matching: .any)[groupIdentifier].firstMatch
             let liveButton = liveGroup.radioButtons[label]
             return window.exists
-                && window.isEnabled
                 && liveGroup.exists
                 && liveGroup.isEnabled
                 && liveButton.exists

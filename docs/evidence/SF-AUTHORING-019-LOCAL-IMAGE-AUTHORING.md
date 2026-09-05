@@ -173,9 +173,11 @@ replacement hosted execution remains the authoritative confirmation.
 Actions `33945148753` retained the decisive follow-up diagnostics. AppKit's
 shipping focus probe reported the workspace window key/main with its command
 route attached, and the concrete Horizontal radio segment was enabled,
-hittable, and inside the usable display. XCTest alone exposed the top-level
-AXApplication container as Disabled. Structural pointer readiness therefore
-uses the foreground process plus live window/group/segment and modal/geometry
+hittable, and inside the usable display. XCTest exposed the AXApplication
+container as Disabled. Actions `33946638814` repeated the healthy native probe
+and live enabled/hittable segment while exposing AXWindow Disabled as inherited
+container metadata too. Structural pointer readiness therefore
+uses the foreground process plus live group/segment and modal/geometry
 state, does not reactivate an already foreground app, and records the
 top-level proxy flag only as diagnostics. This preserves the real pointer and
 commit assertions without mistaking an AX container discrepancy for a disabled

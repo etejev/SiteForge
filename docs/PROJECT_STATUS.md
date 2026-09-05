@@ -68,10 +68,11 @@ The subsequent documentation-only Actions run `33943569279` passed 48/49 UI
 journeys but exposed a distinct AX activation boundary before Center committed.
 Actions `33945148753` retained the decisive distinction: AppKit still reported
 the shipping workspace window key/main and attached, and the concrete segment
-remained enabled/hittable in the usable display, while XCTest alone reported
-its top-level AXApplication container Disabled. The segment helper now avoids
-reactivating an already foreground app and gates the live window, group,
-segment, modal absence, and safe geometry instead of that proxy-only flag; it
+remained enabled/hittable in the usable display, while XCTest reported its
+AXApplication and AXWindow containers Disabled. Actions `33946638814`
+confirmed the same inherited AXWindow discrepancy. The segment helper now avoids
+reactivating an already foreground app and gates the live group, segment,
+modal absence, and safe geometry instead of those container flags; it
 still observes the freshly queried commit announcement. Replacement hosted
 confirmation remains required.
 

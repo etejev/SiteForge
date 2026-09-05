@@ -22,9 +22,10 @@ checks green locally on 2026-09-04. Hosted stabilization Actions
 `33942209770` passed the same complete 440-test gate on 2026-09-05 after
 pointer journeys stopped trusting obscured `isHittable` results beneath the
 Dock. Later runs proved the shipping AppKit window remained key/main and its
-live segment enabled while XCTest alone exposed the top-level AXApplication
-container as Disabled. The helper now gates the foreground process and actual
-window/group/segment rather than that proxy-only flag, avoids redundant
+live segment enabled while XCTest exposed the AXApplication and AXWindow
+containers as Disabled. Actions `33946638814` confirmed that the AXWindow flag
+was also inherited metadata rather than the live control state. The helper now
+gates the foreground process and actual group/segment rather than those flags, avoids redundant
 activation, and observes the live replacement announcement. Hosted replacement
 confirmation remains required. Do not create a second asset
 store, retain user paths, serialize thumbnail/editor state, or broaden this

@@ -22,12 +22,16 @@ None.
     window/control ownership with no sheet/dialog, require the segment inside
     the usable screen, then re-query the live replacement announcement after
     the click. Actions `33945148753` proved the AppKit window remained key/main
-    and the concrete segment enabled/hittable while XCTest alone exposed its
-    top-level AXApplication container as Disabled. The helper no longer treats
-    that proxy-only flag as control authority or needlessly reactivates an
-    already foreground app. A focused local run compiled but macOS failed the
+    and the concrete segment enabled/hittable while XCTest exposed its
+    AXApplication and AXWindow containers as Disabled. The helper no longer
+    treats inherited container flags as control authority or needlessly
+    reactivates an already foreground app. A focused local run compiled but macOS failed the
     launch helper while SiteForge remained Running Background, before the
     changed structural interaction was reached.
+  - Latest evidence: Actions `33946638814` reproduced only the inherited
+    AXWindow Disabled flag while the concrete Horizontal segment remained
+    enabled/hittable and the native key/main probe stayed healthy. Readiness now
+    gates the actual live group/segment rather than that container metadata.
   - Remaining gate: require a green replacement hosted run before closing the
     follow-up again.
 

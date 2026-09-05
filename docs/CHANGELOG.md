@@ -33,10 +33,10 @@ This file records user-visible behavior during development. It is not a substitu
   Actions `33942209770` passed the complete hosted 440-test verification gate.
   A later run exposed a hosted AX distinction before the same segment click:
   the AppKit window remained key/main and the concrete segment remained
-  enabled/hittable while XCTest marked only its top-level Application proxy
+  enabled/hittable while XCTest marked its Application and Window containers
   Disabled. Segmented structural actions therefore gate the foreground
   process, live window/group/segment, modal absence, and usable geometry rather
-  than that proxy-only flag, avoid reactivating an already foreground app, and
+  than inherited container flags, avoid reactivating an already foreground app, and
   re-query the replacement announcement after commit.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
