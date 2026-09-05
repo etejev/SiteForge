@@ -539,6 +539,44 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertNil(state.insertionFailure)
     }
 
+    // SF-0502-002, SF-0505-002: background snapshot I/O must not disable
+    // native Inspector controls or reject the next revision's transaction.
+    func testInspectorEditsRemainAvailableDuringBackgroundAutosave() async throws {
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let backend = DocumentLifecycleBackend()
+        await backend.configureForTesting(delayNanoseconds: 500_000_000)
+        let fixture = try ApplicationOwnedTestFixture.create("inspector-autosave")
+        defer { try? fixture.cleanup() }
+        let recoveryDirectory = fixture.url.appendingPathComponent("recovery", isDirectory: true)
+        try FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
+        let lifecycle = DocumentLifecycleController(
+            session: session, backend: backend, recoveryDirectory: recoveryDirectory,
+            saveDestinationProvider: { _ in nil },
+            autosaveDebouncer: ImmediateInsertionAutosaveDebouncer()
+        )
+        let state = WorkspaceShellState(documentSession: session, lifecycle: lifecycle)
+        state.resizeViewport(to: .init(width: 900, height: 600), pixelRatio: 2)
+        for _ in 0..<200 where state.canvasRenderPlan == nil { await Task.yield() }
+        state.performDefaultInsertion(.stack, provenance: .accessibility)
+        for _ in 0..<400 where lifecycle.phase != .autosaving || state.canvasRenderPlan?.identity.revision != 1 {
+            await Task.yield()
+        }
+        XCTAssertEqual(lifecycle.phase, .autosaving, "\(String(describing: lifecycle.failure))")
+        let selectedID = try XCTUnwrap(state.selectionState.primaryID)
+        XCTAssertTrue(state.geometryInspectorAvailability(for: .y).isEnabled)
+        XCTAssertTrue(state.containerLayoutAvailability(for: .alignment).isEnabled)
+        XCTAssertTrue(state.commitGeometryInspectorValue(122, field: .y, provenance: .keyboard))
+        XCTAssertTrue(state.commitContainerLayout(field: .alignment, value: .alignment(.center), provenance: .keyboard))
+        let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == selectedID })
+        XCTAssertEqual(node.insertionNumberProperty("layout.y"), 122)
+        XCTAssertEqual(node.insertionStringProperty("layout.align"), "center")
+        XCTAssertEqual(session.document.revision, 3)
+        XCTAssertEqual(state.selectionState.primaryID, selectedID)
+        try session.undo()
+        try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == selectedID }?.insertionStringProperty("layout.align"), "start")
+    }
+
     // SF-0405-004, SF-0405-007
     func testCommittedNodesIntegrateWithLayoutRendererHitTestingAndBoundedInvalidation() throws {
         let fixture = makeFixture()

@@ -1,0 +1,48 @@
+name: Inspector focused diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/inspector-autosave-repair]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspector-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused-diagnostic:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Record diagnostic environment
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          sw_vers
+          uname -m
+          xcodebuild -version
+      - name: Run allowlisted Inspector regressions (not full acceptance)
+        env:
+          SITEFORGE_DERIVED_DATA: ${{ runner.temp }}/SiteForge/DerivedData
+        run: |
+          mkdir -p "$RUNNER_TEMP/siteforge-ci"
+          set -o pipefail
+          ./sf test focused \
+            SiteForgeTests/InsertionModelTests/testInspectorEditsRemainAvailableDuringBackgroundAutosave \
+            SiteForgeUITests/SiteForgeLaunchTests/testGeometryTransformPointerKeyboardNumericUndoRedoAndAccessibilityJourney \
+            SiteForgeUITests/SiteForgeLaunchTests/testStructuralLayoutInspectorReflowsSectionStackAndGridJourney \
+            2>&1 | tee "$RUNNER_TEMP/siteforge-ci/inspector-diagnostic.log"
+      - name: Retain focused evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: inspector-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/siteforge-ci/inspector-diagnostic.log
+            ${{ runner.temp }}/SiteForge/TestResults/*.xcresult
+            ${{ runner.temp }}/SiteForge/TestResults/*.log
+          if-no-files-found: warn
+          retention-days: 7

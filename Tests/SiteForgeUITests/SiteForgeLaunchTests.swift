@@ -305,28 +305,16 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(heightField.waitForExistence(timeout: 5))
         XCTAssertEqual(xField.label, "X geometry")
         XCTAssertTrue((xField.value as? String)?.contains("authored") == true)
-        xField.click()
-        xField.typeKey("a", modifierFlags: .command)
-        xField.typeText("121")
-        xField.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(xField, with: "121", in: application)
         XCTAssertTrue(waitForValueToChange(geometry, from: afterPointerResize))
         let afterNumericMove = try XCTUnwrap(geometry.value as? String)
-        yField.click()
-        yField.typeKey("a", modifierFlags: .command)
-        yField.typeText("122")
-        yField.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(yField, with: "122", in: application)
         XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericMove))
         let afterNumericY = try XCTUnwrap(geometry.value as? String)
-        widthField.click()
-        widthField.typeKey("a", modifierFlags: .command)
-        widthField.typeText("241")
-        widthField.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(widthField, with: "241", in: application)
         XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericY))
         let afterNumericWidth = try XCTUnwrap(geometry.value as? String)
-        heightField.click()
-        heightField.typeKey("a", modifierFlags: .command)
-        heightField.typeText("161")
-        heightField.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(heightField, with: "161", in: application)
         XCTAssertTrue(waitForValueToChange(geometry, from: afterNumericWidth))
 
         // Native focus loss commits a complete draft through the same typed
@@ -3329,7 +3317,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         if identifier.hasSuffix(".reset") {
             return application.buttons[identifier]
         }
-        if identifier.hasSuffix(".padding")
+        if ["inspector.layout.x", "inspector.layout.y", "inspector.layout.width", "inspector.layout.height"].contains(identifier)
+            || identifier.hasSuffix(".padding")
             || identifier.hasSuffix(".gap")
             || identifier.hasSuffix(".columns") {
             return application.textFields[identifier]
