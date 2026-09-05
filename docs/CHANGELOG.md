@@ -11,7 +11,9 @@ This file records user-visible behavior during development. It is not a substitu
   test placement; normal-width automation and production policy are unchanged.
   A second hosted pass also made native image import tolerant of the system
   open panel completing a full-path choice immediately, and drives structural
-  alignment through the live popup's standard keyboard-selection path.
+  alignment through the live popup's standard keyboard-selection path. Image
+  undo/redo proof uses the standard macOS shortcuts so both leading import and
+  history remain operable on displays narrower than the product minimum.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,

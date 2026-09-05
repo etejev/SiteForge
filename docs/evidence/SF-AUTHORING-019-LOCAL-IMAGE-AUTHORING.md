@@ -92,6 +92,15 @@ path when its transient menu item is absent from AX. The two affected journeys
 passed together locally (2/2); the prior 440-test `./sf verify` remains the
 authoritative full local gate because no production code changed.
 
+Actions `33929806075` passed every repository and non-UI gate plus 48/49 UI
+journeys. The remaining image failure was an offscreen trailing Redo toolbar
+button after the journey deliberately left-aligned the 1100-point window to
+reach native leading import controls on a 1024-point display. The journey now
+uses the standard macOS Command-Z and Shift-Command-Z paths and asserts the live
+alt-text value changes and restores exactly. This preserves the product minimum
+and strengthens history proof without relying on offscreen chrome; the focused
+image journey passed 1/1.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

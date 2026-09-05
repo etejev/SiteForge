@@ -20,6 +20,10 @@ None.
     failure set to two native-control publication differences: the open panel
     could complete a full-path import before exposing a live Import button, and
     a transient popup menu item was not present in the hosted AX tree.
+    Actions `33929806075` passed 48 of 49 UI journeys and exposed one remaining
+    narrow-display assumption: after leading-edge import, the trailing Redo
+    toolbar control was outside the unchanged 1100-point window's visible
+    intersection.
   - Correction: Save now resolves either live autosave completion or a live
     enabled Save command before preserving the same reopen proof. Leading-
     control journeys opt into the existing left-edge test placement only when
@@ -29,7 +33,9 @@ None.
     The two replacement-run failures pass together (2/2). Final local
     `./sf verify` remains the authoritative 391 unit/integration plus 49 UI
     tests (440 total) from the preceding correction; unchanged broad coverage
-    was not repeated.
+    was not repeated. The image journey now proves exact undo/redo via native
+    Command-Z and Shift-Command-Z plus live alt-text restoration; that affected
+    journey passes 1/1.
   - Remaining gate: require a green replacement hosted run before returning
     this item to DONE or continuing SF-AUTHORING-020 source work.
 

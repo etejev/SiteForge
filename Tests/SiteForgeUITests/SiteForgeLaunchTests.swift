@@ -1250,10 +1250,24 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.image.status"], containing: "committed"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-019 Image Fill focal alt")
 
-        let undo = application.buttons["toolbar.undo"]
-        XCTAssertTrue(waitForEnabled(undo)); undo.click()
-        let redo = application.buttons["toolbar.redo"]
-        XCTAssertTrue(waitForEnabled(redo)); redo.click()
+        let committedAlt = "A generated orange and teal test image"
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { [weak application] _, _ in
+                    guard let application else { return false }
+                    return (application.textFields["inspector.image.alt"].value as? String) != committedAlt
+                },
+                object: application
+            )],
+            timeout: 5
+        ) == .completed)
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(
+            application.textFields["inspector.image.alt"],
+            containing: committedAlt,
+            timeout: 5
+        ))
         attachWindowScreenshot(application, named: "SF-AUTHORING-019 Image undo redo")
 
         application.menuBars.menuBarItems["File"].click()
