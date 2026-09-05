@@ -2,8 +2,8 @@
 
 Last updated: 2026-09-05.
 
-`SF-AUTHORING-019` is verified and complete within its bounded local-raster
-scope. Schema-v5 owns stable image-asset descriptors
+`SF-AUTHORING-019` remains locally verified within its bounded local-raster
+scope, with one hosted activation follow-up in progress. Schema-v5 owns stable image-asset descriptors
 and Image-node references; the existing resource sidecar preserves exact
 original bytes. Assets import/search/rename/replace/reveal/delete, Image
 insertion, Fit/Fill/Stretch, focal point, alt/decorative semantics, renderer
@@ -64,6 +64,13 @@ to be contained by the Inspector's intersection with the real AppKit
 but macOS timed out enabling UI automation before executing either test body.
 The authoritative replacement Actions run `33942209770` then passed all 391
 unit/integration and 49 UI tests (440 total), with every repository gate green.
+The subsequent documentation-only Actions run `33943569279` passed 48/49 UI
+journeys but exposed a distinct foreground race: Center was safely above the
+Dock, yet SiteForge and its window became disabled before the alignment
+announcement changed. The concrete radio-segment path now reactivates and
+requires a foreground/enabled live application, window, group, and segment,
+then observes the freshly queried announcement. Replacement hosted
+confirmation remains required.
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and

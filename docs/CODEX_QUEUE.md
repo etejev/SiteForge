@@ -8,7 +8,24 @@ None.
 
 ## IN PROGRESS
 
-None.
+- [ ] `SF-AUTHORING-019` Close the hosted structural-control activation follow-up.
+  - Requirements: bounded `SF-0801-001` through `SF-0801-008` and
+    `SF-0802-001` through `SF-0802-008`, plus supporting native window,
+    keyboard, and accessibility contracts.
+  - Evidence: Actions `33942209770` passed the complete 440-test gate. The
+    subsequent documentation-only Actions run `33943569279` passed 48/49 UI
+    journeys but exposed an independent foreground-ownership race in the same
+    structural journey: the Center segment was safely above the Dock, then the
+    application/window became disabled and the prior Gap announcement remained.
+  - Correction: segmented structural actions now re-query the concrete live
+    radio segment after scrolling, require foreground application and enabled
+    window ownership with no sheet/dialog, require the segment to be enabled,
+    hittable, and inside the usable screen, then re-query the live replacement
+    announcement after the click. A focused local run compiled and entered the
+    test but macOS failed the launch helper while SiteForge remained Running
+    Background, before the changed structural interaction was reached.
+  - Remaining gate: require a green replacement hosted run before closing the
+    follow-up again.
 
 ## DONE
 
@@ -49,10 +66,11 @@ None.
     and evidence checks green on 2026-09-04. Six original-resolution
     maximized-window states passed visual review; see
     `docs/evidence/SF-AUTHORING-019-LOCAL-IMAGE-AUTHORING.md`.
-    Hosted stabilization completed in Actions `33942209770`, which passed the
+    Hosted stabilization passed in Actions `33942209770`, which passed the
     complete 391 unit/integration plus 49 UI gate after the shared structural
     pointer helper required controls to be inside the usable display rather
-    than trusting an obscured `isHittable` result.
+    than trusting an obscured `isHittable` result. The subsequent
+    foreground-ownership follow-up is tracked above.
 
 - [x] `SF-AUTHORING-018` Add responsive container layout and breakpoint
   visibility.

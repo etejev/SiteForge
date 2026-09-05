@@ -158,6 +158,18 @@ unit/integration and 49 UI tests (440 total). This confirms the shared
 usable-screen reveal policy on the 1024×768 hosted display and closes the
 SF-AUTHORING-019 checkpoint without changing the 1100-point product minimum.
 
+The subsequent documentation-only Actions run `33943569279` passed all
+repository/non-UI gates and 48/49 UI journeys. Its structural failure showed
+the Center segment safely at `y=518`, above the Dock, but the application and
+window had yielded foreground/enabled ownership and the previous Gap
+announcement remained. Structural segmented actions now activate the real
+application, wait for a foreground enabled window with no sheet/dialog,
+re-query the enabled concrete native radio segment, require its frame inside
+the usable screen, and re-query the live announcement after the click. A local
+focused run compiled and entered the test but failed in the launch helper when
+macOS left SiteForge Running Background, before reaching this changed path;
+replacement hosted execution remains the authoritative confirmation.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

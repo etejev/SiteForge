@@ -2,7 +2,8 @@
 
 ## Current checkpoint
 
-`SF-AUTHORING-019` is **VERIFIED AND DONE**. Schema-v5 adds one image-asset
+`SF-AUTHORING-019` is **LOCALLY VERIFIED; HOSTED ACTIVATION FOLLOW-UP IN
+PROGRESS**. Schema-v5 adds one image-asset
 catalogue and Image node/reference, retains
 exact local raster bytes in the existing content-addressed resource sidecar,
 and integrates the Assets pane, Elements/Insert commands, identity-gated Image
@@ -20,7 +21,10 @@ unit/integration plus 49 UI tests (440 total), zero failures, with all repositor
 checks green locally on 2026-09-04. Hosted stabilization Actions
 `33942209770` passed the same complete 440-test gate on 2026-09-05 after
 pointer journeys stopped trusting obscured `isHittable` results beneath the
-Dock. Do not create a second asset
+Dock. A later documentation-only run exposed foreground ownership yielding
+before the safely visible Center segment committed; the live segment path now
+requires foreground/enabled application and window ownership and live
+announcement adoption. Do not create a second asset
 store, retain user paths, serialize thumbnail/editor state, or broaden this
 slice into image fills, remote providers, responsive sources, or export. No
 next READY milestone is specified.

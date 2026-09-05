@@ -31,6 +31,10 @@ This file records user-visible behavior during development. It is not a substitu
   the live Inspector control into the actual `NSScreen.visibleFrame`
   intersection before clicking, without shrinking the production window.
   Actions `33942209770` passed the complete hosted 440-test verification gate.
+  A later run exposed foreground ownership yielding before the same segment
+  click, so segmented structural actions now require the live application,
+  window, group, and concrete segment to be foreground and enabled, and their
+  commit assertions re-query the replacement announcement element.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,

@@ -2355,20 +2355,35 @@ final class SiteForgeLaunchTests: XCTestCase {
         let axis = application.descendants(matching: .any)["inspector.layout.container.axis"]
         revealStructuralLayoutControl(axis, in: application)
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack vertical default")
-        let horizontal = axis.radioButtons["Horizontal"]
-        XCTAssertTrue(horizontal.waitForExistence(timeout: 3)); horizontal.click()
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Direction committed", timeout: 3))
+        clickStructuralLayoutRadioButton(
+            "Horizontal",
+            groupIdentifier: "inspector.layout.container.axis",
+            in: application
+        )
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.announcement",
+            containing: "Direction committed",
+            timeout: 3
+        ))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack horizontal")
         let gap = application.textFields["inspector.layout.container.gap"]
         replaceStructuralLayoutField(gap, with: "36", in: application)
-        let alignment = revealStructuralLayoutControl(
+        _ = revealStructuralLayoutControl(
             application.descendants(matching: .any)["inspector.layout.container.alignment"],
             in: application
         )
-        XCTAssertTrue(alignment.waitForExistence(timeout: 3))
-        let center = alignment.radioButtons["Center"]
-        XCTAssertTrue(center.waitForExistence(timeout: 3)); center.click()
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Alignment committed", timeout: 3))
+        clickStructuralLayoutRadioButton(
+            "Center",
+            groupIdentifier: "inspector.layout.container.alignment",
+            in: application
+        )
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.announcement",
+            containing: "Alignment committed",
+            timeout: 3
+        ))
         XCTAssertTrue(waitForLiveValue(
             in: application,
             identifier: "inspector.layout.container.alignment",
@@ -3319,6 +3334,61 @@ final class SiteForgeLaunchTests: XCTestCase {
             return application.textFields[identifier]
         }
         return application.descendants(matching: .any)[identifier].firstMatch
+    }
+
+    /// Segmented SwiftUI pickers expose native radio buttons. Re-query the
+    /// concrete segment after foreground adoption and scrolling so a retained
+    /// group proxy cannot route the pointer after AppKit has yielded the app.
+    private func clickStructuralLayoutRadioButton(
+        _ label: String,
+        groupIdentifier: String,
+        in application: XCUIApplication
+    ) {
+        let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
+        var group = liveStructuralLayoutControl(groupIdentifier, in: application)
+        var button = group.radioButtons[label]
+
+        for _ in 0..<10 where !isSafelyVisibleForPointer(button, inside: scroll) {
+            let targetFrame = button.frame
+            let safeViewport = pointerSafeIntersection(for: scroll.frame)
+            let deltaY: CGFloat = targetFrame.minY < safeViewport.minY + 8 ? 180 : -180
+            scroll.scroll(byDeltaX: 0, deltaY: deltaY)
+            group = liveStructuralLayoutControl(groupIdentifier, in: application)
+            button = group.radioButtons[label]
+        }
+
+        application.activate()
+        let safeViewport = pointerSafeIntersection(for: scroll.frame)
+        let ready = NSPredicate { [weak application] _, _ in
+            guard let application,
+                  application.state == .runningForeground,
+                  application.isEnabled,
+                  application.sheets.count == 0,
+                  application.dialogs.count == 0 else { return false }
+            let window = application.windows.firstMatch
+            let liveGroup = application.descendants(matching: .any)[groupIdentifier].firstMatch
+            let liveButton = liveGroup.radioButtons[label]
+            return window.exists
+                && window.isEnabled
+                && liveGroup.exists
+                && liveGroup.isEnabled
+                && liveButton.exists
+                && liveButton.isEnabled
+                && liveButton.isHittable
+                && safeViewport.contains(liveButton.frame)
+        }
+        guard XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: ready, object: application)],
+            timeout: 5
+        ) == .completed else {
+            attachPointerDiagnostics(control: button, application: application)
+            XCTFail("Inspector segment \(groupIdentifier).\(label) did not become foreground, enabled, and safely visible")
+            return
+        }
+
+        group = liveStructuralLayoutControl(groupIdentifier, in: application)
+        button = group.radioButtons[label]
+        button.click()
     }
 
     private func replaceStructuralLayoutField(
