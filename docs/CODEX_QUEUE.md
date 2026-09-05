@@ -8,7 +8,24 @@ None.
 
 ## IN PROGRESS
 
-None.
+- [ ] `SF-AUTHORING-020` Implement Button and Link authoring.
+  - Requirements: bounded evidence for `SF-0806-001` through
+    `SF-0806-008` and `SF-1102-001` through `SF-1102-008`, plus the existing
+    insertion, content, typography, style, responsive, persistence, history,
+    recovery, accessibility, and diagnostic contracts exercised by this slice.
+    Both normative modules remain Partial outside this local authoring path.
+  - Plan: extend the existing typed node/property and identity-gated insertion
+    architecture with Button and Link; add one versioned label/link-target
+    codec and one central content/interaction transaction registry; resolve
+    internal PageID/NodeID and external HTTP(S) targets without editor
+    navigation; render upright accessible controls through immutable snapshots;
+    then prove validation, broken-target recovery, exact history, package/
+    recovery, mixed applicability, and the actual maximized/compact workflow.
+  - Explicit exclusions: embeds and remote previews, downloads, network
+    fetching, custom protocols, analytics, runtime navigation, state styling,
+    multi-action graphs, animation, export/publishing, advanced variants,
+    CMS/data binding, components, broad performance/accessibility matrices,
+    and release acceptance.
 
 ## DONE
 
