@@ -2,10 +2,12 @@
 
 Last updated: 2026-09-05.
 
-Final native Save follow-up is IN PROGRESS: recovery autosave incorrectly
-disabled the command during menu tracking in Actions `33986611685` attempt 2.
-The bounded correction reuses Save's existing recovery cancel/drain operation;
-its focused and hosted results are tracked in the Inspector repair evidence.
+Final native Save follow-up is complete: recovery autosave no longer disables
+the durable Save command during menu tracking. The existing cancel/drain
+operation remains authoritative. Both focused checks passed; Actions
+`33991018406` passed 392 unit/integration plus 49 UI tests (441/441) for final
+production correction `f951df7`, with repository checks green. Reopen imagery
+confirms Saved status and preserved typography/geometry.
 Earlier complete-gate results below refer to their explicit historical SHA.
 
 `SF-AUTHORING-019` and its hosted Inspector/autosave correction are complete

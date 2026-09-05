@@ -1,5 +1,12 @@
 # Codex Continuation Handoff
 
+Final SF-AUTHORING-019 Save availability acceptance: production `f951df7` is
+hosted-green in Actions `33991018406` (392 unit/integration + 49 UI = 441,
+zero failures). Recovery autosave does not disable native Save; the existing
+cancel/drain operation owns durable saving. Both focused follow-up checks
+passed. Preserve the separate pre-existing Button/Link work; no new feature
+was included in this repair. See the Inspector repair evidence for chronology.
+
 ## Current checkpoint
 
 `SF-AUTHORING-019` and the hosted Inspector/autosave repair are

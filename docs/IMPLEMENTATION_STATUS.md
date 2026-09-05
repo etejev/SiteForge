@@ -2,10 +2,11 @@
 
 Last updated: 2026-09-05.
 
-SF-AUTHORING-019 final Save follow-up is IN PROGRESS pending hosted acceptance.
-Recovery autosave must not disable the native durable Save command; the existing
-cancel/drain operation owns the transition. Historical gate totals below are
-not substituted for the current follow-up result.
+SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
+available during recovery autosave through the existing cancel/drain boundary.
+Focused lifecycle and typography persistence checks passed (2/2). Actions
+`33991018406` passed 392 unit/integration plus 49 UI tests (441/441), with
+repository checks green, for final production correction `f951df7`.
 
 Current SF-AUTHORING-019 repair evidence supersedes the earlier AX-only
 explanation in the historical checkpoint row: immutable-snapshot autosave

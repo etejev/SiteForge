@@ -1,8 +1,8 @@
 # Inspector autosave repair
 
 Requirements: supporting SF-0502-002, SF-0505-002, SF-0801-005,
-SF-0802-005 and SF-1902-008. Earlier correction verified; final native Save
-availability follow-up is IN PROGRESS pending hosted acceptance.
+SF-0802-005 and SF-1902-008. Correction and final native Save availability
+follow-up are verified and complete.
 
 | Symptom | Evidence and cause | Correction | Regression |
 |---|---|---|---|
@@ -126,3 +126,10 @@ selection remain visible. No additional local full suite was run.
 The hosted job has 40-minute bounded headroom because two measured full runs
 reached its former 30-minute cutoff, including artifact upload. Individual
 XCTest waits, test selection, assertions, and performance budgets are unchanged.
+
+Final hosted acceptance: Actions `33991018406` passed for production commit
+`f951df7`: 392 unit/integration and 49 UI tests (441/441), zero failures,
+repository checks green. Typography's real native Save/reopen journey passed
+in 74.338 seconds. This validates the final production availability correction;
+no additional local broad suite was run for the focused follow-up.
+https://github.com/etejev/SiteForge/actions/runs/33991018406
