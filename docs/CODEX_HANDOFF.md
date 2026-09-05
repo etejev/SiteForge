@@ -17,7 +17,10 @@ screens, and reactivates/re-queries live structural fields before keyboard
 input. The three affected journeys passed independently and in three grouped
 repetitions; the complete UI target passed 49/49. Final `./sf verify` passed 391
 unit/integration plus 49 UI tests (440 total), zero failures, with all repository
-checks green on 2026-09-04. Do not create a second asset
+checks green locally on 2026-09-04. Hosted stabilization Actions
+`33942209770` passed the same complete 440-test gate on 2026-09-05 after
+pointer journeys stopped trusting obscured `isHittable` results beneath the
+Dock. Do not create a second asset
 store, retain user paths, serialize thumbnail/editor state, or broaden this
 slice into image fills, remote providers, responsive sources, or export. No
 next READY milestone is specified.

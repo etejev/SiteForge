@@ -1,9 +1,9 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-04.
+Last updated: 2026-09-05.
 
-`SF-AUTHORING-019` is locally verified within its bounded local-raster scope
-and its hosted follow-up remains in progress. Schema-v5 owns stable image-asset descriptors
+`SF-AUTHORING-019` is verified and complete within its bounded local-raster
+scope. Schema-v5 owns stable image-asset descriptors
 and Image-node references; the existing resource sidecar preserves exact
 original bytes. Assets import/search/rename/replace/reveal/delete, Image
 insertion, Fit/Fill/Stretch, focal point, alt/decorative semantics, renderer
@@ -26,7 +26,7 @@ to native open-panel and popup-menu AX publication differences; both corrected
 journeys pass together locally (2/2). Actions `33929806075` then passed 48/49
 UI journeys and exposed an offscreen trailing Redo toolbar assumption in the
 leading-edge image journey. Native shortcut undo/redo with exact live value
-restoration now passes that journey locally (1/1); hosted confirmation remains.
+restoration passed that journey locally (1/1) and in the closing hosted gate.
 Actions `33931671075` subsequently passed 47/49 UI journeys and showed that
 hosted Go to Folder selected the exact image without activating Import, while
 popup type-ahead did not commit Center. The focused journeys now use the native
@@ -61,8 +61,9 @@ minimum window placed the persistent Center segment beneath the Dock on the
 structural-control reveal path now requires the freshly queried control frame
 to be contained by the Inspector's intersection with the real AppKit
 `visibleFrame` before clicking. A local two-selector run compiled the change
-but macOS timed out enabling UI automation before executing either test body;
-replacement hosted confirmation remains the closing gate.
+but macOS timed out enabling UI automation before executing either test body.
+The authoritative replacement Actions run `33942209770` then passed all 391
+unit/integration and 49 UI tests (440 total), with every repository gate green.
 
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and

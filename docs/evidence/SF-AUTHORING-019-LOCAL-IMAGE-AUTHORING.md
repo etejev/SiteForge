@@ -151,7 +151,12 @@ inside that intersection before clicking. The 1100-point product minimum is
 unchanged. A focused two-selector run built the application and tests, but the
 local macOS runner timed out enabling automation before either test body; this
 environment failure does not replace the prior passing 1/1 product evidence,
-and a replacement hosted run remains required.
+and a replacement hosted run remained the authoritative confirmation.
+
+Actions `33942209770` passed every repository gate plus all 391
+unit/integration and 49 UI tests (440 total). This confirms the shared
+usable-screen reveal policy on the 1024×768 hosted display and closes the
+SF-AUTHORING-019 checkpoint without changing the 1100-point product minimum.
 
 ## Visual inspection
 
