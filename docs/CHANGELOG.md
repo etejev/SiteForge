@@ -4,6 +4,15 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
+- Fixed Inspector controls becoming disabled during background snapshot saves.
+  Geometry and structural-layout edits retain keyboard focus and remain
+  available while autosave works; existing revision guards preserve newer edits.
+  The focused hosted regression plus both affected UI journeys passed 3/3 in
+  Actions `33980431383`. Final local verification passed 441/441 tests;
+  hosted main acceptance remains pending.
+  Stack Alignment now labels its native segments on a separate line to avoid
+  wrapping at the compact Inspector width.
+
 - Continued stabilizing the SF-AUTHORING-019 hosted checkpoint after Actions
   `33922908106`. Save/reopen now accepts a document already durably saved by
   autosave. On displays narrower than the supported 1100-point minimum, UI

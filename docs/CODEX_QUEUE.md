@@ -32,8 +32,20 @@ None.
     AXWindow Disabled flag while the concrete Horizontal segment remained
     enabled/hittable and the native key/main probe stayed healthy. Readiness now
     gates the actual live group/segment rather than that container metadata.
-  - Remaining gate: require a green replacement hosted run before closing the
-    follow-up again.
+  - Corrected diagnosis: Actions `33947877755` subsequently showed genuinely
+    disabled Inspector controls, not just inherited AX metadata. The shared
+    transform validation context rejected editing while autosave wrote an
+    immutable snapshot, disabling fields between pointer and keyboard events.
+    Saving/autosaving now retain editing availability with the existing
+    revision guards; conflict, preview, and read-only restrictions are unchanged.
+  - Focused confirmation: Actions `33980431383` passed the new autosave model
+    regression and the geometry and structural UI journeys (3/3). See
+    `docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md`.
+  - Final local gate: `./sf verify` passed 392 unit/integration and 49 UI
+    tests (441 total), zero failures, on 2026-09-05. Seven distinct affected
+    focused selectors passed; original-resolution persistence and alignment
+    screenshots were reviewed. Repository checks and diff hygiene passed.
+  - Remaining gate: hosted main confirmation.
 
 ## DONE
 

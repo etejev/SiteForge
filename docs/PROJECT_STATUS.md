@@ -2,6 +2,16 @@
 
 Last updated: 2026-09-05.
 
+Current repair finding supersedes the earlier AX-only explanation below:
+Actions `33947877755` revealed a production availability gate that disabled
+the Inspector during immutable-snapshot autosave. The correction preserves
+revision-guarded editing during saving/autosaving, matching insertion and
+inline-text behavior. Actions `33980431383` passed the deterministic autosave
+regression and both affected UI journeys (3/3). Final local `./sf verify`
+passed 392 unit/integration plus 49 UI tests (441/441), with all repository
+checks green. Hosted main confirmation remains pending. Historical test totals
+below describe earlier checkpoints.
+
 `SF-AUTHORING-019` remains locally verified within its bounded local-raster
 scope, with one hosted activation follow-up in progress. Schema-v5 owns stable image-asset descriptors
 and Image-node references; the existing resource sidecar preserves exact

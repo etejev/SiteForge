@@ -2,6 +2,15 @@
 
 Last updated: 2026-09-05.
 
+Current SF-AUTHORING-019 repair evidence supersedes the earlier AX-only
+explanation in the historical checkpoint row: immutable-snapshot autosave
+was disabling the shared Inspector validation context. Editing now remains
+available with revision guards. Actions `33980431383` passed the new autosave
+regression plus geometry and structural UI journeys (3/3). Final local
+verification passed 392 unit/integration plus 49 UI tests (441/441), with
+repository checks green. Hosted main confirmation remains pending; see
+`docs/evidence/SF-AUTHORING-019-INSPECTOR-REPAIR.md`.
+
 | Requirement or work item | Status | Implementation | Automated evidence | Manual evidence | Notes |
 |---|---|---|---|---|---|
 | SF-AUTHORING-019 / bounded SF-0801-001–008; SF-0802-001–008 | **Locally verified bounded local-raster slice; hosted activation follow-up in progress; both modules remain Partial overall** | Schema-v5 stores stable image-asset descriptors and typed Image-node references while exact original bytes use the existing content-addressed resource sidecar. The Assets pane imports/searches/renames/replaces/reveals/deletes local raster assets; Image insertion, Fit/Fill/Stretch, focal point, alt/decorative semantics, renderer snapshots, history, package, and recovery use existing identity-gated boundaries. Normal windows preserve the 1100-point production minimum and trailing controls on narrower displays. | Five focused model/persistence/renderer classes passed 116/116. Final local `./sf verify` passed 391 unit/integration plus 49 UI tests (440 total), zero failures, on 2026-09-04. Actions `33942209770` passed the same hosted 440-test gate. Actions `33945148753` and `33946638814` proved the native AppKit window and concrete segment remained healthy while XCTest exposed inherited AXApplication/AXWindow Disabled flags; interaction readiness now uses the foreground process and concrete shipping control authority. Replacement hosted confirmation remains required. | Six original-resolution actual-app states were reviewed for normal maximized presentation, readable Assets/Inspector controls, upright and clipped image pixels, Fit/Fill/focal behavior, aligned selection geometry, reopened state, and absence of ghost/debug content. | Folders/tags/favorites, bulk organization, drag-to-artboard, remote providers, SVG/video/audio/fonts, advanced editing, masks/renditions, responsive source sets, metadata-policy UI, non-Image image fills, preview/export parity, broad scale/accessibility matrices, and release acceptance remain deferred. |
