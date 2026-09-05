@@ -33,12 +33,18 @@ None.
     Actions `33935713623` again passed 48/49 and proved that its later failure
     occurred before publication: Down Arrow and Return were synthesized
     against the application rather than the live popup on the hosted OS.
+    Actions `33937301726` then proved that even popup-targeted key synthesis
+    did not commit that transient AppKit menu on the hosted OS; its justified
+    retry passed every repository/non-UI gate and isolated the same one UI
+    boundary.
   - Correction: Save now resolves either live autosave completion or a live
     enabled Save command before preserving the same reopen proof. Leading-
     control journeys opt into the existing left-edge test placement only when
     the display is narrower than the product minimum. Image import now accepts
     only either an imported asset row or a freshly enabled native Import action;
-    structural alignment uses the live native popup's keyboard selection path.
+    structural alignment now uses the same persistent native segmented-picker
+    pattern as Stack direction, avoiding transient menu ownership while keeping
+    visible pointer, keyboard, and accessibility semantics.
     The two replacement-run failures pass together (2/2). Final local
     `./sf verify` remains the authoritative 391 unit/integration plus 49 UI
     tests (440 total) from the preceding correction; unchanged broad coverage
@@ -46,12 +52,11 @@ None.
     Command-Z and Shift-Command-Z plus live alt-text restoration; that affected
     journey passes 1/1. The open-panel journey now confirms the Go to Folder
     field closes and activates the native default Import action; structural
-    alignment uses Down Arrow and Return from the live popup. Its committed
-    value assertion now re-queries the replacement accessibility element and
-    compares the semantic value independent of AppKit capitalization. The
-    keyboard events are also targeted to that live popup rather than the
-    application. The exact corrected structural journey passes 1/1. The
-    latest affected runs passed image import 1/1 and structural alignment 1/1.
+    alignment selects the visible Center segment and requires both the commit
+    announcement and the re-queried semantic group value. The exact corrected
+    structural journey passes 1/1; practical-minimum reachability also passes
+    1/1 with the segmented control. The latest affected runs passed image
+    import 1/1 and structural alignment 1/1.
   - Remaining gate: require a green replacement hosted run before returning
     this item to DONE or continuing SF-AUTHORING-020 source work.
 

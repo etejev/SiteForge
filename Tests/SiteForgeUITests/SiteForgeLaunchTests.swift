@@ -2365,17 +2365,14 @@ final class SiteForgeLaunchTests: XCTestCase {
             application.descendants(matching: .any)["inspector.layout.container.alignment"],
             in: application
         )
-        XCTAssertTrue(alignment.waitForExistence(timeout: 3)); alignment.click()
-        let liveAlignment = application.popUpButtons["inspector.layout.container.alignment"]
-        XCTAssertTrue(liveAlignment.waitForExistence(timeout: 3))
-        liveAlignment.typeKey(.downArrow, modifierFlags: [])
-        liveAlignment.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(alignment.waitForExistence(timeout: 3))
+        let center = alignment.radioButtons["Center"]
+        XCTAssertTrue(center.waitForExistence(timeout: 3)); center.click()
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Alignment committed", timeout: 3))
         XCTAssertTrue(waitForLiveValue(
             in: application,
             identifier: "inspector.layout.container.alignment",
-            containing: "center",
-            timeout: 3
+            containing: "center"
         ))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 stack gap alignment")
 
@@ -3183,10 +3180,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         ) == .completed
     }
 
-    /// SwiftUI may replace a native control after committing its binding. Re-query
-    /// the live accessibility element so the assertion observes the committed
-    /// control rather than a stale proxy, and compare semantic values without
-    /// depending on AppKit's presentation capitalization.
+    /// A committed SwiftUI control may be replaced after publishing its
+    /// binding. Re-query the live accessibility value so the assertion observes
+    /// the current semantic state rather than a stale native proxy.
     private func waitForLiveValue(
         in application: XCUIApplication,
         identifier: String,

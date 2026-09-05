@@ -46,6 +46,14 @@ not the native popup. The journey now sends both keys to the re-queried live
 popup; the exact journey passes locally 1/1 in
 `focused-a0219a8d-e4f3-4169-abe0-eeb819c73755.xcresult`.
 
+Actions `33937301726` passed all repository/non-UI gates and isolated the same
+single structural UI boundary after one unrelated AX-launch retry. It proved
+that even popup-targeted keys did not commit the transient hosted AppKit menu.
+Stack cross-axis alignment now uses the persistent native segmented-picker
+pattern already used for direction. Practical-minimum reachability passes 1/1,
+and the complete structural journey passes 1/1 in
+`focused-0a15d65a-83d5-45b6-8064-c113cadddacd.xcresult`.
+
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and
 SF-0603. The existing Desktop-base cascade now authors isolated Tablet/Mobile

@@ -127,6 +127,18 @@ followed. Both keys now target the re-queried live popup. The exact structural
 journey passed 1/1 in
 `focused-a0219a8d-e4f3-4169-abe0-eeb819c73755.xcresult`.
 
+Actions `33937301726` passed every repository/non-UI gate. Its first attempt
+lost the workspace AX boundary before product assertions; the one justified
+retry reached the structural control and proved that even popup-targeted key
+events did not commit the transient hosted AppKit menu. The production Stack
+alignment control now uses a persistent native segmented picker, matching the
+existing direction control and retaining the same canonical registry path.
+The practical-minimum control journey passed 1/1 in
+`focused-0a9e4685-c6b4-46e7-8fe0-b91a0764d3e6.xcresult`; the complete
+structural journey clicks the visible Center segment, requires the canonical
+commit announcement, re-queries the live semantic group value, and passed 1/1
+in `focused-0a15d65a-83d5-45b6-8064-c113cadddacd.xcresult`.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

@@ -20,7 +20,12 @@ This file records user-visible behavior during development. It is not a substitu
   uses the popup's Down Arrow and Return path instead of type-ahead, then
   re-queries the live replacement popup before validating its semantic value.
   Those keyboard events are delivered to the popup itself so hosted AppKit
-  menu tracking cannot redirect them to the application.
+  menu tracking cannot redirect them to the application. A subsequent hosted
+  run proved that transient popup menu selection still differed across macOS
+  runners, so Stack cross-axis alignment now uses a persistent native segmented
+  picker, matching Stack direction. Its visible Center action publishes the
+  same canonical transaction and semantic accessibility value without relying
+  on transient menu ownership.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,
