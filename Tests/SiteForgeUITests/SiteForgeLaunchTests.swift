@@ -2366,8 +2366,10 @@ final class SiteForgeLaunchTests: XCTestCase {
             in: application
         )
         XCTAssertTrue(alignment.waitForExistence(timeout: 3)); alignment.click()
-        application.typeKey(.downArrow, modifierFlags: [])
-        application.typeKey(.return, modifierFlags: [])
+        let liveAlignment = application.popUpButtons["inspector.layout.container.alignment"]
+        XCTAssertTrue(liveAlignment.waitForExistence(timeout: 3))
+        liveAlignment.typeKey(.downArrow, modifierFlags: [])
+        liveAlignment.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Alignment committed", timeout: 3))
         XCTAssertTrue(waitForLiveValue(
             in: application,

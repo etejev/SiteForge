@@ -19,6 +19,8 @@ This file records user-visible behavior during development. It is not a substitu
   and activates the native panel's default Import action. Structural alignment
   uses the popup's Down Arrow and Return path instead of type-ahead, then
   re-queries the live replacement popup before validating its semantic value.
+  Those keyboard events are delivered to the popup itself so hosted AppKit
+  menu tracking cannot redirect them to the application.
 
 - Completed the SF-AUTHORING-018 hosted follow-up: nested structural insertion
   remains available while background autosave writes an immutable snapshot,

@@ -120,6 +120,13 @@ semantic accessibility value case-insensitively. The exact structural journey
 passed 1/1 in
 `focused-8a3bef0d-5ce9-4ba7-a54f-f0a4cba63314.xcresult`.
 
+Actions `33935713623` again passed all repository/non-UI gates and 48/49 UI
+journeys. Its sole trace showed the popup was clicked, but Down Arrow and
+Return were synthesized against the application and no commit announcement
+followed. Both keys now target the re-queried live popup. The exact structural
+journey passed 1/1 in
+`focused-a0219a8d-e4f3-4169-abe0-eeb819c73755.xcresult`.
+
 ## Visual inspection
 
 The actual-app journey retained these named original-resolution states:

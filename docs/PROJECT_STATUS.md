@@ -39,6 +39,13 @@ replacement control. The assertion now re-queries the live popup and validates
 its semantic value independent of AppKit presentation capitalization; the
 exact structural journey passes locally 1/1.
 
+Actions `33935713623` passed all repository/non-UI gates and 48/49 UI
+journeys. The sole failure moved to the preceding commit announcement and its
+event trace proved Down Arrow/Return were synthesized against the application,
+not the native popup. The journey now sends both keys to the re-queried live
+popup; the exact journey passes locally 1/1 in
+`focused-a0219a8d-e4f3-4169-abe0-eeb819c73755.xcresult`.
+
 `SF-AUTHORING-018` is verified and complete as the bounded responsive
 container-layout and breakpoint-visibility slice for SF-0601, SF-0602, and
 SF-0603. The existing Desktop-base cascade now authors isolated Tablet/Mobile

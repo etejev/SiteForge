@@ -30,6 +30,9 @@ None.
     `33933806330` passed 48 of 49 UI journeys: image import was green and the
     structural command announced a successful Center commit, but the test
     retained a stale, presentation-case-sensitive popup accessibility query.
+    Actions `33935713623` again passed 48/49 and proved that its later failure
+    occurred before publication: Down Arrow and Return were synthesized
+    against the application rather than the live popup on the hosted OS.
   - Correction: Save now resolves either live autosave completion or a live
     enabled Save command before preserving the same reopen proof. Leading-
     control journeys opt into the existing left-edge test placement only when
@@ -46,6 +49,8 @@ None.
     alignment uses Down Arrow and Return from the live popup. Its committed
     value assertion now re-queries the replacement accessibility element and
     compares the semantic value independent of AppKit capitalization. The
+    keyboard events are also targeted to that live popup rather than the
+    application. The exact corrected structural journey passes 1/1. The
     latest affected runs passed image import 1/1 and structural alignment 1/1.
   - Remaining gate: require a green replacement hosted run before returning
     this item to DONE or continuing SF-AUTHORING-020 source work.
