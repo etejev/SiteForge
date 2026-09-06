@@ -2188,6 +2188,121 @@ final class SiteForgeLaunchTests: XCTestCase {
     @MainActor
     // SF-0806-002/005/006, SF-1102-002/005/006: visible native controls,
     // canonical history and a separate-process package reopen.
+    func testStaticPageManagementRoutesHistoryAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("static-pages.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application)
+        @MainActor func pageRow(_ name: String) -> XCUIElement {
+            application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "navigator.page.", name + ", route ")).firstMatch
+        }
+        @MainActor func menu(_ title: String) {
+            application.menuBars.menuBarItems["Page"].click()
+            XCTAssertTrue(application.menuItems[title].isEnabled)
+            application.menuItems[title].click()
+        }
+        @MainActor func draft(_ id: String, _ value: String) {
+            let field = application.textFields[id]
+            XCTAssertTrue(field.waitForExistence(timeout: 3))
+            field.click(); field.typeKey("a", modifierFlags: .command); field.typeText(value)
+        }
+        application.buttons["navigator.tab.pages"].click()
+        application.buttons["navigator.pages.new"].click()
+        draft("page.editor.name", "About")
+        draft("page.editor.route", "/about")
+        application.buttons["page.editor.apply"].click()
+        XCTAssertTrue(pageRow("About").waitForExistence(timeout: 3))
+        let stableID = pageRow("About").identifier
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-021 new empty page")
+        menu("Rename Page…")
+        draft("page.editor.name", "Team")
+        application.buttons["page.editor.apply"].click()
+        XCTAssertTrue(pageRow("Team").waitForExistence(timeout: 3))
+        XCTAssertEqual(pageRow("Team").identifier, stableID)
+        menu("Edit Route…")
+        draft("page.editor.route", "/404")
+        application.buttons["page.editor.apply"].click()
+        XCTAssertTrue(application.staticTexts["page.editor.validation"].waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-021 invalid protected route")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(pageRow("Team").label, "Team, route /about")
+        menu("Edit Route…")
+        draft("page.editor.route", "/team")
+        application.buttons["page.editor.apply"].click()
+        XCTAssertEqual(pageRow("Team").label, "Team, route /team")
+        application.menuBars.menuBarItems["Insert"].click()
+        application.menuItems["Insert Frame at Center"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let frameID = canvasObject(named: "Frame", in: application).identifier
+        menu("Duplicate Page")
+        XCTAssertTrue(pageRow("Team Copy").waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        XCTAssertNotEqual(canvasObject(named: "Frame", in: application).identifier, frameID)
+        menu("Move Page Earlier")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-021 duplicate reordered")
+        menu("Delete Page…")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-021 delete impact")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(pageRow("Team Copy").exists)
+        menu("Delete Page…")
+        application.buttons["page.editor.apply"].click()
+        XCTAssertTrue(pageRow("Team Copy").waitForNonExistence(timeout: 3))
+        application.buttons["toolbar.undo"].click()
+        XCTAssertTrue(pageRow("Team Copy").waitForExistence(timeout: 3))
+        application.buttons["toolbar.redo"].click()
+        XCTAssertTrue(pageRow("Team Copy").waitForNonExistence(timeout: 3))
+        pageRow("Team").click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, frameID)
+        saveDocumentIfModified(in: application)
+        terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("pages-reopen-recovery"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        application.buttons["navigator.tab.pages"].click()
+        XCTAssertTrue(pageRow("Team").waitForExistence(timeout: 3))
+        XCTAssertEqual(pageRow("Team").identifier, stableID)
+        XCTAssertEqual(pageRow("Team").label, "Team, route /team")
+        pageRow("Team").click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, frameID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-021 reopened page")
+    }
+
+    func testStaticPageCompactProtectedRolesAndLiveLinkTargetJourney() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeWindowSize", "minimum", "-SiteForgeUITestWindowAlignment", TestWindowAlignment.right.rawValue,
+        ])
+        XCTAssertEqual(application.descendants(matching: .any)["workspace.shell"].frame.width, 1_100, accuracy: 2)
+        application.menuBars.menuBarItems["Page"].click()
+        XCTAssertFalse(application.menuItems["Delete Page…"].isEnabled)
+        XCTAssertFalse(application.menuItems["Edit Route…"].isEnabled)
+        application.typeKey(.escape, modifierFlags: [])
+        application.typeKey("n", modifierFlags: [.command, .shift])
+        let name = application.textFields["page.editor.name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        name.click(); name.typeKey("a", modifierFlags: .command); name.typeText("Contact")
+        let route = application.textFields["page.editor.route"]
+        route.click(); route.typeKey("a", modifierFlags: .command); route.typeText("/contact")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-021 compact page fields")
+        application.buttons["page.editor.apply"].click()
+        let home = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.page.", "Home, route /")).firstMatch
+        XCTAssertTrue(home.waitForExistence(timeout: 3)); home.click()
+        application.menuBars.menuBarItems["Insert"].click()
+        application.menuItems["Insert Button at Center"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        application.buttons["inspector.tab.interactions"].click()
+        application.popUpButtons["inspector.interactions.link.type"].click()
+        application.menuItems["Page"].click()
+        let target = application.popUpButtons["inspector.interactions.link.page"]
+        revealStructuralLayoutControl(target, in: application)
+        target.click()
+        XCTAssertTrue(application.menuItems["Contact — /contact"].exists)
+        application.menuItems["Contact — /contact"].click()
+        XCTAssertTrue(waitForValue(target, containing: "Contact"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-021 compact live page target")
+    }
+
     func testButtonLinkContentTargetsUndoRedoAndReopenJourney() throws {
         let project = fixtureRoot.appendingPathComponent("button-link.siteforge")
         var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
@@ -2312,7 +2427,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.menuItems["Page"].click()
         let page = application.popUpButtons["inspector.interactions.link.page"]
         XCTAssertTrue(waitForHittable(page, in: application)); page.click()
-        application.menuItems["Home"].click()
+        application.menuItems["Home — /"].click()
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.control.status"], containing: "target committed"))
         let context = application.popUpButtons["inspector.interactions.link.context"]
         XCTAssertTrue(waitForHittable(context, in: application)); context.click()

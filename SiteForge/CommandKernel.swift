@@ -1,9 +1,191 @@
 import Foundation
 
+// SF-0303: authoring policy is stricter than historical decoding. Old page
+// routes retain their intent; new edits use this one normalized static domain.
+enum StaticPagePolicy {
+    static func name(_ draft: String) throws -> String {
+        let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value.utf8.count <= 256,
+              value.rangeOfCharacter(from: .controlCharacters) == nil else {
+            throw PageAuthoringError.invalidName
+        }
+        return value
+    }
+
+    static func route(_ draft: String) throws -> PageRoute {
+        let value = draft.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let segments = value.dropFirst().split(separator: "/", omittingEmptySubsequences: false)
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-_")
+        guard value.first == "/", value.utf8.count <= 1024, value != "/", value != "/404",
+              !segments.isEmpty, segments.allSatisfy({ !$0.isEmpty && $0.unicodeScalars.allSatisfy(allowed.contains) }) else {
+            throw PageAuthoringError.invalidRoute
+        }
+        return PageRoute(rawValue: value)
+    }
+
+    static func uniqueRoute(stem: String, in document: CanonicalDocument) -> String {
+        let existing = Set(document.pages.map { $0.route.rawValue.lowercased() })
+        var suffix = 1
+        var candidate = stem
+        while existing.contains(candidate) {
+            suffix += 1
+            candidate = "\(stem)-\(suffix)"
+        }
+        return candidate
+    }
+
+    static func duplicateName(_ source: String) throws -> String {
+        var prefix = ""
+        for character in source {
+            let next = prefix + String(character)
+            guard next.utf8.count <= 251 else { break }
+            prefix = next
+        }
+        return try name((prefix.isEmpty ? "Page" : prefix) + " Copy")
+    }
+}
+
+enum PageAuthoringError: Error, LocalizedError {
+    case invalidName, invalidRoute, collision, protectedPage, stale, unavailable, cancelled, unchanged
+    var errorDescription: String? {
+        switch self {
+        case .invalidName: "Enter a page name of 1–256 UTF-8 bytes without control characters."
+        case .invalidRoute: "Use /about or /about/team with letters, digits, hyphens or underscores. / and /404 are protected."
+        case .collision: "Another page already uses this route. Choose a unique path."
+        case .protectedPage: "Home and Not Found cannot be deleted or assigned another route."
+        case .stale: "The page context changed. Reopen this action and try again."
+        case .unavailable: "Page editing is unavailable while the document is read-only or being replaced."
+        case .cancelled: "Page edit cancelled. The document is unchanged."
+        case .unchanged: "The page already has this value."
+        }
+    }
+}
+
+struct PageEditIdentity: Equatable {
+    let documentID: DocumentID
+    let revision: UInt64
+    let pageID: PageID
+}
+
+enum PageEdit {
+    case create(name: String, route: String)
+    case rename(String)
+    case route(String)
+    case duplicate
+    case delete
+    case move(Int)
+
+    var commandName: CommandName {
+        switch self {
+        case .create, .duplicate: .insertPage
+        case .rename: .renamePage
+        case .route: .setPageRoute
+        case .delete: .removePage
+        case .move: .movePage
+        }
+    }
+}
+
+struct PreparedPageEdit {
+    let command: DocumentCommand
+    let selectedPageID: PageID
+}
+
+struct PageCommandRegistry {
+    func prepare(_ edit: PageEdit, identity: PageEditIdentity, in document: CanonicalDocument,
+                 isAvailable: Bool, cancelled: Bool = false) throws -> PreparedPageEdit {
+        guard !cancelled else { throw PageAuthoringError.cancelled }
+        guard isAvailable else { throw PageAuthoringError.unavailable }
+        guard identity.documentID == document.id, identity.revision == document.revision,
+              document.revision < UInt64.max,
+              let index = document.pageIndex(for: identity.pageID) else { throw PageAuthoringError.stale }
+        let page = document.pages[index]
+        func validatedRoute(_ draft: String) throws -> PageRoute {
+            let route = try StaticPagePolicy.route(draft)
+            guard !document.pages.contains(where: { $0.id != page.id && $0.route.rawValue.lowercased() == route.rawValue }) else {
+                throw PageAuthoringError.collision
+            }
+            return route
+        }
+        switch edit {
+        case .create(let name, let rawRoute):
+            let route = try StaticPagePolicy.route(rawRoute)
+            guard !document.pages.contains(where: { $0.route.rawValue.lowercased() == route.rawValue }) else {
+                throw PageAuthoringError.collision
+            }
+            let created = DocumentPage.minimum(name: try StaticPagePolicy.name(name), route: route.rawValue,
+                                               role: .standard, provenance: .authored)
+            return .init(command: .insertPage(.init(page: created, index: document.pages.count)), selectedPageID: created.id)
+        case .rename(let draft):
+            let name = try StaticPagePolicy.name(draft)
+            guard name != page.name else { throw PageAuthoringError.unchanged }
+            return .init(command: .renamePage(.init(pageID: page.id, name: name)), selectedPageID: page.id)
+        case .route(let draft):
+            guard page.role == .standard else { throw PageAuthoringError.protectedPage }
+            let route = try validatedRoute(draft)
+            guard route != page.route else { throw PageAuthoringError.unchanged }
+            return .init(command: .setPageRoute(.init(pageID: page.id, route: route)), selectedPageID: page.id)
+        case .move(let destination):
+            guard document.pages.indices.contains(destination) else { throw PageAuthoringError.stale }
+            guard destination != index else { throw PageAuthoringError.unchanged }
+            return .init(command: .movePage(.init(pageID: page.id, index: destination)), selectedPageID: page.id)
+        case .delete:
+            guard page.role == .standard else { throw PageAuthoringError.protectedPage }
+            // Guides are page-owned canonical data; remove them in the same
+            // transaction so inverse insertion restores their exact ordering.
+            let guides = document.guides.filter { $0.pageID == page.id }
+            let commands = guides.map { DocumentCommand.removeGuide(.init(guideID: $0.id)) }
+                + [.removePage(.init(pageID: page.id))]
+            let destination = document.pages.first { $0.id != page.id }?.id
+            guard let destination else { throw PageAuthoringError.protectedPage }
+            return .init(command: .batch(commands), selectedPageID: destination)
+        case .duplicate:
+            let newID = PageID()
+            let ids = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, NodeID()) })
+            let nodes = page.nodes.map { node in
+                let parent: NodeParent = switch node.parent {
+                case .page: .page(newID)
+                case .node(let id): .node(ids[id]!)
+                }
+                let properties = node.properties.map { property in
+                    var value = property.value
+                    if property.key.rawValue == CanonicalLinkTarget.namespace + "pageID",
+                       value == .string(page.id.description) { value = .string(newID.description) }
+                    if property.key.rawValue == CanonicalLinkTarget.namespace + "nodeID",
+                       node.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == page.id.description,
+                       case .string(let raw) = value, let old = NodeID(uuidString: raw), let replacement = ids[old] {
+                        value = .string(replacement.description)
+                    }
+                    return NodeProperty(key: property.key, value: value, origin: property.origin)
+                }
+                return DocumentNode(id: ids[node.id]!, kind: node.kind, name: node.name,
+                                    parent: parent, childIDs: node.childIDs.map { ids[$0]! }, properties: properties)
+            }
+            let copy = DocumentPage(id: newID, name: try StaticPagePolicy.duplicateName(page.name),
+                route: .init(rawValue: StaticPagePolicy.uniqueRoute(stem: "/page-copy", in: document)),
+                role: .standard, provenance: .authored,
+                rootNodeIDs: page.rootNodeIDs.map { ids[$0]! }, nodes: nodes)
+            let guides = document.guides.filter { $0.pageID == page.id }.enumerated().map { offset, guide in
+                DocumentCommand.insertGuide(.init(guide: .init(pageID: newID, axis: guide.axis,
+                    position: guide.position, provenance: guide.provenance), index: document.guides.count + offset))
+            }
+            return .init(command: .batch([.insertPage(.init(page: copy, index: index + 1))] + guides), selectedPageID: newID)
+        }
+    }
+
+    func inboundLinkCount(to pageID: PageID, in document: CanonicalDocument) -> Int {
+        document.pages.filter { $0.id != pageID }.flatMap(\.nodes).filter {
+            $0.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == pageID.description
+        }.count
+    }
+}
+
 enum CommandName: String, CaseIterable, Codable, Sendable {
     case insertPage = "document.page.insert"
     case removePage = "document.page.remove"
     case renamePage = "document.page.rename"
+    case setPageRoute = "document.page.route.set"
+    case movePage = "document.page.move"
     case insertNode = "document.node.insert"
     case removeNode = "document.node.remove"
     case moveNode = "document.node.move"
@@ -52,6 +234,17 @@ struct RemovePageCommand: Codable, Equatable, Sendable {
 struct RenamePageCommand: Codable, Equatable, Sendable {
     let pageID: PageID
     let name: String
+}
+
+struct SetPageRouteCommand: Codable, Equatable, Sendable {
+    let pageID: PageID
+    let route: PageRoute
+}
+
+/// The destination is the final index, after removal of the source page.
+struct MovePageCommand: Codable, Equatable, Sendable {
+    let pageID: PageID
+    let index: Int
 }
 
 struct InsertNodeCommand: Codable, Equatable, Sendable {
@@ -130,6 +323,8 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case insertPage(InsertPageCommand)
     case removePage(RemovePageCommand)
     case renamePage(RenamePageCommand)
+    case setPageRoute(SetPageRouteCommand)
+    case movePage(MovePageCommand)
     case insertNode(InsertNodeCommand)
     case removeNode(RemoveNodeCommand)
     case moveNode(MoveNodeCommand)
@@ -148,6 +343,8 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
         case .insertPage: .insertPage
         case .removePage: .removePage
         case .renamePage: .renamePage
+        case .setPageRoute: .setPageRoute
+        case .movePage: .movePage
         case .insertNode: .insertNode
         case .removeNode: .removeNode
         case .moveNode: .moveNode
@@ -170,6 +367,10 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
         case .removePage(let command):
             [command.pageID.commandTarget]
         case .renamePage(let command):
+            [command.pageID.commandTarget]
+        case .setPageRoute(let command):
+            [command.pageID.commandTarget]
+        case .movePage(let command):
             [command.pageID.commandTarget]
         case .insertNode(let command):
             [command.pageID.commandTarget, command.node.id.commandTarget]
@@ -255,6 +456,8 @@ struct CommandRegistry {
             CommandDescriptor(name: .insertPage, title: "Insert Page", mutatesDocument: true),
             CommandDescriptor(name: .removePage, title: "Remove Page", mutatesDocument: true),
             CommandDescriptor(name: .renamePage, title: "Rename Page", mutatesDocument: true),
+            CommandDescriptor(name: .setPageRoute, title: "Edit Page Route", mutatesDocument: true),
+            CommandDescriptor(name: .movePage, title: "Move Page", mutatesDocument: true),
             CommandDescriptor(name: .insertNode, title: "Insert Node", mutatesDocument: true),
             CommandDescriptor(name: .removeNode, title: "Remove Node", mutatesDocument: true),
             CommandDescriptor(name: .moveNode, title: "Move Node", mutatesDocument: true),
@@ -301,6 +504,22 @@ struct CommandRegistry {
             }
             guard !value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return .disabled(reason: "Page names cannot be empty.")
+            }
+            return .enabled
+
+        case .setPageRoute(let value):
+            guard let page = document.pages.first(where: { $0.id == value.pageID }),
+                  page.role == .standard else {
+                return .disabled(reason: "Home and Not Found routes are protected.")
+            }
+            // Authoring normalization belongs to PageCommandRegistry. The
+            // inverse must also restore valid historical route spellings.
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .movePage(let value):
+            guard document.pageIndex(for: value.pageID) != nil,
+                  document.pages.indices.contains(value.index) else {
+                return .disabled(reason: "The page or destination no longer exists.")
             }
             return .enabled
 
@@ -540,6 +759,22 @@ struct CommandRegistry {
             return CommandMutation(
                 inverse: .renamePage(RenamePageCommand(pageID: value.pageID, name: previousName))
             )
+
+        case .setPageRoute(let value):
+            guard let index = document.pageIndex(for: value.pageID) else {
+                throw CommandExecutionError.disabled("The page no longer exists.")
+            }
+            let previous = document.pages[index].route
+            document.pages[index].route = value.route
+            return CommandMutation(inverse: .setPageRoute(.init(pageID: value.pageID, route: previous)))
+
+        case .movePage(let value):
+            guard let index = document.pageIndex(for: value.pageID) else {
+                throw CommandExecutionError.disabled("The page no longer exists.")
+            }
+            let page = document.pages.remove(at: index)
+            document.pages.insert(page, at: value.index)
+            return CommandMutation(inverse: .movePage(.init(pageID: value.pageID, index: index)))
 
         case .insertNode(let value):
             guard let pageIndex = document.pageIndex(for: value.pageID) else {
@@ -812,6 +1047,11 @@ final class CommandDiagnostics {
     var records: [CommandDiagnosticRecord] { buffer.snapshot() }
     var droppedRecordCount: UInt64 { buffer.droppedRecordCount }
 
+    func recordPagePreparationFailure(_ edit: PageEdit, pageID: PageID, durationMilliseconds: Double) {
+        record(commandName: edit.commandName, targets: [pageID.commandTarget],
+               durationMilliseconds: durationMilliseconds, result: .failure, failureCategory: .validation)
+    }
+
     fileprivate func record(
         commandName: CommandName,
         targets: [CommandTarget],
@@ -821,7 +1061,9 @@ final class CommandDiagnostics {
     ) {
         buffer.append(
             CommandDiagnosticRecord(
-                requirementIDs: ["SF-0203-008", "SF-0306-008", "SF-1607-008"],
+                requirementIDs: ["SF-0203-008", "SF-0306-008", "SF-1607-008"]
+                    + ([CommandName.insertPage, .removePage, .renamePage, .setPageRoute, .movePage].contains(commandName)
+                        ? ["SF-0303-008"] : []),
                 commandName: commandName,
                 sanitizedIdentifiers: targets.map(sanitize),
                 durationMilliseconds: max(0, durationMilliseconds),

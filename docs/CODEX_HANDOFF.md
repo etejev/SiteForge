@@ -1,12 +1,22 @@
 # Codex Continuation Handoff
 
-Active work: SF-AUTHORING-020 on the preserved feature branch. Do not restart
+Active work: SF-AUTHORING-021 on `sf-authoring-021-pages-routes`. Native Pages
+actions and central validation/transactions are implemented. Five model and
+two new UI selectors, plus the affected compact target selector, passed.
+Seven window images were reviewed. Final verification passed 404 non-UI +
+54 UI tests (458/458). Preserve these changes; finish authorized main
+integration/push and hosted acceptance without repeating unchanged tests. See
+`docs/evidence/SF-AUTHORING-021-STATIC-PAGES.md`. Do not start SF-AUTHORING-022.
+The previous SF-AUTHORING-020 Actions run 34000476753 passed 399 non-UI +
+52 UI tests (451/451) for 85615b9. No predecessor repair is necessary.
+
+Preceding milestone: SF-AUTHORING-020. Do not restart
 the completed SF-AUTHORING-019 repair. Compact/internal-target and separated
 object visuals are reviewed. Final verification passed 399 non-UI + 52 UI
-tests (451 total). Integrate/push this coherent checkpoint and inspect its
-hosted run before reporting delivery complete. The Button/Link registry,
+tests (451 total). Checkpoint 85615b9 is pushed and hosted-green. The Button/Link registry,
 six model tests, control glyph test and actual-app journeys are implemented;
-see `docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md`. Do not start another feature.
+see `docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md`. SF-AUTHORING-021 is now
+explicitly authorized; no further feature is authorized after it.
 
 Final SF-AUTHORING-019 Save availability acceptance: production `f951df7` is
 hosted-green in Actions `33991018406` (392 unit/integration + 49 UI = 441,

@@ -1004,6 +1004,8 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var imageInspectorFailure: ImageInspectorError?
     @Published private(set) var lastImageInspectorAnnouncement = "Image Inspector inactive"
     @Published private(set) var lastLinkInspectorAnnouncement = "Button and Link properties"
+    @Published var pageEditorRequest: PageEditorRequest?
+    @Published private(set) var pageAnnouncement = ""
     private(set) var linkInspectorDiagnostics: [LinkInspectorDiagnostic] = []
     @Published private(set) var snapResolution: SnapResolution?
     @Published private(set) var isSnappingSuppressed = false
@@ -1509,6 +1511,45 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     var pages: [DocumentPage] { documentSession.document.pages }
+
+    var pageEditingIsAvailable: Bool { transformValidationContext.isLifecycleAvailable }
+
+    func presentPageEditor(_ mode: PageEditorRequest.Mode, pageID: PageID? = nil) {
+        guard pageEditingIsAvailable, let id = pageID ?? effectiveSelectedPageID,
+              let page = pages.first(where: { $0.id == id }) else { return }
+        navigatorTab = .pages
+        pageEditorRequest = .init(identity: .init(documentID: documentSession.document.id,
+            revision: documentSession.document.revision, pageID: id), mode: mode,
+            name: mode == .create ? "New Page" : page.name,
+            route: mode == .create ? StaticPagePolicy.uniqueRoute(stem: "/new-page", in: documentSession.document) : page.route.rawValue,
+            inboundLinks: PageCommandRegistry().inboundLinkCount(to: id, in: documentSession.document),
+            objects: max(0, page.nodes.count - 1))
+    }
+
+    @discardableResult
+    func commitPageEdit(_ edit: PageEdit, identity: PageEditIdentity) -> Bool {
+        let start = DispatchTime.now().uptimeNanoseconds
+        do {
+            let prepared = try PageCommandRegistry().prepare(edit, identity: identity,
+                in: documentSession.document, isAvailable: pageEditingIsAvailable)
+            _ = try documentSession.execute(prepared.command)
+            if prepared.selectedPageID != identity.pageID { selectPage(prepared.selectedPageID) }
+            pageAnnouncement = "Page change committed. \(pages.count) pages."
+            announcementPoster.post(pageAnnouncement)
+            return true
+        } catch {
+            documentSession.diagnostics.recordPagePreparationFailure(edit, pageID: identity.pageID,
+                durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            pageAnnouncement = error.localizedDescription
+            announcementPoster.post(pageAnnouncement)
+            return false
+        }
+    }
+
+    func performPageEdit(_ edit: PageEdit, pageID: PageID) {
+        _ = commitPageEdit(edit, identity: .init(documentID: documentSession.document.id,
+            revision: documentSession.document.revision, pageID: pageID))
+    }
 
     var effectiveSelectedPageID: PageID? {
         guard let selectedPageID, pages.contains(where: { $0.id == selectedPageID }) else {

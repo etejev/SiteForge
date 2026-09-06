@@ -302,6 +302,8 @@ private extension PersistedHistoryStore {
         case "insertPage": try requireCommandPayload(value, keys: ["page", "index"])
         case "removePage": try requireCommandPayload(value, keys: ["pageID"])
         case "renamePage": try requireCommandPayload(value, keys: ["pageID", "name"])
+        case "setPageRoute": try requireCommandPayload(value, keys: ["pageID", "route"])
+        case "movePage": try requireCommandPayload(value, keys: ["pageID", "index"])
         case "insertNode": try requireCommandPayload(value, keys: ["pageID", "node", "index"])
         case "removeNode": try requireCommandPayload(value, keys: ["pageID", "nodeID"])
         case "moveNode": try requireCommandPayload(value, keys: ["pageID", "nodeID", "destination", "index"])

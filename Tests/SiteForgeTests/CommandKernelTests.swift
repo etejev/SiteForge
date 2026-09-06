@@ -3,6 +3,194 @@ import XCTest
 
 @MainActor
 final class CommandKernelTests: XCTestCase {
+    func testStaticPageRoutesValidationIdentityAndAtomicHistory() throws {
+        let unicodeCopy = try StaticPagePolicy.duplicateName(String(repeating: "界", count: 85))
+        XCTAssertLessThanOrEqual(unicodeCopy.utf8.count, 256)
+        XCTAssertTrue(unicodeCopy.hasSuffix(" Copy"))
+        XCTAssertEqual(try StaticPagePolicy.name(unicodeCopy), unicodeCopy)
+        let session = DocumentSession(document: BlankProjectDefaults.document())
+        let registry = PageCommandRegistry()
+        func apply(_ edit: PageEdit, pageID: PageID) throws -> PageID {
+            let prepared = try registry.prepare(edit, identity: .init(documentID: session.document.id,
+                revision: session.document.revision, pageID: pageID), in: session.document, isAvailable: true)
+            try session.execute(prepared.command)
+            return prepared.selectedPageID
+        }
+        let home = session.document.pages[0].id
+        let created = try apply(.create(name: " About ", route: " /About/Team "), pageID: home)
+        let page = try XCTUnwrap(session.document.pages.last)
+        XCTAssertEqual(page.id, created)
+        XCTAssertEqual(page.name, "About")
+        XCTAssertEqual(page.route.rawValue, "/about/team")
+        XCTAssertEqual(page.nodes.count, 1)
+        XCTAssertTrue(page.nodes[0].properties.isEmpty)
+        XCTAssertTrue(page.nodes[0].childIDs.isEmpty)
+        _ = try apply(.rename("Our Team"), pageID: created)
+        _ = try apply(.route("/team"), pageID: created)
+        _ = try apply(.move(0), pageID: created)
+        XCTAssertEqual(session.document.pages.first?.id, created)
+        try session.undo()
+        XCTAssertEqual(session.document.pages.last?.id, created)
+        try session.undo()
+        XCTAssertEqual(session.document.pages.last?.route.rawValue, "/about/team")
+        try session.redo()
+        XCTAssertEqual(session.document.pages.last?.route.rawValue, "/team")
+        XCTAssertEqual(session.document.pages.last?.rootNodeIDs, page.rootNodeIDs)
+        XCTAssertEqual(try JSONDecoder().decode(CanonicalDocument.self,
+            from: JSONEncoder().encode(session.document)), session.document)
+        let before = session.document
+        for invalid in ["", "/", "/404", "/a//b", "/a/", "/a?x=1", "/a#b", "/../x", "/a%2fb", "/a b", "/a\\b"] {
+            XCTAssertThrowsError(try apply(.route(invalid), pageID: created), invalid)
+        }
+        XCTAssertThrowsError(try apply(.create(name: "Other", route: "/TEAM"), pageID: home))
+        XCTAssertThrowsError(try apply(.delete, pageID: home))
+        XCTAssertThrowsError(try apply(.route("/home"), pageID: home))
+        for invalid in ["", "\n", "bad\u{0000}name", String(repeating: "x", count: 257)] {
+            XCTAssertThrowsError(try apply(.rename(invalid), pageID: created))
+        }
+        XCTAssertEqual(session.document, before)
+    }
+
+    func testStaticPageDuplicateRemapsInternalLinksAndDeleteUndoPreservesIntent() throws {
+        let session = DocumentSession(document: BlankProjectDefaults.document())
+        let registry = PageCommandRegistry()
+        func apply(_ edit: PageEdit, _ id: PageID) throws -> PageID {
+            let value = try registry.prepare(edit, identity: .init(documentID: session.document.id,
+                revision: session.document.revision, pageID: id), in: session.document, isAvailable: true)
+            try session.execute(value.command)
+            return value.selectedPageID
+        }
+        let home = session.document.pages[0].id
+        let pageID = try apply(.create(name: "Destination", route: "/destination"), home)
+        let root = try XCTUnwrap(session.document.pages.last?.rootNodeIDs.first)
+        let link = DocumentNode(kind: .link, name: "Self link", parent: .node(root), properties:
+            CanonicalLinkTarget.page(pageID).properties.map { .init(key: .init(rawValue: $0.0), value: $0.1) })
+        try session.execute(.insertNode(.init(pageID: pageID, node: link, index: 0)))
+        let copyID = try apply(.duplicate, pageID)
+        let original = try XCTUnwrap(session.document.pages.first { $0.id == pageID })
+        let copy = try XCTUnwrap(session.document.pages.first { $0.id == copyID })
+        XCTAssertTrue(Set(original.nodes.map(\.id)).isDisjoint(with: copy.nodes.map(\.id)))
+        XCTAssertEqual(try CanonicalLinkTarget.resolve(copy.nodes[1]), .page(copyID))
+        XCTAssertNotEqual(original.nodes[1].properties[0].id, copy.nodes[1].properties[0].id)
+        let homeRoot = session.document.pages[0].rootNodeIDs[0]
+        let inbound = DocumentNode(kind: .link, name: "Inbound", parent: .node(homeRoot), properties:
+            CanonicalLinkTarget.page(pageID).properties.map { .init(key: .init(rawValue: $0.0), value: $0.1) })
+        try session.execute(.insertNode(.init(pageID: home, node: inbound, index: 0)))
+        XCTAssertEqual(registry.inboundLinkCount(to: pageID, in: session.document), 1)
+        let beforePages = session.document.pages
+        _ = try apply(.delete, pageID)
+        XCTAssertFalse(session.document.pages.contains { $0.id == pageID })
+        XCTAssertEqual(try CanonicalLinkTarget.resolve(session.document.pages[0].nodes[1]), .page(pageID))
+        try session.undo()
+        XCTAssertEqual(session.document.pages, beforePages)
+        try session.redo()
+        XCTAssertFalse(session.document.pages.contains { $0.id == pageID })
+    }
+
+    func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {
+        let document = BlankProjectDefaults.document()
+        let registry = PageCommandRegistry()
+        let identity = PageEditIdentity(documentID: document.id, revision: document.revision, pageID: document.pages[0].id)
+        XCTAssertThrowsError(try registry.prepare(.rename("Home"), identity: identity, in: document, isAvailable: true))
+        XCTAssertThrowsError(try registry.prepare(.rename("Changed"), identity: identity, in: document, isAvailable: false))
+        XCTAssertThrowsError(try registry.prepare(.rename("Changed"), identity: identity, in: document, isAvailable: true, cancelled: true))
+        for stale in [PageEditIdentity(documentID: DocumentID(), revision: 0, pageID: identity.pageID),
+                      .init(documentID: document.id, revision: 1, pageID: identity.pageID),
+                      .init(documentID: document.id, revision: 0, pageID: PageID())] {
+            XCTAssertThrowsError(try registry.prepare(.rename("Changed"), identity: stale, in: document, isAvailable: true))
+        }
+        let diagnostics = CommandDiagnostics()
+        diagnostics.recordPagePreparationFailure(.rename("Private page name"), pageID: identity.pageID, durationMilliseconds: 1)
+        XCTAssertTrue(diagnostics.records[0].requirementIDs.contains("SF-0303-008"))
+        XCTAssertFalse(String(describing: diagnostics.records).contains("Private page name"))
+        XCTAssertFalse(String(describing: diagnostics.records).contains(identity.pageID.description))
+    }
+
+    func testStaticPagePackageRecoveryHistoryAndLegacyRouteInverse() async throws {
+        let session = DocumentSession(document: BlankProjectDefaults.document())
+        let page = DocumentPage(name: "Legacy", route: .init(rawValue: "/Legacy"))
+        try session.execute(.insertPage(.init(page: page, index: 2)))
+        let registry = PageCommandRegistry()
+        let prepared = try registry.prepare(.route("/updated"), identity: .init(documentID: session.document.id,
+            revision: session.document.revision, pageID: page.id), in: session.document, isAvailable: true)
+        try session.execute(prepared.command)
+        try session.execute(.movePage(.init(pageID: page.id, index: 0)))
+        let package = ProjectPackage(createdAt: .init(date: Date(timeIntervalSince1970: 1)), document: session.document)
+        let store = ProjectPackageStore()
+        let archived = try await PersistedHistoryStore().package(package, with: session.historySnapshot())
+        let bytes = try await store.encode(archived)
+        let sameBytes = try await store.encode(archived)
+        XCTAssertEqual(bytes, sameBytes)
+        let reopened = try await store.decode(bytes)
+        XCTAssertEqual(reopened.document, session.document)
+        guard case .restored(let history) = try await PersistedHistoryStore().load(from: reopened) else {
+            return XCTFail("Page commands must retain validated package/recovery history")
+        }
+        let recovered = DocumentSession(document: reopened.document)
+        try recovered.installValidatedHistory(history)
+        try recovered.undo()
+        XCTAssertEqual(recovered.document.pages.last?.id, page.id)
+        try recovered.undo()
+        XCTAssertEqual(recovered.document.pages.last?.route.rawValue, "/Legacy")
+        try recovered.redo()
+        XCTAssertEqual(recovered.document.pages.last?.route.rawValue, "/updated")
+        try recovered.execute(.renamePage(.init(pageID: page.id, name: "Branch")))
+        XCTAssertFalse(recovered.canRedo)
+        XCTAssertFalse(String(describing: recovered.diagnostics.records).contains("/updated"))
+        XCTAssertFalse(String(describing: recovered.diagnostics.records).contains("/Legacy"))
+    }
+
+    func testStaticPageDuplicateSectionTargetsGuidesAndBoundedNodeOrdering() throws {
+        for count in [100, 10_000] {
+            let pageID = PageID(), rootID = NodeID(), sectionID = NodeID()
+            let children = (0..<count).map { index in
+                DocumentNode(kind: .frame, name: "Item \(index)", parent: .node(sectionID))
+            }
+            let section = DocumentNode(id: sectionID, kind: .section, name: "Section", parent: .node(rootID), childIDs: children.map(\.id), properties: [
+                .init(key: .init(rawValue: "layout.container.kind"), value: .string("section"), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.axis"), value: .string("vertical"), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.padding"), value: .number(48), origin: .defaulted),
+            ])
+            let target = DocumentNode(kind: .link, name: "Section link", parent: .node(rootID), properties:
+                CanonicalLinkTarget.section(pageID: pageID, nodeID: sectionID).properties.map {
+                    .init(key: .init(rawValue: $0.0), value: $0.1)
+                })
+            let external = DocumentNode(kind: .link, name: "External", parent: .node(rootID), properties:
+                CanonicalLinkTarget.external("https://example.com").properties.map {
+                    .init(key: .init(rawValue: $0.0), value: $0.1)
+                })
+            let root = DocumentNode(id: rootID, kind: .frame, name: "Root", parent: .page(pageID), childIDs: [sectionID, target.id, external.id])
+            let page = DocumentPage(id: pageID, name: "Source", route: .init(rawValue: "/source"), rootNodeIDs: [rootID], nodes: [root, section, target, external] + children)
+            var document = BlankProjectDefaults.document()
+            document.pages.append(page)
+            document.guides.append(.init(pageID: pageID, axis: .vertical, position: 123))
+            try document.validate()
+            let session = DocumentSession(document: document)
+            let registry = PageCommandRegistry()
+            let prepared = try registry.prepare(.duplicate, identity: .init(documentID: document.id,
+                revision: document.revision, pageID: pageID), in: document, isAvailable: true)
+            try session.execute(prepared.command)
+            let copy = try XCTUnwrap(session.document.pages.last)
+            XCTAssertEqual(copy.nodes.map(\.name), page.nodes.map(\.name))
+            XCTAssertEqual(copy.nodes[1].childIDs, Array(copy.nodes.dropFirst(4)).map(\.id))
+            XCTAssertEqual(try CanonicalLinkTarget.resolve(copy.nodes[2]), .section(pageID: copy.id, nodeID: copy.nodes[1].id))
+            XCTAssertEqual(try CanonicalLinkTarget.resolve(copy.nodes[3]), .external("https://example.com"))
+            XCTAssertEqual(session.document.imageAssets, document.imageAssets)
+            XCTAssertEqual(session.document.guides.last?.pageID, copy.id)
+            XCTAssertEqual(session.document.guides.last?.position, 123)
+            XCTAssertNotEqual(session.document.guides.last?.id, document.guides.first?.id)
+            try session.undo()
+            XCTAssertEqual(session.document.pages, document.pages)
+            XCTAssertEqual(session.document.guides, document.guides)
+            let deletion = try registry.prepare(.delete, identity: .init(documentID: document.id,
+                revision: session.document.revision, pageID: pageID), in: session.document, isAvailable: true)
+            try session.execute(deletion.command)
+            XCTAssertTrue(session.document.guides.isEmpty)
+            try session.undo()
+            XCTAssertEqual(session.document.pages, document.pages)
+            XCTAssertEqual(session.document.guides, document.guides)
+        }
+    }
     private let documentID = DocumentID(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
     private let pageID = PageID(UUID(uuidString: "00000000-0000-0000-0000-000000000002")!)
     private let rootNodeID = NodeID(UUID(uuidString: "00000000-0000-0000-0000-000000000003")!)

@@ -1,5 +1,15 @@
 # SiteForge Visual Contract
 
+## Static pages (SF-AUTHORING-021)
+
+Pages exposes New Page and Page Actions, with equivalent native Page and row
+context menus. Rows show the display name and route separately; full values and
+protected roles remain accessible. Draft sheets keep persistent field labels,
+readable validation and native Cancel/Apply semantics. Deletion names its
+object/link impact and uses a destructive confirmation. New pages contain
+only a non-rendered structural root; page changes do not leave old canvas
+objects or editor drafts visible. Duplication is not a template operation.
+
 ## Button and Link authoring (SF-AUTHORING-020)
 
 Button and Link are real Elements and native Insert actions. Content edits

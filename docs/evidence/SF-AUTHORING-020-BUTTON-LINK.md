@@ -109,6 +109,11 @@ Key attachment names are `SF-AUTHORING-020 link selected`,
 `SF-AUTHORING-020 compatible mixed labels`, and
 `SF-AUTHORING-020 incompatible selection`.
 
+Hosted verification: Actions `34000476753` passed 399 non-UI + 52 UI tests
+(451 total), zero failures, for `85615b9`. This was confirmed from the completed
+run log, not inferred from local results:
+https://github.com/etejev/SiteForge/actions/runs/34000476753
+
 Deferred: embeds, remote previews, network fetching, downloads/custom schemes,
 analytics/runtime navigation, state styling, multi-action graphs, animation,
 export/publishing, advanced variants, CMS/data binding, components, broad

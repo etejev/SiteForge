@@ -12,12 +12,33 @@ None.
 
 ## DONE
 
+- [x] `SF-AUTHORING-021` Static page management and route editing (locally verified).
+  - Requirements: bounded `SF-0303-001`–`008`, supporting `SF-0306-005`,
+    `SF-0307-001`–`005` and `SF-1102-001`–`005`. OD-003 special-page roles
+    and ADR-0003/0004 identity/history invariants remain authoritative.
+  - Plan: extend existing page commands with validated route/reorder edits;
+    prepare identity-gated create/duplicate/delete operations; expose native
+    Pages controls with drafts and deletion impact; verify links, exact history,
+    packages and focused actual-app workflows before the final full gate.
+  - Preserve Home `/` and Not Found `/404`; ordinary pages start with only a
+    non-rendered root. Duplicate nodes get fresh identities; internal duplicate
+    links remap, outbound links and immutable resources remain shared.
+  - Exclusions: folders, CMS/dynamic routes, localization, redirects, role
+    reassignment, SEO, navigation templates, runtime navigation, export and
+    publishing. Normative modules remain Partial outside this bounded slice.
+  - Evidence: five focused model selectors and two new actual-app journeys
+    pass, plus the affected prior Button/Link compact target journey. Seven
+    retained window images were reviewed. Final `./sf verify` passed 404
+    unit/integration + 54 UI = 458 tests, zero failures. Hosted verification
+    follows the verified commit and is not inferred from local results. See
+    `docs/evidence/SF-AUTHORING-021-STATIC-PAGES.md`.
+
 - [x] `SF-AUTHORING-020` Implement Button and Link authoring.
   - Active evidence: `docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md`.
     Focused model, migration, history, glyph and all three new UI journeys
     passed; maximized/compact visuals were reviewed. Final local gate passed
-    399 unit/integration + 52 UI = 451 tests, zero failures. Hosted verification
-    follows this locally verified commit; no hosted result is inferred.
+    399 unit/integration + 52 UI = 451 tests, zero failures. Actions
+    `34000476753` passed the same 451 tests for pushed checkpoint `85615b9`.
   - Requirements: bounded evidence for `SF-0806-001` through
     `SF-0806-008` and `SF-1102-001` through `SF-1102-008`, plus the existing
     insertion, content, typography, style, responsive, persistence, history,

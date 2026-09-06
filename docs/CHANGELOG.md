@@ -4,6 +4,11 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
+- Added native static page creation, rename, route editing, duplication,
+  confirmed deletion and accessible reordering. Stable internal targets survive
+  metadata edits; duplicate internal links remap, missing targets remain
+  repairable, and page/guide history is atomic. Home and Not Found stay protected.
+
 - Added Button/Link insertion and native Content/Interactions controls for
   labels, stable page/section targets and validated HTTP(S) URLs. Reset,
   cancellation, mixed applicability, exact undo/redo and package persistence

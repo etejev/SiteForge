@@ -63,6 +63,9 @@ struct WorkspaceShellView: View {
             }
         }
         .navigationTitle(state.lifecycle.title)
+        .sheet(item: $state.pageEditorRequest) { request in
+            PageEditorSheet(state: state, request: request)
+        }
         .toolbar {
             WorkspaceToolbar(state: state)
         }
@@ -341,6 +344,14 @@ private struct NavigatorView: View {
             )
 
             if state.navigatorTab == .pages {
+                Button("New Page…", systemImage: "doc.badge.plus") { state.presentPageEditor(.create) }
+                    .disabled(!state.pageEditingIsAvailable)
+                    .accessibilityIdentifier("navigator.pages.new")
+                if let page = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }) {
+                    Menu("Page Actions") { PageActionButtons(state: state, page: page) }
+                        .disabled(!state.pageEditingIsAvailable)
+                        .accessibilityIdentifier("navigator.pages.actions")
+                }
                 ScrollView {
                     LazyVStack(spacing: 4) {
                         ForEach(state.pages) { page in
@@ -881,6 +892,85 @@ private struct NavigatorPageRow: View {
         .accessibilityHint("Use Up and Down Arrow to navigate pages")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier(NavigatorPageAccessibility.identifier(for: page.id))
+        .contextMenu {
+            PageActionButtons(state: state, page: page)
+                .disabled(!state.pageEditingIsAvailable)
+        }
+    }
+}
+
+struct PageEditorRequest: Identifiable {
+    enum Mode { case create, rename, route, delete }
+    let id = UUID()
+    let identity: PageEditIdentity
+    let mode: Mode
+    let name: String
+    let route: String
+    let inboundLinks: Int
+    let objects: Int
+}
+
+private struct PageActionButtons: View {
+    @ObservedObject var state: WorkspaceShellState
+    let page: DocumentPage
+    var body: some View {
+        Button("Rename Page…") { state.presentPageEditor(.rename, pageID: page.id) }
+        Button("Edit Route…") { state.presentPageEditor(.route, pageID: page.id) }
+            .disabled(page.role != .standard)
+        Button("Duplicate Page") { state.performPageEdit(.duplicate, pageID: page.id) }
+        let index = state.pages.firstIndex(where: { $0.id == page.id }) ?? 0
+        Button("Move Page Earlier") { state.performPageEdit(.move(index - 1), pageID: page.id) }
+            .disabled(index == 0)
+        Button("Move Page Later") { state.performPageEdit(.move(index + 1), pageID: page.id) }
+            .disabled(index + 1 >= state.pages.count)
+        Button("Delete Page…", role: .destructive) { state.presentPageEditor(.delete, pageID: page.id) }
+            .disabled(page.role != .standard || state.pages.count == 1)
+    }
+}
+
+private struct PageEditorSheet: View {
+    @ObservedObject var state: WorkspaceShellState
+    let request: PageEditorRequest
+    @State private var name = ""
+    @State private var route = ""
+    @State private var error = ""
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(request.mode == .delete ? "Delete Page" : "Page Details").font(.headline)
+            if request.mode == .delete {
+                Text("Delete \(request.name) and \(request.objects) authored objects? \(request.inboundLinks) incoming links will retain missing targets for repair. Undo restores the page and its links.")
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                if request.mode != .route {
+                    Text("Page name").font(.caption)
+                    TextField("Page name", text: $name).accessibilityIdentifier("page.editor.name")
+                }
+                if request.mode != .rename {
+                    Text("Route").font(.caption)
+                    TextField("Route", text: $route).accessibilityIdentifier("page.editor.route")
+                    Text("Static path, for example /about/team. Home and /404 are protected.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if !error.isEmpty { Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("page.editor.validation") }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(request.mode == .delete ? "Delete Page" : "Apply", role: request.mode == .delete ? .destructive : nil) {
+                    let edit: PageEdit = switch request.mode {
+                    case .create: .create(name: name, route: route)
+                    case .rename: .rename(name)
+                    case .route: .route(route)
+                    case .delete: .delete
+                    }
+                    if state.commitPageEdit(edit, identity: request.identity) { dismiss() }
+                    else { error = state.pageAnnouncement }
+                }.keyboardShortcut(.defaultAction).accessibilityIdentifier("page.editor.apply")
+            }
+        }.padding(20).frame(width: 360)
+            .onAppear { name = request.name; route = request.route }
     }
 }
 
@@ -1972,7 +2062,7 @@ private struct ControlInspectorFieldsView: View {
                     if kind == "page", let id = PageID(uuidString: $0) { submit(.target(.page(id)), provenance: "picker") }
                 })) {
                     Text("Choose a page").tag("")
-                    ForEach(document.pages, id: \.id) { Text($0.name).tag($0.id.description) }
+                    ForEach(document.pages, id: \.id) { Text("\($0.name) — \($0.route.rawValue)").tag($0.id.description) }
                     if !page.isEmpty && !document.pages.contains(where: { $0.id.description == page }) { Text("Missing page").tag(page) }
                 }.accessibilityIdentifier("inspector.interactions.link.page")
             }
@@ -3890,6 +3980,17 @@ struct SiteForgeCommands: Commands {
                 commandState?.importImages(insertFirst: true)
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
+        }
+
+        CommandMenu("Page") {
+            Button("New Page…") { commandState?.presentPageEditor(.create) }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(commandState?.pageEditingIsAvailable != true)
+            if let state = commandState,
+               let page = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }) {
+                PageActionButtons(state: state, page: page)
+                    .disabled(!state.pageEditingIsAvailable)
+            }
         }
 
         CommandMenu("Selection") {

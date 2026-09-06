@@ -2,13 +2,21 @@
 
 Last updated: 2026-09-05.
 
+SF-AUTHORING-021 is locally verified: native static page creation, name/route
+editing, duplicate/delete/reorder and live link targets share canonical
+transactions and preserved history. Five focused model and two new UI selectors,
+plus the affected prior compact journey, passed. Seven window images were
+reviewed. Final verification passed 404 non-UI + 54 UI = 458 tests, zero
+failures. Hosted acceptance follows the commit. SF-0303 remains
+Partial; see `docs/evidence/SF-AUTHORING-021-STATIC-PAGES.md`.
+
 SF-AUTHORING-020 is locally verified: schema-v6 Button/Link nodes, native label
 and typed internal/external target editing, immutable glyph rendering,
 atomic subset edits, missing-target preservation and exact history/package
 round trips are implemented. All three new actual-app journeys and reviewed
 compact/internal-target visuals pass. Final `./sf verify` passed 399 non-UI
-and 52 UI tests (451 total), zero failures. Hosted verification follows the
-commit. SF-0806 and SF-1102 remain Partial. See
+and 52 UI tests (451 total), zero failures. Actions `34000476753` passed
+the same hosted totals for `85615b9`. SF-0806 and SF-1102 remain Partial. See
 `docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md` for exact scope and evidence.
 
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains

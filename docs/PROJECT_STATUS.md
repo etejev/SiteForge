@@ -2,13 +2,19 @@
 
 Last updated: 2026-09-05.
 
-Current feature: SF-AUTHORING-020 Button/Link local authoring is locally verified.
+Current checkpoint: SF-AUTHORING-021 static page management, locally verified.
+The authorized feature branch preserves the preceding Button/Link checkpoint;
+focused evidence and seven reviewed window images pass. Final `./sf verify`
+passed 404 unit/integration + 54 UI tests (458/458). The authorized commit,
+push and hosted verification complete the delivery boundary.
+
+Preceding feature: SF-AUTHORING-020 Button/Link local authoring is locally verified.
 The prior hosted-green SF-AUTHORING-019 repair is preserved. New controls
 author labels and navigation intent without following links in the editor;
 runtime navigation, embeds and publishing remain deferred. Focused evidence
 is recorded in `docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md`; the new
 feature passed `./sf verify`: 399 unit/integration + 52 UI = 451 tests.
-Hosted acceptance is checked after this commit and is not inferred from local results.
+Actions `34000476753` passed the same hosted totals for checkpoint `85615b9`.
 
 Final native Save follow-up is complete: recovery autosave no longer disables
 the durable Save command during menu tracking. The existing cancel/drain
