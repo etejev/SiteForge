@@ -728,7 +728,7 @@ final class CanvasRendererTests: XCTestCase {
             case .section: [("layout.container.kind", .string("section")), ("layout.padding", .number(64)), ("layout.axis", .string("vertical"))]
             case .stack: [("layout.container.kind", .string("stack")), ("layout.axis", .string("horizontal")), ("layout.padding", .number(20)), ("layout.gap", .number(12)), ("layout.align", .string("center"))]
             case .grid: [("layout.container.kind", .string("grid")), ("layout.padding", .number(16)), ("layout.gap", .number(8)), ("layout.grid.columns", .number(2)), ("layout.grid.placement", .string("row-major"))]
-            case .frame, .text, .image, .component: []
+            case .frame, .text, .image, .button, .link, .component: []
             }
             return values.map { .init(key: .init(rawValue: $0.0), value: $0.1, origin: .authored) }
         }

@@ -1,3 +1,4 @@
+import Combine
 import Darwin
 import XCTest
 @testable import SiteForge
@@ -348,7 +349,7 @@ final class InsertionModelTests: XCTestCase {
             try session.execute(try prepare(kind, fixture: current, nodeID: id).documentCommand)
         }
         let bytes = try DocumentSerializer.encode(session.document)
-        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":5"))
+        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":6"))
         let reopened = try DocumentSerializer.decode(bytes)
         XCTAssertEqual(reopened, session.document)
         XCTAssertEqual(reopened.pages[0].nodes.first { $0.id == sectionID }?.kind, .section)
@@ -454,9 +455,17 @@ final class InsertionModelTests: XCTestCase {
 
         let textState = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank()))
         textState.resizeViewport(to: .init(width: 900, height: 600), pixelRatio: 2)
-        for _ in 0..<200 where textState.canvasRenderPlan == nil { await Task.yield() }
+        // Await the actual worker publication, not a scheduler-dependent
+        // number of yields that can finish before scene preparation starts.
+        let ready = expectation(description: "Text scene ready")
+        let readiness = textState.$canvasRenderPlan.compactMap { $0 }.first().sink { _ in ready.fulfill() }
+        await fulfillment(of: [ready], timeout: 5)
+        XCTAssertTrue(textState.insertionAvailability(.text).isEnabled)
+        let adopted = expectation(description: "Inserted Text selected")
+        let selection = textState.$selectionState.filter { $0.primaryID != nil }.first().sink { _ in adopted.fulfill() }
         textState.performDefaultInsertion(.text, provenance: .accessibility)
-        for _ in 0..<200 where textState.canvasRenderPlan?.authoredObjects.count != 1 { await Task.yield() }
+        await fulfillment(of: [adopted], timeout: 5)
+        withExtendedLifetime((readiness, selection)) {}
         let text = try XCTUnwrap(textState.selectionState.primaryID)
         XCTAssertEqual(textState.canvasRenderPlan?.authoredObjects.map(\.id), [text])
         XCTAssertEqual(textState.canvasRenderPlan?.identity.revision, textState.documentSession.document.revision)
@@ -705,6 +714,8 @@ final class InsertionModelTests: XCTestCase {
         case .text: return .text(.init(identity: identity, nodeID: nodeID, parentID: parentID ?? fixture.rootID, index: index, geometry: geometry, text: text, provenance: provenance))
         case .section, .stack, .grid:
             return .container(.init(kind: kind, identity: identity, nodeID: nodeID, parentID: parentID ?? fixture.rootID, index: index, geometry: geometry, provenance: provenance))
+        case .button, .link:
+            return .control(.init(kind: kind, identity: identity, nodeID: nodeID, parentID: parentID ?? fixture.rootID, index: index, geometry: geometry, provenance: provenance))
         case .image:
             return .image(.init(
                 identity: identity,

@@ -2105,7 +2105,7 @@ private func applyStructuralDefaults(for kind: NodeKind, to node: inout Document
         values = [("layout.container.kind", .string("stack")), ("layout.axis", .string("vertical")), ("layout.padding", .number(24)), ("layout.gap", .number(24)), ("layout.align", .string("start"))]
     case .grid:
         values = [("layout.container.kind", .string("grid")), ("layout.padding", .number(24)), ("layout.gap", .number(24)), ("layout.grid.columns", .number(2)), ("layout.grid.placement", .string("row-major"))]
-    case .frame, .text, .image, .component:
+    case .frame, .text, .image, .button, .link, .component:
         values = []
     }
     node.properties.append(contentsOf: values.map { key, value in

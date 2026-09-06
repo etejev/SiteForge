@@ -8,7 +8,16 @@ None.
 
 ## IN PROGRESS
 
-- [ ] `SF-AUTHORING-020` Implement Button and Link authoring.
+None.
+
+## DONE
+
+- [x] `SF-AUTHORING-020` Implement Button and Link authoring.
+  - Active evidence: `docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md`.
+    Focused model, migration, history, glyph and all three new UI journeys
+    passed; maximized/compact visuals were reviewed. Final local gate passed
+    399 unit/integration + 52 UI = 451 tests, zero failures. Hosted verification
+    follows this locally verified commit; no hosted result is inferred.
   - Requirements: bounded evidence for `SF-0806-001` through
     `SF-0806-008` and `SF-1102-001` through `SF-1102-008`, plus the existing
     insertion, content, typography, style, responsive, persistence, history,
@@ -26,9 +35,6 @@ None.
     multi-action graphs, animation, export/publishing, advanced variants,
     CMS/data binding, components, broad performance/accessibility matrices,
     and release acceptance.
-
-
-## DONE
 
 - [x] `SF-AUTHORING-019` Final native Save availability follow-up.
   - Requirements: `SF-0301-005`, `SF-0306-003`–`005`, supporting

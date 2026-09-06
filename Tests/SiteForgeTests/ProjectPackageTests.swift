@@ -57,7 +57,7 @@ final class ProjectPackageTests: XCTestCase {
         let manifest = try XCTUnwrap(members.first(where: { $0.path == "manifest.json" }))
         let text = String(decoding: manifest.data, as: UTF8.self)
         XCTAssertTrue(text.contains("\"packageVersion\":1"))
-        XCTAssertTrue(text.contains("\"documentSchemaVersion\":5"))
+        XCTAssertTrue(text.contains("\"documentSchemaVersion\":6"))
         XCTAssertTrue(text.contains(projectID.description))
         XCTAssertTrue(text.contains("\"sha256\""))
     }
@@ -1316,7 +1316,7 @@ private func applyStructuralDefaultsForPackageTest(kind: NodeKind, node: inout D
         [("layout.container.kind", .string("grid")), ("layout.padding", .number(24)),
          ("layout.gap", .number(24)), ("layout.grid.columns", .number(2)),
          ("layout.grid.placement", .string("row-major"))]
-    case .frame, .text, .image, .component: []
+    case .frame, .text, .image, .button, .link, .component: []
     }
     node.properties.append(contentsOf: values.map {
         NodeProperty(key: .init(rawValue: $0.0), value: $0.1, origin: .defaulted)

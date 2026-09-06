@@ -346,7 +346,8 @@ private extension PersistedHistoryStore {
         for entry in all {
             try cancellation.check()
             let (expectedResultRevision, overflow) = entry.parentRevision.addingReportingOverflow(1)
-            guard !overflow, entry.resultRevision == expectedResultRevision else {
+            guard !overflow, entry.resultRevision == expectedResultRevision,
+                  entry.resultRevision <= snapshot.documentRevision else {
                 throw PersistedHistoryError.revisionMismatch
             }
             guard entry.commandName == entry.forward.name,
@@ -356,7 +357,10 @@ private extension PersistedHistoryStore {
         }
 
         let logicalOrder = snapshot.undoEntries + snapshot.redoEntries.reversed()
-        for pair in zip(logicalOrder, logicalOrder.dropFirst()) where pair.0.resultRevision != pair.1.parentRevision {
+        // Undo/redo advances the document revision without adding a new
+        // authored history entry. A later branch therefore has legitimate
+        // revision gaps; overlapping or reversed entries remain invalid.
+        for pair in zip(logicalOrder, logicalOrder.dropFirst()) where pair.0.resultRevision > pair.1.parentRevision {
             try cancellation.check()
             throw PersistedHistoryError.reorderedTransactions
         }

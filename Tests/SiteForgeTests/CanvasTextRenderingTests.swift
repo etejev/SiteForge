@@ -4,6 +4,31 @@ import XCTest
 
 @MainActor
 final class CanvasTextRenderingTests: XCTestCase {
+    // SF-1102-001/006: Button surfaces must not suppress their authored text
+    // subtree. Link and Button glyphs use the same upright layout at zoom.
+    func testControlGlyphPixelsRemainVisibleWithinAuthoredBounds() throws {
+        for scale in [1.0, 2.0] {
+            for zoom in [0.25, 1.0, 8.0] {
+                let viewport = try CanvasViewportState(
+                    worldOrigin: .init(x: 0, y: 0), viewportSize: .init(width: 1500, height: 500), zoom: CanvasZoom(zoom),
+                    pixelRatio: CanvasPixelRatio(scale))
+                for style in [CanvasPaintStyle.frameSurface, .textPlaceholder] {
+                    let frame = WorldRect(origin: .init(x: 4, y: 4), size: .init(width: 160, height: 44))
+                    let object = CanvasRenderObject(id: NodeID(), frame: frame, clipRect: nil,
+                        paintOrder: 0, style: style, isVisible: true, accessibilityLabel: "Control",
+                        plainText: "Continue", fillRGBA: style == .frameSurface ? [0.92, 0.92, 0.92, 1] : nil)
+                    let layer = try XCTUnwrap(CanvasAuthoredTextLayerFactory.makeLayer(for: object, viewport: viewport, contentsScale: scale))
+                    if style == .frameSurface {
+                        XCTAssertEqual(layer.foregroundColor, NSColor.black.cgColor)
+                    }
+                    let pixels = rasterizedTextLayerBytes(layer, width: 1500, height: 500)
+                    let changed = changedPixels(from: Data(repeating: 0, count: pixels.count), to: pixels, width: 1500)
+                    XCTAssertFalse(changed.isEmpty, "An authored control label must paint glyphs, including on a filled surface")
+                    XCTAssertTrue(changed.allSatisfy { layer.frame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: $0.x, y: $0.y)) })
+                }
+            }
+        }
+    }
     // SF-0405-006, SF-0406-001, SF-0406-002, SF-0406-005 — structural names
     // are tile-rasterized. Plain text intentionally composes in its own
     // non-tiled authored subtree, covered by the shared layout and app tests.

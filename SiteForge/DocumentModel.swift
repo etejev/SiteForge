@@ -543,6 +543,13 @@ enum CanonicalLinkContext: String, CaseIterable, Sendable {
     case same, new
 }
 
+extension DocumentNode {
+    var controlLabel: String { insertionStringProperty(CanonicalLinkTarget.labelKey) ?? kind.rawValue.capitalized }
+    var controlContext: CanonicalLinkContext {
+        insertionStringProperty(CanonicalLinkTarget.namespace + "context").flatMap(CanonicalLinkContext.init(rawValue:)) ?? .same
+    }
+}
+
 enum CanonicalLinkTarget: Equatable, Sendable {
     case none
     case page(PageID)
@@ -553,16 +560,17 @@ enum CanonicalLinkTarget: Equatable, Sendable {
     static let labelKey = "content.control.v1.label"
 
     static func validate(_ node: DocumentNode) throws {
-        let owned = node.properties.filter { $0.key.rawValue.hasPrefix(namespace) || $0.key.rawValue.hasPrefix("content.control.") }
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix("interaction.link.") || $0.key.rawValue.hasPrefix("content.control.") }
         guard node.kind.isLinkControl else {
             guard owned.isEmpty else { throw CanonicalLinkError.invalidTarget }
             return
         }
         let allowed = Set(["kind", "pageID", "nodeID", "url", "context"].map { namespace + $0 } + [labelKey])
-        guard owned.allSatisfy({ allowed.contains($0.key.rawValue) }),
-              let label = node.insertionStringProperty(labelKey),
-              label.utf8.count <= 4096,
-              label.rangeOfCharacter(from: .controlCharacters) == nil else { throw CanonicalLinkError.invalidLabel }
+        guard owned.allSatisfy({ allowed.contains($0.key.rawValue) }) else { throw CanonicalLinkError.invalidTarget }
+        if let property = node.insertionProperty(labelKey) {
+            guard case .string(let label) = property.value, label.utf8.count <= 4096,
+                  label.rangeOfCharacter(from: .controlCharacters) == nil else { throw CanonicalLinkError.invalidLabel }
+        }
         if let context = node.insertionProperty(namespace + "context") {
             guard case .string(let value) = context.value, CanonicalLinkContext(rawValue: value) != nil
             else { throw CanonicalLinkError.invalidTarget }
@@ -1090,7 +1098,7 @@ enum CanonicalResponsiveVisibilityNamespaceValidator {
     static func validate(_ node: DocumentNode) throws {
         let properties = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
         guard !properties.isEmpty else { return }
-        guard [.frame, .text, .section, .stack, .grid].contains(node.kind) else {
+        guard [.frame, .text, .section, .stack, .grid, .button, .link].contains(node.kind) else {
             throw ModelValidationError.invalidResponsiveVisibilityState
         }
         for property in properties {
@@ -1106,7 +1114,7 @@ enum CanonicalResponsiveVisibilityNamespaceValidator {
 /// adoption; absence remains the deterministic default.
 enum CanonicalBoxStyleNamespaceValidator {
     static let root = "style.box.v1."
-    private static let supportedKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .section, .stack, .grid, .button]
     private static let borderKeys: Set<String> = [
         "border.width", "border.style", "border.color.red", "border.color.green",
         "border.color.blue", "border.color.alpha",
@@ -1247,7 +1255,7 @@ enum CanonicalImageNamespaceValidator {
 enum CanonicalFillLayerNamespaceValidator {
     static let root = "style.fill.layers.v1"
     static let orderKey = "style.fill.layers.v1.order"
-    private static let supportedKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .section, .stack, .grid, .button]
 
     static func validate(_ node: DocumentNode) throws {
         let owned = node.properties.filter { owns($0.key.rawValue) }
@@ -1609,9 +1617,8 @@ enum DocumentSerializationError: Error, Equatable, LocalizedError {
 }
 
 enum DocumentSerializer {
-    // Schema 5 adds the canonical image-asset catalogue and versioned Image
-    // reference namespace. Schema 4 remains an immutable historical shape and
-    // is re-emitted as v5 on the next deterministic save.
+    // Schema 6 adds Button/Link kinds and their closed v1 property namespace.
+    // Historical schemas cannot acquire these kinds by permissive decoding.
     static let currentSchemaVersion = 6
     static let minimumSupportedSchemaVersion = 1
 
@@ -1923,6 +1930,10 @@ enum DocumentSerializer {
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
         try checkpoint()
+        if header.schemaVersion < 6,
+           document.pages.contains(where: { $0.nodes.contains { $0.kind.isLinkControl } }) {
+            throw DocumentSerializationError.malformedInput
+        }
         do {
             try document.validate(checkpoint: checkpoint)
         } catch let error as ModelValidationError {

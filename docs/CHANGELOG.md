@@ -4,6 +4,14 @@ This file records user-visible behavior during development. It is not a substitu
 
 ## Unreleased
 
+- Added Button/Link insertion and native Content/Interactions controls for
+  labels, stable page/section targets and validated HTTP(S) URLs. Reset,
+  cancellation, mixed applicability, exact undo/redo and package persistence
+  reuse the canonical transaction path. Editor selection never navigates.
+- Corrected Button label contrast, native field clipping and duplicate
+  end-edit callbacks. History recovery now accepts valid revision gaps caused
+  by undo/redo branching while retaining ordering and inverse validation.
+
 - Kept native Save available during recovery autosave. Manual Save uses the
   existing cancellation/drain boundary and still disables when durably clean
   or already saving. No persistence assertion or XCTest wait was relaxed.

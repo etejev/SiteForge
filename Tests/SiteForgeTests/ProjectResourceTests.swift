@@ -538,7 +538,7 @@ final class ProjectResourceTests: XCTestCase {
         legacyObject["document"] = legacyDocument
         let migrated = try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacyObject))
         XCTAssertTrue(migrated.imageAssets.isEmpty)
-        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":5"))
+        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":6"))
     }
 
     func testImageInspectorRejectsInvalidStaleAndInapplicableEditsWithoutMutation() throws {

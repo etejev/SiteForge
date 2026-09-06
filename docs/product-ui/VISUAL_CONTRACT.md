@@ -1,5 +1,17 @@
 # SiteForge Visual Contract
 
+## Button and Link authoring (SF-AUTHORING-020)
+
+Button and Link are real Elements and native Insert actions. Content edits
+their labels; Interactions edits stable page/section or HTTP(S) navigation
+intent. These actions never navigate in the editor. Unsupported selections
+receive an explicit unavailable explanation; mixed values are not borrowed
+from the primary node. Native fields retain readable bezels inside the
+Inspector scroll viewport. Button text uses contrast resolved from its fill
+snapshot; label layout shares the canonical text geometry without offsets.
+Separately authored objects may intentionally overlap, but visual evidence
+must position them through real Layout controls so both can be inspected.
+
 ## Purpose and scope
 
 This is the source of truth for SiteForge’s final-product visual language. It

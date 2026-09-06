@@ -2,6 +2,14 @@
 
 Last updated: 2026-09-05.
 
+Current feature: SF-AUTHORING-020 Button/Link local authoring is locally verified.
+The prior hosted-green SF-AUTHORING-019 repair is preserved. New controls
+author labels and navigation intent without following links in the editor;
+runtime navigation, embeds and publishing remain deferred. Focused evidence
+is recorded in `docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md`; the new
+feature passed `./sf verify`: 399 unit/integration + 52 UI = 451 tests.
+Hosted acceptance is checked after this commit and is not inferred from local results.
+
 Final native Save follow-up is complete: recovery autosave no longer disables
 the durable Save command during menu tracking. The existing cancel/drain
 operation remains authoritative. Both focused checks passed; Actions

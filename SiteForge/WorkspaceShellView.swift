@@ -566,7 +566,7 @@ private struct ElementCatalogRow: View {
             // Structural catalogue rows have a useful non-pointer equivalent:
             // they commit one validated default insertion. Frame/Text retain
             // their established tool-arming workflow for canvas placement.
-            if let kind = item.insertionKind, [.section, .stack, .grid].contains(kind) {
+            if let kind = item.insertionKind, [.section, .stack, .grid, .button, .link].contains(kind) {
                 state.performDefaultInsertion(kind, provenance: .accessibility)
             } else {
                 state.selectTool(tool)
@@ -1881,6 +1881,166 @@ private final class FocusableViewportPresetPopUpButton: NSPopUpButton {
     }
 }
 
+private struct ControlInspectorFieldsView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let interactions: Bool
+    @State private var label = ""
+    @State private var url = ""
+    @State private var kind = "none"
+    @State private var page = ""
+    @State private var section = ""
+    @State private var dirty = false
+    @State private var identity: ImageInspectorOperationIdentity?
+    @State private var message = ""
+    @FocusState private var field: String?
+    private var nodes: [DocumentNode] { state.selectedLinkControls }
+    private var document: CanonicalDocument { state.documentSession.document }
+    private var target: CanonicalLinkTarget? {
+        let values = nodes.compactMap { try? CanonicalLinkTarget.resolve($0) }
+        guard let first = values.first, values.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+    private var mixedLabel: Bool { Set(nodes.map(\.controlLabel)).count > 1 }
+    private var context: String {
+        let values = Set(nodes.map { $0.controlContext.rawValue })
+        return values.count == 1 ? values.first! : "mixed"
+    }
+    private var provenance: String {
+        let key = interactions ? CanonicalLinkTarget.namespace + "kind" : CanonicalLinkTarget.labelKey
+        let values = Set(nodes.map { $0.insertionProperty(key)?.origin.rawValue ?? "omitted" })
+        return values.count == 1 ? values.first!.capitalized : "Mixed provenance"
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if nodes.isEmpty {
+                ContentUnavailableView("Select a Button or Link", systemImage: "link",
+                    description: Text("These controls edit Button and Link labels and targets. Other selected objects are unchanged."))
+                    .accessibilityIdentifier(interactions ? "inspector.interactions.unavailable" : "inspector.content.unavailable")
+                    .accessibilityLabel("\(interactions ? "Interactions" : "Content") unavailable for this selection. Select a Button or Link.")
+            } else {
+                Text(interactions ? "Link Target" : "Control Label").font(.headline)
+                Text("\(nodes.count) applicable; \(state.selectionState.count - nodes.count) incompatible unchanged · \(provenance)")
+                    .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("inspector.control.applicability")
+                Group {
+                    if interactions { targetFields } else {
+                        TextField(mixedLabel ? "Mixed labels" : "Label", text: Binding(get: { label }, set: {
+                            if label != $0 { label = $0; dirty = true }
+                        }))
+                            .textFieldStyle(.roundedBorder).focused($field, equals: "label")
+                            .accessibilityLabel("Control label").accessibilityIdentifier("inspector.content.control.label")
+                            .onSubmit { commitDraft("return") }
+                        Button("Reset Label") { submit(.label(nil), provenance: "reset") }
+                            .accessibilityIdentifier("inspector.content.control.reset")
+                    }
+                }.disabled(!state.linkInspectorIsEnabled)
+                if !state.linkInspectorIsEnabled { Text("Show and unlock the selected controls before editing.").font(.caption) }
+                Text(message.isEmpty ? "Editor selection never follows authored navigation." : message)
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Control edit status").accessibilityValue(message)
+                    .accessibilityIdentifier("inspector.control.status")
+            }
+        }
+        // Native text-field bezels extend beyond their SwiftUI layout rect.
+        // Leave room inside the scroll viewport for the bezel and focus ring.
+        .padding(.horizontal, 4)
+        .onAppear { refresh() }
+        .onChange(of: state.canvasRenderPlan?.identity) { _, _ in if !dirty && field == nil { refresh() } }
+        .onChange(of: field) { old, new in
+            if old != nil && dirty { commitDraft("focus-loss") }
+            if new != nil { identity = state.linkInspectorIdentity }
+        }
+        .onExitCommand { dirty = false; refresh(); message = "Draft cancelled; committed properties are unchanged."; field = nil }
+    }
+    private var targetFields: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if target == nil { Text("Mixed targets").accessibilityIdentifier("inspector.interactions.link.mixed") }
+            if nodes.contains(where: { (try? CanonicalLinkTarget.resolve($0).isMissing(in: document)) == true }) {
+                Label("Target missing — choose a replacement or remove the target.", systemImage: "exclamationmark.triangle")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("inspector.interactions.link.missing")
+            }
+            Picker("Target type", selection: Binding(get: { kind }, set: {
+                kind = $0; page = ""; section = ""; dirty = true
+                if $0 == "none" { submit(.target(nil), provenance: "picker") }
+            })) {
+                Text("No target").tag("none"); Text("Page").tag("page"); Text("Section").tag("section")
+                Text("External HTTP(S)").tag("external")
+                if target == nil { Text("Mixed").tag("mixed") }
+            }.accessibilityIdentifier("inspector.interactions.link.type")
+            if kind == "page" || kind == "section" {
+                Picker("Page", selection: Binding(get: { page }, set: {
+                    page = $0; section = ""; dirty = true
+                    if kind == "page", let id = PageID(uuidString: $0) { submit(.target(.page(id)), provenance: "picker") }
+                })) {
+                    Text("Choose a page").tag("")
+                    ForEach(document.pages, id: \.id) { Text($0.name).tag($0.id.description) }
+                    if !page.isEmpty && !document.pages.contains(where: { $0.id.description == page }) { Text("Missing page").tag(page) }
+                }.accessibilityIdentifier("inspector.interactions.link.page")
+            }
+            if kind == "section" {
+                Picker("Section", selection: Binding(get: { section }, set: {
+                    section = $0
+                    if let pageID = PageID(uuidString: page), let nodeID = NodeID(uuidString: $0) {
+                        submit(.target(.section(pageID: pageID, nodeID: nodeID)), provenance: "picker")
+                    }
+                })) {
+                    Text("Choose a section").tag("")
+                    ForEach(document.pages.first(where: { $0.id.description == page })?.nodes.filter { $0.kind == .section } ?? [], id: \.id) {
+                        Text($0.name).tag($0.id.description)
+                    }
+                    if !section.isEmpty && !(document.pages.first(where: { $0.id.description == page })?.nodes.contains(where: { $0.id.description == section && $0.kind == .section }) ?? false) {
+                        Text("Missing section").tag(section)
+                    }
+                }.accessibilityIdentifier("inspector.interactions.link.section")
+            }
+            if kind == "external" {
+                TextField("https://example.com", text: Binding(get: { url }, set: {
+                    if url != $0 { url = $0; dirty = true }
+                }))
+                    .textFieldStyle(.roundedBorder).focused($field, equals: "url")
+                    .accessibilityLabel("External URL").accessibilityIdentifier("inspector.interactions.link.url")
+                    .onSubmit { commitDraft("return") }
+            }
+            Picker("Open in", selection: Binding(get: { context }, set: {
+                if let value = CanonicalLinkContext(rawValue: $0) { submit(.context(value), provenance: "picker") }
+            })) {
+                Text("Same context").tag("same"); Text("New context").tag("new")
+                if context == "mixed" { Text("Mixed").tag("mixed") }
+            }.accessibilityIdentifier("inspector.interactions.link.context")
+            Button("Remove Target") { submit(.target(nil), provenance: "reset") }.accessibilityIdentifier("inspector.interactions.link.remove")
+            Button("Reset Context") { submit(.context(nil), provenance: "reset") }.accessibilityIdentifier("inspector.interactions.link.resetContext")
+        }
+    }
+    private func refresh() {
+        identity = state.linkInspectorIdentity
+        label = mixedLabel ? "" : (nodes.first?.controlLabel ?? "")
+        page = ""; section = ""; url = ""
+        switch target {
+        case .none?: kind = "none"
+        case .page(let id)?: kind = "page"; page = id.description
+        case .section(let pageID, let nodeID)?: kind = "section"; page = pageID.description; section = nodeID.description
+        case .external(let value)?: kind = "external"; url = value
+        case nil: kind = "mixed"
+        }
+    }
+    private func submit(_ edit: LinkInspectorEdit, provenance: String) {
+        let wasDirty = dirty
+        dirty = false
+        if state.commitLinkEdit(edit, identity: state.linkInspectorIdentity, provenance: provenance) { field = nil; refresh() }
+        else { dirty = wasDirty }
+        message = state.lastLinkInspectorAnnouncement
+    }
+    private func commitDraft(_ provenance: String) {
+        guard dirty else { return }
+        let edit: LinkInspectorEdit = interactions ? .target(.external(url)) : .label(label)
+        // Canonical publication can synchronously end native editing. Consume
+        // this draft first so its focus-loss callback cannot commit it twice.
+        dirty = false
+        if state.commitLinkEdit(edit, identity: identity, provenance: provenance) { field = nil }
+        else { dirty = true }
+        message = state.lastLinkInspectorAnnouncement
+    }
+}
+
 private struct InspectorView: View {
     @ObservedObject var state: WorkspaceShellState
     let focus: FocusState<ShellFocus?>.Binding
@@ -1924,6 +2084,8 @@ private struct InspectorView: View {
                     description: Text("Select an object to inspect its \(state.inspectorTab.title.lowercased()) summary.")
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Nothing Selected. Select an object to inspect its \(state.inspectorTab.title.lowercased()).")
                 .accessibilityIdentifier("inspector.empty")
             } else {
                 ScrollView(.vertical) {
@@ -1991,7 +2153,8 @@ private struct InspectorView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.accessibility.summary")
         case .content, .interactions:
-            EmptyView()
+            ControlInspectorFieldsView(state: state, interactions: state.inspectorTab == .interactions)
+                .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ",") + state.inspectorTab.rawValue)
         }
     }
 
@@ -3394,7 +3557,7 @@ private struct StatusBarView: View {
                     .accessibilityLabel(artboardStatus)
                     .accessibilityIdentifier("status.selection.artboard")
             }
-            if state.selectedTool == .frame || state.selectedTool == .text {
+            if [.frame, .text, .button, .link].contains(state.selectedTool) {
                 Divider().frame(height: 14)
                 Label(state.insertionStatus, systemImage: "plus.square.dashed")
                     .accessibilityLabel(state.insertionStatus)
@@ -3695,6 +3858,12 @@ struct SiteForgeCommands: Commands {
             }
             .keyboardShortcut("t", modifiers: [.command, .shift])
             .disabled(commandState?.insertionAvailability(.text).isEnabled != true)
+            Button("Insert Button at Center") { commandState?.performDefaultInsertion(.button, provenance: .menu) }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+                .disabled(commandState?.insertionAvailability(.button).isEnabled != true)
+            Button("Insert Link at Center") { commandState?.performDefaultInsertion(.link, provenance: .menu) }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(commandState?.insertionAvailability(.link).isEnabled != true)
             Divider()
             Button("Insert Section at Center") {
                 commandState?.performDefaultInsertion(.section, provenance: .menu)
@@ -4039,7 +4208,7 @@ enum CanvasAuthoredTextLayerFactory {
         viewport: CanvasViewportState,
         contentsScale: CGFloat
     ) -> CATextLayer? {
-        guard object.style == .textPlaceholder,
+        guard object.plainText != nil,
               object.isVisible,
               object.opacity.isFinite,
               (0...1).contains(object.opacity),
@@ -4063,15 +4232,24 @@ enum CanvasAuthoredTextLayerFactory {
         layer.name = "renderer.authored-text.\(object.id.description)"
         layer.isGeometryFlipped = true
         layer.frame = layout.glyphBounds
+        // Button labels are authored text over a filled surface, not editor
+        // chrome. Resolve a readable neutral foreground from that same
+        // immutable fill snapshot instead of the application's dark-mode ink.
+        let foreground: NSColor
+        if object.style == .frameSurface,
+           let rgba = CanvasAuthoredFillCompositor.resolvedColor(layers: object.fillLayers, atNormalizedPoint: (0.5, 0.5)) ?? object.fillRGBA,
+           rgba.count == 4, rgba[3] >= 0.5 {
+            foreground = 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2] > 0.5 ? .black : .white
+        } else { foreground = .labelColor }
         layer.string = NSAttributedString(string: text, attributes: [
             .font: layout.font,
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: foreground,
             .kern: layout.tracking,
             .paragraphStyle: layout.paragraphStyle,
         ])
         layer.font = layout.font
         layer.fontSize = layout.fontSize
-        layer.foregroundColor = NSColor.labelColor.cgColor
+        layer.foregroundColor = foreground.cgColor
         layer.opacity = Float(object.opacity)
         layer.alignmentMode = switch layout.alignment { case .center: .center; case .right: .right; default: .left }
         layer.truncationMode = .end
@@ -4767,7 +4945,7 @@ private final class NativeCanvasViewportView: NSView {
             tileLayer.setNeedsDisplay()
             contentContainer.addSublayer(tileLayer)
         }
-        for object in plan.authoredObjects where object.style == .textPlaceholder && object.isVisible {
+        for object in plan.authoredObjects where object.plainText != nil && object.isVisible {
             guard let textLayer = CanvasAuthoredTextLayerFactory.makeLayer(
                 for: object,
                 viewport: rasterViewport,

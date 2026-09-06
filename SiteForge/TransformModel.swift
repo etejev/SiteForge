@@ -114,7 +114,7 @@ enum DesignBoxStyleError: Error, LocalizedError, Equatable, Sendable {
 
 struct DesignBoxStyleCommandRegistry: Sendable {
     static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-0506-%03d", $0) })
-    static let applicableKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
+    static let applicableKinds: Set<NodeKind> = [.frame, .section, .stack, .grid, .button]
     static let namespace = "style.box.v1."
 
     static func resolvedStyle(for node: DocumentNode) -> CanonicalBoxStyle? {
@@ -280,7 +280,7 @@ struct TypographyCommandRegistry: Sendable {
     static let namespace = CanonicalTypography.namespace
 
     static func resolvedTypography(for node: DocumentNode) -> CanonicalTypography? {
-        guard node.kind == .text else { return nil }
+        guard node.kind.isTextual else { return nil }
         func string(_ suffix: String) -> String? { node.insertionStringProperty(namespace + suffix) }
         func number(_ suffix: String) -> Double? { node.insertionNumberProperty(namespace + suffix) }
         let fallback = CanonicalTypography.defaultValue
@@ -290,14 +290,14 @@ struct TypographyCommandRegistry: Sendable {
             size: number("size") ?? fallback.size,
             lineHeight: number("lineHeight") ?? fallback.lineHeight,
             tracking: number("tracking") ?? fallback.tracking,
-            alignment: string("alignment").flatMap(CanonicalTextAlignment.init(rawValue:)) ?? fallback.alignment
+            alignment: string("alignment").flatMap(CanonicalTextAlignment.init(rawValue:)) ?? (node.kind == .button ? .center : fallback.alignment)
         )
         return value.isValid ? value : nil
     }
 
     static func selectionValue(nodes: [DocumentNode]) -> TypographyInspectorValue {
         guard !nodes.isEmpty else { return .unavailable("Select plain Text to edit typography.") }
-        let applicable = nodes.filter { $0.kind == .text }
+        let applicable = nodes.filter { $0.kind.isTextual }
         guard !applicable.isEmpty else { return .unavailable("Typography applies only to plain Text in this milestone.") }
         let values = applicable.compactMap(resolvedTypography)
         guard values.count == applicable.count, let first = values.first,
@@ -329,7 +329,7 @@ struct TypographyCommandRegistry: Sendable {
             guard context.availableNodeIDs.contains(id), !node.selectionBooleanProperty("hidden"), !node.selectionBooleanProperty("locked") else {
                 throw TypographyCommandError.unavailable("A selected object is unavailable, hidden, or locked.")
             }
-            guard node.kind == .text, var style = Self.resolvedTypography(for: node) else {
+            guard node.kind.isTextual, var style = Self.resolvedTypography(for: node) else {
                 skipped.append(id); reasons[id] = "This object kind does not support typography."; continue
             }
             if case .reset = command.edit {
@@ -478,7 +478,7 @@ enum CanonicalFillLayerDecodingError: Error, Equatable, Sendable {
 enum CanonicalFillLayerCodec {
     static let namespaceRoot = "style.fill.layers.v1"
     static let orderKey = "style.fill.layers.v1.order"
-    private static let supportedKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .section, .stack, .grid, .button]
 
     static func layers(for node: DocumentNode) -> [CanonicalFillLayer]? {
         do {
@@ -881,7 +881,7 @@ enum DesignInspectorError: Error, LocalizedError, Equatable, Sendable {
 
 struct DesignInspectorCommandRegistry: Sendable {
     static let requirementIDs: Set<String> = ["SF-0508-001", "SF-0508-002", "SF-0508-003", "SF-0508-004", "SF-0508-005", "SF-0508-006", "SF-0508-007", "SF-0508-008"]
-    static let fillKinds: Set<NodeKind> = [.frame, .section, .stack, .grid]
+    static let fillKinds: Set<NodeKind> = [.frame, .section, .stack, .grid, .button]
 
     /// The v5 layer representation wins whenever its order key is present.
     /// This prevents a migrated document from consulting legacy RGBA fields as
@@ -935,7 +935,7 @@ struct DesignInspectorCommandRegistry: Sendable {
     }
 
     static func resolvedOpacity(for node: DocumentNode) -> (Double, PropertyOrigin)? {
-        guard fillKinds.contains(node.kind) || node.kind == .text else { return nil }
+        guard fillKinds.contains(node.kind) || node.kind.isTextual else { return nil }
         if let value = node.insertionNumberProperty("style.opacity"), value.isFinite, (0...1).contains(value) {
             return (value, node.insertionProperty("style.opacity")?.origin ?? .authored)
         }
@@ -1350,7 +1350,7 @@ struct GeometryInspectorCommandRegistry: Sendable {
         "SF-0602-005", "SF-0602-006", "SF-0602-008",
     ]
 
-    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link]
 
     static func supportsFixedGeometry(_ kind: NodeKind) -> Bool {
         supportedKinds.contains(kind)
@@ -2674,6 +2674,31 @@ enum LinkInspectorEdit: Equatable, Sendable {
     case context(CanonicalLinkContext?)
 }
 
+enum LinkInspectorError: Error, Equatable, LocalizedError, Sendable {
+    case cancelled, emptySelection, staleDocument, staleRevision, staleRenderer,
+         pageUnavailable, selectionMismatch, duplicateTarget, missingTarget,
+         lockedTarget, hiddenTarget, unavailableTarget, noApplicableTarget, revisionExhausted
+    var errorDescription: String? {
+        switch self {
+        case .cancelled: "Draft cancelled; committed properties are unchanged."
+        case .emptySelection, .noApplicableTarget: "Select a Button or Link to edit its label and target."
+        case .lockedTarget: "Unlock the selected control before editing."
+        case .hiddenTarget, .unavailableTarget: "Show the selected control at this breakpoint before editing."
+        case .revisionExhausted: "The document revision cannot accept another edit."
+        default: "The document, selection, or renderer changed. Review the current control and try again."
+        }
+    }
+}
+
+struct LinkInspectorDiagnostic: Equatable, Sendable {
+    let requirementID: String
+    let operation: String
+    let provenance: String
+    let identifiers: [String]
+    let durationMilliseconds: Double
+    let succeeded: Bool
+}
+
 struct LinkInspectorCommandRegistry: Sendable {
     /// SF-0806-002/005, SF-1102-002/005. Existing property commands own the
     /// inverse, including removed property IDs and provenance.
@@ -2684,37 +2709,38 @@ struct LinkInspectorCommandRegistry: Sendable {
         context: TransformValidationContext,
         cancelled: Bool = false
     ) throws -> PreparedImageInspectorEdit {
-        if cancelled { throw ImageInspectorError.cancelled }
-        guard identity.documentID == document.id else { throw ImageInspectorError.staleDocument }
-        guard identity.revision == document.revision else { throw ImageInspectorError.staleRevision }
+        if cancelled { throw LinkInspectorError.cancelled }
+        guard identity.documentID == document.id else { throw LinkInspectorError.staleDocument }
+        guard identity.revision == document.revision else { throw LinkInspectorError.staleRevision }
         guard identity.sceneID == context.currentSceneID,
-              identity.rendererGeneration == context.rendererGeneration else { throw ImageInspectorError.staleRenderer }
+              identity.rendererGeneration == context.rendererGeneration else { throw LinkInspectorError.staleRenderer }
         guard context.isLifecycleAvailable else { throw TransformError.lifecycleUnavailable(context.lifecycleDisabledReason ?? "Editing is unavailable.") }
         guard identity.pageID == context.activePageID,
-              let page = document.pages.first(where: { $0.id == identity.pageID }) else { throw ImageInspectorError.pageUnavailable }
-        guard !identity.selectedNodeIDs.isEmpty else { throw ImageInspectorError.emptySelection }
-        guard Set(identity.selectedNodeIDs).count == identity.selectedNodeIDs.count else { throw ImageInspectorError.duplicateTarget }
-        guard identity.selectedNodeIDs == context.selectedNodeIDs else { throw ImageInspectorError.selectionMismatch }
-        guard document.revision < UInt64.max - 1 else { throw ImageInspectorError.revisionExhausted }
+              let page = document.pages.first(where: { $0.id == identity.pageID }) else { throw LinkInspectorError.pageUnavailable }
+        guard !identity.selectedNodeIDs.isEmpty else { throw LinkInspectorError.emptySelection }
+        guard Set(identity.selectedNodeIDs).count == identity.selectedNodeIDs.count else { throw LinkInspectorError.duplicateTarget }
+        guard identity.selectedNodeIDs == context.selectedNodeIDs else { throw LinkInspectorError.selectionMismatch }
+        guard document.revision < UInt64.max - 1 else { throw LinkInspectorError.revisionExhausted }
         if case .label(let label?) = edit {
             guard label.utf8.count <= 4096, label.rangeOfCharacter(from: .controlCharacters) == nil else { throw CanonicalLinkError.invalidLabel }
         }
         if case .target(.external(let url)) = edit, !CanonicalLinkTarget.validateExternal(url) { throw CanonicalLinkError.invalidTarget }
+        if case .target(let target?) = edit, target.isMissing(in: document) { throw CanonicalLinkError.invalidTarget }
         var commands: [DocumentCommand] = []
         var applicable: [NodeID] = [], skipped: [NodeID] = []
         for id in identity.selectedNodeIDs {
-            guard let node = page.nodes.first(where: { $0.id == id }) else { throw ImageInspectorError.missingTarget }
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw LinkInspectorError.missingTarget }
             guard node.kind.isLinkControl else { skipped.append(id); continue }
-            if node.insertionBooleanProperty("locked") { throw ImageInspectorError.lockedTarget }
-            if node.insertionBooleanProperty("hidden") { throw ImageInspectorError.hiddenTarget }
-            guard context.availableNodeIDs.contains(id) else { throw ImageInspectorError.unavailableTarget }
+            if node.insertionBooleanProperty("locked") { throw LinkInspectorError.lockedTarget }
+            if node.insertionBooleanProperty("hidden") { throw LinkInspectorError.hiddenTarget }
+            guard context.availableNodeIDs.contains(id) else { throw LinkInspectorError.unavailableTarget }
             applicable.append(id)
             let replacements: [(String, PropertyValue)]
             let owned: Set<String>
             let origin: PropertyOrigin
             switch edit {
             case .label(let label):
-                replacements = [(CanonicalLinkTarget.labelKey, .string(label ?? node.kind.rawValue.capitalized))]
+                replacements = label.map { [(CanonicalLinkTarget.labelKey, .string($0))] } ?? []
                 owned = [CanonicalLinkTarget.labelKey]
                 origin = label == nil ? .defaulted : .authored
             case .target(let target):
@@ -2737,7 +2763,7 @@ struct LinkInspectorCommandRegistry: Sendable {
                     property: .init(id: previous?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: origin))))
             }
         }
-        guard !applicable.isEmpty else { throw ImageInspectorError.noApplicableTarget }
+        guard !applicable.isEmpty else { throw LinkInspectorError.noApplicableTarget }
         guard !commands.isEmpty else { throw ContainerLayoutError.noChanges }
         let command: DocumentCommand = commands.count == 1 ? commands[0] : .batch(commands)
         guard CommandRegistry().availability(for: command, in: document).isEnabled else { throw CanonicalLinkError.invalidTarget }

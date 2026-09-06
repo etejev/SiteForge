@@ -2,6 +2,15 @@
 
 Last updated: 2026-09-05.
 
+SF-AUTHORING-020 is locally verified: schema-v6 Button/Link nodes, native label
+and typed internal/external target editing, immutable glyph rendering,
+atomic subset edits, missing-target preservation and exact history/package
+round trips are implemented. All three new actual-app journeys and reviewed
+compact/internal-target visuals pass. Final `./sf verify` passed 399 non-UI
+and 52 UI tests (451 total), zero failures. Hosted verification follows the
+commit. SF-0806 and SF-1102 remain Partial. See
+`docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md` for exact scope and evidence.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

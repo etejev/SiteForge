@@ -1,5 +1,13 @@
 # Codex Continuation Handoff
 
+Active work: SF-AUTHORING-020 on the preserved feature branch. Do not restart
+the completed SF-AUTHORING-019 repair. Compact/internal-target and separated
+object visuals are reviewed. Final verification passed 399 non-UI + 52 UI
+tests (451 total). Integrate/push this coherent checkpoint and inspect its
+hosted run before reporting delivery complete. The Button/Link registry,
+six model tests, control glyph test and actual-app journeys are implemented;
+see `docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md`. Do not start another feature.
+
 Final SF-AUTHORING-019 Save availability acceptance: production `f951df7` is
 hosted-green in Actions `33991018406` (392 unit/integration + 49 UI = 441,
 zero failures). Recovery autosave does not disable native Save; the existing

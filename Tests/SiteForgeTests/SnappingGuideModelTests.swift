@@ -100,7 +100,7 @@ final class SnappingGuideModelTests: XCTestCase {
         ]
         let bytes = try DocumentSerializer.encode(fixture.document)
         XCTAssertEqual(bytes, try DocumentSerializer.encode(fixture.document))
-        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":5"))
+        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":6"))
         XCTAssertEqual(try DocumentSerializer.decode(bytes), fixture.document)
         // Immutable schema-2 migration evidence lives in
         // `ProjectPackageTests`; this guide-specific test only proves the

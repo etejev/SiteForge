@@ -1,5 +1,7 @@
 # Legacy project-package goldens
 
+`schema-v5-blank-document.json` is an immutable canonical document emitted by the schema-v5 encoder at `70e7c42`. It exercises schema-v6 adaptation without introducing Button or Link nodes into historical data. Its document, page, and root identities must survive migration unchanged.
+
 These Base64 files are immutable byte-for-byte SiteForge package-v1 fixtures whose canonical payload uses a supported historical document schema. They were produced once from the documented `SFPKG001` container layout, not through the current production encoder, and are decoded to raw package bytes by the migration tests.
 
 | Fixture | Purpose | Decoded package SHA-256 |

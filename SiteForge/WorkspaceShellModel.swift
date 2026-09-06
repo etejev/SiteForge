@@ -108,6 +108,8 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .frame: "F"
         case .text: "T"
         case .image: "I"
+        case .button: "B"
+        case .link: "L"
         default: "No shortcut"
         }
     }
@@ -151,7 +153,9 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .available(.frame): "Arms the existing transactional Frame insertion path."
         case .available(.text): "Arms the existing transactional plain-Text insertion path."
         case .available(.image): "Inserts the selected local image asset through the transactional Image path."
-        case .available: "No other insertion capability is currently available."
+        case .available(.button): "Arms transactional Button insertion with an editable label and navigation intent."
+        case .available(.link): "Arms transactional Link insertion with an editable label and navigation intent."
+        case .available(.select), .available(.component): "No insertion capability is available for this tool."
         case .unavailable(let reason): reason
         }
     }
@@ -175,18 +179,8 @@ enum InspectorTab: String, CaseIterable, Identifiable {
 
     var availability: InspectorTabAvailability {
         switch self {
-        case .design, .layout, .accessibility:
+        case .design, .layout, .accessibility, .content, .interactions:
             .available
-        case .content:
-            .unavailable(
-                reason: "General content properties are not available yet.",
-                nextStep: "Edit supported plain text directly on the canvas; broader content editing requires a later canonical property-editing milestone."
-            )
-        case .interactions:
-            .unavailable(
-                reason: "Interaction authoring is not available yet.",
-                nextStep: "Interaction data will require a later canonical interaction-model milestone."
-            )
         }
     }
 
@@ -830,7 +824,7 @@ actor WorkspaceScenePreparationWorker {
                 style: style,
                 isVisible: !node.selectionBooleanProperty("hidden"),
                 accessibilityLabel: node.kind == .text ? "Text object" : (imageAccessibilityLabel ?? node.name),
-                plainText: node.kind.isTextual ? node.insertionStringProperty(node.kind.isLinkControl ? CanonicalLinkTarget.labelKey : "content.text") : nil,
+                plainText: node.kind.isLinkControl ? node.controlLabel : (node.kind == .text ? node.insertionStringProperty("content.text") : nil),
                 displayName: node.kind.isTextual ? nil : node.name,
                 fillRGBA: nil,
                 fillLayers: fillLayers,
@@ -1009,6 +1003,8 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var imageThumbnailData: [AssetID: Data] = [:]
     @Published private(set) var imageInspectorFailure: ImageInspectorError?
     @Published private(set) var lastImageInspectorAnnouncement = "Image Inspector inactive"
+    @Published private(set) var lastLinkInspectorAnnouncement = "Button and Link properties"
+    private(set) var linkInspectorDiagnostics: [LinkInspectorDiagnostic] = []
     @Published private(set) var snapResolution: SnapResolution?
     @Published private(set) var isSnappingSuppressed = false
     /// Scene-local editor orientation preference; never canonical project data.
@@ -1379,6 +1375,48 @@ final class WorkspaceShellState: ObservableObject {
                 : "Deleted image asset and \(nodeRemovals.count) use\(nodeRemovals.count == 1 ? "" : "s")"
             announcementPoster.post(lastAssetAnnouncement)
         } catch { lastAssetAnnouncement = error.localizedDescription }
+    }
+
+    var selectedLinkControls: [DocumentNode] { selectedCanonicalNodes.filter { $0.kind.isLinkControl } }
+    var linkInspectorIdentity: ImageInspectorOperationIdentity? {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan,
+              plan.identity.documentID == documentSession.document.id,
+              plan.identity.revision == documentSession.document.revision else { return nil }
+        return .init(documentID: documentSession.document.id, pageID: pageID,
+            revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration, selectedNodeIDs: selectionState.orderedIDs)
+    }
+    var linkInspectorIsEnabled: Bool {
+        !selectedLinkControls.isEmpty && transformValidationContext.isLifecycleAvailable
+            && selectedLinkControls.allSatisfy {
+                !$0.insertionBooleanProperty("locked") && !$0.insertionBooleanProperty("hidden")
+                    && transformValidationContext.availableNodeIDs.contains($0.id)
+            }
+    }
+    @discardableResult
+    func commitLinkEdit(_ edit: LinkInspectorEdit, identity: ImageInspectorOperationIdentity?, provenance: String) -> Bool {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let operation: String = switch edit { case .label: "label"; case .target: "target"; case .context: "context" }
+        var succeeded = false
+        defer {
+            linkInspectorDiagnostics.append(.init(requirementID: "SF-1102-008", operation: operation,
+                provenance: ["return", "focus-loss", "picker", "reset", "escape"].contains(provenance) ? provenance : "control",
+                identifiers: (identity?.selectedNodeIDs ?? []).map { String($0.description.prefix(8)) },
+                durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000, succeeded: succeeded))
+            if linkInspectorDiagnostics.count > 128 { linkInspectorDiagnostics.removeFirst(linkInspectorDiagnostics.count - 128) }
+        }
+        do {
+            guard let identity, linkInspectorIdentity != nil else { throw LinkInspectorError.staleRenderer }
+            let prepared = try LinkInspectorCommandRegistry().prepare(edit, identity: identity,
+                in: documentSession.document, context: transformValidationContext, cancelled: provenance == "escape")
+            _ = try documentSession.execute(prepared.command)
+            lastLinkInspectorAnnouncement = "Control \(operation) committed for \(prepared.applicableNodeIDs.count) object(s); skipped \(prepared.skippedNodeIDs.count) incompatible object(s)."
+            succeeded = true
+        } catch {
+            lastLinkInspectorAnnouncement = error.localizedDescription
+        }
+        announcementPoster.post(lastLinkInspectorAnnouncement)
+        return succeeded
     }
 
     func imageInspectorPresentation() -> ImageInspectorPresentation {
@@ -2505,12 +2543,8 @@ final class WorkspaceShellState: ObservableObject {
         if textEditingSession.isActive {
             commitTextEditing()
         }
-        if selectedTool == .frame {
-            commitInsertion(.frame, at: point, provenance: .pointer, keepsToolArmed: true)
-            return
-        }
-        if selectedTool == .text {
-            commitInsertion(.text, at: point, provenance: .pointer, keepsToolArmed: true)
+        if let kind = InsertionKind(rawValue: selectedTool.rawValue), kind != .image {
+            commitInsertion(kind, at: point, provenance: .pointer, keepsToolArmed: true)
             return
         }
         guard selectedTool == .select, let plan = canvasRenderPlan, let scene = selectionScene,
@@ -3547,7 +3581,7 @@ final class WorkspaceShellState: ObservableObject {
         }
         insertionSession.cancel()
         insertionFailure = nil
-        if resetTool, selectedTool == .frame || selectedTool == .text { selectedTool = .select }
+        if resetTool, InsertionKind(rawValue: selectedTool.rawValue) != nil { selectedTool = .select }
         if wasActive {
             lastInsertionAnnouncement = "Insertion cancelled"
             announcementPoster.post(lastInsertionAnnouncement)

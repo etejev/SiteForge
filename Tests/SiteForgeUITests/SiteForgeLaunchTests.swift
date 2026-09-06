@@ -730,20 +730,20 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(borderToggle.isHittable); borderToggle.click()
         let borderWidth = reveal("inspector.design.borderWidth")
         XCTAssertTrue(borderWidth.isEnabled)
-        borderWidth.click(); borderWidth.typeKey("a", modifierFlags: .command); borderWidth.typeText("4"); borderWidth.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(borderWidth, with: "4", in: application)
         let radiusToggle = reveal("inspector.design.cornerRadiusToggle")
         XCTAssertTrue(radiusToggle.isHittable); radiusToggle.click()
         let radius = reveal("inspector.design.cornerRadius")
-        radius.click(); radius.typeKey("a", modifierFlags: .command); radius.typeText("18"); radius.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(radius, with: "18", in: application)
         attachWindowScreenshot(application, named: "SF-AUTHORING-014 border radius")
         let shadowToggle = reveal("inspector.design.shadowToggle")
         XCTAssertTrue(shadowToggle.isHittable); shadowToggle.click()
         let shadow = reveal("inspector.design.shadowValues")
-        shadow.click(); shadow.typeKey("a", modifierFlags: .command); shadow.typeText("2, 10, 20, 1"); shadow.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(shadow, with: "2, 10, 20, 1", in: application)
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.design.announcement"], containing: "shadow committed"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-014 shadow")
         let beforeCancel = shadow.value as? String
-        shadow.click(); shadow.typeKey("a", modifierFlags: .command); shadow.typeText("invalid"); shadow.typeKey(.escape, modifierFlags: [])
+        replaceStructuralLayoutField(shadow, with: "invalid", in: application, endKey: .escape)
         XCTAssertEqual(shadow.value as? String, beforeCancel)
         application.typeKey("z", modifierFlags: .command)
         application.typeKey("z", modifierFlags: [.command, .shift])
@@ -2133,13 +2133,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(text.isEnabled)
         XCTAssertEqual(frame.label, "Frame")
         XCTAssertEqual(text.label, "Text")
-        for identifier in ["section", "stack", "grid"] {
+        for identifier in ["section", "stack", "grid", "button", "link"] {
             let item = application.buttons["navigator.elements.\(identifier)"]
             XCTAssertTrue(item.exists, identifier)
             XCTAssertTrue(item.isEnabled, identifier)
             XCTAssertTrue(item.label == identifier.capitalized)
         }
-        for identifier in ["button", "link", "divider", "navbar", "footer"] {
+        for identifier in ["divider", "navbar", "footer"] {
             let item = application.buttons["navigator.elements.\(identifier)"]
             XCTAssertTrue(item.exists, identifier)
             XCTAssertFalse(item.isEnabled, identifier)
@@ -2186,6 +2186,148 @@ final class SiteForgeLaunchTests: XCTestCase {
     // supported authored kind, so enclosure by the editor-only outline is a
     // visual contract rather than an object-count-only assertion.
     @MainActor
+    // SF-0806-002/005/006, SF-1102-002/005/006: visible native controls,
+    // canonical history and a separate-process package reopen.
+    func testButtonLinkContentTargetsUndoRedoAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("button-link.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.button"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let buttonID = canvasObject(named: "Button", in: application).identifier
+        XCTAssertTrue(canvasObject(named: "Button", in: application).isSelected)
+        application.buttons["inspector.tab.content"].click()
+        replaceStructuralLayoutField(application.textFields["inspector.content.control.label"], with: "Read guide", in: application)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 button label")
+        let controlStatus = application.descendants(matching: .any)["inspector.control.status"].firstMatch
+        XCTAssertTrue(waitForValue(controlStatus, containing: "label committed"), "Status: \(controlStatus.label) / \(String(describing: controlStatus.value)); field: \(String(describing: application.textFields["inspector.content.control.label"].value))")
+        application.buttons["inspector.tab.interactions"].click()
+        application.popUpButtons["inspector.interactions.link.type"].click()
+        application.menuItems["External HTTP(S)"].click()
+        replaceStructuralLayoutField(application.textFields["inspector.interactions.link.url"], with: "https://example.com/guide", in: application)
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.control.status"], containing: "target committed"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 external target")
+        replaceStructuralLayoutField(application.textFields["inspector.interactions.link.url"], with: "javascript:invalid", in: application)
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.control.status"], containing: "HTTP or HTTPS"))
+        application.textFields["inspector.interactions.link.url"].typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.interactions.link.url"], containing: "https://example.com/guide"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 invalid cancelled")
+        application.buttons["toolbar.undo"].click()
+        XCTAssertTrue(application.popUpButtons["inspector.interactions.link.type"].waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForValue(application.popUpButtons["inspector.interactions.link.type"], containing: "No target"))
+        application.buttons["toolbar.redo"].click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.interactions.link.url"], containing: "https://example.com/guide"))
+        XCTAssertEqual(canvasObject(named: "Button", in: application).identifier, buttonID)
+        application.menuBars.menuBarItems["Insert"].click()
+        application.menuItems["Insert Link at Center"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        XCTAssertTrue(canvasObject(named: "Link", in: application).isSelected)
+        // Center insertion intentionally shares a location. Author a distinct
+        // position through Layout so both labels can be visually inspected.
+        application.buttons["inspector.tab.layout"].click()
+        replaceStructuralLayoutField(application.textFields["inspector.layout.x"], with: "200", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.layout.y"], with: "200", in: application)
+        application.buttons["inspector.tab.content"].click()
+        replaceStructuralLayoutField(application.textFields["inspector.content.control.label"], with: "More details", in: application)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 link selected")
+        saveDocumentIfModified(in: application)
+        terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("control-reopen-recovery"))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        application.buttons["navigator.tab.layers"].click()
+        let row = application.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Button")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 3)); row.click()
+        XCTAssertEqual(canvasObject(named: "Button", in: application).identifier, buttonID)
+        application.buttons["inspector.tab.content"].click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.content.control.label"], containing: "Read guide"))
+        application.buttons["inspector.tab.interactions"].click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.interactions.link.url"], containing: "https://example.com/guide"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 reopened")
+    }
+
+    // SF-0806-002/005, SF-1102-002: real additive selection and atomic
+    // applicable-subset editing, with no primary-value borrowing.
+    func testButtonLinkMixedAndIncompatibleContentJourney() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        for (index, kind) in ["Button", "Link", "Text"].enumerated() {
+            application.menuBars.menuBarItems["Insert"].click()
+            application.menuItems["Insert \(kind) at Center"].click()
+            XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects \(index + 1)", timeout: 5))
+            application.buttons["inspector.tab.layout"].click()
+            replaceStructuralLayoutField(application.textFields["inspector.layout.x"], with: String(200 + index * 300), in: application)
+            replaceStructuralLayoutField(application.textFields["inspector.layout.y"], with: "200", in: application)
+        }
+        application.buttons["navigator.tab.layers"].click()
+        @MainActor func row(_ name: String) -> XCUIElement {
+            application.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", name
+            )).firstMatch
+        }
+        row("Button").click()
+        XCUIElement.perform(withKeyModifiers: .shift) { row("Link").click() }
+        let selection = application.descendants(matching: .any)["status.selectionPath"]
+        XCTAssertTrue(waitForValue(selection, containing: "2 selected"))
+        XCTAssertTrue(row("Button").isSelected); XCTAssertTrue(row("Link").isSelected)
+        application.buttons["inspector.tab.content"].click()
+        XCTAssertEqual(application.textFields["inspector.content.control.label"].placeholderValue, "Mixed labels")
+        replaceStructuralLayoutField(application.textFields["inspector.content.control.label"], with: "Shared label", in: application)
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.control.status"], containing: "2 object(s)"))
+        XCTAssertTrue(row("Button").isSelected); XCTAssertTrue(row("Link").isSelected)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 compatible mixed labels")
+        application.buttons["toolbar.undo"].click()
+        XCTAssertEqual(application.textFields["inspector.content.control.label"].placeholderValue, "Mixed labels")
+        application.buttons["toolbar.redo"].click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.content.control.label"], containing: "Shared label"))
+        row("Button").click()
+        XCUIElement.perform(withKeyModifiers: .shift) { row("Text").click() }
+        XCTAssertTrue(waitForValue(selection, containing: "2 selected"))
+        replaceStructuralLayoutField(application.textFields["inspector.content.control.label"], with: "Applicable only", in: application)
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.control.status"], containing: "skipped 1 incompatible"))
+        XCTAssertTrue(row("Button").isSelected); XCTAssertTrue(row("Text").isSelected)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 partial selection")
+        row("Text").click()
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.content.unavailable"].waitForExistence(timeout: 3))
+        XCTAssertFalse(application.textFields["inspector.content.control.label"].exists)
+        XCTAssertTrue(waitForValue(selection, containing: "1 selected"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 incompatible selection")
+    }
+
+    func testButtonLinkInternalTargetControlsAtPracticalMinimum() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeWindowSize", "minimum",
+            "-SiteForgeUITestWindowAlignment", TestWindowAlignment.right.rawValue,
+        ])
+        XCTAssertEqual(application.descendants(matching: .any)["workspace.shell"].frame.width, 1_100, accuracy: 2)
+        application.menuBars.menuBarItems["Insert"].click()
+        application.menuItems["Insert Button at Center"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        application.buttons["inspector.tab.content"].click()
+        replaceStructuralLayoutField(application.textFields["inspector.content.control.label"], with: "Open page", in: application)
+        application.buttons["inspector.tab.interactions"].click()
+        application.popUpButtons["inspector.interactions.link.type"].click()
+        application.menuItems["Page"].click()
+        let page = application.popUpButtons["inspector.interactions.link.page"]
+        XCTAssertTrue(waitForHittable(page, in: application)); page.click()
+        application.menuItems["Home"].click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.control.status"], containing: "target committed"))
+        let context = application.popUpButtons["inspector.interactions.link.context"]
+        XCTAssertTrue(waitForHittable(context, in: application)); context.click()
+        application.menuItems["New context"].click()
+        XCTAssertTrue(waitForValue(context, containing: "New context"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 compact internal page target")
+        let remove = application.buttons["inspector.interactions.link.remove"]
+        revealStructuralLayoutControl(remove, in: application)
+        remove.click()
+        XCTAssertTrue(waitForValue(application.popUpButtons["inspector.interactions.link.type"], containing: "No target"))
+        application.buttons["toolbar.undo"].click()
+        XCTAssertTrue(waitForValue(application.popUpButtons["inspector.interactions.link.page"], containing: "Home"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-020 compact restored target")
+    }
+
     func testSupportedElementsShareSelectedRenderGeometryJourney() throws {
         let application = launchWorkspace()
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
@@ -2493,20 +2635,25 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(content.label, "Content")
         XCTAssertTrue(content.isEnabled)
         content.click()
-        let contentUnavailable = application.descendants(matching: .any)["inspector.content.unavailable"]
+        // SF-AUTHORING-020 enables Content/Interactions for Button/Link.
+        // An empty selection remains unavailable without falsely claiming
+        // that the entire feature is not implemented.
+        let contentUnavailable = application.descendants(matching: .any)["inspector.empty"]
         XCTAssertTrue(contentUnavailable.waitForExistence(timeout: 5))
-        XCTAssertTrue(contentUnavailable.label.localizedCaseInsensitiveContains("Content unavailable"))
-        XCTAssertTrue(contentUnavailable.label.localizedCaseInsensitiveContains("not available yet"))
+        XCTAssertTrue(contentUnavailable.label.localizedCaseInsensitiveContains("Nothing Selected"))
+        XCTAssertTrue(contentUnavailable.label.localizedCaseInsensitiveContains("content"))
+        XCTAssertFalse(application.textFields["inspector.content.control.label"].exists)
         XCTAssertTrue(application.descendants(matching: .button)["inspector.transform.moveRight"].exists == false)
         attachScreenshot(named: "SF-PRODUCT-UI-003 inspector content unavailable")
 
         XCTAssertTrue(waitForHittable(interactions, in: application))
         XCTAssertEqual(interactions.label, "Interactions")
         interactions.click()
-        let interactionsUnavailable = application.descendants(matching: .any)["inspector.interactions.unavailable"]
+        let interactionsUnavailable = application.descendants(matching: .any)["inspector.empty"]
         XCTAssertTrue(interactionsUnavailable.waitForExistence(timeout: 5))
-        XCTAssertTrue(interactionsUnavailable.label.localizedCaseInsensitiveContains("Interactions unavailable"))
-        XCTAssertTrue(interactionsUnavailable.label.localizedCaseInsensitiveContains("not available yet"))
+        XCTAssertTrue(interactionsUnavailable.label.localizedCaseInsensitiveContains("Nothing Selected"))
+        XCTAssertTrue(interactionsUnavailable.label.localizedCaseInsensitiveContains("interactions"))
+        XCTAssertFalse(application.popUpButtons["inspector.interactions.link.type"].exists)
         attachScreenshot(named: "SF-PRODUCT-UI-003 inspector interactions unavailable")
     }
 
@@ -3283,7 +3430,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         }
         XCTAssertTrue(
             isSafelyVisibleForPointer(liveElement, inside: scroll),
-            "Inspector control \(identifier) must remain inside the usable display and reachable"
+            "Inspector control \(identifier) must remain inside the usable display and reachable; control=\(liveElement.frame), scroll=\(scroll.frame), safe=\(pointerSafeIntersection(for: scroll.frame)), hittable=\(liveElement.isHittable)"
         )
         return liveElement
     }
@@ -3323,6 +3470,8 @@ final class SiteForgeLaunchTests: XCTestCase {
             return application.buttons[identifier]
         }
         if ["inspector.layout.x", "inspector.layout.y", "inspector.layout.width", "inspector.layout.height"].contains(identifier)
+            || ["inspector.content.control.label", "inspector.interactions.link.url"].contains(identifier)
+            || ["inspector.design.borderWidth", "inspector.design.cornerRadius", "inspector.design.shadowValues"].contains(identifier)
             || identifier.hasSuffix(".padding")
             || identifier.hasSuffix(".gap")
             || identifier.hasSuffix(".columns") {
@@ -3393,7 +3542,8 @@ final class SiteForgeLaunchTests: XCTestCase {
     private func replaceStructuralLayoutField(
         _ field: XCUIElement,
         with text: String,
-        in application: XCUIApplication
+        in application: XCUIApplication,
+        endKey: XCUIKeyboardKey = .return
     ) {
         let identifier = field.identifier
         _ = revealStructuralLayoutControl(field, in: application)
@@ -3411,7 +3561,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let focusedField = application.textFields[identifier]
         focusedField.typeKey("a", modifierFlags: .command)
         focusedField.typeText(text)
-        application.textFields[identifier].typeKey(.return, modifierFlags: [])
+        application.textFields[identifier].typeKey(endKey, modifierFlags: [])
     }
 
     private func waitForLiveStructuralFieldReadiness(
