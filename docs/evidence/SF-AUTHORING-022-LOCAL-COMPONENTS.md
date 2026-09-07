@@ -38,6 +38,34 @@ focused result bundle rather than in source control.
 
 ## Observed corrections
 
+Hosted run `34165188350` passed all 413 non-UI tests and 54/56 UI tests.
+The reopened component journey clicked Pages beyond the display's leading
+edge; it now uses the same live native pointer-reveal helper as earlier steps.
+The Pages journey completed deletion, but its 10-point toolbar-reveal drag
+left the native window unchanged. The retained recording confirms that the
+dialog closes and the application is enabled again: this is not failed
+canonical deletion. Both helpers now align the complete 1100-point window
+to the required display edge rather than applying a tiny control-only delta.
+The new deterministic 1024-point display regression retains full control
+containment and the production minimum width. No pointer, identity, history
+or persistence assertion was removed.
+
+That hosted gate reached test completion approximately 39 minutes after job
+start, leaving insufficient room in the 40-minute job for cleanup and retained
+failure artifacts. The orchestration ceiling is now 50 minutes; XCTest waits,
+application performance budgets and assertions are unchanged. This headroom
+does not classify the two failed assertions as infrastructure success.
+
+The correction's focused group passed 3/3, zero failures:
+`testNarrowDisplayPointerAlignmentPreservesWindowAndRevealsBothEdges`
+(0.086 seconds), `testLocalComponentsCreateLinkEditDetachAndReopenJourney`
+(96.661 seconds), and `testStaticPageManagementRoutesHistoryAndReopenJourney`
+(125.259 seconds). Retained reopened-page/component images show Saved,
+upright content and bounded artboard/grid composition without serialized
+selection. Repository checks and whitespace checks pass; no runner remains.
+The earlier 469-test full product gate remains authoritative locally; the
+additional geometry selector raises the next hosted inventory to 470 tests.
+
 - Definition editing uses the active canonical graph for insertion and
   selection context, without exposing definitions as website pages.
 - The definition breadcrumb has an explicit accessibility container so its

@@ -37,10 +37,13 @@ None.
     and the resource save/recovery check passed after correcting its incomplete
     Image fixture. Historical migration checks passed 3/3, placement/schema
     checks passed 2/2, and both final component UI journeys passed independently.
-    Original-resolution maximized and compact images were reviewed. Remaining
+    Original-resolution maximized and compact images were reviewed.
     Final integrated verification passed 413 unit/integration + 56 UI = 469
     tests, zero failures; all repository gates passed. Remaining work is the
-    authorized commit, main integration and hosted checkpoint acceptance.
+    hosted checkpoint acceptance after authorized main integration/push.
+    Run `34165188350` passed 413 non-UI and 54/56 UI tests; the two
+    narrow-display pointer failures and focused corrections are recorded in
+    the component evidence. Do not restart unrelated feature work.
     Do not mark DONE until hosted CI passes.
   - Subsequent owner-authorized batch: after this coherent checkpoint, create
     a specification-backed completion roadmap and continue up to three

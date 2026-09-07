@@ -13,6 +13,11 @@ failures, with all repository gates green. See
 `docs/evidence/SF-AUTHORING-022-LOCAL-COMPONENTS.md`. Hosted acceptance is not
 inferred from this local result.
 
+Hosted follow-up `34165188350` exposed two narrow-display pointer failures,
+not canonical component/page failures. Both corrected journeys and the new
+1024-point edge-alignment regression passed together 3/3. The component
+evidence records the retained recording, screenshots and bounded CI headroom.
+
 SF-AUTHORING-021 is locally verified: native static page creation, name/route
 editing, duplicate/delete/reorder and live link targets share canonical
 transactions and preserved history. Five focused model and two new UI selectors,

@@ -2,6 +2,11 @@
 
 ## Locally verified — SF-AUTHORING-022
 
+- Hosted pointer coverage now re-queries Pages after reopen and aligns the
+  native window fully to reveal edge controls without reducing its minimum
+  width. The measured hosted gate has bounded cleanup/artifact headroom;
+  application timeouts and product assertions are unchanged.
+
 - Component insertion respects the selected container's visible artboard area
   without rewriting definition geometry. Added focused strict-schema,
   placement, history/resource-recovery and migration evidence.

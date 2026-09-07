@@ -21,8 +21,8 @@ automation and both test bodies executed. Do not reset privacy databases or
 kill shared testmanagerd. The passing main result records an internal QoS
 warning; see the evidence chronology rather than claiming warning-free runtime.
 
-`SF-AUTHORING-022` is IN PROGRESS on `sf-authoring-022-local-components`.
-Preserve the uncommitted SF-AUTHORING-021 pointer-placement repair. Hosted
+`SF-AUTHORING-022` is IN PROGRESS on `main`; the component branch and
+SF-AUTHORING-021 pointer-placement repair are integrated and pushed. Hosted
 run `34003323869` failed because the Pages control was outside the narrow
 screen; do not describe hosted acceptance as green. The component scope,
 sequence and exclusions are recorded in CODEX_QUEUE. Canonical definition

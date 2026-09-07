@@ -22,6 +22,16 @@ private enum LaunchLifecycleReadinessHandshake {
     }
 }
 
+private enum PointerWindowPlacement {
+    // Align the complete native window to the needed display edge. A tiny
+    // per-control correction can remain within AppKit's drag threshold.
+    static func horizontalTranslation(window: CGRect, target: CGRect, visible: CGRect) -> CGFloat {
+        if target.minX < visible.minX { return visible.minX - window.minX }
+        if target.maxX > visible.maxX { return visible.maxX - window.maxX }
+        return 0
+    }
+}
+
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
     private static let applicationBundleIdentifier = "app.siteforge.SiteForge"
@@ -2249,7 +2259,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         terminateAndWait(application)
         application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("components-recovery"))
         XCTAssertTrue(waitForWorkspaceReady(application))
-        application.buttons["navigator.tab.pages"].click()
+        revealComponentPointerTarget("navigator.tab.pages", in: application).click()
         let page = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "navigator.page.", "Instances, route ")).firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 3)); page.click()
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
@@ -2306,6 +2316,25 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 compact keyboard cancellation")
     }
 
+    func testNarrowDisplayPointerAlignmentPreservesWindowAndRevealsBothEdges() {
+        let visible = CGRect(x: 0, y: 24, width: 1024, height: 700)
+        let leadingWindow = CGRect(x: 16, y: 47, width: 1100, height: 642)
+        let undo = CGRect(x: 993, y: 47, width: 41, height: 52)
+        let trailingShift = PointerWindowPlacement.horizontalTranslation(window: leadingWindow, target: undo, visible: visible)
+        XCTAssertEqual(trailingShift, -92)
+        let trailingWindow = leadingWindow.offsetBy(dx: trailingShift, dy: 0)
+        XCTAssertEqual(trailingWindow.width, 1100)
+        XCTAssertEqual(trailingWindow.maxX, visible.maxX)
+        XCTAssertLessThanOrEqual(undo.offsetBy(dx: trailingShift, dy: 0).maxX, visible.maxX)
+        let pages = CGRect(x: -32.5, y: 97.5, width: 44, height: 26)
+        let leadingShift = PointerWindowPlacement.horizontalTranslation(window: trailingWindow, target: pages, visible: visible)
+        XCTAssertEqual(leadingShift, 76)
+        XCTAssertGreaterThanOrEqual(pages.offsetBy(dx: leadingShift, dy: 0).minX, visible.minX)
+        XCTAssertEqual(trailingWindow.offsetBy(dx: leadingShift, dy: 0).width, 1100)
+        XCTAssertEqual(PointerWindowPlacement.horizontalTranslation(window: trailingWindow,
+            target: CGRect(x: 200, y: 100, width: 100, height: 30), visible: visible), 0)
+    }
+
     /// A 1100-point window can exceed the hosted display. Move the actual
     /// title bar to expose a target, retaining the production minimum and
     /// real pointer/focus assertions rather than bypassing the control.
@@ -2317,11 +2346,10 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTFail("A usable display is required for pointer interaction")
             return query
         }
-        let frame = query.frame
-        let delta = frame.minX < visible.minX ? visible.minX - frame.minX
-            : frame.maxX > visible.maxX ? visible.maxX - frame.maxX : 0
+        let window = application.windows.firstMatch
+        let delta = PointerWindowPlacement.horizontalTranslation(window: window.frame,
+            target: query.frame, visible: visible)
         if delta != 0 {
-            let window = application.windows.firstMatch
             let start = window.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: window.frame.width / 2, dy: 8))
             start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: delta, dy: 0)))
@@ -2359,11 +2387,10 @@ final class SiteForgeLaunchTests: XCTestCase {
             // A control already inside the display is valid. The constrained
             // window inset is not an additional per-control clipping margin.
             let safe = visible
-            let frame = query().frame
-            let delta = frame.minX < safe.minX ? safe.minX - frame.minX
-                : frame.maxX > safe.maxX ? safe.maxX - frame.maxX : 0
+            let window = application.windows.firstMatch
+            let delta = PointerWindowPlacement.horizontalTranslation(window: window.frame,
+                target: query().frame, visible: safe)
             if delta != 0 {
-                let window = application.windows.firstMatch
                 // The top title-bar strip is above toolbar controls. Screen
                 // X has the same origin in AppKit and XCTest; no Y conversion
                 // is involved in this strictly horizontal native drag.
