@@ -2199,14 +2199,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         componentMenu("Component", "Create Component from Selection", in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, originalID)
-        let componentsOverflow = application.descendants(matching: .any)["navigator.tab.overflow"]
-        XCTAssertTrue(waitForHittable(componentsOverflow, in: application)); componentsOverflow.click()
+        revealComponentPointerTarget("navigator.tab.overflow", in: application).click()
         application.menuItems["Components"].click()
         XCTAssertTrue(application.buttons["components.create"].waitForExistence(timeout: 3))
         XCTAssertTrue(application.staticTexts["inspector.component.provenance"].exists)
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 original linked instance")
 
         let deleteDefinition = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "components.delete.")).firstMatch
+        revealComponentPointerTarget(deleteDefinition.identifier, in: application)
         XCTAssertTrue(waitForHittable(deleteDefinition, in: application))
         deleteDefinition.click()
         XCTAssertTrue(application.buttons["Detach Uses and Delete"].waitForExistence(timeout: 3))
@@ -2230,10 +2230,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertNotEqual(secondID, originalID)
         componentMenu("Component", "Edit Definition", in: application)
         XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
+        revealComponentPointerTarget("components.exit", in: application)
         XCTAssertTrue(waitForHittable(application.buttons["components.exit"], in: application))
         editComponentHex("#994422FF", in: application)
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 definition editing")
-        application.buttons["components.exit"].click()
+        revealComponentPointerTarget("components.exit", in: application).click()
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, secondID)
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 propagated second instance")
@@ -2266,6 +2267,7 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     private func editComponentHex(_ value: String, in application: XCUIApplication) {
         application.buttons["inspector.tab.design"].click()
+        revealComponentPointerTarget("inspector.design.fillHex", in: application)
         let field = application.textFields["inspector.design.fillHex"]
         XCTAssertTrue(waitForHittable(field, in: application))
         field.click(); field.typeKey("a", modifierFlags: .command); field.typeText(value)
@@ -2275,7 +2277,7 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     func testLocalComponentsConstrainedMinimumOverflowAndCancellationJourney() throws {
         let application = launchScenario("workspace", extraArguments: [
-            "-SiteForgeWindowSize", "minimum", "-SiteForgeUITestWindowAlignment", TestWindowAlignment.right.rawValue
+            "-SiteForgeWindowSize", "minimum", "-SiteForgeUITestWindowAlignment", TestWindowAlignment.left.rawValue
         ])
         XCTAssertEqual(application.descendants(matching: .any)["workspace.shell"].frame.width, 1_100, accuracy: 2)
         application.menuBars.menuBarItems["Insert"].click()
@@ -2302,6 +2304,35 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, originalID)
         XCTAssertTrue(application.buttons["components.edit.selected"].exists)
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 compact keyboard cancellation")
+    }
+
+    /// A 1100-point window can exceed the hosted display. Move the actual
+    /// title bar to expose a target, retaining the production minimum and
+    /// real pointer/focus assertions rather than bypassing the control.
+    @discardableResult
+    private func revealComponentPointerTarget(_ identifier: String, in application: XCUIApplication) -> XCUIElement {
+        let query = application.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        XCTAssertTrue(query.waitForExistence(timeout: 3))
+        guard let visible = NSScreen.main?.visibleFrame else {
+            XCTFail("A usable display is required for pointer interaction")
+            return query
+        }
+        let frame = query.frame
+        let delta = frame.minX < visible.minX ? visible.minX - frame.minX
+            : frame.maxX > visible.maxX ? visible.maxX - frame.maxX : 0
+        if delta != 0 {
+            let window = application.windows.firstMatch
+            let start = window.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: window.frame.width / 2, dy: 8))
+            start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: delta, dy: 0)))
+        }
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let live = application.descendants(matching: .any).matching(identifier: identifier).firstMatch
+            return live.isEnabled && live.isHittable && live.frame.minX >= visible.minX - 1
+                && live.frame.maxX <= visible.maxX + 1
+        }, object: application)], timeout: 3) == .completed,
+            "The live component control must be enabled, hittable and inside the display")
+        return application.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
     // SF-0402-001 through SF-0402-008, SF-0407-001 through SF-0407-006

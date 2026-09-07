@@ -25,6 +25,17 @@ The exact affected journey subsequently passed 1/1, zero failures. The prior
 does not trigger another unchanged local full suite. Hosted compilation and
 verification must pass for the corrective SHA before acceptance.
 
+Narrow-display review also identified that right-aligning a 1100-point window
+on a 1024-point display can put the leading Components overflow off-screen.
+The component pointer helper now reveals the actual control by dragging the
+native title bar, then re-queries and requires enabled/hittable in-display
+bounds. The explicitly constrained navigator journey uses leading placement.
+Production minimum sizing and generic launch policy are unchanged. Both exact
+journeys passed together 2/2; the updated compact overflow/cancellation images
+were inspected at original resolution and retain readable controls, centered
+artboard and aligned Frame selection. The eight attachments remain in the
+focused result bundle rather than in source control.
+
 ## Observed corrections
 
 - Definition editing uses the active canonical graph for insertion and
