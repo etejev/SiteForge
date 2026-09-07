@@ -2187,29 +2187,16 @@ final class SiteForgeLaunchTests: XCTestCase {
         var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
         XCTAssertTrue(waitForWorkspaceReady(application))
         assertNormalWindowPolicy(in: application)
-        @MainActor func menu(_ menu: String, _ action: String) {
-            application.menuBars.menuBarItems[menu].click()
-            XCTAssertTrue(waitForEnabled(application.menuItems[action]))
-            application.menuItems[action].click()
-        }
-        @MainActor func hex(_ value: String) {
-            application.buttons["inspector.tab.design"].click()
-            let field = application.textFields["inspector.design.fillHex"]
-            XCTAssertTrue(waitForHittable(field, in: application))
-            field.click(); field.typeKey("a", modifierFlags: .command); field.typeText(value)
-            field.typeKey(.return, modifierFlags: [])
-            XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: value))
-        }
-        menu("Insert", "Insert Frame at Center")
+        componentMenu("Insert", "Insert Frame at Center", in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
-        hex("#336699FF")
-        menu("Insert", "Insert Text at Center")
+        editComponentHex("#336699FF", in: application)
+        componentMenu("Insert", "Insert Text at Center", in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         application.buttons["navigator.tab.layers"].click()
         let frameRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame")).firstMatch
         XCTAssertTrue(frameRow.waitForExistence(timeout: 3)); frameRow.click()
         let originalID = canvasObject(named: "Frame", in: application).identifier
-        menu("Component", "Create Component from Selection")
+        componentMenu("Component", "Create Component from Selection", in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, originalID)
         let componentsOverflow = application.descendants(matching: .any)["navigator.tab.overflow"]
@@ -2229,7 +2216,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, originalID)
         XCTAssertTrue(application.staticTexts["inspector.component.provenance"].exists)
 
-        menu("Page", "New Page…")
+        componentMenu("Page", "New Page…", in: application)
         let name = application.textFields["page.editor.name"]
         XCTAssertTrue(name.waitForExistence(timeout: 3))
         name.click(); name.typeKey("a", modifierFlags: .command); name.typeText("Instances")
@@ -2241,16 +2228,16 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         let secondID = canvasObject(named: "Frame", in: application).identifier
         XCTAssertNotEqual(secondID, originalID)
-        menu("Component", "Edit Definition")
+        componentMenu("Component", "Edit Definition", in: application)
         XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
         XCTAssertTrue(waitForHittable(application.buttons["components.exit"], in: application))
-        hex("#994422FF")
+        editComponentHex("#994422FF", in: application)
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 definition editing")
         application.buttons["components.exit"].click()
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, secondID)
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 propagated second instance")
-        menu("Component", "Detach Instance")
+        componentMenu("Component", "Detach Instance", in: application)
         XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: "#994422FF"))
         application.typeKey("z", modifierFlags: .command)
         application.typeKey("z", modifierFlags: [.command, .shift])
@@ -2267,6 +2254,23 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, secondID)
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 reopened detached instance")
+    }
+
+    // Instance methods preserve MainActor isolation under the hosted Swift
+    // compiler; nested helpers must not capture the non-Sendable XCTestCase.
+    private func componentMenu(_ menu: String, _ action: String, in application: XCUIApplication) {
+        application.menuBars.menuBarItems[menu].click()
+        XCTAssertTrue(waitForEnabled(application.menuItems[action]))
+        application.menuItems[action].click()
+    }
+
+    private func editComponentHex(_ value: String, in application: XCUIApplication) {
+        application.buttons["inspector.tab.design"].click()
+        let field = application.textFields["inspector.design.fillHex"]
+        XCTAssertTrue(waitForHittable(field, in: application))
+        field.click(); field.typeKey("a", modifierFlags: .command); field.typeText(value)
+        field.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: value))
     }
 
     func testLocalComponentsConstrainedMinimumOverflowAndCancellationJourney() throws {

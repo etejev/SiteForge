@@ -15,6 +15,16 @@ reopen in 114.137 seconds. The repaired page-management journey passed in
 Earlier failures and authentication incidents below are historical evidence,
 not the current acceptance status. Hosted status follows the pushed SHA.
 
+Hosted run `34164363270` for `e20b6d2` failed during UI-test compilation under
+Xcode 26.6, before executing XCTest. Two nested MainActor helpers captured the
+non-Sendable XCTestCase; the newer local compiler accepted that capture. They
+now use the existing actor-isolated instance-helper pattern, passing the live
+application explicitly. No application behavior, wait, or assertion changed.
+The exact affected journey subsequently passed 1/1, zero failures. The prior
+469-test product gate remains authoritative; this test-helper-only correction
+does not trigger another unchanged local full suite. Hosted compilation and
+verification must pass for the corrective SHA before acceptance.
+
 ## Observed corrections
 
 - Definition editing uses the active canonical graph for insertion and
