@@ -66,6 +66,22 @@ selection. Repository checks and whitespace checks pass; no runner remains.
 The earlier 469-test full product gate remains authoritative locally; the
 additional geometry selector raises the next hosted inventory to 470 tests.
 
+The pointer boundary additionally waits for the foreground application and
+enabled live control before starting a title-bar gesture. The hosted recording shows
+the delete sheet transitioning from disabled content to an enabled workspace;
+canonical row removal alone is not a native sheet-dismissal readiness signal.
+The guard uses the existing bounded wait and captures the live hierarchy on
+failure, without retrying gestures or bypassing the visible control.
+An exploratory Window AXEnabled guard failed both focused journeys before
+interaction: macOS reports the non-control Application/Window containers as
+Disabled even while their genuine controls are enabled and usable. The guard
+therefore uses application activation plus the actual control's enabled state,
+not a container attribute. Those exploratory failures are not passing evidence.
+The corrected active-app/control guard passed both affected journeys 2/2:
+component create/link/edit/detach/reopen in 114.927 seconds and page management
+in 131.555 seconds. All existing pointer, history and persistence assertions
+remain intact. No production behavior changed.
+
 - Definition editing uses the active canonical graph for insertion and
   selection context, without exposing definitions as website pages.
 - The definition breadcrumb has an explicit accessibility container so its

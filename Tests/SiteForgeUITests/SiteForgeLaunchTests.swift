@@ -2346,6 +2346,16 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTFail("A usable display is required for pointer interaction")
             return query
         }
+        // A canonical command may finish before its native sheet dismisses.
+        // Window AXEnabled is not a control-availability signal on macOS;
+        // require the foreground application and actual enabled target.
+        guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            application.state == .runningForeground
+                && application.descendants(matching: .any).matching(identifier: identifier).firstMatch.isEnabled
+        }, object: application)], timeout: 3) == .completed else {
+            XCTFail("The app must be active and the live pointer control enabled: \(application.debugDescription)")
+            return query
+        }
         let window = application.windows.firstMatch
         let delta = PointerWindowPlacement.horizontalTranslation(window: window.frame,
             target: query.frame, visible: visible)
@@ -2384,6 +2394,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         // never change product sizing or synthesize a command/model shortcut.
         @MainActor func reveal(_ query: @autoclosure @escaping () -> XCUIElement) {
             guard let visible = NSScreen.main?.visibleFrame else { return }
+            guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                application.state == .runningForeground && query().isEnabled
+            }, object: application)], timeout: 3) == .completed else {
+                XCTFail("The app must be active and the live pointer control enabled: \(application.debugDescription)")
+                return
+            }
             // A control already inside the display is valid. The constrained
             // window inset is not an additional per-control clipping margin.
             let safe = visible
