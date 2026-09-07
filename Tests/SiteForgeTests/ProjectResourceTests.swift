@@ -6,6 +6,81 @@ import XCTest
 @testable import SiteForge
 
 final class ProjectResourceTests: XCTestCase {
+    @MainActor
+    func testComponentDefinitionResourcesSurviveLinkedDuplicationSaveAndRecovery() async throws {
+        let fixture = try makeFixture()
+        let bytes = try makePNG(width: 4, height: 3)
+        let descriptor = ProjectResourceDescriptor(id: ResourceID(), filename: "card.png", mediaType: "image/png",
+            byteCount: bytes.count, sha256: ProjectResourceStore.digest(bytes))
+        let asset = ImageAsset(resourceID: descriptor.id, displayName: "Card", originalFilename: "card.png",
+            format: .png, pixelWidth: 4, pixelHeight: 3, byteCount: bytes.count, contentHash: descriptor.sha256)
+        var document = ProjectCreation.blank()
+        document.imageAssets = [asset]
+        let pageID = document.pages[0].id, parentID = document.pages[0].rootNodeIDs[0]
+        var frame = DocumentNode(kind: .frame, name: "Card", parent: .node(parentID), properties:
+            [("layout.x", 80.0), ("layout.y", 90), ("layout.width", 240), ("layout.height", 160)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            })
+        let image = DocumentNode(kind: .image, name: "Photo", parent: .node(frame.id), properties: [
+            NodeProperty(key: .init(rawValue: "content.image.v1.assetID"), value: .string(asset.id.description)),
+            NodeProperty(key: .init(rawValue: "content.image.v1.fit"), value: .string(ImageFitMode.fit.rawValue), origin: .defaulted),
+            NodeProperty(key: .init(rawValue: "content.image.v1.focal.x"), value: .number(0.5), origin: .defaulted),
+            NodeProperty(key: .init(rawValue: "content.image.v1.focal.y"), value: .number(0.5), origin: .defaulted),
+            NodeProperty(key: .init(rawValue: "content.image.v1.alt"), value: .string(""), origin: .defaulted),
+            NodeProperty(key: .init(rawValue: "content.image.v1.decorative"), value: .boolean(false), origin: .defaulted),
+            NodeProperty(key: .init(rawValue: "layout.x"), value: .number(100)),
+            NodeProperty(key: .init(rawValue: "layout.y"), value: .number(110)),
+            NodeProperty(key: .init(rawValue: "layout.width"), value: .number(80)),
+            NodeProperty(key: .init(rawValue: "layout.height"), value: .number(60))
+        ])
+        frame.childIDs = [image.id]
+        document.pages[0].nodes[0].childIDs = [frame.id]
+        document.pages[0].nodes += [frame, image]
+        try document.validate()
+        let session = DocumentSession(document: document), sceneID = CanvasViewportSceneID()
+        let prepared = try ComponentCommandRegistry().prepare(.create(frame.id), identity: .init(
+            documentID: document.id, pageID: pageID, revision: document.revision,
+            sceneID: sceneID, rendererGeneration: document.revision), in: document,
+            context: .init(activePageID: pageID, currentSceneID: sceneID, rendererGeneration: document.revision,
+                selectedNodeIDs: [frame.id], availableNodeIDs: [frame.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        try session.execute(prepared.command)
+        let duplicate = try PageCommandRegistry().prepare(.duplicate, identity: .init(documentID: document.id,
+            revision: session.document.revision, pageID: pageID), in: session.document, isAvailable: true)
+        try session.execute(duplicate.command)
+        XCTAssertEqual(session.document.componentDefinitions.count, 1)
+        let instances = session.document.websitePages.flatMap(\.nodes).filter { $0.kind == .component }
+        XCTAssertEqual(instances.count, 2)
+        XCTAssertEqual(Set(instances.compactMap { CanonicalComponentReference.definitionID(for: $0) }).count, 1)
+        let package = try ProjectPackage(document: session.document).withResource(descriptor, data: bytes)
+        let backend = DocumentLifecycleBackend()
+        let destination = fixture.url.appendingPathComponent("Components.siteforge")
+        func identity(_ url: URL, _ kind: LifecycleDestinationKind, _ intent: LifecycleOperationIntent) -> LifecycleOperationIdentity {
+            .init(id: LifecycleOperationID(), epoch: LifecycleEpoch(), documentID: document.id,
+                projectID: package.projectID, revision: session.document.revision,
+                destination: .file(url, kind: kind), intent: intent)
+        }
+        _ = try await backend.write(package, history: session.historySnapshot(), to: destination, expected: nil,
+            identity: identity(destination, .durable, .saveAs))
+        let reopened = try await backend.read(from: destination, identity: identity(destination, .durable, .open))
+        XCTAssertEqual(reopened.package.document, session.document)
+        XCTAssertEqual(try reopened.package.resourceData(for: descriptor), bytes)
+        let recoveryDirectory = fixture.url.appendingPathComponent("recovery", isDirectory: true)
+        let store = ProjectPackageStore()
+        try await store.prepareRecoveryDirectory(recoveryDirectory)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: package.projectID, in: recoveryDirectory)
+        _ = try await backend.write(package, history: session.historySnapshot(), to: recoveryURL, expected: nil,
+            identity: identity(recoveryURL, .recovery, .autosave))
+        let recovered = try await backend.read(from: recoveryURL, identity: identity(recoveryURL, .recovery, .restore))
+        XCTAssertEqual(recovered.package.document, session.document)
+        XCTAssertEqual(try recovered.package.resourceData(for: descriptor), bytes)
+        for page in recovered.package.document.websitePages {
+            let resolved = try ComponentGraphResolver.resolvedPage(page, in: recovered.package.document, breakpoint: .mobile)
+            for node in resolved.nodes where node.kind == .image {
+                XCTAssertEqual(node.insertionStringProperty("content.image.v1.assetID"), asset.id.description)
+            }
+        }
+    }
+
     private var fixtures: [ApplicationOwnedTestFixture] = []
 
     override func tearDownWithError() throws {
@@ -538,7 +613,7 @@ final class ProjectResourceTests: XCTestCase {
         legacyObject["document"] = legacyDocument
         let migrated = try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacyObject))
         XCTAssertTrue(migrated.imageAssets.isEmpty)
-        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":6"))
+        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":7"))
     }
 
     func testImageInspectorRejectsInvalidStaleAndInapplicableEditsWithoutMutation() throws {

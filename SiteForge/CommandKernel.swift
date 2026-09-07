@@ -1052,6 +1052,13 @@ final class CommandDiagnostics {
                durationMilliseconds: durationMilliseconds, result: .failure, failureCategory: .validation)
     }
 
+    func recordComponentOperation(pageID: PageID, nodeIDs: [NodeID], succeeded: Bool, durationMilliseconds: Double) {
+        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0901-008", "SF-0905-005"],
+            commandName: .batch, sanitizedIdentifiers: ([pageID.commandTarget] + nodeIDs.map(\.commandTarget)).map(sanitize),
+            durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
+            failureCategory: succeeded ? nil : .validation))
+    }
+
     fileprivate func record(
         commandName: CommandName,
         targets: [CommandTarget],

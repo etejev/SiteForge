@@ -1,5 +1,18 @@
 # SiteForge Visual Contract
 
+## Local components (SF-AUTHORING-022)
+
+The Components destination is reachable through the native navigator overflow
+menu when the horizontal tab strip cannot show every full label. Its definition
+rows retain readable names, usage counts and Insert/Edit/Delete actions at the
+1100-point practical minimum. Linked instances distinguish inherited appearance
+from independent geometry. Editing a definition displays an explicit breadcrumb
+and Exit Definition action above the canvas. Definitions never appear as website
+pages. Destructive definition removal names its detach-uses effect and offers
+pointer Cancel and keyboard Escape; cancellation must retain linked identity.
+New instances fit the visible selected-parent/artboard area without moving the
+definition. No expanded child becomes a second editable canonical object.
+
 ## Static pages (SF-AUTHORING-021)
 
 Pages exposes New Page and Page Actions, with equivalent native Page and row

@@ -8,7 +8,44 @@ None.
 
 ## IN PROGRESS
 
-None.
+- [ ] `SF-AUTHORING-022` Reusable local components.
+  - Requirements: bounded `SF-0901-001`–`008`, supporting `SF-0905-003`–`005`
+    identity, inheritance and exact history. These modules remain Partial.
+  - Plan: first repair SF-AUTHORING-021's narrow-display pointer journey;
+    then implement canonical definitions/linked instances, shared resolution,
+    definition editing, detach/delete and native Components controls through
+    existing transactions. Add focused model/package/render/UI evidence and
+    visually review the real workflow before one integrated final gate.
+  - Preserve stable identities, resource references and independent instance
+    placement; no serialized expanded copies or blank-project fixtures.
+  - Exclusions: nested authoring, variants, slots, per-child overrides, remote
+    libraries, export/runtime/publishing and release acceptance.
+  - SF-AUTHORING-021 remains locally verified but hosted failed: run
+    `34003323869` exposed Pages outside the narrow display's leading edge.
+    The pointer repair passed two focused window-policy tests and the exact
+    native-Xcode page journey (1/1, 112.949 seconds); five retained images were
+    reviewed. Managed automation initialization failed before the test body,
+    so those earlier attempts are not product failures. Hosted acceptance is
+    still pending the integrated checkpoint.
+  - Component progress: five focused command/resolution/history/context tests pass,
+    including detachment across all three breakpoints. The real create/link/
+    edit/detach/reopen journey passed after visual corrections (1/1, 96.221
+    seconds). Five original-resolution images were reviewed; the definition
+    breadcrumb and inherited-instance Inspector are now readable. See
+    `docs/evidence/SF-AUTHORING-022-LOCAL-COMPONENTS.md`.
+    Two additional strict-schema/budget/cancellation/collision checks passed,
+    and the resource save/recovery check passed after correcting its incomplete
+    Image fixture. Historical migration checks passed 3/3, placement/schema
+    checks passed 2/2, and both final component UI journeys passed independently.
+    Original-resolution maximized and compact images were reviewed. Remaining
+    Final integrated verification passed 413 unit/integration + 56 UI = 469
+    tests, zero failures; all repository gates passed. Remaining work is the
+    authorized commit, main integration and hosted checkpoint acceptance.
+    Do not mark DONE until hosted CI passes.
+  - Subsequent owner-authorized batch: after this coherent checkpoint, create
+    a specification-backed completion roadmap and continue up to three
+    dependency-ready user-visible slices. Preserve separate commit/CI identity;
+    do not treat the historical handoff's stop instructions as current policy.
 
 ## DONE
 

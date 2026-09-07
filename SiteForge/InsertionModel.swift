@@ -152,7 +152,7 @@ enum ResponsiveVisibilitySource: Equatable, Sendable {
 
 enum ResponsiveVisibilityResolver {
     static let namespace = "responsive.visibility.v1"
-    static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link]
+    static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link, .component]
     static func supports(_ node: DocumentNode) -> Bool { supportedKinds.contains(node.kind) && node.insertionGeometry != nil }
     static func key(_ breakpoint: ResponsiveBreakpoint) -> String {
         "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).visible"
@@ -728,6 +728,167 @@ extension DocumentNode {
 /// ownership and defaulted properties. World space remains top-left/Y-down;
 /// this shared resolver feeds the renderer and selection scene rather than
 /// storing an editor-only second geometry source.
+/// Read-only component expansion. Canonical pages contain only instance roots;
+/// expanded children are revision-scoped rendering data, never a write target.
+enum ComponentResolutionError: Error, Equatable {
+    case objectLimitExceeded(Int)
+    case duplicateObject(NodeID)
+}
+
+enum ComponentGraphResolver {
+    /// Placement is scene input, not a responsive rewrite of the definition.
+    /// Bound a new instance to the visible portion of its canonical parent.
+    static func insertionGeometry(source: InsertionGeometry, parentFrame: WorldRect?,
+                                  artboard: WorldRect) -> InsertionGeometry? {
+        let parent = parentFrame ?? artboard
+        let left = max(parent.minX, artboard.minX), top = max(parent.minY, artboard.minY)
+        let right = min(parent.maxX, artboard.maxX), bottom = min(parent.maxY, artboard.maxY)
+        guard [left, top, right, bottom, source.size.width, source.size.height].allSatisfy(\.isFinite),
+              right - left >= 1, bottom - top >= 1,
+              source.size.width >= 1, source.size.height >= 1 else { return nil }
+        let width = min(source.size.width, right - left)
+        let height = min(source.size.height, bottom - top)
+        return .init(origin: .init(x: left + (right - left - width) / 2,
+                                  y: top + (bottom - top - height) / 2),
+                     size: .init(width: width, height: height))
+    }
+    /// Detachment materializes every supported breakpoint, not just the
+    /// current viewport. Instance-owned geometry keeps its original property
+    /// identities; derived child coordinates become ordinary overrides.
+    static func detachedNodes(_ instance: DocumentNode, definition: DocumentPage,
+                              page: DocumentPage) -> [DocumentNode]? {
+        guard let geometry = page.resolvedStructuralGeometry(breakpoint: .desktop)[instance.id],
+              var nodes = expand(instance, definition: definition, pageID: page.id,
+                                 geometry: geometry, breakpoint: .desktop) else { return nil }
+        for breakpoint in ResponsiveBreakpoint.allCases where breakpoint != .desktop {
+            guard let placement = page.resolvedStructuralGeometry(breakpoint: breakpoint)[instance.id],
+                  let resolved = expand(instance, definition: definition, pageID: page.id,
+                                        geometry: placement, breakpoint: breakpoint) else { return nil }
+            for index in nodes.indices where nodes[index].id != instance.id {
+                for field in GeometryInspectorField.allCases {
+                    guard let value = resolved[index].insertionProperty(field.propertyKey),
+                          value.value != nodes[index].insertionProperty(field.propertyKey)?.value else { continue }
+                    let key = ResponsiveGeometryResolver.key(field, breakpoint: breakpoint)
+                    nodes[index].properties.append(NodeProperty(
+                        id: PropertyID(DocumentPage.deterministicUUID(namespace: nodes[index].id.rawValue, label: key)),
+                        key: .init(rawValue: key), value: value.value, origin: value.origin))
+                }
+            }
+        }
+        if let index = nodes.firstIndex(where: { $0.id == instance.id }) {
+            let placement = instance.properties.filter {
+                GeometryInspectorField.allCases.map(\.propertyKey).contains($0.key.rawValue)
+                    || $0.key.rawValue.hasPrefix(ResponsiveGeometryResolver.namespace + ".")
+            }
+            let keys = Set(placement.map(\.key))
+            nodes[index].properties.removeAll { keys.contains($0.key) }
+            nodes[index].properties += placement
+        }
+        return nodes
+    }
+
+    /// Apply the renderer's existing object budget before allocating any
+    /// instance expansion. Cancellation is checked between bounded graphs.
+    static func resolvedPage(_ page: DocumentPage, in document: CanonicalDocument,
+                            breakpoint: ResponsiveBreakpoint,
+                            maximumNodes: Int = ResolvedGraphPolicy.maximumNodes,
+                            checkpoint: () throws -> Void = {}) throws -> DocumentPage {
+        let definitions = Dictionary(uniqueKeysWithValues: document.componentDefinitions.map { ($0.id, $0) })
+        var count = 0
+        for node in page.nodes {
+            try checkpoint()
+            let size = CanonicalComponentReference.definitionID(for: node)
+                .flatMap { definitions[$0]?.nodes.count } ?? 1
+            guard size <= maximumNodes - count else {
+                throw ComponentResolutionError.objectLimitExceeded(maximumNodes + 1)
+            }
+            count += size
+        }
+        let placement = page.resolvedStructuralGeometry(breakpoint: breakpoint)
+        var output = page
+        output.nodes = []
+        output.nodes.reserveCapacity(count)
+        var occupied = Set(page.nodes.map(\.id))
+        for instance in page.nodes {
+            try checkpoint()
+            guard let definitionID = CanonicalComponentReference.definitionID(for: instance),
+                  let definition = definitions[definitionID], let geometry = placement[instance.id],
+                  let expanded = expand(instance, definition: definition, pageID: page.id,
+                                        geometry: geometry, breakpoint: breakpoint) else {
+                output.nodes.append(instance)
+                continue
+            }
+            for node in expanded where node.id != instance.id {
+                try checkpoint()
+                guard occupied.insert(node.id).inserted else { throw ComponentResolutionError.duplicateObject(node.id) }
+            }
+            output.nodes += expanded
+        }
+        return output
+    }
+
+    static func expand(_ instance: DocumentNode, definition: DocumentPage, pageID: PageID,
+                       geometry: InsertionGeometry, breakpoint: ResponsiveBreakpoint) -> [DocumentNode]? {
+        guard definition.role == .componentDefinition,
+              let rootID = definition.rootNodeIDs.first,
+              !definition.nodes.contains(where: { $0.kind == .component }) else { return nil }
+        let frames = definition.resolvedStructuralGeometry(breakpoint: breakpoint)
+        guard let rootGeometry = frames[rootID] else { return nil }
+        let ids = Dictionary(uniqueKeysWithValues: definition.nodes.map { node in
+            (node.id, node.id == rootID ? instance.id : NodeID(DocumentPage.deterministicUUID(
+                namespace: instance.id.rawValue, label: "component-child:" + node.id.description)))
+        })
+        return definition.nodes.map { node in
+            let id = ids[node.id]!
+            let isRoot = node.id == rootID
+            var properties = node.properties.filter {
+                !$0.key.rawValue.hasPrefix("responsive.geometry.v1.")
+            }.map { property in
+                NodeProperty(id: PropertyID(DocumentPage.deterministicUUID(namespace: id.rawValue,
+                    label: "component-property:" + property.id.description)), key: property.key,
+                    value: property.value, origin: property.origin)
+            }
+            if let frame = frames[node.id] {
+                let values: [String: Double] = [
+                    "layout.x": isRoot ? geometry.origin.x : geometry.origin.x + frame.origin.x - rootGeometry.origin.x,
+                    "layout.y": isRoot ? geometry.origin.y : geometry.origin.y + frame.origin.y - rootGeometry.origin.y,
+                    "layout.width": isRoot ? geometry.size.width : frame.size.width,
+                    "layout.height": isRoot ? geometry.size.height : frame.size.height,
+                ]
+                for index in properties.indices {
+                    if let value = values[properties[index].key.rawValue] { properties[index].value = .number(value) }
+                }
+            }
+            if isRoot {
+                let visibility = instance.properties.filter {
+                    $0.key.rawValue.hasPrefix("responsive.visibility.v1.") || ["hidden", "locked"].contains($0.key.rawValue)
+                }
+                let keys = Set(visibility.map(\.key))
+                properties.removeAll { keys.contains($0.key) }
+                properties += visibility
+            }
+            // Internal definition links resolve to this instance's graph;
+            // outbound stable references remain untouched.
+            for index in properties.indices {
+                if properties[index].key.rawValue == CanonicalLinkTarget.namespace + "pageID",
+                   properties[index].value == .string(definition.id.description) {
+                    properties[index].value = .string(pageID.description)
+                }
+                if properties[index].key.rawValue == CanonicalLinkTarget.namespace + "nodeID",
+                   case .string(let old) = properties[index].value,
+                   let oldID = NodeID(uuidString: old), let mapped = ids[oldID] {
+                    properties[index].value = .string(mapped.description)
+                }
+            }
+            let parent: NodeParent = if isRoot { instance.parent }
+                else if case .node(let parentID) = node.parent { .node(ids[parentID]!) }
+                else { .page(pageID) }
+            return DocumentNode(id: id, kind: node.kind, name: isRoot ? instance.name : node.name,
+                parent: parent, childIDs: node.childIDs.compactMap { ids[$0] }, properties: properties)
+        }
+    }
+}
+
 enum GridRowOffsetResolver {
     /// Computes each row origin with one height read per child and one pass
     /// over the resulting rows. Keeping this work explicit prevents a prefix

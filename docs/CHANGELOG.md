@@ -1,5 +1,15 @@
 # SiteForge Development Changelog
 
+## Locally verified — SF-AUTHORING-022
+
+- Component insertion respects the selected container's visible artboard area
+  without rewriting definition geometry. Added focused strict-schema,
+  placement, history/resource-recovery and migration evidence.
+- Safe-delete and compact Components focused journeys now pass, with reviewed
+  window evidence. The confirmation Cancel control has an unambiguous native
+  accessibility identifier. Final integrated verification passed 469/469 tests;
+  hosted checkpoint acceptance remains pending.
+
 This file records user-visible behavior during development. It is not a substitute for Git history or the normative specification.
 
 ## Unreleased

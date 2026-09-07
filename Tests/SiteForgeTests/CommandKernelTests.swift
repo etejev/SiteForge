@@ -3,6 +3,314 @@ import XCTest
 
 @MainActor
 final class CommandKernelTests: XCTestCase {
+    func testComponentInsertionPlacementUsesVisibleParentIntersectionWithoutChangingSource() throws {
+        let source = InsertionGeometry(origin: .init(x: 900, y: 800), size: .init(width: 240, height: 160))
+        let artboard = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: 768, height: 1024))
+        let parent = WorldRect(origin: .init(x: 700, y: 40), size: .init(width: 200, height: 100))
+        let placed = try XCTUnwrap(ComponentGraphResolver.insertionGeometry(source: source,
+            parentFrame: parent, artboard: artboard))
+        XCTAssertEqual(placed.origin, .init(x: 700, y: 40))
+        XCTAssertEqual(placed.size, .init(width: 68, height: 100))
+        XCTAssertEqual(source.origin, .init(x: 900, y: 800))
+        XCTAssertEqual(source.size, .init(width: 240, height: 160))
+        XCTAssertNil(ComponentGraphResolver.insertionGeometry(source: source,
+            parentFrame: .init(origin: .init(x: 800, y: 40), size: .init(width: 200, height: 100)), artboard: artboard))
+        let root = try XCTUnwrap(ComponentGraphResolver.insertionGeometry(source: source, parentFrame: nil, artboard: artboard))
+        XCTAssertEqual(root.origin, .init(x: 264, y: 432))
+        XCTAssertEqual(root.size, source.size)
+    }
+    func testComponentExpansionBudgetCancellationAndCollisionAreMutationNeutral() throws {
+        var document = BlankProjectDefaults.document()
+        let definitionID = PageID(), rootID = NodeID()
+        func geometry() -> [NodeProperty] {
+            [("layout.x", 0.0), ("layout.y", 0), ("layout.width", 120), ("layout.height", 24)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            }
+        }
+        let child = DocumentNode(kind: .text, name: "Child", parent: .node(rootID), properties: geometry())
+        let root = DocumentNode(id: rootID, kind: .frame, name: "Master", parent: .page(definitionID),
+            childIDs: [child.id], properties: geometry())
+        let definition = DocumentPage(id: definitionID, name: "Card", route: .init(rawValue: ""),
+            role: .componentDefinition, provenance: .authored, rootNodeIDs: [rootID], nodes: [root, child])
+        let parentID = document.pages[0].rootNodeIDs[0]
+        let instances = (0..<100).map { _ in
+            DocumentNode(kind: .component, name: "Card", parent: .node(parentID), properties: geometry() + [
+                NodeProperty(key: .init(rawValue: CanonicalComponentReference.key), value: .string(definitionID.description))
+            ])
+        }
+        document.pages[0].nodes[0].childIDs = instances.map(\.id)
+        document.pages[0].nodes += instances
+        document.pages.append(definition)
+        let before = try DocumentSerializer.encode(document)
+        let resolved = try ComponentGraphResolver.resolvedPage(document.pages[0], in: document,
+            breakpoint: .desktop, maximumNodes: 201)
+        XCTAssertEqual(resolved.nodes.count, 201)
+        XCTAssertEqual(Set(resolved.nodes.map(\.id)).count, 201)
+        XCTAssertThrowsError(try ComponentGraphResolver.resolvedPage(document.pages[0], in: document,
+            breakpoint: .desktop, maximumNodes: 200)) {
+            XCTAssertEqual($0 as? ComponentResolutionError, .objectLimitExceeded(201))
+        }
+        XCTAssertThrowsError(try ComponentGraphResolver.resolvedPage(document.pages[0], in: document,
+            breakpoint: .desktop, checkpoint: { throw CanvasRendererError.cancelled })) {
+            XCTAssertEqual($0 as? CanvasRendererError, .cancelled)
+        }
+        XCTAssertEqual(try DocumentSerializer.encode(document), before)
+        let derivedID = NodeID(DocumentPage.deterministicUUID(namespace: instances[0].id.rawValue,
+            label: "component-child:" + child.id.description))
+        document.pages[0].nodes[0].childIDs.append(derivedID)
+        document.pages[0].nodes.append(DocumentNode(id: derivedID, kind: .frame, name: "Collision",
+            parent: .node(parentID), properties: geometry()))
+        XCTAssertThrowsError(try ComponentGraphResolver.resolvedPage(document.pages[0], in: document,
+            breakpoint: .desktop)) { XCTAssertEqual($0 as? ComponentResolutionError, .duplicateObject(derivedID)) }
+    }
+
+    func testComponentSchemaRejectsHistoricalSmugglingCyclesAndPreservesMissingReferences() throws {
+        var document = BlankProjectDefaults.document()
+        let missingID = PageID(), parentID = document.pages[0].rootNodeIDs[0]
+        let instance = DocumentNode(kind: .component, name: "Missing", parent: .node(parentID), properties: [
+            NodeProperty(key: .init(rawValue: CanonicalComponentReference.key), value: .string(missingID.description))
+        ])
+        document.pages[0].nodes[0].childIDs.append(instance.id)
+        document.pages[0].nodes.append(instance)
+        let bytes = try DocumentSerializer.encode(document)
+        XCTAssertEqual(try DocumentSerializer.decode(bytes), document)
+        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":7", with: "\"schemaVersion\":6")
+        XCTAssertThrowsError(try DocumentSerializer.decode(Data(old.utf8)))
+        let future = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":7", with: "\"schemaVersion\":8")
+        XCTAssertThrowsError(try DocumentSerializer.decode(Data(future.utf8))) {
+            XCTAssertEqual($0 as? DocumentSerializationError, .unsupportedSchema(8))
+        }
+        var invalid = document
+        invalid.pages[0].nodes[1].properties[0].value = .string("invalid")
+        XCTAssertThrowsError(try DocumentSerializer.encode(invalid))
+        let cyclicRoot = DocumentNode(kind: .component, name: "Cycle", parent: .page(missingID),
+            properties: [NodeProperty(key: .init(rawValue: CanonicalComponentReference.key),
+                                      value: .string(missingID.description))])
+        invalid = document
+        invalid.pages.append(DocumentPage(id: missingID, name: "Cycle", route: .init(rawValue: ""),
+            role: .componentDefinition, provenance: .authored, rootNodeIDs: [cyclicRoot.id], nodes: [cyclicRoot]))
+        XCTAssertThrowsError(try invalid.validate()) {
+            XCTAssertEqual($0 as? ModelValidationError, .incompatibleChildOwnership)
+        }
+        XCTAssertEqual(try DocumentSerializer.encode(document), bytes)
+    }
+
+    func testComponentDefinitionContextUsesAuthoringGraphWithoutWebsiteNavigation() throws {
+        var document = BlankProjectDefaults.document()
+        let definitionID = PageID()
+        let root = DocumentNode(kind: .frame, name: "Card", parent: .page(definitionID), properties:
+            [("layout.x", 100.0), ("layout.y", 80), ("layout.width", 240), ("layout.height", 160)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            })
+        document.pages.append(DocumentPage(id: definitionID, name: "Card", route: .init(rawValue: ""),
+            role: .componentDefinition, provenance: .authored, rootNodeIDs: [root.id], nodes: [root]))
+        let session = DocumentSession(document: document)
+        let shell = WorkspaceShellState(documentSession: session)
+        let returnPage = shell.effectiveSelectedPageID
+        shell.editComponentDefinition(definitionID)
+        XCTAssertEqual(shell.effectiveSelectedPageID, definitionID)
+        XCTAssertFalse(shell.pages.contains { $0.id == definitionID })
+        XCTAssertEqual(shell.selectionPath, "Card / No selection")
+        shell.performDefaultInsertion(.text, provenance: .menu)
+        let definition = try XCTUnwrap(session.document.componentDefinitions.first)
+        XCTAssertEqual(definition.nodes.count, 2)
+        XCTAssertEqual(definition.nodes.last?.parent, .node(root.id))
+        XCTAssertEqual(session.document.websitePages, document.websitePages)
+        shell.exitComponentDefinition()
+        XCTAssertEqual(shell.effectiveSelectedPageID, returnPage)
+        XCTAssertNil(shell.editingComponentID)
+    }
+
+    func testComponentDetachPreservesEveryBreakpointAndInstancePropertyIdentity() throws {
+        var document = BlankProjectDefaults.document()
+        let pageID = document.pages[0].id, parentID = document.pages[0].rootNodeIDs[0]
+        var root = DocumentNode(kind: .frame, name: "Card", parent: .node(parentID), properties:
+            [("layout.x", 100.0), ("layout.y", 80), ("layout.width", 240), ("layout.height", 160)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            })
+        let child = DocumentNode(kind: .text, name: "Label", parent: .node(root.id), properties:
+            [("layout.x", 120.0), ("layout.y", 90), ("layout.width", 100), ("layout.height", 24)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            })
+        root.childIDs = [child.id]
+        let mobileX = NodeProperty(key: .init(rawValue: ResponsiveGeometryResolver.key(.x, breakpoint: .mobile)),
+            value: .number(20), origin: .authored)
+        root.properties.append(mobileX)
+        document.pages[0].nodes[0].childIDs = [root.id]
+        document.pages[0].nodes += [root, child]
+        let session = DocumentSession(document: document), scene = CanvasViewportSceneID()
+        func command(_ edit: ComponentEdit) throws -> DocumentCommand {
+            try ComponentCommandRegistry().prepare(edit, identity: .init(documentID: document.id, pageID: pageID,
+                revision: session.document.revision, sceneID: scene, rendererGeneration: session.document.revision),
+                in: session.document, context: .init(activePageID: pageID, currentSceneID: scene,
+                    rendererGeneration: session.document.revision, selectedNodeIDs: [root.id],
+                    availableNodeIDs: [root.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil)).command
+        }
+        try session.execute(command(.create(root.id)))
+        let linked = session.document
+        let expected = try ResponsiveBreakpoint.allCases.map {
+            try ComponentGraphResolver.resolvedPage(linked.pages[0], in: linked, breakpoint: $0)
+                .resolvedStructuralGeometry(breakpoint: $0)
+        }
+        try session.execute(command(.detach(root.id)))
+        for (index, breakpoint) in ResponsiveBreakpoint.allCases.enumerated() {
+            XCTAssertEqual(session.document.pages[0].resolvedStructuralGeometry(breakpoint: breakpoint), expected[index])
+        }
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == root.id }?
+            .properties.first { $0.key == mobileX.key }, mobileX)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.undo()
+        var restored = session.document; restored.revision = linked.revision
+        XCTAssertEqual(restored, linked)
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].resolvedStructuralGeometry(breakpoint: .mobile), expected[2])
+    }
+
+    func testComponentCreateResolveDetachAndExactHistory() throws {
+        var document = BlankProjectDefaults.document()
+        let pageID = document.pages[0].id
+        let parentID = document.pages[0].rootNodeIDs[0]
+        let root = DocumentNode(kind: .frame, name: "Card", parent: .node(parentID), properties:
+            [("layout.x", 100.0), ("layout.y", 80.0), ("layout.width", 240.0), ("layout.height", 160.0)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            })
+        document.pages[0].nodes[0].childIDs = [root.id]
+        document.pages[0].nodes.append(root)
+        let session = DocumentSession(document: document)
+        let sceneID = CanvasViewportSceneID()
+        func prepare(_ edit: ComponentEdit) throws -> PreparedComponentEdit {
+            try ComponentCommandRegistry().prepare(edit, identity: .init(documentID: document.id, pageID: pageID,
+                revision: session.document.revision, sceneID: sceneID, rendererGeneration: session.document.revision),
+                in: session.document, context: .init(activePageID: pageID, currentSceneID: sceneID,
+                    rendererGeneration: session.document.revision, selectedNodeIDs: [root.id],
+                    availableNodeIDs: [root.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        let created = try prepare(.create(root.id))
+        try session.execute(created.command)
+        XCTAssertEqual(session.document.componentDefinitions.count, 1)
+        XCTAssertEqual(session.document.websitePages.count, 2)
+        XCTAssertEqual(session.document.pages[0].nodes.last?.id, root.id)
+        XCTAssertEqual(session.document.pages[0].nodes.last?.kind, .component)
+        let resolved = try ComponentGraphResolver.resolvedPage(session.document.pages[0], in: session.document, breakpoint: .desktop)
+        XCTAssertEqual(resolved.nodes.last?.insertionGeometry, root.insertionGeometry)
+        XCTAssertEqual(resolved.nodes.last?.kind, .frame)
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
+        try session.undo()
+        var restored = session.document; restored.revision = document.revision
+        XCTAssertEqual(restored, document)
+        try session.redo()
+        let beforeDetach = session.document
+        try session.execute(prepare(.detach(root.id)).command)
+        XCTAssertEqual(session.document.pages[0].nodes.last?.kind, .frame)
+        XCTAssertEqual(session.document.pages[0].nodes.last?.insertionGeometry, root.insertionGeometry)
+        try session.undo()
+        restored = session.document; restored.revision = beforeDetach.revision
+        XCTAssertEqual(restored, beforeDetach)
+    }
+
+    func testComponentInstancesPropagateAcrossPagesAndSafeDeleteRestoresExactGraphs() throws {
+        var document = BlankProjectDefaults.document()
+        let homeID = document.pages[0].id, otherID = document.pages[1].id
+        func node(_ name: String, parent: NodeParent, x: Double, width: Double) -> DocumentNode {
+            DocumentNode(kind: .frame, name: name, parent: parent, properties:
+                [("layout.x", x), ("layout.y", 100), ("layout.width", width), ("layout.height", 120)].map {
+                    NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+                })
+        }
+        var root = node("Component", parent: .node(document.pages[0].rootNodeIDs[0]), x: 100, width: 240)
+        let child = node("Child", parent: .node(root.id), x: 120, width: 60)
+        root.childIDs = [child.id]
+        document.pages[0].nodes[0].childIDs = [root.id]
+        document.pages[0].nodes += [root, child]
+        let session = DocumentSession(document: document)
+        let sceneID = CanvasViewportSceneID()
+        func prepare(_ edit: ComponentEdit, pageID: PageID, selected: [NodeID]) throws -> PreparedComponentEdit {
+            try ComponentCommandRegistry().prepare(edit, identity: .init(documentID: document.id, pageID: pageID,
+                revision: session.document.revision, sceneID: sceneID, rendererGeneration: session.document.revision),
+                in: session.document, context: .init(activePageID: pageID, currentSceneID: sceneID,
+                    rendererGeneration: session.document.revision, selectedNodeIDs: selected,
+                    availableNodeIDs: Set(selected), isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        let create = try prepare(.create(root.id), pageID: homeID, selected: [root.id])
+        try session.execute(create.command)
+        let definitionID = try XCTUnwrap(create.definitionID)
+        let inserted = try prepare(.insert(definitionID: definitionID, parentID: document.pages[1].rootNodeIDs[0],
+            geometry: .init(origin: .init(x: 400, y: 300), size: .init(width: 240, height: 120))), pageID: otherID, selected: [])
+        try session.execute(inserted.command)
+        let secondID = try XCTUnwrap(inserted.selectedNodeID)
+        let definition = try XCTUnwrap(session.document.componentDefinitions.first)
+        let masterChild = try XCTUnwrap(definition.nodes.first(where: { $0.name == "Child" }))
+        let width = try XCTUnwrap(masterChild.properties.first(where: { $0.key.rawValue == "layout.width" }))
+        try session.execute(.setProperty(.init(pageID: definitionID, nodeID: masterChild.id,
+            property: .init(id: width.id, key: width.key, value: .number(90), origin: .authored))))
+        let first = try ComponentGraphResolver.resolvedPage(session.document.pages[0], in: session.document, breakpoint: .desktop)
+        let second = try ComponentGraphResolver.resolvedPage(session.document.pages[1], in: session.document, breakpoint: .desktop)
+        let firstChild = try XCTUnwrap(first.nodes.first(where: { $0.name == "Child" }))
+        let secondChild = try XCTUnwrap(second.nodes.first(where: { $0.name == "Child" }))
+        XCTAssertEqual(firstChild.insertionGeometry?.size.width, 90)
+        XCTAssertEqual(secondChild.insertionGeometry?.size.width, 90)
+        XCTAssertNotEqual(firstChild.id, secondChild.id)
+        XCTAssertEqual(second.nodes.first(where: { $0.id == secondID })?.insertionGeometry?.origin.x, 400)
+        XCTAssertEqual(secondChild.insertionGeometry?.origin.x, 420)
+        XCTAssertEqual(session.document.pages[0].nodes.count, 2, "Expanded children must never serialize into the instance page")
+        XCTAssertThrowsError(try prepare(.delete(definitionID: definitionID, detachUses: false), pageID: homeID, selected: [root.id]))
+        let before = session.document
+        try session.execute(prepare(.delete(definitionID: definitionID, detachUses: true), pageID: homeID, selected: [root.id]).command)
+        XCTAssertTrue(session.document.componentDefinitions.isEmpty)
+        XCTAssertEqual(session.document.pages[0].nodes.first(where: { $0.id == root.id })?.kind, .frame)
+        XCTAssertEqual(session.document.pages[1].nodes.first(where: { $0.id == secondID })?.kind, .frame)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.undo()
+        var restored = session.document; restored.revision = before.revision
+        XCTAssertEqual(restored, before)
+        try session.redo()
+        XCTAssertTrue(session.document.componentDefinitions.isEmpty)
+    }
+
+    func testComponentInvalidCancelledAndStaleIdentityRemainNeutral() throws {
+        var document = BlankProjectDefaults.document()
+        let pageID = document.pages[0].id
+        let root = DocumentNode(kind: .frame, name: "Private component name", parent: .node(document.pages[0].rootNodeIDs[0]), properties:
+            [("layout.x", 100.0), ("layout.y", 80), ("layout.width", 240), ("layout.height", 160)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            })
+        document.pages[0].nodes[0].childIDs = [root.id]; document.pages[0].nodes.append(root)
+        let scene = CanvasViewportSceneID()
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: pageID, revision: 0, sceneID: scene, rendererGeneration: 0)
+        let context = TransformValidationContext(activePageID: pageID, currentSceneID: scene, rendererGeneration: 0,
+            selectedNodeIDs: [root.id], availableNodeIDs: [root.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let registry = ComponentCommandRegistry()
+        XCTAssertThrowsError(try registry.prepare(.create(root.id), identity: identity, in: document, context: context, cancelled: true))
+        let stale: [DesignInspectorOperationIdentity] = [
+            .init(documentID: DocumentID(), pageID: pageID, revision: 0, sceneID: scene, rendererGeneration: 0),
+            .init(documentID: document.id, pageID: PageID(), revision: 0, sceneID: scene, rendererGeneration: 0),
+            .init(documentID: document.id, pageID: pageID, revision: 1, sceneID: scene, rendererGeneration: 0),
+            .init(documentID: document.id, pageID: pageID, revision: 0, sceneID: CanvasViewportSceneID(), rendererGeneration: 0),
+            .init(documentID: document.id, pageID: pageID, revision: 0, sceneID: scene, rendererGeneration: 1),
+        ]
+        for value in stale { XCTAssertThrowsError(try registry.prepare(.create(root.id), identity: value, in: document, context: context)) }
+        for selection in [[], [root.id, root.id], [NodeID()]] as [[NodeID]] {
+            let changed = TransformValidationContext(activePageID: pageID, currentSceneID: scene, rendererGeneration: 0,
+                selectedNodeIDs: selection, availableNodeIDs: [root.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+            XCTAssertThrowsError(try registry.prepare(.create(root.id), identity: identity, in: document, context: changed))
+        }
+        for key in ["locked", "hidden"] {
+            var blocked = document
+            blocked.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: key), value: .boolean(true)))
+            XCTAssertThrowsError(try registry.prepare(.create(root.id), identity: identity, in: blocked, context: context))
+        }
+        var unsupported = document; unsupported.pages[0].nodes[1].kind = .text
+        XCTAssertThrowsError(try registry.prepare(.create(root.id), identity: identity, in: unsupported, context: context))
+        let diagnostics = CommandDiagnostics()
+        diagnostics.recordComponentOperation(pageID: pageID, nodeIDs: [root.id], succeeded: false, durationMilliseconds: 1)
+        XCTAssertEqual(diagnostics.records.last?.requirementIDs.first, "SF-0901-008")
+        XCTAssertFalse(String(describing: diagnostics.records).contains(root.name))
+        XCTAssertFalse(String(describing: diagnostics.records).contains(root.id.description))
+        XCTAssertEqual(document.revision, 0)
+        XCTAssertTrue(document.componentDefinitions.isEmpty)
+    }
+
     func testStaticPageRoutesValidationIdentityAndAtomicHistory() throws {
         let unicodeCopy = try StaticPagePolicy.duplicateName(String(repeating: "界", count: 85))
         XCTAssertLessThanOrEqual(unicodeCopy.utf8.count, 256)
@@ -486,7 +794,7 @@ final class CommandKernelTests: XCTestCase {
 
         XCTAssertEqual(first, second)
         let json = String(decoding: first, as: UTF8.self)
-        XCTAssertTrue(json.contains("\"schemaVersion\":6"))
+        XCTAssertTrue(json.contains("\"schemaVersion\":7"))
         XCTAssertTrue(json.contains("\"origin\":\"authored\""))
     }
 
@@ -500,7 +808,7 @@ final class CommandKernelTests: XCTestCase {
     // SF-0302-004, SF-1702-004, SF-1702-008
     func testUnknownMalformedAndInvalidSchemaInputsAreRejected() throws {
         let valid = String(decoding: try DocumentSerializer.encode(populatedDocument()), as: UTF8.self)
-        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":6", with: "\"schemaVersion\":99").utf8)
+        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":7", with: "\"schemaVersion\":99").utf8)
         XCTAssertThrowsError(try DocumentSerializer.decode(unknown)) { error in
             XCTAssertEqual(error as? DocumentSerializationError, .unsupportedSchema(99))
         }

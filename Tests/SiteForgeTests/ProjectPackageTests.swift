@@ -57,7 +57,7 @@ final class ProjectPackageTests: XCTestCase {
         let manifest = try XCTUnwrap(members.first(where: { $0.path == "manifest.json" }))
         let text = String(decoding: manifest.data, as: UTF8.self)
         XCTAssertTrue(text.contains("\"packageVersion\":1"))
-        XCTAssertTrue(text.contains("\"documentSchemaVersion\":6"))
+        XCTAssertTrue(text.contains("\"documentSchemaVersion\":7"))
         XCTAssertTrue(text.contains(projectID.description))
         XCTAssertTrue(text.contains("\"sha256\""))
     }
@@ -135,6 +135,8 @@ final class ProjectPackageTests: XCTestCase {
 
         let first = try await store.decode(legacyPackage)
         let second = try await store.decode(legacyPackage)
+        XCTAssertTrue(first.document.componentDefinitions.isEmpty)
+        XCTAssertFalse(first.document.pages.flatMap(\.nodes).contains { $0.kind == .component })
         XCTAssertEqual(first.projectID.description, "11000000-0000-0000-0000-000000000001")
         XCTAssertEqual(first.document.id.description, "21000000-0000-0000-0000-000000000001")
         XCTAssertEqual(first.document.creationKind, .migratedLegacy)
@@ -254,6 +256,7 @@ final class ProjectPackageTests: XCTestCase {
             sha256: "3ab14ab513e8932395579540750016e3a73f4742e9d463574c6443b3f4303b12"
         )
         let legacy = try await store.decode(legacyData)
+        XCTAssertTrue(legacy.document.componentDefinitions.isEmpty)
         let page = try XCTUnwrap(legacy.document.pages.only)
         let nodeID = NodeID(UUID(uuidString: "63000000-0000-0000-0000-000000000004")!)
         let legacyNode = try XCTUnwrap(page.nodes.first(where: { $0.id == nodeID }))

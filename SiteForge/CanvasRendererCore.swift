@@ -472,7 +472,7 @@ enum CanvasRendererError: Error, Equatable, LocalizedError, Sendable {
 }
 
 enum CanvasRendererPolicy {
-    static let maximumObjects = 20_000
+    static let maximumObjects = ResolvedGraphPolicy.maximumNodes
     static let tileDevicePixels = 512
     static let maximumTiles = 512
     static let maximumRasterDimension = 32_768.0

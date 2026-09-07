@@ -1,6 +1,17 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-05.
+Last updated: 2026-09-07.
+
+SF-AUTHORING-022 is locally verified; hosted acceptance remains pending. Focused checks cover
+pre-allocation expansion limits, strict schema rejection, resource save/recovery
+and historical fixtures. New component placement respects the visible selected
+parent. Revised safe-delete and compact visual acceptance now pass in native
+XCTest: both focused journeys passed independently, and retained window images
+were reviewed. The earlier automation authentication block is resolved.
+Final `./sf verify` passed 413 unit/integration + 56 UI = 469 tests, zero
+failures, with all repository gates green. See
+`docs/evidence/SF-AUTHORING-022-LOCAL-COMPONENTS.md`. Hosted acceptance is not
+inferred from this local result.
 
 SF-AUTHORING-021 is locally verified: native static page creation, name/route
 editing, duplicate/delete/reorder and live link targets share canonical

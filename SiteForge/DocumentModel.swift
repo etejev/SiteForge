@@ -1,6 +1,12 @@
 import CryptoKit
 import Foundation
 
+/// Bound derived graph expansion and renderer preparation with one budget.
+/// This is an execution limit, not serialized project state.
+enum ResolvedGraphPolicy {
+    static let maximumNodes = 20_000
+}
+
 /// Canonical v1 structural-layout tokens shared by model validation,
 /// deterministic layout resolution, and the Inspector command registry.
 enum ContainerLayoutAxis: String, CaseIterable, Sendable { case vertical, horizontal }
@@ -415,6 +421,8 @@ enum PageRole: String, Codable, Equatable, Sendable {
     case home
     case notFound
     case standard
+    /// A reusable node graph, never a website route.
+    case componentDefinition
 }
 
 enum PageProvenance: String, Codable, Equatable, Sendable {
@@ -750,7 +758,7 @@ struct DocumentPage: Codable, Equatable, Identifiable, Sendable {
         )
     }
 
-    fileprivate static func deterministicUUID(namespace: UUID, label: String) -> UUID {
+    static func deterministicUUID(namespace: UUID, label: String) -> UUID {
         var data = Data(namespace.uuidString.lowercased().utf8)
         data.append(Data(label.utf8))
         var bytes = Array(SHA256.hash(data: data).prefix(16))
@@ -871,6 +879,35 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// SF-0901: definitions reuse the ordered canonical graph, but have no route.
+/// References may be missing so damage never silently replaces authored intent.
+enum CanonicalComponentReference {
+    static let namespace = "component.instance.v1."
+    static let key = namespace + "definitionID"
+
+    static func definitionID(for node: DocumentNode) -> PageID? {
+        guard node.kind == .component,
+              let property = node.properties.first(where: { $0.key.rawValue == key }),
+              case .string(let value) = property.value else { return nil }
+        return PageID(uuidString: value)
+    }
+
+    static func validate(_ node: DocumentNode) throws {
+        let properties = node.properties.filter { $0.key.rawValue.hasPrefix("component.") }
+        guard !properties.isEmpty else { return }
+        guard node.kind == .component, properties.count == 1,
+              properties[0].key.rawValue == key,
+              definitionID(for: node) != nil, node.childIDs.isEmpty else {
+            throw ModelValidationError.invalidComponentReference
+        }
+    }
+}
+
+extension CanonicalDocument {
+    var componentDefinitions: [DocumentPage] { pages.filter { $0.role == .componentDefinition } }
+    var websitePages: [DocumentPage] { pages.filter { $0.role != .componentDefinition } }
+}
+
 enum BlankProjectDefaults {
     static let requirementIDs: Set<String> = [
         "SF-0301-001", "SF-0301-002", "SF-0301-005", "SF-0301-006", "SF-0301-008",
@@ -974,10 +1011,12 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case duplicateAssetContent
     case invalidImageAsset
     case invalidImageReference
+    case invalidComponentReference
 
     var errorDescription: String? {
         switch self {
         case .revisionNotIncrementable: "The document revision cannot accept another transaction."
+        case .invalidComponentReference: "The component reference is malformed or belongs to an incompatible object."
         case .emptyPageList: "A project must contain at least one page."
         case .duplicatePageID: "Page identifiers must be unique."
         case .duplicatePageRoute: "Published page routes must be unique."
@@ -1024,7 +1063,7 @@ enum CanonicalResponsiveGeometryNamespaceValidator {
         "60000000-0000-4000-8000-000000000003",
     ]
     private static let fields: Set<String> = ["x", "y", "width", "height"]
-    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link, .component]
 
     static func validate(_ node: DocumentNode) throws {
         let properties = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
@@ -1098,7 +1137,7 @@ enum CanonicalResponsiveVisibilityNamespaceValidator {
     static func validate(_ node: DocumentNode) throws {
         let properties = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
         guard !properties.isEmpty else { return }
-        guard [.frame, .text, .section, .stack, .grid, .button, .link].contains(node.kind) else {
+        guard [.frame, .text, .section, .stack, .grid, .image, .button, .link, .component].contains(node.kind) else {
             throw ModelValidationError.invalidResponsiveVisibilityState
         }
         for property in properties {
@@ -1357,14 +1396,15 @@ extension CanonicalDocument {
     func validate(checkpoint: () throws -> Void = {}) throws {
         try checkpoint()
         guard revision < UInt64.max else { throw ModelValidationError.revisionNotIncrementable }
-        guard !pages.isEmpty else { throw ModelValidationError.emptyPageList }
+        guard pages.contains(where: { $0.role != .componentDefinition }) else { throw ModelValidationError.emptyPageList }
         guard Set(pages.map(\.id)).count == pages.count else {
             throw ModelValidationError.duplicatePageID
         }
-        guard Set(pages.map(\.route)).count == pages.count else {
+        let websitePages = pages.filter { $0.role != .componentDefinition }
+        guard Set(websitePages.map(\.route)).count == websitePages.count else {
             throw ModelValidationError.duplicatePageRoute
         }
-        let specialRoles = pages.map(\.role).filter { $0 != .standard }
+        let specialRoles = websitePages.map(\.role).filter { $0 != .standard }
         guard Set(specialRoles).count == specialRoles.count else {
             throw ModelValidationError.duplicatePageRole
         }
@@ -1434,9 +1474,9 @@ private extension DocumentPage {
             throw ModelValidationError.invalidPageName
         }
         let routeValue = route.rawValue
-        guard routeValue.first == "/", !routeValue.contains("?"), !routeValue.contains("#"),
-              !routeValue.contains("//"),
-              routeValue == "/" || !routeValue.hasSuffix("/") else {
+        guard role == .componentDefinition ? routeValue.isEmpty : (routeValue.first == "/" && !routeValue.contains("?") && !routeValue.contains("#") &&
+              !routeValue.contains("//") &&
+              (routeValue == "/" || !routeValue.hasSuffix("/"))) else {
             throw ModelValidationError.invalidPageRoute
         }
         guard !rootNodeIDs.isEmpty, !nodes.isEmpty else {
@@ -1455,6 +1495,14 @@ private extension DocumentPage {
         }
 
         let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        if role == .componentDefinition {
+            guard rootNodeIDs.count == 1,
+                  let root = nodesByID[rootNodeIDs[0]],
+                  root.kind.acceptsAuthoredChildren,
+                  !nodes.contains(where: { $0.kind == .component }) else {
+                throw ModelValidationError.incompatibleChildOwnership
+            }
+        }
         let childrenByParent = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, Set($0.childIDs)) })
         for rootID in rootNodeIDs {
             try checkpoint()
@@ -1515,6 +1563,7 @@ private extension DocumentPage {
                 throw ModelValidationError.duplicatePropertyKey
             }
             try CanonicalFillLayerNamespaceValidator.validate(node)
+            try CanonicalComponentReference.validate(node)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
             try CanonicalLinkTarget.validate(node)
@@ -1619,7 +1668,7 @@ enum DocumentSerializationError: Error, Equatable, LocalizedError {
 enum DocumentSerializer {
     // Schema 6 adds Button/Link kinds and their closed v1 property namespace.
     // Historical schemas cannot acquire these kinds by permissive decoding.
-    static let currentSchemaVersion = 6
+    static let currentSchemaVersion = 7
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -1914,7 +1963,7 @@ enum DocumentSerializer {
             } catch {
                 throw DocumentSerializationError.malformedInput
             }
-        case 5, currentSchemaVersion:
+        case 5, 6, currentSchemaVersion:
             do {
                 let strictDecoder = JSONDecoder()
                 strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
@@ -1930,6 +1979,12 @@ enum DocumentSerializer {
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
         try checkpoint()
+        if header.schemaVersion < 7,
+           document.pages.contains(where: { $0.role == .componentDefinition || $0.nodes.contains(where: {
+               $0.properties.contains { $0.key.rawValue.hasPrefix(CanonicalComponentReference.namespace) }
+           }) }) {
+            throw DocumentSerializationError.malformedInput
+        }
         if header.schemaVersion < 6,
            document.pages.contains(where: { $0.nodes.contains { $0.kind.isLinkControl } }) {
             throw DocumentSerializationError.malformedInput

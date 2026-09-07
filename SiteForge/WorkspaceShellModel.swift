@@ -371,6 +371,7 @@ enum NavigatorPageAccessibility {
         case .home: "Home page"
         case .notFound: "Not Found page"
         case .standard: "Standard page"
+        case .componentDefinition: "Component definition"
         }
     }
 }
@@ -701,7 +702,12 @@ actor WorkspaceScenePreparationWorker {
             scale: request.viewport.pixelRatio
         )
 
-        let activePage = request.document.pages.first { $0.id == request.activePageID }
+        let canonicalPage = request.document.pages.first { $0.id == request.activePageID }
+        let activePage = try canonicalPage.map {
+            try ComponentGraphResolver.resolvedPage($0, in: request.document, breakpoint: request.breakpoint,
+                maximumNodes: CanvasRendererPolicy.maximumObjects,
+                checkpoint: { if Task.isCancelled { throw WorkspaceScenePreparationError.cancelled } })
+        }
         let orderedActiveNodes = activePage?.canonicalDepthFirstNodes() ?? []
         let resolvedGeometry = activePage?.resolvedStructuralGeometry(breakpoint: request.breakpoint) ?? [:]
         let effectivelyVisible = activePage?.effectiveVisibleNodeIDs(breakpoint: request.breakpoint) ?? []
@@ -847,7 +853,7 @@ actor WorkspaceScenePreparationWorker {
         var fallbackOrder = renderObjects.count
         var selectionTargets: [SelectionTargetSnapshot] = []
         selectionTargets.reserveCapacity(activePage?.nodes.count ?? 0)
-        if let page = activePage {
+        if let page = canonicalPage {
             let names = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0.name) })
             let structuralRootIDs = Set(page.rootNodeIDs.filter { rootID in
                 page.nodes.first(where: { $0.id == rootID })?.insertionGeometry == nil
@@ -1006,6 +1012,9 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var lastLinkInspectorAnnouncement = "Button and Link properties"
     @Published var pageEditorRequest: PageEditorRequest?
     @Published private(set) var pageAnnouncement = ""
+    @Published private(set) var componentAnnouncement = ""
+    @Published private(set) var editingComponentID: PageID?
+    private var componentReturnContext: (PageID, NodeID?)?
     private(set) var linkInspectorDiagnostics: [LinkInspectorDiagnostic] = []
     @Published private(set) var snapResolution: SnapResolution?
     @Published private(set) var isSnappingSuppressed = false
@@ -1510,9 +1519,91 @@ final class WorkspaceShellState: ObservableObject {
         }
     }
 
-    var pages: [DocumentPage] { documentSession.document.pages }
+    var pages: [DocumentPage] { documentSession.document.websitePages }
+    // Website navigation excludes definitions, but authoring commands must
+    // resolve the currently edited canonical graph, including definitions.
+    private var activeAuthoringPage: DocumentPage? {
+        documentSession.document.pages.first { $0.id == effectiveSelectedPageID }
+    }
+    var componentDefinitions: [DocumentPage] { documentSession.document.componentDefinitions }
+    var selectedComponent: DocumentNode? {
+        selectedCanonicalNodes.count == 1 && selectedCanonicalNodes[0].kind == .component ? selectedCanonicalNodes[0] : nil
+    }
+    var canCreateComponent: Bool {
+        editingComponentID == nil && pageEditingIsAvailable && selectedCanonicalNodes.count == 1
+            && selectedCanonicalNodes[0].kind.acceptsAuthoredChildren && selectedCanonicalNodes[0].insertionGeometry != nil
+    }
+    func componentUsageCount(_ id: PageID) -> Int {
+        documentSession.document.websitePages.reduce(0) { total, page in
+            total + page.nodes.filter { CanonicalComponentReference.definitionID(for: $0) == id }.count
+        }
+    }
+    func createComponent() {
+        guard let id = selectionState.primaryID else { return }
+        performComponentEdit(.create(id))
+    }
+    func insertComponent(_ id: PageID) {
+        guard let definition = componentDefinitions.first(where: { $0.id == id }),
+              let rootID = definition.rootNodeIDs.first,
+              let root = definition.nodes.first(where: { $0.id == rootID }),
+              let geometry = root.insertionGeometry, let parent = insertionParentID else { return }
+        let parentFrame = activeAuthoringPage?.resolvedStructuralGeometry(
+            breakpoint: viewportPreset.responsiveBreakpoint)[parent]?.frame
+        guard let placement = ComponentGraphResolver.insertionGeometry(source: geometry,
+            parentFrame: parentFrame, artboard: viewportState.contentBounds) else {
+            componentAnnouncement = "The selected container has no visible insertion area. Reveal it or choose another parent."
+            return
+        }
+        performComponentEdit(.insert(definitionID: id, parentID: parent, geometry: placement))
+    }
+    func detachComponent() {
+        guard let id = selectedComponent?.id else { return }
+        performComponentEdit(.detach(id))
+    }
+    func deleteComponent(_ id: PageID, detachUses: Bool) {
+        performComponentEdit(.delete(definitionID: id, detachUses: detachUses))
+    }
+    private func performComponentEdit(_ edit: ComponentEdit) {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else { return }
+        let started = DispatchTime.now().uptimeNanoseconds
+        var succeeded = false
+        defer {
+            documentSession.diagnostics.recordComponentOperation(pageID: pageID,
+                nodeIDs: selectionState.orderedIDs, succeeded: succeeded,
+                durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+        }
+        do {
+            let prepared = try ComponentCommandRegistry().prepare(edit, identity: .init(
+                documentID: documentSession.document.id, pageID: pageID, revision: documentSession.document.revision,
+                sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration),
+                in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.command)
+            succeeded = true
+            pendingSelectionAfterInsertion = prepared.selectedNodeID
+            scheduleScenePreparation()
+            componentAnnouncement = "Component change committed"
+        } catch { componentAnnouncement = error.localizedDescription }
+        announcementPoster.post(componentAnnouncement)
+    }
+    func editComponentDefinition(_ id: PageID) {
+        guard let definition = componentDefinitions.first(where: { $0.id == id }),
+              let pageID = effectiveSelectedPageID, editingComponentID == nil else { return }
+        componentReturnContext = (pageID, selectionState.primaryID)
+        editingComponentID = id
+        selectPage(id)
+        pendingSelectionAfterInsertion = definition.rootNodeIDs.first
+        componentAnnouncement = "Editing component definition; changes update linked instances"
+    }
+    func exitComponentDefinition() {
+        guard let context = componentReturnContext else { return }
+        editingComponentID = nil
+        componentReturnContext = nil
+        selectPage(pages.contains(where: { $0.id == context.0 }) ? context.0 : pages[0].id)
+        pendingSelectionAfterInsertion = context.1
+        componentAnnouncement = "Returned to page; linked instances updated"
+    }
 
-    var pageEditingIsAvailable: Bool { transformValidationContext.isLifecycleAvailable }
+    var pageEditingIsAvailable: Bool { editingComponentID == nil && transformValidationContext.isLifecycleAvailable }
 
     func presentPageEditor(_ mode: PageEditorRequest.Mode, pageID: PageID? = nil) {
         guard pageEditingIsAvailable, let id = pageID ?? effectiveSelectedPageID,
@@ -1552,6 +1643,9 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     var effectiveSelectedPageID: PageID? {
+        if let editingComponentID, componentDefinitions.contains(where: { $0.id == editingComponentID }) {
+            return editingComponentID
+        }
         guard let selectedPageID, pages.contains(where: { $0.id == selectedPageID }) else {
             return pages.first?.id
         }
@@ -1559,7 +1653,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func selectPage(_ pageID: PageID) {
-        guard pages.contains(where: { $0.id == pageID }) else { return }
+        guard pages.contains(where: { $0.id == pageID }) || editingComponentID == pageID else { return }
         cancelDragDrop()
         cancelInsertion(resetTool: true)
         cancelTransform()
@@ -1729,8 +1823,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     var selectionPath: String {
-        guard let pageID = effectiveSelectedPageID,
-              let page = pages.first(where: { $0.id == pageID }) else { return "No selection" }
+        guard let page = activeAuthoringPage else { return "No selection" }
         guard !selectionState.isEmpty else { return "\(page.name) / No selection" }
         if selectionState.count > 1 { return "\(page.name) / \(selectionState.count) objects" }
         return "\(page.name) / \(selectionSummary)"
@@ -4027,7 +4120,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private var insertionValidationContext: InsertionValidationContext {
-        let page = pages.first(where: { $0.id == effectiveSelectedPageID })
+        let page = activeAuthoringPage
         // Structural page roots intentionally do not produce render objects,
         // but they remain valid canonical insertion destinations for an empty
         // page. A newly inserted canonical container can also become the
@@ -4096,7 +4189,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private var insertionParentID: NodeID? {
-        guard let page = pages.first(where: { $0.id == effectiveSelectedPageID }) else { return nil }
+        guard let page = activeAuthoringPage else { return nil }
         if let primaryID = selectionState.primaryID,
            page.nodes.first(where: { $0.id == primaryID })?.kind.acceptsAuthoredChildren == true {
             return primaryID
@@ -4112,7 +4205,7 @@ final class WorkspaceShellState: ObservableObject {
     ) -> AuthoringInsertionCommand? {
         guard let pageID = effectiveSelectedPageID,
               let parentID = insertionParentID,
-              let page = pages.first(where: { $0.id == pageID }),
+              let page = activeAuthoringPage,
               let parent = page.nodes.first(where: { $0.id == parentID }) else { return nil }
         // Availability queries occur before a tool is armed. They must model
         // the same current document/page/revision boundary as the eventual
@@ -4409,6 +4502,9 @@ final class WorkspaceShellState: ObservableObject {
         selectedGuideID = nil
         pendingSelectionAfterInsertion = nil
         pendingSelectionLifecycleBoundary = nil
+        editingComponentID = nil
+        componentReturnContext = nil
+        componentAnnouncement = ""
         canvasRendererFailure = nil
         viewportFailure = nil
         lastViewportAnnouncement = "Canvas viewport reset for the opened document"

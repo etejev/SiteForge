@@ -2176,7 +2176,128 @@ final class SiteForgeLaunchTests: XCTestCase {
         let componentsMenuItem = application.menuItems["Components"]
         XCTAssertTrue(componentsMenuItem.waitForExistence(timeout: 3))
         componentsMenuItem.click()
-        XCTAssertTrue(application.descendants(matching: .any)["navigator.components.unavailable"].waitForExistence(timeout: 3))
+        XCTAssertTrue(application.buttons["components.create"].waitForExistence(timeout: 3))
+        XCTAssertFalse(application.buttons["components.create"].isEnabled)
+    }
+
+    // SF-0901-002/005/006: only native menus and Inspector controls author
+    // definitions/instances; the package is reopened by a fresh app process.
+    func testLocalComponentsCreateLinkEditDetachAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("local-components.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application)
+        @MainActor func menu(_ menu: String, _ action: String) {
+            application.menuBars.menuBarItems[menu].click()
+            XCTAssertTrue(waitForEnabled(application.menuItems[action]))
+            application.menuItems[action].click()
+        }
+        @MainActor func hex(_ value: String) {
+            application.buttons["inspector.tab.design"].click()
+            let field = application.textFields["inspector.design.fillHex"]
+            XCTAssertTrue(waitForHittable(field, in: application))
+            field.click(); field.typeKey("a", modifierFlags: .command); field.typeText(value)
+            field.typeKey(.return, modifierFlags: [])
+            XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: value))
+        }
+        menu("Insert", "Insert Frame at Center")
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        hex("#336699FF")
+        menu("Insert", "Insert Text at Center")
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        application.buttons["navigator.tab.layers"].click()
+        let frameRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame")).firstMatch
+        XCTAssertTrue(frameRow.waitForExistence(timeout: 3)); frameRow.click()
+        let originalID = canvasObject(named: "Frame", in: application).identifier
+        menu("Component", "Create Component from Selection")
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, originalID)
+        let componentsOverflow = application.descendants(matching: .any)["navigator.tab.overflow"]
+        XCTAssertTrue(waitForHittable(componentsOverflow, in: application)); componentsOverflow.click()
+        application.menuItems["Components"].click()
+        XCTAssertTrue(application.buttons["components.create"].waitForExistence(timeout: 3))
+        XCTAssertTrue(application.staticTexts["inspector.component.provenance"].exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-022 original linked instance")
+
+        let deleteDefinition = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "components.delete.")).firstMatch
+        XCTAssertTrue(waitForHittable(deleteDefinition, in: application))
+        deleteDefinition.click()
+        XCTAssertTrue(application.buttons["Detach Uses and Delete"].waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-022 safe delete confirmation")
+        application.buttons["components.delete.cancel"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, originalID)
+        XCTAssertTrue(application.staticTexts["inspector.component.provenance"].exists)
+
+        menu("Page", "New Page…")
+        let name = application.textFields["page.editor.name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        name.click(); name.typeKey("a", modifierFlags: .command); name.typeText("Instances")
+        application.buttons["page.editor.apply"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+        application.menuBars.menuBarItems["Component"].click()
+        application.menuItems["Insert Component"].click()
+        application.menuItems["Insert Frame Component"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        let secondID = canvasObject(named: "Frame", in: application).identifier
+        XCTAssertNotEqual(secondID, originalID)
+        menu("Component", "Edit Definition")
+        XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForHittable(application.buttons["components.exit"], in: application))
+        hex("#994422FF")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-022 definition editing")
+        application.buttons["components.exit"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, secondID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-022 propagated second instance")
+        menu("Component", "Detach Instance")
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: "#994422FF"))
+        application.typeKey("z", modifierFlags: .command)
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: "#994422FF"))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, secondID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-022 detached undo redo")
+        saveDocumentIfModified(in: application)
+        terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("components-recovery"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        application.buttons["navigator.tab.pages"].click()
+        let page = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "navigator.page.", "Instances, route ")).firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 3)); page.click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, secondID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-022 reopened detached instance")
+    }
+
+    func testLocalComponentsConstrainedMinimumOverflowAndCancellationJourney() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeWindowSize", "minimum", "-SiteForgeUITestWindowAlignment", TestWindowAlignment.right.rawValue
+        ])
+        XCTAssertEqual(application.descendants(matching: .any)["workspace.shell"].frame.width, 1_100, accuracy: 2)
+        application.menuBars.menuBarItems["Insert"].click()
+        application.menuItems["Insert Frame at Center"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let originalID = canvasObject(named: "Frame", in: application).identifier
+        application.menuBars.menuBarItems["Component"].click()
+        application.menuItems["Create Component from Selection"].click()
+        let overflow = application.descendants(matching: .any)["navigator.tab.overflow"]
+        XCTAssertTrue(waitForHittable(overflow, in: application))
+        overflow.click()
+        XCTAssertTrue(application.menuItems["Components"].isEnabled)
+        application.menuItems["Components"].click()
+        for prefix in ["components.insert.", "components.edit.", "components.delete."] {
+            let button = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", prefix)).firstMatch
+            XCTAssertTrue(waitForHittable(button, in: application))
+            XCTAssertTrue(button.isEnabled)
+        }
+        attachWindowScreenshot(application, named: "SF-AUTHORING-022 compact Components overflow")
+        application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "components.delete.")).firstMatch.click()
+        XCTAssertTrue(application.buttons["Detach Uses and Delete"].waitForExistence(timeout: 3))
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, originalID)
+        XCTAssertTrue(application.buttons["components.edit.selected"].exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-022 compact keyboard cancellation")
     }
 
     // SF-0402-001 through SF-0402-008, SF-0407-001 through SF-0407-006
@@ -2190,9 +2311,41 @@ final class SiteForgeLaunchTests: XCTestCase {
     // canonical history and a separate-process package reopen.
     func testStaticPageManagementRoutesHistoryAndReopenJourney() throws {
         let project = fixtureRoot.appendingPathComponent("static-pages.siteforge")
-        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"),
+            windowAlignment: leadingEdgeAlignmentOnNarrowDisplay)
         XCTAssertTrue(waitForWorkspaceReady(application))
-        assertNormalWindowPolicy(in: application)
+        assertNormalWindowPolicy(in: application,
+            permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay: leadingEdgeAlignmentOnNarrowDisplay != nil)
+        // Preserve real pointer coverage on a display narrower than the
+        // product minimum. Drag the native title bar to reveal the region;
+        // never change product sizing or synthesize a command/model shortcut.
+        @MainActor func reveal(_ query: @autoclosure @escaping () -> XCUIElement) {
+            guard let visible = NSScreen.main?.visibleFrame else { return }
+            // A control already inside the display is valid. The constrained
+            // window inset is not an additional per-control clipping margin.
+            let safe = visible
+            let frame = query().frame
+            let delta = frame.minX < safe.minX ? safe.minX - frame.minX
+                : frame.maxX > safe.maxX ? safe.maxX - frame.maxX : 0
+            if delta != 0 {
+                let window = application.windows.firstMatch
+                // The top title-bar strip is above toolbar controls. Screen
+                // X has the same origin in AppKit and XCTest; no Y conversion
+                // is involved in this strictly horizontal native drag.
+                let start = window.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: window.frame.width / 2, dy: 8))
+                start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: delta, dy: 0)))
+            }
+            XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let element = query()
+                return element.isHittable && element.frame.minX >= safe.minX - 1 && element.frame.maxX <= safe.maxX + 1
+            }, object: application)], timeout: 3) == .completed,
+                "The real control must be fully inside the usable display: \(query().debugDescription)")
+        }
+        @MainActor func clickButton(_ identifier: String) {
+            reveal(application.buttons[identifier])
+            application.buttons[identifier].click()
+        }
         @MainActor func pageRow(_ name: String) -> XCUIElement {
             application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "navigator.page.", name + ", route ")).firstMatch
         }
@@ -2204,32 +2357,34 @@ final class SiteForgeLaunchTests: XCTestCase {
         @MainActor func draft(_ id: String, _ value: String) {
             let field = application.textFields[id]
             XCTAssertTrue(field.waitForExistence(timeout: 3))
-            field.click(); field.typeKey("a", modifierFlags: .command); field.typeText(value)
+            reveal(application.textFields[id])
+            let liveField = application.textFields[id]
+            liveField.click(); liveField.typeKey("a", modifierFlags: .command); liveField.typeText(value)
         }
-        application.buttons["navigator.tab.pages"].click()
-        application.buttons["navigator.pages.new"].click()
+        clickButton("navigator.tab.pages")
+        clickButton("navigator.pages.new")
         draft("page.editor.name", "About")
         draft("page.editor.route", "/about")
-        application.buttons["page.editor.apply"].click()
+        clickButton("page.editor.apply")
         XCTAssertTrue(pageRow("About").waitForExistence(timeout: 3))
         let stableID = pageRow("About").identifier
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
         attachWindowScreenshot(application, named: "SF-AUTHORING-021 new empty page")
         menu("Rename Page…")
         draft("page.editor.name", "Team")
-        application.buttons["page.editor.apply"].click()
+        clickButton("page.editor.apply")
         XCTAssertTrue(pageRow("Team").waitForExistence(timeout: 3))
         XCTAssertEqual(pageRow("Team").identifier, stableID)
         menu("Edit Route…")
         draft("page.editor.route", "/404")
-        application.buttons["page.editor.apply"].click()
+        clickButton("page.editor.apply")
         XCTAssertTrue(application.staticTexts["page.editor.validation"].waitForExistence(timeout: 3))
         attachWindowScreenshot(application, named: "SF-AUTHORING-021 invalid protected route")
         application.typeKey(.escape, modifierFlags: [])
         XCTAssertEqual(pageRow("Team").label, "Team, route /about")
         menu("Edit Route…")
         draft("page.editor.route", "/team")
-        application.buttons["page.editor.apply"].click()
+        clickButton("page.editor.apply")
         XCTAssertEqual(pageRow("Team").label, "Team, route /team")
         application.menuBars.menuBarItems["Insert"].click()
         application.menuItems["Insert Frame at Center"].click()
@@ -2246,20 +2401,22 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(pageRow("Team Copy").exists)
         menu("Delete Page…")
-        application.buttons["page.editor.apply"].click()
+        clickButton("page.editor.apply")
         XCTAssertTrue(pageRow("Team Copy").waitForNonExistence(timeout: 3))
-        application.buttons["toolbar.undo"].click()
+        clickButton("toolbar.undo")
         XCTAssertTrue(pageRow("Team Copy").waitForExistence(timeout: 3))
-        application.buttons["toolbar.redo"].click()
+        clickButton("toolbar.redo")
         XCTAssertTrue(pageRow("Team Copy").waitForNonExistence(timeout: 3))
+        reveal(pageRow("Team"))
         pageRow("Team").click()
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, frameID)
         saveDocumentIfModified(in: application)
         terminateAndWait(application)
-        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("pages-reopen-recovery"))
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("pages-reopen-recovery"),
+            windowAlignment: leadingEdgeAlignmentOnNarrowDisplay)
         XCTAssertTrue(waitForWorkspaceReady(application))
-        application.buttons["navigator.tab.pages"].click()
+        clickButton("navigator.tab.pages")
         XCTAssertTrue(pageRow("Team").waitForExistence(timeout: 3))
         XCTAssertEqual(pageRow("Team").identifier, stableID)
         XCTAssertEqual(pageRow("Team").label, "Team, route /team")

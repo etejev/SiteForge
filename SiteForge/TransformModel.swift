@@ -830,6 +830,167 @@ extension Array where Element == CanonicalFillLayer {
 /// diagnostics. Canonical mutations still travel through the same registry.
 enum DesignInspectorProvenance: String, Codable, Sendable { case picker, stepper, hexadecimal, keyboard, focusLoss, accessibility, automation }
 
+enum ComponentEdit: Sendable {
+    case create(NodeID)
+    case insert(definitionID: PageID, parentID: NodeID, geometry: InsertionGeometry)
+    case detach(NodeID)
+    case delete(definitionID: PageID, detachUses: Bool)
+}
+
+struct PreparedComponentEdit: Sendable {
+    let command: DocumentCommand
+    let selectedNodeID: NodeID?
+    let definitionID: PageID?
+}
+
+/// All UI component actions compile complete graph changes into the existing
+/// atomic command kernel. Graph replacement preserves storage order as well as
+/// ownership order, and therefore has an exact existing-command inverse.
+struct ComponentCommandRegistry {
+    func prepare(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity,
+                 in document: CanonicalDocument, context: TransformValidationContext,
+                 cancelled: Bool = false) throws -> PreparedComponentEdit {
+        guard !cancelled else { throw TransformError.cancelled }
+        guard context.isLifecycleAvailable else { throw TransformError.lifecycleUnavailable("Component editing is unavailable.") }
+        guard identity.documentID == document.id else { throw TransformError.staleDocument }
+        guard identity.revision == document.revision else { throw TransformError.staleRevision }
+        guard document.revision < UInt64.max - 1 else { throw TransformError.revisionExhausted }
+        guard identity.sceneID == context.currentSceneID,
+              identity.rendererGeneration == context.rendererGeneration,
+              identity.rendererGeneration == document.revision else { throw TransformError.staleRenderer }
+        guard identity.pageID == context.activePageID,
+              let index = document.pages.firstIndex(where: { $0.id == identity.pageID }) else { throw TransformError.pageUnavailable }
+        var page = document.pages[index]
+        guard page.role != .componentDefinition else {
+            throw CommandExecutionError.disabled("Exit definition editing before creating, inserting or detaching an instance.")
+        }
+        func replace(_ graph: DocumentPage, at index: Int) -> [DocumentCommand] {
+            [.removePage(.init(pageID: graph.id)), .insertPage(.init(page: graph, index: index))]
+        }
+        func selected(_ id: NodeID) throws -> DocumentNode {
+            guard context.selectedNodeIDs == [id] else { throw TransformError.selectionMismatch }
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw TransformError.missingTarget }
+            guard context.availableNodeIDs.contains(id) else { throw TransformError.unavailableTarget }
+            guard !node.selectionBooleanProperty("locked") else { throw TransformError.lockedTarget }
+            guard !node.selectionBooleanProperty("hidden") else { throw TransformError.hiddenTarget }
+            return node
+        }
+        switch edit {
+        case .create(let id):
+            let root = try selected(id)
+            guard root.kind.acceptsAuthoredChildren, let rootGeometry = root.insertionGeometry,
+                  [rootGeometry.origin.x, rootGeometry.origin.y, rootGeometry.size.width, rootGeometry.size.height].allSatisfy({ $0.isFinite && abs($0) <= 1_000_000_000 }),
+                  rootGeometry.size.width >= 1, rootGeometry.size.height >= 1 else { throw TransformError.incompatibleGeometry }
+            let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            var included = Set<NodeID>(), pending = [id]
+            while let next = pending.popLast() {
+                guard included.insert(next).inserted, let node = byID[next], node.kind != .component else {
+                    throw CommandExecutionError.disabled("Nested component authoring is unavailable.")
+                }
+                pending += node.childIDs
+            }
+            let descendants = included.subtracting([id])
+            for otherPage in document.pages {
+                for node in otherPage.nodes where !included.contains(node.id) {
+                    if let target = node.insertionStringProperty(CanonicalLinkTarget.namespace + "nodeID"),
+                       let targetID = NodeID(uuidString: target), descendants.contains(targetID) {
+                        throw CommandExecutionError.disabled("Remove inbound links to child sections before creating this component.")
+                    }
+                }
+            }
+            let definitionID = PageID()
+            let ids = Dictionary(uniqueKeysWithValues: included.map { ($0, NodeID()) })
+            let nodes = page.nodes.filter { included.contains($0.id) }.map { node in
+                var properties = node.properties.map { NodeProperty(key: $0.key, value: $0.value, origin: $0.origin) }
+                for i in properties.indices {
+                    if properties[i].key.rawValue == CanonicalLinkTarget.namespace + "nodeID",
+                       case .string(let value) = properties[i].value,
+                       let oldID = NodeID(uuidString: value), let newID = ids[oldID] {
+                        properties[i].value = .string(newID.description)
+                        if let pageIndex = properties.firstIndex(where: { $0.key.rawValue == CanonicalLinkTarget.namespace + "pageID" }) {
+                            properties[pageIndex].value = .string(definitionID.description)
+                        }
+                    }
+                }
+                let parent: NodeParent = node.id == id ? .page(definitionID) : {
+                    if case .node(let parentID) = node.parent { return .node(ids[parentID]!) }
+                    return .page(definitionID)
+                }()
+                return DocumentNode(id: ids[node.id]!, kind: node.kind, name: node.name, parent: parent,
+                    childIDs: node.childIDs.map { ids[$0]! }, properties: properties)
+            }
+            let definition = DocumentPage(id: definitionID, name: root.name,
+                route: .init(rawValue: ""), role: .componentDefinition, provenance: .authored,
+                rootNodeIDs: [ids[id]!], nodes: nodes)
+            let instance = Self.instance(id: id, name: root.name, parent: root.parent,
+                                         definitionID: definitionID, geometry: root.insertionGeometry!,
+                                         preserved: root.properties)
+            page.nodes = page.nodes.compactMap { node in
+                node.id == id ? instance : included.contains(node.id) ? nil : node
+            }
+            return .init(command: .batch(replace(page, at: index) + [.insertPage(.init(page: definition, index: document.pages.count))]),
+                         selectedNodeID: id, definitionID: definitionID)
+        case .insert(let definitionID, let parentID, let geometry):
+            guard let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+                  let parentIndex = page.nodes.firstIndex(where: { $0.id == parentID }),
+                  page.nodes[parentIndex].kind.acceptsAuthoredChildren,
+                  !page.nodes[parentIndex].selectionBooleanProperty("locked"),
+                  !page.nodes[parentIndex].selectionBooleanProperty("hidden"),
+                  [geometry.origin.x, geometry.origin.y, geometry.size.width, geometry.size.height].allSatisfy(\.isFinite),
+                  geometry.size.width > 0, geometry.size.height > 0 else { throw TransformError.incompatibleGeometry }
+            let instance = Self.instance(id: NodeID(), name: definition.name, parent: .node(parentID),
+                                         definitionID: definitionID, geometry: geometry)
+            page.nodes[parentIndex].childIDs.append(instance.id)
+            page.nodes.append(instance)
+            return .init(command: .batch(replace(page, at: index)), selectedNodeID: instance.id, definitionID: definitionID)
+        case .detach(let id):
+            let instance = try selected(id)
+            guard let definitionID = CanonicalComponentReference.definitionID(for: instance),
+                  let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+                  let expanded = ComponentGraphResolver.detachedNodes(instance, definition: definition, page: page) else {
+                throw CommandExecutionError.disabled("The definition is missing. Restore it before detaching to preserve appearance.")
+            }
+            page.nodes = page.nodes.flatMap { $0.id == id ? expanded : [$0] }
+            return .init(command: .batch(replace(page, at: index)), selectedNodeID: id, definitionID: nil)
+        case .delete(let definitionID, let detachUses):
+            guard let definition = document.componentDefinitions.first(where: { $0.id == definitionID }) else { throw TransformError.missingTarget }
+            var commands: [DocumentCommand] = []
+            for (pageIndex, original) in document.pages.enumerated() where original.role != .componentDefinition {
+                var graph = original
+                let uses = graph.nodes.filter { CanonicalComponentReference.definitionID(for: $0) == definitionID }
+                guard uses.isEmpty || detachUses else {
+                    throw CommandExecutionError.disabled("This component is in use. Choose Detach Uses and Delete, or cancel.")
+                }
+                for instance in uses {
+                    guard !instance.selectionBooleanProperty("locked") else { throw TransformError.lockedTarget }
+                    guard let expanded = ComponentGraphResolver.detachedNodes(instance, definition: definition,
+                        page: graph) else { throw TransformError.incompatibleGeometry }
+                    graph.nodes = graph.nodes.flatMap { $0.id == instance.id ? expanded : [$0] }
+                }
+                if !uses.isEmpty { commands += replace(graph, at: pageIndex) }
+            }
+            commands += document.guides.filter { $0.pageID == definitionID }.map { .removeGuide(.init(guideID: $0.id)) }
+            commands.append(.removePage(.init(pageID: definitionID)))
+            return .init(command: .batch(commands), selectedNodeID: nil, definitionID: nil)
+        }
+    }
+
+    private static func instance(id: NodeID, name: String, parent: NodeParent, definitionID: PageID,
+                                 geometry: InsertionGeometry, preserved: [NodeProperty] = []) -> DocumentNode {
+        var properties = preserved.filter {
+            $0.key.rawValue.hasPrefix("responsive.geometry.v1.") || $0.key.rawValue.hasPrefix("responsive.visibility.v1.")
+                || ["hidden", "locked"].contains($0.key.rawValue)
+        }
+        for (key, value) in [("layout.x", geometry.origin.x), ("layout.y", geometry.origin.y),
+                             ("layout.width", geometry.size.width), ("layout.height", geometry.size.height)] {
+            properties.append(preserved.first(where: { $0.key.rawValue == key })
+                ?? NodeProperty(key: .init(rawValue: key), value: .number(value)))
+        }
+        properties.append(NodeProperty(key: .init(rawValue: CanonicalComponentReference.key), value: .string(definitionID.description)))
+        return DocumentNode(id: id, kind: .component, name: name, parent: parent, properties: properties)
+    }
+}
+
 struct DesignInspectorOperationIdentity: Equatable, Sendable {
     let documentID: DocumentID
     let pageID: PageID
@@ -1350,7 +1511,7 @@ struct GeometryInspectorCommandRegistry: Sendable {
         "SF-0602-005", "SF-0602-006", "SF-0602-008",
     ]
 
-    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link]
+    private static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link, .component]
 
     static func supportsFixedGeometry(_ kind: NodeKind) -> Bool {
         supportedKinds.contains(kind)

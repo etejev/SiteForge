@@ -608,7 +608,7 @@ final class TransformModelTests: XCTestCase {
     // SF-0403-001, SF-0403-004, SF-0403-008
     func testGeometryInspectorSupportsOnlyDeclaredNodeKindsAndRedactsDiagnostics() throws {
         let registry = GeometryInspectorCommandRegistry()
-        for kind in [NodeKind.frame, .text, .section, .stack, .grid] {
+        for kind in [NodeKind.frame, .text, .section, .stack, .grid, .component] {
             var fixture = makeFixture()
             fixture.document.pages[0].nodes[1].kind = kind
             applyStructuralDefaults(for: kind, to: &fixture.document.pages[0].nodes[1])
@@ -623,6 +623,9 @@ final class TransformModelTests: XCTestCase {
 
         var unsupported = makeFixture()
         unsupported.document.pages[0].nodes[1].kind = .component
+        // Components now support fixed geometry. An omitted requested property
+        // still has no base value to edit and must remain mutation-neutral.
+        unsupported.document.pages[0].nodes[1].properties.removeAll { $0.key.rawValue == "layout.x" }
         XCTAssertThrowsError(try registry.prepare(
             unsupported.inspectorCommand(field: .x, value: 20),
             in: unsupported.document,
@@ -631,6 +634,7 @@ final class TransformModelTests: XCTestCase {
 
         var subset = makeFixture(selectedIDs: [])
         subset.document.pages[0].nodes[2].kind = .component
+        subset.document.pages[0].nodes[2].properties.removeAll { $0.key.rawValue == "layout.y" }
         subset.selectedIDs = [subset.nodeID, subset.secondNodeID]
         let partial = try registry.prepare(
             subset.inspectorCommand(field: .y, value: 55),
@@ -1763,6 +1767,9 @@ final class TransformModelTests: XCTestCase {
         let visibilityRegistry = ResponsiveVisibilityCommandRegistry()
         var partialDocument = session.document
         partialDocument.pages[0].nodes[2].kind = .component
+        // A linked instance is applicable; a non-rendering node without a
+        // complete geometry is not. Preserve explicit subset rejection proof.
+        partialDocument.pages[0].nodes[2].properties.removeAll { $0.key.rawValue == "layout.width" }
         let partialFixture = fixture.with(document: partialDocument)
         let partialVisibility = try visibilityRegistry.prepare(.init(
             identity: .init(editID: GeometryInspectorEditID(), documentID: partialDocument.id,

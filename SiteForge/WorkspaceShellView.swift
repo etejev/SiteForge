@@ -393,7 +393,7 @@ private struct NavigatorView: View {
                 AssetsNavigatorView(state: state)
                     .id(NavigatorTab.assets)
             } else if state.navigatorTab == .components {
-                FutureNavigatorDestinationView(tab: .components)
+                ComponentsNavigatorView(state: state)
                     .id(NavigatorTab.components)
             }
         }
@@ -401,6 +401,77 @@ private struct NavigatorView: View {
         .workspaceChrome(.navigator)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.navigator.rawValue)
+    }
+}
+
+private struct ComponentsNavigatorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @State private var deleting: PageID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button("Create from Selection", action: state.createComponent)
+                .disabled(!state.canCreateComponent)
+                .help("Select one authored Frame, Section, Stack or Grid. Nested components are not supported.")
+                .accessibilityIdentifier("components.create")
+            if state.componentDefinitions.isEmpty {
+                Text("Turn a selected container into a reusable local component.")
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(state.componentDefinitions) { definition in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(definition.name).fontWeight(.semibold).lineLimit(1).help(definition.name)
+                            Text("\(state.componentUsageCount(definition.id)) linked instances").font(.caption)
+                            HStack {
+                                Button("Insert") { state.insertComponent(definition.id) }
+                                    .disabled(state.editingComponentID != nil || !state.pageEditingIsAvailable)
+                                    .accessibilityIdentifier("components.insert." + definition.id.description)
+                                Button("Edit") { state.editComponentDefinition(definition.id) }
+                                    .disabled(state.editingComponentID != nil)
+                                    .accessibilityIdentifier("components.edit." + definition.id.description)
+                                Button("Delete", role: .destructive) { deleting = definition.id }
+                                    .disabled(state.editingComponentID != nil || !state.pageEditingIsAvailable)
+                                    .accessibilityIdentifier("components.delete." + definition.id.description)
+                            }
+                        }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("components.definition." + definition.id.description)
+                    }
+                }
+            }
+            if let instance = state.selectedComponent {
+                Text("Linked instance · appearance inherited from definition")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                if let id = CanonicalComponentReference.definitionID(for: instance),
+                   state.componentDefinitions.contains(where: { $0.id == id }) {
+                    Button("Edit Definition") { state.editComponentDefinition(id) }
+                        .accessibilityIdentifier("components.edit.selected")
+                    Button("Detach Instance", action: state.detachComponent)
+                        .disabled(!state.pageEditingIsAvailable)
+                        .accessibilityIdentifier("components.detach")
+                } else {
+                    Text("Definition missing. Restore it to recover this instance; its identity and placement are retained.")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if !state.componentAnnouncement.isEmpty {
+                Text(state.componentAnnouncement).font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("components.status")
+            }
+        }
+        .confirmationDialog("Delete component? Linked uses will become independent objects.",
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+                if let id = deleting {
+                    Button(state.componentUsageCount(id) == 0 ? "Delete Component" : "Detach Uses and Delete", role: .destructive) {
+                        state.deleteComponent(id, detachUses: true); deleting = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) { deleting = nil }
+                    .accessibilityIdentifier("components.delete.cancel")
+            }
     }
 }
 
@@ -981,6 +1052,23 @@ private struct CanvasPlaceholderView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let id = state.editingComponentID {
+                HStack {
+                    Text("Editing Component: \(state.componentDefinitions.first(where: { $0.id == id })?.name ?? "Unavailable")")
+                        .lineLimit(1)
+                    Spacer()
+                    Button("Exit Definition", action: state.exitComponentDefinition)
+                        .accessibilityIdentifier("components.exit")
+                }
+                .padding(8)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(.bar)
+                // Like the viewport controls, the edit breadcrumb must
+                // composite above the native canvas's backing layers.
+                .zIndex(1)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("components.editing.context")
+            }
             ViewportControlsView(state: state, focus: focus, tabRouter: tabRouter)
                 // The header owns its intrinsic one-, two-, or three-row
                 // height. A fixed 40-point band clipped the second empty-state
@@ -2062,7 +2150,7 @@ private struct ControlInspectorFieldsView: View {
                     if kind == "page", let id = PageID(uuidString: $0) { submit(.target(.page(id)), provenance: "picker") }
                 })) {
                     Text("Choose a page").tag("")
-                    ForEach(document.pages, id: \.id) { Text("\($0.name) — \($0.route.rawValue)").tag($0.id.description) }
+                    ForEach(document.websitePages, id: \.id) { Text("\($0.name) — \($0.route.rawValue)").tag($0.id.description) }
                     if !page.isEmpty && !document.pages.contains(where: { $0.id.description == page }) { Text("Missing page").tag(page) }
                 }.accessibilityIdentifier("inspector.interactions.link.page")
             }
@@ -2210,8 +2298,26 @@ private struct InspectorView: View {
     private var inspectorDetails: some View {
         switch state.inspectorTab {
         case .design:
-            DesignInspectorFieldsView(state: state)
-                .id(state.geometryInspectorSelectionKey)
+            if let instance = state.selectedComponent {
+                Text("Linked Component").font(.headline)
+                Text("Appearance is inherited from the definition. Edit the definition to update linked instances, or detach to edit this instance independently.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.component.provenance")
+                if let id = CanonicalComponentReference.definitionID(for: instance),
+                   state.componentDefinitions.contains(where: { $0.id == id }) {
+                    Button("Edit Definition") { state.editComponentDefinition(id) }
+                        .accessibilityIdentifier("inspector.component.edit")
+                    Button("Detach Instance", action: state.detachComponent)
+                        .disabled(!state.pageEditingIsAvailable)
+                        .accessibilityIdentifier("inspector.component.detach")
+                } else {
+                    Text("Definition unavailable. Restore the definition to recover this instance.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                DesignInspectorFieldsView(state: state)
+                    .id(state.geometryInspectorSelectionKey)
+            }
         case .layout:
             Text(state.transformGeometrySummary)
                 .monospacedDigit()
@@ -3990,6 +4096,27 @@ struct SiteForgeCommands: Commands {
                let page = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }) {
                 PageActionButtons(state: state, page: page)
                     .disabled(!state.pageEditingIsAvailable)
+            }
+        }
+
+        CommandMenu("Component") {
+            Button("Create Component from Selection") { commandState?.createComponent() }
+                .disabled(commandState?.canCreateComponent != true)
+            if let state = commandState {
+                Menu("Insert Component") {
+                    ForEach(state.componentDefinitions) { definition in
+                        Button("Insert \(definition.name) Component") { state.insertComponent(definition.id) }
+                            .accessibilityIdentifier("components.menu.insert." + definition.id.description)
+                    }
+                }.disabled(state.editingComponentID != nil || state.componentDefinitions.isEmpty || !state.pageEditingIsAvailable)
+                if let instance = state.selectedComponent,
+                   let id = CanonicalComponentReference.definitionID(for: instance) {
+                    Button("Edit Definition") { state.editComponentDefinition(id) }
+                    Button("Detach Instance", action: state.detachComponent)
+                        .disabled(!state.pageEditingIsAvailable)
+                }
+                Button("Exit Definition", action: state.exitComponentDefinition)
+                    .disabled(state.editingComponentID == nil)
             }
         }
 

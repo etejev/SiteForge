@@ -1,5 +1,48 @@
 # Codex Continuation Handoff
 
+## Current owner-authorized work
+
+Latest evidence (2026-09-07): placement/cycle checks pass 2/2, historical
+migration checks pass 3/3, and resource recovery passes 1/1. Both
+`testLocalComponentsCreateLinkEditDetachAndReopenJourney` and
+`testLocalComponentsConstrainedMinimumOverflowAndCancellationJourney` now pass
+independently. Six final main-journey and two compact original-resolution
+screenshots were reviewed. Final `./sf verify` passed 413 unit/integration +
+56 UI = 469 tests, zero failures, with repository gates green. Commit and
+ordinary main integration/push are authorized; hosted acceptance remains
+pending. `COMPLETION_ROADMAP.md` records the provisional map.
+
+Resolved authentication incident: the native runner startup log at 15:48:33 reports
+“Writer daemon requires authentication to enable automation mode”, followed by
+LocalAuthentication requesting “Enable UI Automation”. The console session is
+active, Xcode and command-line selection both use the same Xcode installation,
+and no SiteForge app/runner remained. The owner subsequently approved native
+automation and both test bodies executed. Do not reset privacy databases or
+kill shared testmanagerd. The passing main result records an internal QoS
+warning; see the evidence chronology rather than claiming warning-free runtime.
+
+`SF-AUTHORING-022` is IN PROGRESS on `sf-authoring-022-local-components`.
+Preserve the uncommitted SF-AUTHORING-021 pointer-placement repair. Hosted
+run `34003323869` failed because the Pages control was outside the narrow
+screen; do not describe hosted acceptance as green. The component scope,
+sequence and exclusions are recorded in CODEX_QUEUE. Canonical definition
+graphs, linked resolution, native create/edit/detach controls and five focused
+model tests are implemented. The corrected complete UI journey passed and
+original-resolution attachments were reviewed. Migration/recovery/boundedness
+focused acceptance and the combined final gate are green. After completing this checkpoint,
+the owner authorizes up to three dependency-ready user-visible slices selected
+from a specification-backed completion roadmap. Historical stop instructions
+below are not current restrictions. Commit, safe main integration and ordinary
+push are authorized; security and verification requirements are unchanged.
+
+The historical checkpoint notes below describe preceding acceptance, not
+the current authorization. One combined final gate is required after the
+repair and bounded component implementation; do not repeat broad tests
+while iterating. Native Xcode can launch the exact page journey even when
+the managed command-line runner times out enabling automation mode.
+
+## Historical checkpoint notes
+
 Active work: SF-AUTHORING-021 on `sf-authoring-021-pages-routes`. Native Pages
 actions and central validation/transactions are implemented. Five model and
 two new UI selectors, plus the affected compact target selector, passed.
