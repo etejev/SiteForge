@@ -1,53 +1,26 @@
 # Codex Continuation Handoff
 
-## Current owner-authorized work
+## Current verified checkpoint
 
-Current hosted repair: run `34169229028` passed 413 non-UI and 55/57 UI,
-including the component journey. Constrained placement was reapplying after
-native moves; the helper also used touch rather than mouse dragging. The
-native image-panel wait followed an ambiguous replacement text field. These
-boundaries now have six passing focused selectors and reviewed attachments.
-Temporary tracing is removed. Finish hosted acceptance without another
-unchanged broad local suite; do not start a new feature during this repair.
+SF-AUTHORING-022 and the preserved SF-AUTHORING-021 hosted repair are VERIFIED
+AND DONE within their bounded scopes. Main is pushed at production checkpoint
+`bb5992fa20d7dfe277a47e5d5c40e5ae11f10452`. Actions `34172995329` passed
+`./sf verify`: 414 unit/integration + 58 UI = 472 tests, zero failures.
 
-Latest evidence (2026-09-07): placement/cycle checks pass 2/2, historical
-migration checks pass 3/3, and resource recovery passes 1/1. Both
-`testLocalComponentsCreateLinkEditDetachAndReopenJourney` and
-`testLocalComponentsConstrainedMinimumOverflowAndCancellationJourney` now pass
-independently. Six final main-journey and two compact original-resolution
-screenshots were reviewed. Final `./sf verify` passed 413 unit/integration +
-56 UI = 469 tests, zero failures, with repository gates green. Commit and
-ordinary main integration/push are authorized; hosted acceptance remains
-pending. `COMPLETION_ROADMAP.md` records the provisional map.
+The native window helper now uses mouse dragging with a stationary coordinate
+anchor. Explicit constrained placement applies once rather than locking later
+user moves. The Image journey follows the exact native Go to Folder field.
+Six directly affected focused selectors pass; reviewed original-resolution
+evidence and preceding failed attempts are recorded in
+`docs/evidence/SF-AUTHORING-022-LOCAL-COMPONENTS.md`. Temporary tracing is removed.
+Do not repeat unchanged broad suites or reinterpret earlier pending notes as
+current failures. The working checkpoint contains no new feature beyond 022.
 
-Resolved authentication incident: the native runner startup log at 15:48:33 reports
-“Writer daemon requires authentication to enable automation mode”, followed by
-LocalAuthentication requesting “Enable UI Automation”. The console session is
-active, Xcode and command-line selection both use the same Xcode installation,
-and no SiteForge app/runner remained. The owner subsequently approved native
-automation and both test bodies executed. Do not reset privacy databases or
-kill shared testmanagerd. The passing main result records an internal QoS
-warning; see the evidence chronology rather than claiming warning-free runtime.
-
-`SF-AUTHORING-022` is IN PROGRESS on `main`; the component branch and
-SF-AUTHORING-021 pointer-placement repair are integrated and pushed. Hosted
-run `34003323869` failed because the Pages control was outside the narrow
-screen; do not describe hosted acceptance as green. The component scope,
-sequence and exclusions are recorded in CODEX_QUEUE. Canonical definition
-graphs, linked resolution, native create/edit/detach controls and five focused
-model tests are implemented. The corrected complete UI journey passed and
-original-resolution attachments were reviewed. Migration/recovery/boundedness
-focused acceptance and the combined final gate are green. After completing this checkpoint,
-the owner authorizes up to three dependency-ready user-visible slices selected
-from a specification-backed completion roadmap. Historical stop instructions
-below are not current restrictions. Commit, safe main integration and ordinary
-push are authorized; security and verification requirements are unchanged.
-
-The historical checkpoint notes below describe preceding acceptance, not
-the current authorization. One combined final gate is required after the
-repair and bounded component implementation; do not repeat broad tests
-while iterating. Native Xcode can launch the exact page journey even when
-the managed command-line runner times out enabling automation mode.
+The owner authorized ordinary commits/main integration/push for this checkpoint.
+No next feature was started during the hosted repair. Consult CODEX_QUEUE and
+the specification-backed COMPLETION_ROADMAP before selecting a later bounded
+slice; READY is currently empty. Component nesting, variants, slots, per-child
+overrides, remote libraries, export/runtime and release remain excluded.
 
 ## Historical checkpoint notes
 

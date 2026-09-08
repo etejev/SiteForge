@@ -1,6 +1,10 @@
 # SiteForge Development Changelog
 
-## Locally verified — SF-AUTHORING-022
+## Verified — SF-AUTHORING-022
+
+- Final hosted verification passed 472/472 tests at `bb5992f` in Actions
+  `34172995329`, closing the component checkpoint and preserved Pages repair.
+  The following entries retain the focused-repair chronology.
 
 - Explicit constrained launch placement no longer locks subsequent native
   window movement. Hosted pointer helpers use macOS mouse dragging, and the

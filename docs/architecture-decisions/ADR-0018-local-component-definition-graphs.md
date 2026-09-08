@@ -1,6 +1,6 @@
 # ADR-0018: Local component definition graphs
 
-- Status: Implemented — local milestone verification passed
+- Status: Implemented — local and hosted milestone verification passed (Actions 34172995329)
 - Requirements: SF-0901-001–005, SF-0905-003–005
 
 ## Implemented boundary

@@ -1,12 +1,14 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-05.
+Last updated: 2026-09-08.
 
-Current checkpoint: SF-AUTHORING-021 static page management, locally verified.
-The authorized feature branch preserves the preceding Button/Link checkpoint;
-focused evidence and seven reviewed window images pass. Final `./sf verify`
-passed 404 unit/integration + 54 UI tests (458/458). The authorized commit,
-push and hosted verification complete the delivery boundary.
+Current checkpoint: SF-AUTHORING-022 reusable local components and the preserved
+SF-AUTHORING-021 pointer repair are hosted verified. Actions `34172995329`
+for `bb5992f` passed `./sf verify`: 414 unit/integration + 58 UI = 472 tests,
+zero failures. Linked definitions, insertion, editing, detach, history and
+reopen have reviewed native UI evidence. Native constrained window movement
+and exact image-panel ownership are repaired without reducing product width
+or weakening persistence assertions. No next feature was started.
 
 Preceding feature: SF-AUTHORING-020 Button/Link local authoring is locally verified.
 The prior hosted-green SF-AUTHORING-019 repair is preserved. New controls

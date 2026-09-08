@@ -1,8 +1,19 @@
 # SF-AUTHORING-022 focused implementation evidence
 
-Status: LOCALLY VERIFIED; hosted checkpoint acceptance pending.
+Status: VERIFIED AND DONE within the bounded local-component scope.
 Requirements: bounded SF-0901-001–008 and SF-0905-003–005;
 the normative modules remain Partial.
+
+## Final hosted acceptance — 2026-09-08
+
+[Actions 34172995329](https://github.com/etejev/SiteForge/actions/runs/34172995329)
+passed `./sf verify` for `bb5992fa20d7dfe277a47e5d5c40e5ae11f10452`:
+414 unit/integration and 58 UI tests, 472 total, zero failures. Native window
+movement passed in 13.531 seconds, image import/reopen in 67.851 seconds and
+page management in 111.198 seconds; both component journeys also passed.
+The full hosted job completed successfully in 43 minutes with all repository
+gates green. Earlier pending/failed entries below are dated chronology, not
+the current checkpoint status. No next feature was started during this repair.
 
 ## Authoritative final local gate — 2026-09-07
 

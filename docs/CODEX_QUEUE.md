@@ -8,7 +8,11 @@ None.
 
 ## IN PROGRESS
 
-- [ ] `SF-AUTHORING-022` Reusable local components.
+None.
+
+## DONE
+
+- [x] `SF-AUTHORING-022` Reusable local components (hosted verified).
   - Requirements: bounded `SF-0901-001`–`008`, supporting `SF-0905-003`–`005`
     identity, inheritance and exact history. These modules remain Partial.
   - Plan: first repair SF-AUTHORING-021's narrow-display pointer journey;
@@ -20,13 +24,13 @@ None.
     placement; no serialized expanded copies or blank-project fixtures.
   - Exclusions: nested authoring, variants, slots, per-child overrides, remote
     libraries, export/runtime/publishing and release acceptance.
-  - SF-AUTHORING-021 remains locally verified but hosted failed: run
+  - Earlier SF-AUTHORING-021 hosted failure: run
     `34003323869` exposed Pages outside the narrow display's leading edge.
     The pointer repair passed two focused window-policy tests and the exact
     native-Xcode page journey (1/1, 112.949 seconds); five retained images were
     reviewed. Managed automation initialization failed before the test body,
-    so those earlier attempts are not product failures. Hosted acceptance is
-    still pending the integrated checkpoint.
+    so those earlier attempts are not product failures. The integrated hosted
+    checkpoint below subsequently passed.
   - Component progress: five focused command/resolution/history/context tests pass,
     including detachment across all three breakpoints. The real create/link/
     edit/detach/reopen journey passed after visual corrections (1/1, 96.221
@@ -39,24 +43,22 @@ None.
     checks passed 2/2, and both final component UI journeys passed independently.
     Original-resolution maximized and compact images were reviewed.
     Final integrated verification passed 413 unit/integration + 56 UI = 469
-    tests, zero failures; all repository gates passed. Remaining work is the
-    hosted checkpoint acceptance after authorized main integration/push.
+    tests, zero failures; all repository gates passed.
     Run `34165188350` passed 413 non-UI and 54/56 UI tests; the two
     narrow-display pointer failures and focused corrections are recorded in
     the component evidence. Do not restart unrelated feature work.
     Follow-up `34169229028` passed the component workflow but exposed a
     constrained-placement observer lock and an ambiguous image-panel query.
     Both boundaries are corrected with six passing affected selectors,
-    including a real native window-movement regression. Await hosted gate.
-    Do not mark DONE until hosted CI passes.
+    including a real native window-movement regression. Actions `34172995329`
+    for `bb5992f` passed final `./sf verify`: 414 unit/integration + 58 UI =
+    472 tests, zero failures. This also closes SF-AUTHORING-021's hosted gate.
   - Subsequent owner-authorized batch: after this coherent checkpoint, create
     a specification-backed completion roadmap and continue up to three
     dependency-ready user-visible slices. Preserve separate commit/CI identity;
     do not treat the historical handoff's stop instructions as current policy.
 
-## DONE
-
-- [x] `SF-AUTHORING-021` Static page management and route editing (locally verified).
+- [x] `SF-AUTHORING-021` Static page management and route editing (hosted verified).
   - Requirements: bounded `SF-0303-001`–`008`, supporting `SF-0306-005`,
     `SF-0307-001`–`005` and `SF-1102-001`–`005`. OD-003 special-page roles
     and ADR-0003/0004 identity/history invariants remain authoritative.
@@ -74,7 +76,7 @@ None.
     pass, plus the affected prior Button/Link compact target journey. Seven
     retained window images were reviewed. Final `./sf verify` passed 404
     unit/integration + 54 UI = 458 tests, zero failures. Hosted verification
-    follows the verified commit and is not inferred from local results. See
+    passed in integrated run `34172995329` at `bb5992f` (472/472). See
     `docs/evidence/SF-AUTHORING-021-STATIC-PAGES.md`.
 
 - [x] `SF-AUTHORING-020` Implement Button and Link authoring.

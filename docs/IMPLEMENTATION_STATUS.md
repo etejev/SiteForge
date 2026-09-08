@@ -1,8 +1,14 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-07.
+Last updated: 2026-09-08.
 
-SF-AUTHORING-022 is locally verified; hosted acceptance remains pending. Focused checks cover
+SF-AUTHORING-022 and the integrated SF-AUTHORING-021 hosted repair are VERIFIED
+AND DONE within their bounded scopes. Actions `34172995329` at `bb5992f`
+passed `./sf verify`: 414 unit/integration + 58 UI = 472 tests, zero failures.
+The notes below preserve the local and hosted-repair chronology; they do not
+supersede this final result. Normative component modules remain Partial.
+
+Pre-hosted local evidence: focused checks cover
 pre-allocation expansion limits, strict schema rejection, resource save/recovery
 and historical fixtures. New component placement respects the visible selected
 parent. Revised safe-delete and compact visual acceptance now pass in native
@@ -17,7 +23,7 @@ Hosted follow-up `34165188350` exposed two narrow-display pointer failures,
 not canonical component/page failures. Both corrected journeys and the new
 1024-point edge-alignment regression passed together 3/3. The component
 evidence records the retained recording, screenshots and bounded CI headroom.
-The next hosted run passed the component workflow; the remaining placement
+The next hosted attempt passed the component workflow; the remaining placement
 observer and native image-panel query defects now have six passing affected
 selectors, including actual window movement. See the same evidence chronology.
 
