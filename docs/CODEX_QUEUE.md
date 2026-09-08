@@ -12,6 +12,26 @@ None.
 
 ## DONE
 
+- [x] `SF-AUTHORING-023` Native application Appearance Settings (locally verified).
+  - Bounded SF-0206-002/003/004/006/008 evidence; module remains Partial.
+  - Plan: typed versioned app-local appearance preference under ADR-0006;
+    native Settings with draft preview, Apply, Cancel/Escape, Reset and exact
+    restoration; focused persistence/validation/UI tests and visual review,
+    then one authoritative verification gate.
+  - Acceptance: Follow macOS/Light/Dark, explicit application scope and
+    default/authored provenance, invalid/future data preserved with safe
+    fallback, cancellation and close rollback, persisted choice after reopen,
+    accessible native keyboard controls and truthful diagnostics.
+  - Exclusions: canonical project preferences (SF-0206-001), canvas/code/
+    publishing/experimental preferences, profiles, document-history changes,
+    and broad module/release acceptance. No document or package mutation.
+  - Focused acceptance: 6/6 model + 1/1 actual-app journey; five original-size
+    Settings screenshots reviewed. Native Close/Command-W rollback and AX
+    value semantics are covered. Final `./sf verify` passed 420 unit/integration
+    + 59 UI = 479 tests, zero failures; repository checks passed. Hosted CI
+    is pending the verified checkpoint push. Evidence:
+    `docs/evidence/SF-AUTHORING-023-APPEARANCE-SETTINGS.md`.
+
 - [x] `SF-AUTHORING-022` Reusable local components (hosted verified).
   - Requirements: bounded `SF-0901-001`–`008`, supporting `SF-0905-003`–`005`
     identity, inheritance and exact history. These modules remain Partial.

@@ -46,6 +46,90 @@ private enum PointerWindowPlacement {
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
+    // SF-0206-002/003/004/006/008 — real native Settings, no document hooks.
+    func testApplicationAppearanceSettingsPreviewApplyCancelResetJourney() {
+        let application = launchWorkspace()
+        application.typeKey(",", modifierFlags: .command)
+        let apply = application.buttons["settings.appearance.apply"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 5))
+        let provenance = application.staticTexts["settings.appearance.provenance"]
+        let originalWasDefault = (provenance.value as? String)?.contains("Default") == true
+        let originalChoice = ["Follow macOS", "Light", "Dark"].first {
+            (application.radioButtons[$0].value as? NSNumber)?.intValue == 1
+        }
+        XCTAssertNotNil(originalChoice)
+        @MainActor func choose(_ title: String) {
+            let radio = application.radioButtons[title]
+            XCTAssertTrue(radio.isHittable, radio.debugDescription)
+            XCTAssertTrue(radio.frame.minX.isFinite && radio.frame.minY.isFinite)
+            radio.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        }
+        @MainActor func awaitText(_ identifier: String, _ text: String) {
+            let predicate = NSPredicate { _, _ in
+                let live = application.staticTexts[identifier]
+                return live.exists && (live.value as? String)?.contains(text) == true
+            }
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 5), .completed)
+        }
+        defer {
+            if originalWasDefault { application.buttons["settings.appearance.reset"].click() }
+            else if let originalChoice { choose(originalChoice) }
+            if application.buttons["settings.appearance.apply"].isEnabled {
+                application.buttons["settings.appearance.apply"].click()
+            }
+        }
+        application.buttons["settings.appearance.reset"].click()
+        if application.buttons["settings.appearance.apply"].isEnabled {
+            application.buttons["settings.appearance.apply"].click()
+        }
+        awaitText("settings.appearance.provenance", "Default")
+        func capture(_ name: String) {
+            let window = application.windows.containing(.button, identifier: "settings.appearance.apply").firstMatch
+            XCTAssertTrue(window.exists)
+            XCTAssertLessThan(window.frame.width, 700)
+            let attachment = XCTAttachment(screenshot: window.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        choose("Dark")
+        XCTAssertTrue(application.buttons["settings.appearance.apply"].isEnabled)
+        awaitText("settings.appearance.provenance", "Preview")
+        capture("SF-SETTINGS dark preview")
+        application.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertFalse(application.buttons["settings.appearance.apply"].isEnabled)
+        choose("Light")
+        application.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        awaitText("settings.appearance.status", "saved")
+        awaitText("settings.appearance.provenance", "Authored")
+        capture("SF-SETTINGS light committed")
+        choose("Dark")
+        application.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(application.windows.containing(.button, identifier: "settings.appearance.apply")
+            .firstMatch.waitForNonExistence(timeout: 5))
+        application.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(application.buttons["settings.appearance.apply"].waitForExistence(timeout: 5))
+        XCTAssertEqual((application.radioButtons["Light"].value as? NSNumber)?.intValue, 1, application.debugDescription)
+        XCTAssertFalse(application.buttons["settings.appearance.apply"].isEnabled)
+        capture("SF-SETTINGS reopened cancellation")
+        application.buttons["settings.appearance.reset"].click()
+        application.buttons["settings.appearance.apply"].click()
+        awaitText("settings.appearance.provenance", "Default")
+        capture("SF-SETTINGS reset default")
+        application.buttons["settings.appearance.restore"].click()
+        XCTAssertEqual((application.radioButtons["Light"].value as? NSNumber)?.intValue, 1)
+        awaitText("settings.appearance.status", "restored")
+        application.terminate()
+        application.launch()
+        application.activate()
+        XCTAssertTrue(waitForLaunchWindow(application))
+        application.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(application.buttons["settings.appearance.apply"].waitForExistence(timeout: 5))
+        XCTAssertEqual((application.radioButtons["Light"].value as? NSNumber)?.intValue, 1)
+        awaitText("settings.appearance.provenance", "Authored")
+        capture("SF-SETTINGS persisted after relaunch")
+    }
+
     private static let applicationBundleIdentifier = "app.siteforge.SiteForge"
     private enum TestWindowAlignment: String {
         case left

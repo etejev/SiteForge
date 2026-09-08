@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class SiteForgeApplicationDelegate: NSObject, NSApplicationDelegate {
     private var windowPresentation: WorkspaceWindowLifecycleOwner?
+    let appearanceSettings = AppearanceSettingsStore()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let owner = WorkspaceWindowLifecycleOwner()
@@ -32,6 +33,9 @@ struct SiteForgeApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             SiteForgeCommands()
+        }
+        Settings {
+            AppearanceSettingsView(store: applicationDelegate.appearanceSettings)
         }
     }
 }

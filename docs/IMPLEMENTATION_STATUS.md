@@ -2,6 +2,15 @@
 
 Last updated: 2026-09-08.
 
+SF-AUTHORING-023 is locally verified and DONE: native application-only Appearance Settings,
+with preview/apply/cancel/reset/restoration and versioned app-local persistence.
+Bounded SF-0206-002/003/004/006/008 evidence is recorded in
+`docs/evidence/SF-AUTHORING-023-APPEARANCE-SETTINGS.md`; module remains Partial.
+No canonical project preference coverage is claimed. Focused acceptance passed
+6 model + 1 UI tests; five native Settings captures were visually reviewed.
+Final `./sf verify` passed 420 unit/integration + 59 UI = 479 tests, zero failures.
+Repository checks passed. Hosted CI remains pending the verified checkpoint push.
+
 SF-AUTHORING-022 and the integrated SF-AUTHORING-021 hosted repair are VERIFIED
 AND DONE within their bounded scopes. Actions `34172995329` at `bb5992f`
 passed `./sf verify`: 414 unit/integration + 58 UI = 472 tests, zero failures.

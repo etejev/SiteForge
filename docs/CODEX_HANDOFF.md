@@ -1,5 +1,16 @@
 # Codex Continuation Handoff
 
+## Latest locally verified milestone
+
+SF-AUTHORING-023 adds application-only Appearance Settings under ADR-0006.
+The bounded milestone is locally DONE: 6/6 model checks, 1/1 actual-app journey,
+five reviewed native Settings captures, then one successful `./sf verify`:
+420 unit/integration + 59 UI = 479 tests, zero failures. Repository checks pass.
+Commit/push are owner-authorized. Hosted CI is pending the checkpoint push;
+do not report hosted success from local results or replay an unchanged full
+suite. The next action is to inspect the pushed checkpoint's Actions result.
+No next feature is authorized in this slice.
+
 ## Current verified checkpoint
 
 SF-AUTHORING-022 and the preserved SF-AUTHORING-021 hosted repair are VERIFIED
@@ -14,7 +25,7 @@ Six directly affected focused selectors pass; reviewed original-resolution
 evidence and preceding failed attempts are recorded in
 `docs/evidence/SF-AUTHORING-022-LOCAL-COMPONENTS.md`. Temporary tracing is removed.
 Do not repeat unchanged broad suites or reinterpret earlier pending notes as
-current failures. The working checkpoint contains no new feature beyond 022.
+current failures. That baseline precedes the Settings milestone above.
 
 The owner authorized ordinary commits/main integration/push for this checkpoint.
 No next feature was started during the hosted repair. Consult CODEX_QUEUE and

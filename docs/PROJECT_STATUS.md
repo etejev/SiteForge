@@ -2,13 +2,18 @@
 
 Last updated: 2026-09-08.
 
+SF-AUTHORING-023 application Appearance Settings is locally verified and DONE.
+Six model tests, one actual-app journey and five reviewed Settings captures
+cover the bounded scope. Its single final `./sf verify` passed 420 non-UI +
+59 UI = 479 tests, zero failures. Hosted CI is pending the checkpoint push.
+
 Current checkpoint: SF-AUTHORING-022 reusable local components and the preserved
 SF-AUTHORING-021 pointer repair are hosted verified. Actions `34172995329`
 for `bb5992f` passed `./sf verify`: 414 unit/integration + 58 UI = 472 tests,
 zero failures. Linked definitions, insertion, editing, detach, history and
 reopen have reviewed native UI evidence. Native constrained window movement
 and exact image-panel ownership are repaired without reducing product width
-or weakening persistence assertions. No next feature was started.
+or weakening persistence assertions. The Settings slice above builds on this baseline.
 
 Preceding feature: SF-AUTHORING-020 Button/Link local authoring is locally verified.
 The prior hosted-green SF-AUTHORING-019 repair is preserved. New controls

@@ -1,5 +1,15 @@
 # SiteForge Development Changelog
 
+## Locally verified — SF-AUTHORING-023
+
+- Added native application Appearance Settings: Follow macOS, Light and Dark,
+  live draft preview, Apply, Cancel/Escape, Reset and exact previous-setting
+  restoration. Application scope is explicit; projects remain unchanged.
+- Versioned choices survive relaunch; unsupported records preserve intent and
+  fall back safely. Seven focused checks and five reviewed Settings captures
+  pass. Final `./sf verify` passed 479/479 tests, with repository checks green.
+  Hosted CI remains pending the checkpoint push.
+
 ## Verified — SF-AUTHORING-022
 
 - Final hosted verification passed 472/472 tests at `bb5992f` in Actions

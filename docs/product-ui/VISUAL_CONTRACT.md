@@ -146,6 +146,13 @@ fields, interaction controls, command, history, package, or canonical mutation.
 
 ## Surface system
 
+- Application Appearance Settings uses a compact native Settings window with
+  readable radio choices for Follow macOS, Light and Dark. Scope, provenance,
+  unsaved preview and recovery status remain visible. Apply persists; Cancel,
+  Escape or window close restores committed appearance. Reset removes the
+  app-local override. Dynamic native colors/materials remain authoritative;
+  this never changes canonical project content or website colors (ADR-0006).
+
 - The title bar and toolbar are unified native macOS chrome.
 - Navigator and inspector use native sidebar material; viewport controls use a
   header material; status uses under-window material; recovery has an
