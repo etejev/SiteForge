@@ -23,6 +23,18 @@ private enum LaunchLifecycleReadinessHandshake {
 }
 
 private enum PointerWindowPlacement {
+    @MainActor
+    static func moveWindowHorizontally(by delta: CGFloat, in application: XCUIApplication) {
+        let start = application.toolbars.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let point = start.screenPoint
+        // Coordinates track their referenced element. Anchor the destination
+        // to the stationary menu bar, not the window being dragged.
+        let anchor = application.menuBars.firstMatch.coordinate(withNormalizedOffset: .zero)
+        let origin = anchor.screenPoint
+        let destination = anchor.withOffset(CGVector(dx: point.x + delta - origin.x, dy: point.y - origin.y))
+        start.click(forDuration: 0.1, thenDragTo: destination)
+    }
+
     // Align the complete native window to the needed display edge. A tiny
     // per-control correction can remain within AppKit's drag threshold.
     static func horizontalTranslation(window: CGRect, target: CGRect, visible: CGRect) -> CGFloat {
@@ -1192,7 +1204,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.buttons["assets.empty.import"].click()
         XCTAssertTrue(waitForNativeOpenPanel(in: application))
         application.typeKey("g", modifierFlags: [.command, .shift])
-        let pathField = application.sheets.textFields.firstMatch
+        // Match the native Go to Folder field, not the first text field of
+        // whichever sheet replaces it (the open panel also has text fields).
+        let pathField = application.sheets.textFields["PathTextField"]
         XCTAssertTrue(pathField.waitForExistence(timeout: 3))
         pathField.typeText(imageURL.path)
         application.typeKey(.return, modifierFlags: [])
@@ -1202,8 +1216,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(
             XCTWaiter.wait(
                 for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "exists == false"),
-                    object: pathField
+                    predicate: NSPredicate { _, _ in
+                        !application.sheets.textFields["PathTextField"].exists
+                    },
+                    object: application
                 )],
                 timeout: 5
             ),
@@ -2335,6 +2351,30 @@ final class SiteForgeLaunchTests: XCTestCase {
             target: CGRect(x: 200, y: 100, width: 100, height: 30), visible: visible), 0)
     }
 
+    func testConstrainedWindowPlacementPreservesNativeTitleBarMoveAcrossViewUpdates() {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeWindowSize", "minimum", "-SiteForgeUITestWindowAlignment", "left"
+        ])
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        let before = application.windows.firstMatch.frame
+        let displayLeadingEdge = NSScreen.main?.visibleFrame.minX ?? before.minX
+        PointerWindowPlacement.moveWindowHorizontally(by: -80, in: application)
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            application.windows.firstMatch.frame.minX < displayLeadingEdge
+        }, object: application)], timeout: 3) == .completed, "Native movement must not be undone by placement observers: before=\(before), after=\(application.windows.firstMatch.frame)")
+        // AppKit may snap a dragged window at the screen edge. Its accepted
+        // frame, not an assumed pointer-to-window translation, is the state
+        // subsequent SwiftUI updates must preserve.
+        let moved = application.windows.firstMatch.frame
+        let grid = application.descendants(matching: .any).matching(identifier: "canvas.grid.toggle").firstMatch
+        XCTAssertTrue(grid.isEnabled && grid.isHittable)
+        grid.click()
+        XCTAssertEqual(application.windows.firstMatch.frame, moved)
+        XCTAssertEqual(application.windows.firstMatch.frame.width, before.width, accuracy: 1)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-022 constrained native movement retained")
+    }
+
     /// A 1100-point window can exceed the hosted display. Move the actual
     /// title bar to expose a target, retaining the production minimum and
     /// real pointer/focus assertions rather than bypassing the control.
@@ -2360,9 +2400,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         let delta = PointerWindowPlacement.horizontalTranslation(window: window.frame,
             target: query.frame, visible: visible)
         if delta != 0 {
-            let start = window.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: window.frame.width / 2, dy: 8))
-            start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: delta, dy: 0)))
+            // The upper window edge is a resize hit region. Use the visible
+            // unified title-bar interior for a genuine native window drag.
+            PointerWindowPlacement.moveWindowHorizontally(by: delta, in: application)
         }
         XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             let live = application.descendants(matching: .any).matching(identifier: identifier).firstMatch
@@ -2407,12 +2447,9 @@ final class SiteForgeLaunchTests: XCTestCase {
             let delta = PointerWindowPlacement.horizontalTranslation(window: window.frame,
                 target: query().frame, visible: safe)
             if delta != 0 {
-                // The top title-bar strip is above toolbar controls. Screen
-                // X has the same origin in AppKit and XCTest; no Y conversion
-                // is involved in this strictly horizontal native drag.
-                let start = window.coordinate(withNormalizedOffset: .zero)
-                    .withOffset(CGVector(dx: window.frame.width / 2, dy: 8))
-                start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: delta, dy: 0)))
+                // Use the native title-bar interior, not the upper resize
+                // edge. X coordinates agree between AppKit and XCTest.
+                PointerWindowPlacement.moveWindowHorizontally(by: delta, in: application)
             }
             XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 let element = query()

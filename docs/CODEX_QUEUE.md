@@ -44,6 +44,10 @@ None.
     Run `34165188350` passed 413 non-UI and 54/56 UI tests; the two
     narrow-display pointer failures and focused corrections are recorded in
     the component evidence. Do not restart unrelated feature work.
+    Follow-up `34169229028` passed the component workflow but exposed a
+    constrained-placement observer lock and an ambiguous image-panel query.
+    Both boundaries are corrected with six passing affected selectors,
+    including a real native window-movement regression. Await hosted gate.
     Do not mark DONE until hosted CI passes.
   - Subsequent owner-authorized batch: after this coherent checkpoint, create
     a specification-backed completion roadmap and continue up to three

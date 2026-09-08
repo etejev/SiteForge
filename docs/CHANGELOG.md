@@ -2,6 +2,12 @@
 
 ## Locally verified — SF-AUTHORING-022
 
+- Explicit constrained launch placement no longer locks subsequent native
+  window movement. Hosted pointer helpers use macOS mouse dragging, and the
+  Image import journey tracks the exact native Go to Folder field across
+  panel replacement. Six affected checks have passing focused results;
+  hosted acceptance remains pending.
+
 - Hosted pointer coverage now re-queries Pages after reopen and aligns the
   native window fully to reveal edge controls without reducing its minimum
   width. The measured hosted gate has bounded cleanup/artifact headroom;

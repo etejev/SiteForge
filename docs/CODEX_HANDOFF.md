@@ -2,6 +2,14 @@
 
 ## Current owner-authorized work
 
+Current hosted repair: run `34169229028` passed 413 non-UI and 55/57 UI,
+including the component journey. Constrained placement was reapplying after
+native moves; the helper also used touch rather than mouse dragging. The
+native image-panel wait followed an ambiguous replacement text field. These
+boundaries now have six passing focused selectors and reviewed attachments.
+Temporary tracing is removed. Finish hosted acceptance without another
+unchanged broad local suite; do not start a new feature during this repair.
+
 Latest evidence (2026-09-07): placement/cycle checks pass 2/2, historical
 migration checks pass 3/3, and resource recovery passes 1/1. Both
 `testLocalComponentsCreateLinkEditDetachAndReopenJourney` and

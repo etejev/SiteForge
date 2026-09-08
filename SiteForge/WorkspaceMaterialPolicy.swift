@@ -454,6 +454,7 @@ final class WorkspaceWindowConfigurationView: NSView {
     private var originalWindowMinimumSize: CGSize?
     private var requestedWindowFrameSize: CGSize?
     private var didApplyNormalPresentation = false
+    private var didApplyConstrainedPresentation = false
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -469,7 +470,7 @@ final class WorkspaceWindowConfigurationView: NSView {
         scheduleConfiguration()
     }
 
-    func configureWindow() {
+    func configureWindow(composition: DebugTestComposition = .current()) {
         guard let window else { return }
         // Scene-root configuration can attach before AppKit has ordered the
         // initial launch window. Deferring until it is visible avoids a
@@ -496,15 +497,19 @@ final class WorkspaceWindowConfigurationView: NSView {
         window.backgroundColor = .windowBackgroundColor
         window.isOpaque = true
         if requestedWindowFrameSize == nil,
-           let requestedSize = WorkspaceMetrics.requestedWindowSize() {
+           let requestedSize = WorkspaceMetrics.requestedWindowSize(composition: composition) {
             requestedWindowFrameSize = WorkspaceMetrics.requestedWindowFrameSize(
                 contentSize: requestedSize,
                 currentFrameSize: window.frame.size,
                 currentContentLayoutSize: window.contentLayoutRect.size
             )
         }
-        if let placement = WorkspaceMetrics.requestedUITestWindowPlacement(),
+        if let placement = WorkspaceMetrics.requestedUITestWindowPlacement(composition: composition),
            let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+            // Placement is an initial presentation policy, not a window lock.
+            // Later view updates / AppKit move notifications must preserve
+            // genuine user title-bar moves, including on narrow displays.
+            guard !didApplyConstrainedPresentation else { return }
             let requestedFrame = CGRect(
                 origin: window.frame.origin,
                 size: requestedWindowFrameSize ?? window.frame.size
@@ -514,13 +519,14 @@ final class WorkspaceWindowConfigurationView: NSView {
                 visibleFrame: visibleFrame,
                 placement: placement
             )
-            applyUITestMinimumSize(to: window)
+            window.minSize = WorkspaceMetrics.effectiveMinimumWindowSize(composition: composition)
             if !window.frame.isApproximatelyEqual(to: frame) {
                 // setFrame is required here: setFrameOrigin can be constrained back to
                 // the leading/top edge when a production-minimum window is larger than
                 // a hosted test display.
                 window.setFrame(frame, display: true, animate: false)
             }
+            didApplyConstrainedPresentation = true
         } else if let requestedWindowFrameSize,
                   let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
             // The scene-root configurator and lifecycle owner can run in
@@ -552,6 +558,7 @@ final class WorkspaceWindowConfigurationView: NSView {
         originalWindowMinimumSize = nil
         requestedWindowFrameSize = nil
         didApplyNormalPresentation = false
+        didApplyConstrainedPresentation = false
     }
 
     private func installPlacementObserversIfNeeded() {
@@ -590,11 +597,6 @@ final class WorkspaceWindowConfigurationView: NSView {
             self.configurationScheduled = false
             self.configureWindow()
         }
-    }
-
-    private func applyUITestMinimumSize(to window: NSWindow) {
-        guard originalWindowMinimumSize != nil else { return }
-        window.minSize = WorkspaceMetrics.effectiveMinimumWindowSize()
     }
 
     private func applyExplicitRequestedFrame(

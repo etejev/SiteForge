@@ -141,6 +141,32 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         workspace.removeChildWindow(child)
     }
 
+    // SF-0201-002, SF-0201-003, SF-0201-008 — presentation cannot lock a
+    // genuine title-bar move back to the initial automation placement.
+    @MainActor
+    func testConstrainedWindowPresentationDoesNotUndoSubsequentNativeMovement() {
+        let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 1100, height: 650),
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let view = WorkspaceWindowConfigurationView(frame: .zero)
+        window.contentView?.addSubview(view)
+        window.orderFront(nil)
+        defer { view.detach(); view.removeFromSuperview(); window.close() }
+        let composition = DebugTestComposition(arguments: ["SiteForge", "-SiteForgeUITestMode", "YES",
+            "-SiteForgeUITestWindowAlignment", "left"], enabled: true)
+        view.configureWindow(composition: composition)
+        XCTAssertEqual(window.minSize.width, 1100)
+        let moved = window.frame.offsetBy(dx: 80, dy: 0)
+        window.setFrame(moved, display: true)
+        let accepted = window.frame
+        view.configureWindow(composition: composition)
+        XCTAssertEqual(window.frame, accepted, "A view update must not reverse the user's move")
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        view.configureWindow(composition: composition)
+        XCTAssertEqual(window.frame, accepted)
+        XCTAssertEqual(window.minSize.width, 1100)
+    }
+
     // SF-0201-002, SF-0201-003, SF-0201-008 — generic UI composition is a
     // normal visible-frame window; only a fresh explicit edge request differs.
     func testGenericAndConstrainedUITestPresentationPoliciesAreIsolated() {

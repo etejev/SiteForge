@@ -17,6 +17,9 @@ Hosted follow-up `34165188350` exposed two narrow-display pointer failures,
 not canonical component/page failures. Both corrected journeys and the new
 1024-point edge-alignment regression passed together 3/3. The component
 evidence records the retained recording, screenshots and bounded CI headroom.
+The next hosted run passed the component workflow; the remaining placement
+observer and native image-panel query defects now have six passing affected
+selectors, including actual window movement. See the same evidence chronology.
 
 SF-AUTHORING-021 is locally verified: native static page creation, name/route
 editing, duplicate/delete/reorder and live link targets share canonical

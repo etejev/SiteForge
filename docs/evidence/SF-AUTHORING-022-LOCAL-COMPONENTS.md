@@ -38,6 +38,50 @@ focused result bundle rather than in source control.
 
 ## Observed corrections
 
+Hosted run `34169229028` passed 413 non-UI and 55/57 UI tests, including
+the complete component/reopen journey. Pages still failed after a genuine
+92-point title-bar drag. Code inspection identified the actual ownership
+defect: `WorkspaceWindowConfigurationView` observed didMove/didResize and
+reapplied the initial constrained frame, undoing native movement. Constrained
+placement is now idempotent per attachment, like normal presentation; later
+view updates do not lock the window back to its initial location. The direct
+AppKit regression proves movement survives reconfiguration without reducing
+the 1100-point minimum (supporting SF-0201-002/003/008).
+
+That run also exposed an independent image-import test query defect. Its
+recording shows the intended file selected and native Import enabled after
+Go to Folder closed. A cached `textFields.firstMatch` query followed a text
+field in the replacement open panel instead of the dismissed Go field. The
+journey now identifies native `PathTextField` explicitly and re-queries its
+absence; all import, rendering, history and package-reopen assertions remain.
+The earlier small-drag diagnosis was incomplete and is superseded by the
+confirmed placement-observer call path above.
+
+A direct native movement journey exposed a second boundary: the helper used
+`XCUICoordinateTouchEvents.press`, which produced no native window movement.
+The macOS SDK's `XCUICoordinateMouseEvents.click(forDuration:thenDragTo:)`
+does move the window. It now starts inside the unified title bar and anchors
+its destination to the stationary menu bar rather than the moving window.
+Native edge dragging does not guarantee an exact translation of the window
+origin. The regression requires movement past the display's leading edge,
+unchanged width, and exact preservation of AppKit's accepted frame after a
+real Grid update. Existing pointer-control containment assertions are intact.
+Temporary window tracing was removed after establishing this call path.
+
+Final focused evidence for this boundary: both placement policy/AppKit tests
+passed 2/2; image import/reopen passed (59.285 seconds); the corrected native
+mouse component and page journeys passed (129.275 and 133.521 seconds).
+The new constrained native-movement/Grid-update journey passed 1/1 in 11.896
+seconds after replacing an invalid exact drag-distance assumption with
+preservation of the actual accepted frame. Its earlier exploratory failures
+are retained, not counted as passing groups. Six distinct directly affected
+selectors now have passing results. Original-resolution reopened Image and
+moved-window attachments were inspected: image/selection alignment and
+Inspector persistence are intact; the intentionally moved test window remains
+past the display edge after Grid changes, without shrinking or ghost content.
+Repository checks and diff checks pass. No complete local UI suite was repeated
+during these focused repairs; hosted verification is the remaining gate.
+
 Hosted run `34165188350` passed all 413 non-UI tests and 54/56 UI tests.
 The reopened component journey clicked Pages beyond the display's leading
 edge; it now uses the same live native pointer-reveal helper as earlier steps.
