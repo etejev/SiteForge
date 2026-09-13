@@ -1,5 +1,29 @@
 # SiteForge Development Changelog
 
+## Locally verified — SF-CANVAS-POINTER-001
+
+- Removed a duplicate native layer inversion that reflected authored content
+  and insertion/selection chrome away from the real pointer. AppKit owns the
+  viewport flip; leaf text/raster drawing retains its local conversion.
+- Empty-project guidance yields while a creation tool is armed, so previews
+  remain unobscured and first insertion does not resize the viewport.
+- Added independent native-event/layer and screenshot-edge checks rather than
+  relying only on shared model frame equality. Twelve captures passed review;
+  combined verification passed 490/490 tests. Hosted confirmation pending.
+
+## Locally verified — SF-AUTHORING-024
+
+- Added native Content Inspector definition text exposure and independent
+  instance values, with explicit inherited/authored state, Apply/Cancel and
+  reset-one/all. Empty strings do not mean inheritance.
+- The existing component registry, immutable expansion and package/history
+  paths own all content. Removal guards preserve dependent instance intent;
+  unresolved bindings remain visible rather than silently losing values.
+- Corrected a post-Undo/Redo draft race by requiring matching renderer adoption
+  before capturing an editable identity. Focused acceptance passes 12/12 with
+  five reviewed native captures; combined verification passed 490/490 tests.
+  See the focused SF024 evidence; broader component scope is Partial.
+
 ## Locally verified — SF-AUTHORING-023
 
 - Added native application Appearance Settings: Follow macOS, Light and Dark,
@@ -8,7 +32,7 @@
 - Versioned choices survive relaunch; unsupported records preserve intent and
   fall back safely. Seven focused checks and five reviewed Settings captures
   pass. Final `./sf verify` passed 479/479 tests, with repository checks green.
-  Hosted CI remains pending the checkpoint push.
+  Hosted Actions `34252345248` passed at `b50375c`.
 
 ## Verified — SF-AUTHORING-022
 

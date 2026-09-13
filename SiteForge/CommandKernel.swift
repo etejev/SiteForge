@@ -723,6 +723,7 @@ struct CommandRegistry {
         do {
             _ = try mutate(command, document: &draft, cancellation: .never)
             try draft.validate()
+            try CanonicalComponentText.validateTransition(from: document, to: draft)
             return .enabled
         } catch let error as ModelValidationError {
             return .disabled(reason: error.localizedDescription)
@@ -1053,7 +1054,7 @@ final class CommandDiagnostics {
     }
 
     func recordComponentOperation(pageID: PageID, nodeIDs: [NodeID], succeeded: Bool, durationMilliseconds: Double) {
-        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0901-008", "SF-0905-005"],
+        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0901-008", "SF-0902-008", "SF-0905-005", "SF-0905-008"],
             commandName: .batch, sanitizedIdentifiers: ([pageID.commandTarget] + nodeIDs.map(\.commandTarget)).map(sanitize),
             durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
             failureCategory: succeeded ? nil : .validation))
@@ -1241,6 +1242,7 @@ final class DocumentSession: ObservableObject {
             draft.revision = nextRevision
             do {
                 try draft.validate()
+                try CanonicalComponentText.validateTransition(from: committedDocument, to: draft)
             } catch let error as ModelValidationError {
                 throw CommandExecutionError.invalidResult(error)
             }

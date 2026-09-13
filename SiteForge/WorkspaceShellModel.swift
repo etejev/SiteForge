@@ -1529,6 +1529,37 @@ final class WorkspaceShellState: ObservableObject {
     var selectedComponent: DocumentNode? {
         selectedCanonicalNodes.count == 1 && selectedCanonicalNodes[0].kind == .component ? selectedCanonicalNodes[0] : nil
     }
+    var selectedDefinitionText: DocumentNode? {
+        guard editingComponentID != nil, selectedCanonicalNodes.count == 1,
+              selectedCanonicalNodes[0].kind == .text else { return nil }
+        return selectedCanonicalNodes[0]
+    }
+    var hasComponentTextInspectorContext: Bool {
+        editingComponentID != nil || selectedCanonicalNodes.contains { $0.kind == .component }
+    }
+    var componentTextEditingAvailable: Bool {
+        guard selectedCanonicalNodes.count == 1, let node = selectedCanonicalNodes.first else { return false }
+        return componentTextDraftIdentity != nil && transformValidationContext.isLifecycleAvailable && transformValidationContext.availableNodeIDs.contains(node.id)
+            && !node.selectionBooleanProperty("locked") && !node.selectionBooleanProperty("hidden")
+    }
+    var componentTextProperties: [ExposedComponentTextProperty] {
+        guard let node = selectedComponent, let id = CanonicalComponentReference.definitionID(for: node),
+              let definition = componentDefinitions.first(where: { $0.id == id }) else { return [] }
+        return CanonicalComponentText.properties(in: definition)
+    }
+    var componentTextDraftIdentity: DesignInspectorOperationIdentity? {
+        ComponentCommandRegistry.draftIdentity(document: documentSession.document,
+            pageID: effectiveSelectedPageID, renderer: canvasRenderPlan?.identity)
+    }
+    var componentTextInspectorKey: String {
+        // Canonical publication can precede immutable renderer adoption. A
+        // draft must capture the adopted identity, never the intervening plan.
+        documentSession.document.id.description + ":" + geometryInspectorSelectionKey
+            + ":" + (componentTextDraftIdentity.map { String($0.rendererGeneration) } ?? "adopting")
+    }
+    func commitComponentText(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity) {
+        performComponentEdit(edit, draftIdentity: identity)
+    }
     var canCreateComponent: Bool {
         editingComponentID == nil && pageEditingIsAvailable && selectedCanonicalNodes.count == 1
             && selectedCanonicalNodes[0].kind.acceptsAuthoredChildren && selectedCanonicalNodes[0].insertionGeometry != nil
@@ -1563,7 +1594,7 @@ final class WorkspaceShellState: ObservableObject {
     func deleteComponent(_ id: PageID, detachUses: Bool) {
         performComponentEdit(.delete(definitionID: id, detachUses: detachUses))
     }
-    private func performComponentEdit(_ edit: ComponentEdit) {
+    private func performComponentEdit(_ edit: ComponentEdit, draftIdentity: DesignInspectorOperationIdentity? = nil) {
         guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else { return }
         let started = DispatchTime.now().uptimeNanoseconds
         var succeeded = false
@@ -1573,10 +1604,16 @@ final class WorkspaceShellState: ObservableObject {
                 durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
         }
         do {
-            let prepared = try ComponentCommandRegistry().prepare(edit, identity: .init(
+            let prepared = try ComponentCommandRegistry().prepare(edit, identity: draftIdentity ?? .init(
                 documentID: documentSession.document.id, pageID: pageID, revision: documentSession.document.revision,
                 sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration),
                 in: documentSession.document, context: transformValidationContext)
+            if case .batch(let commands) = prepared.command, commands.isEmpty {
+                succeeded = true
+                componentAnnouncement = "No component value changed"
+                announcementPoster.post(componentAnnouncement)
+                return
+            }
             _ = try documentSession.execute(prepared.command)
             succeeded = true
             pendingSelectionAfterInsertion = prepared.selectedNodeID

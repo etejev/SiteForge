@@ -78,7 +78,7 @@ final class LinkAuthoringTests: XCTestCase {
         }
         let encoded = try DocumentSerializer.encode(session.document)
         XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
-        let oldWithNewKinds = String(decoding: encoded, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":7", with: "\"schemaVersion\":5")
+        let oldWithNewKinds = String(decoding: encoded, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":8", with: "\"schemaVersion\":5")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(oldWithNewKinds.utf8)))
         let old = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures/Legacy/schema-v5-blank-document.json"))
         let migrated = try DocumentSerializer.decode(old)

@@ -2292,6 +2292,114 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     // SF-0901-002/005/006: only native menus and Inspector controls author
     // definitions/instances; the package is reopened by a fresh app process.
+    func testComponentTextPropertiesTwoInstancesResetHistoryAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("component-text-properties.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let firstID = canvasObject(named: "Frame", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + firstID, in: application).click()
+        componentMenu("Component", "Create Component from Selection", in: application)
+        componentMenu("Component", "Edit Definition", in: application)
+        XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
+        let textRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
+        XCTAssertTrue(textRow.waitForExistence(timeout: 3))
+        revealComponentPointerTarget(textRow.identifier, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("component.text.definition.name", with: "Title", in: application)
+        replaceComponentTextField("component.text.definition.default", with: "Shared", in: application)
+        revealComponentPointerTarget("component.text.definition.apply", in: application).click()
+        XCTAssertTrue(waitForValue(application.staticTexts["component.text.status"], containing: "committed"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-024 exposed definition text")
+        revealComponentPointerTarget("components.exit", in: application).click()
+        let field = application.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "component.text.value.")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        let fieldID = field.identifier, propertyID = fieldID.replacingOccurrences(of: "component.text.value.", with: "")
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Shared"))
+        application.menuBars.menuBarItems["Component"].click()
+        application.menuItems["Insert Component"].click()
+        application.menuItems["Insert Frame Component"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 4", timeout: 5))
+        let frames = application.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "canvas.object.", "Frame"))
+        let second = try XCTUnwrap(frames.allElementsBoundByIndex.first { $0.identifier != "canvas.object." + firstID })
+        let secondID = second.identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        revealComponentPointerTarget("inspector.tab.layout", in: application).click()
+        replaceStructuralLayoutField(application.textFields["inspector.layout.x"], with: "80", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.layout.y"], with: "80", in: application)
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField(fieldID, with: "Second", in: application)
+        application.textFields[fieldID].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Second"))
+        XCTAssertTrue(waitForComponentRenderedText("Second", in: application))
+        XCTAssertTrue(waitForComponentRenderedText("Shared", in: application))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-024 independent instance override")
+        revealComponentPointerTarget("navigator.layer." + firstID, in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Shared"))
+        componentMenu("Component", "Edit Definition", in: application)
+        XCTAssertTrue(textRow.waitForExistence(timeout: 3))
+        revealComponentPointerTarget(textRow.identifier, in: application).click()
+        replaceComponentTextField("component.text.definition.default", with: "Revised", in: application)
+        revealComponentPointerTarget("component.text.definition.apply", in: application).click()
+        XCTAssertTrue(waitForValue(application.staticTexts["component.text.status"], containing: "committed"))
+        revealComponentPointerTarget("components.exit", in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Revised"))
+        XCTAssertTrue(waitForComponentRenderedText("Revised", in: application))
+        XCTAssertTrue(waitForComponentRenderedText("Second", in: application))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-024 default propagation preserves override")
+        revealComponentPointerTarget("navigator.layer." + secondID, in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Second"))
+        revealComponentPointerTarget("component.text.reset." + propertyID, in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Revised"))
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Second"))
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Revised"))
+        replaceComponentTextField(fieldID, with: "Discard", in: application)
+        application.textFields[fieldID].typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Revised"))
+        XCTAssertFalse(waitForComponentRenderedText("Discard", in: application, timeout: 0))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-024 reset history and cancelled draft")
+        replaceComponentTextField(fieldID, with: "Saved instance", in: application)
+        revealComponentPointerTarget("component.text.apply." + propertyID, in: application).click()
+        XCTAssertTrue(waitForComponentRenderedText("Saved instance", in: application), application.debugDescription)
+        saveDocumentIfModified(in: application)
+        terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("component-text-recovery"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + secondID, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Saved instance"))
+        XCTAssertTrue(waitForComponentRenderedText("Saved instance", in: application))
+        XCTAssertTrue(waitForComponentRenderedText("Revised", in: application))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier.hasPrefix("canvas.object."), true)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-024 reopened linked text properties")
+        revealComponentPointerTarget("component.text.resetAll", in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Revised"))
+        XCTAssertFalse(application.buttons["component.text.resetAll"].isEnabled)
+    }
+
+    private func replaceComponentTextField(_ identifier: String, with value: String, in application: XCUIApplication) {
+        revealComponentPointerTarget(identifier, in: application).click()
+        let live = application.textFields[identifier]
+        XCTAssertTrue(waitForKeyboardFocus(live, in: application))
+        live.typeKey("a", modifierFlags: .command)
+        live.typeText(value)
+    }
+
+    private func waitForComponentRenderedText(_ text: String, in application: XCUIApplication, timeout: TimeInterval = 5) -> Bool {
+        let live = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND value == %@", "canvas.object.", "Text: " + text)).firstMatch
+        // A zero-duration waiter interrupts AX snapshot work. Negative checks
+        // use a single current query; positive checks await the exact value.
+        return timeout == 0 ? live.exists : live.waitForExistence(timeout: timeout)
+    }
+
     func testLocalComponentsCreateLinkEditDetachAndReopenJourney() throws {
         let project = fixtureRoot.appendingPathComponent("local-components.siteforge")
         var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
@@ -2776,9 +2884,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.menuBars.menuBarItems["Insert"].click()
         application.menuItems["Insert Button at Center"].click()
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
-        application.buttons["inspector.tab.content"].click()
+        // At the practical minimum the native strip may overflow. Use its
+        // visible production menu rather than asking XCTest to scroll a
+        // clipped 25-point strip whose hit point may be outside the display.
+        revealComponentPointerTarget("inspector.tab.overflow", in: application).click()
+        application.menuItems["Content"].click()
         replaceStructuralLayoutField(application.textFields["inspector.content.control.label"], with: "Open page", in: application)
-        application.buttons["inspector.tab.interactions"].click()
+        revealComponentPointerTarget("inspector.tab.overflow", in: application).click()
+        application.menuItems["Interactions"].click()
         application.popUpButtons["inspector.interactions.link.type"].click()
         application.menuItems["Page"].click()
         let page = application.popUpButtons["inspector.interactions.link.page"]
@@ -3469,6 +3582,87 @@ final class SiteForgeLaunchTests: XCTestCase {
     // remains behind the artboard and never changes the selected authored
     // render identity while viewport commands change.
     @MainActor
+    // SF-0401/0405/0407: native pointer screen coordinates are the independent
+    // oracle; painted blue pixels must occur there, not at a reflected rect.
+    func testNativePointerPreviewAndFrameTextCommitFollowScreenCoordinates() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+        for mode in ["fitted", "actual", "panned-zoomed"] {
+            if mode == "actual" { componentMenu("View", "Actual Size", in: application) }
+            if mode == "panned-zoomed" {
+                componentMenu("View", "Zoom Out", in: application)
+                componentMenu("View", "Pan Down", in: application)
+                componentMenu("View", "Pan Right", in: application)
+            }
+            let viewportValue = try XCTUnwrap(canvas.value as? String)
+            let zoom = try XCTUnwrap(Double(viewportValue.split(separator: " ")[1])) / 100
+            for kind in ["Frame", "Text"] {
+                componentMenu("Insert", kind, in: application)
+                XCTAssertTrue(application.descendants(matching: .any)["canvas.empty.state"].waitForNonExistence(timeout: 3))
+                let size = CGSize(width: (kind == "Frame" ? 240 : 120) * zoom,
+                                  height: (kind == "Frame" ? 160 : 24) * zoom)
+                let start = CGPoint(x: canvas.frame.width * 0.27, y: canvas.frame.height * 0.32)
+                // Right, down, left, up, including a position toward the
+                // fitted artboard's leading edge. No model/test mutation.
+                var points = [start, CGPoint(x: start.x + 100, y: start.y),
+                              CGPoint(x: start.x + 100, y: start.y + 100),
+                              CGPoint(x: start.x - 70, y: start.y + 100),
+                              CGPoint(x: start.x - 70, y: start.y - 35)]
+                if mode == "fitted" {
+                    let current = try XCTUnwrap(canvas.value as? String)
+                    let origin = current.components(separatedBy: "origin ")[1].components(separatedBy: ";")[0]
+                        .split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces))! }
+                    // Four points inside the real top/leading artboard edge.
+                    // Assertions still use the independent native pointer and
+                    // screenshot pixels, not a model-render equality oracle.
+                    points.append(.init(x: max(24, -origin[0] * zoom + 4), y: max(24, -origin[1] * zoom + 4)))
+                }
+                for point in points {
+                    canvas.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: point.x, dy: point.y)).hover()
+                    XCTAssertTrue(waitForValue(application.descendants(matching: .any)["status.insertion"], containing: "Previewing"))
+                    try assertPointerChromePixels(canvas: canvas, localRect: CGRect(origin: point, size: size))
+                }
+                attachWindowScreenshot(application, named: "SF-POINTER \(mode) \(kind) preview")
+                let point = try XCTUnwrap(points.last)
+                canvas.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: point.x, dy: point.y)).click()
+                XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+                application.typeKey(.escape, modifierFlags: [])
+                let object = canvasObject(named: kind == "Text" ? "Text object" : kind, in: application)
+                XCTAssertTrue(object.waitForExistence(timeout: 3))
+                XCTAssertEqual(object.frame.minX, canvas.frame.minX + point.x, accuracy: 2)
+                XCTAssertEqual(object.frame.minY, canvas.frame.minY + point.y, accuracy: 2)
+                XCTAssertEqual(object.frame.width, size.width, accuracy: 2)
+                XCTAssertEqual(object.frame.height, size.height, accuracy: 2)
+                try assertPointerChromePixels(canvas: canvas, localRect: CGRect(origin: point, size: size))
+                attachWindowScreenshot(application, named: "SF-POINTER \(mode) \(kind) committed")
+                componentMenu("Edit", "Undo", in: application)
+                XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+            }
+        }
+    }
+
+    private func assertPointerChromePixels(canvas: XCUIElement, localRect: CGRect,
+                                          file: StaticString = #filePath, line: UInt = #line) throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: canvas.screenshot().pngRepresentation))
+        let scaleX = CGFloat(bitmap.pixelsWide) / canvas.frame.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / canvas.frame.height
+        var edges = [0, 0, 0, 0]
+        for y in max(0, Int((localRect.minY - 3) * scaleY))..<min(bitmap.pixelsHigh, Int((localRect.maxY + 3) * scaleY)) {
+            for x in max(0, Int((localRect.minX - 3) * scaleX))..<min(bitmap.pixelsWide, Int((localRect.maxX + 3) * scaleX)) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      color.blueComponent > 0.5, color.blueComponent > color.redComponent + 0.25 else { continue }
+                let px = CGFloat(x) / scaleX, py = CGFloat(y) / scaleY
+                if abs(px - localRect.minX) <= 3 { edges[0] += 1 }
+                if abs(px - localRect.maxX) <= 3 { edges[1] += 1 }
+                if abs(py - localRect.minY) <= 3 { edges[2] += 1 }
+                if abs(py - localRect.maxY) <= 3 { edges[3] += 1 }
+            }
+        }
+        XCTAssertTrue(edges.allSatisfy { $0 >= 4 }, "Painted preview/selection must enclose the actual pointer rect; edge pixels=\(edges), rect=\(localRect)", file: file, line: line)
+    }
+
     func testWorldGridArtboardHierarchyVisualJourney() throws {
         let application = launchWorkspace()
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch

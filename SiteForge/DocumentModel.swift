@@ -895,10 +895,117 @@ enum CanonicalComponentReference {
     static func validate(_ node: DocumentNode) throws {
         let properties = node.properties.filter { $0.key.rawValue.hasPrefix("component.") }
         guard !properties.isEmpty else { return }
-        guard node.kind == .component, properties.count == 1,
-              properties[0].key.rawValue == key,
+        if node.kind == .text, properties.allSatisfy({ $0.key.rawValue.hasPrefix(CanonicalComponentText.namespace) }) {
+            return // The definition-scoped validator owns exposed bindings.
+        }
+        guard node.kind == .component, properties.contains(where: { $0.key.rawValue == key }),
+              properties.allSatisfy({ $0.key.rawValue == key || CanonicalComponentText.overrideID($0.key.rawValue) != nil }),
               definitionID(for: node) != nil, node.childIDs.isEmpty else {
             throw ModelValidationError.invalidComponentReference
+        }
+    }
+}
+
+enum ComponentTextPropertyIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "component-text-property"
+}
+typealias ComponentTextPropertyID = StableIdentifier<ComponentTextPropertyIdentifierDomain>
+
+struct ExposedComponentTextProperty: Equatable, Identifiable, Sendable {
+    let id: ComponentTextPropertyID
+    let sourceNodeID: NodeID
+    let label: String
+    let defaultValue: String
+}
+
+/// SF-0902/0905: definition + property ID is the stable override address.
+/// The owning Text node is the binding; content.text is the sole default.
+enum CanonicalComponentText {
+    static let namespace = "component.exposedText.v1."
+    static let overrideNamespace = "component.instance.v1.text."
+    static let maximumProperties = 64
+    static let maximumTextBytes = 64 * 1_024
+    static let metadataKeys = Set([namespace + "id", namespace + "label", namespace + "type"])
+
+    static func validLabel(_ label: String) -> Bool {
+        !label.isEmpty && label.utf8.count <= 256
+            && label == label.trimmingCharacters(in: .whitespacesAndNewlines)
+            && !label.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+    }
+    static func overrideKey(_ id: ComponentTextPropertyID) -> String { overrideNamespace + id.description }
+    static func overrideID(_ key: String) -> ComponentTextPropertyID? {
+        guard key.hasPrefix(overrideNamespace) else { return nil }
+        let raw = String(key.dropFirst(overrideNamespace.count))
+        guard let id = ComponentTextPropertyID(uuidString: raw), id.description == raw else { return nil }
+        return id
+    }
+    static func property(on node: DocumentNode) -> ExposedComponentTextProperty? {
+        guard node.kind == .text,
+              let raw = node.properties.first(where: { $0.key.rawValue == namespace + "id" }),
+              case .string(let identifier) = raw.value, let id = ComponentTextPropertyID(uuidString: identifier),
+              let label = node.properties.first(where: { $0.key.rawValue == namespace + "label" }),
+              case .string(let labelValue) = label.value,
+              let content = node.properties.first(where: { $0.key.rawValue == "content.text" }),
+              case .string(let text) = content.value else { return nil }
+        return .init(id: id, sourceNodeID: node.id, label: labelValue, defaultValue: text)
+    }
+    static func properties(in definition: DocumentPage) -> [ExposedComponentTextProperty] {
+        definition.nodes.compactMap(property)
+    }
+    static func overrides(on instance: DocumentNode) -> [ComponentTextPropertyID: String] {
+        var result: [ComponentTextPropertyID: String] = [:]
+        for property in instance.properties {
+            if let id = overrideID(property.key.rawValue), case .string(let text) = property.value { result[id] = text }
+        }
+        return result
+    }
+    static func unresolvedOverrides(on instance: DocumentNode, definition: DocumentPage) -> Set<ComponentTextPropertyID> {
+        Set(overrides(on: instance).keys).subtracting(properties(in: definition).map(\.id))
+    }
+    static func validate(_ node: DocumentNode, inDefinition: Bool) throws {
+        guard node.properties.filter({ $0.key.rawValue.hasPrefix(overrideNamespace) }).count <= maximumProperties else {
+            throw ModelValidationError.invalidComponentReference
+        }
+        let metadata = node.properties.filter { $0.key.rawValue.hasPrefix(namespace) }
+        if !metadata.isEmpty {
+            guard inDefinition, node.kind == .text,
+                  Set(metadata.map(\.key.rawValue)) == metadataKeys,
+                  metadata.allSatisfy({ $0.origin == .authored }),
+                  let property = property(on: node), validLabel(property.label),
+                  property.defaultValue.utf8.count <= maximumTextBytes,
+                  node.properties.first(where: { $0.key.rawValue == namespace + "id" })?.value == .string(property.id.description),
+                  node.properties.first(where: { $0.key.rawValue == namespace + "type" })?.value == .string("plain-text") else {
+                throw ModelValidationError.invalidComponentReference
+            }
+        }
+        for property in node.properties where property.key.rawValue.hasPrefix(overrideNamespace) {
+            guard node.kind == .component, !inDefinition,
+                  overrideID(property.key.rawValue) != nil, property.origin == .authored,
+                  case .string(let text) = property.value, text.utf8.count <= maximumTextBytes else {
+                throw ModelValidationError.invalidComponentReference
+            }
+        }
+    }
+    /// Compare complete transaction results, not intermediate remove/insert
+    /// commands. Explicit detach/reset may resolve intent; raw source deletion
+    /// may not silently strand a previously valid authored override.
+    static func validateTransition(from old: CanonicalDocument, to new: CanonicalDocument) throws {
+        let oldDefinitions = Dictionary(uniqueKeysWithValues: old.componentDefinitions.map { ($0.id, $0) })
+        let newDefinitions = Dictionary(uniqueKeysWithValues: new.componentDefinitions.map { ($0.id, $0) })
+        let newNodes = Dictionary(uniqueKeysWithValues: new.websitePages.flatMap(\.nodes).map { ($0.id, $0) })
+        for instance in old.websitePages.flatMap(\.nodes) {
+            guard let definitionID = CanonicalComponentReference.definitionID(for: instance),
+                  let oldDefinition = oldDefinitions[definitionID],
+                  let newInstance = newNodes[instance.id], newInstance.kind == .component else { continue }
+            let retained = Set(overrides(on: instance).keys).intersection(overrides(on: newInstance).keys)
+            guard retained.isEmpty || CanonicalComponentReference.definitionID(for: newInstance) == definitionID else {
+                throw ModelValidationError.componentTextIntentWouldBeLost
+            }
+            let prior = Dictionary(uniqueKeysWithValues: properties(in: oldDefinition).map { ($0.id, $0.sourceNodeID) })
+            let current = Dictionary(uniqueKeysWithValues: (newDefinitions[definitionID].map(properties) ?? []).map { ($0.id, $0.sourceNodeID) })
+            for id in overrides(on: instance).keys where prior[id] != nil && overrides(on: newInstance)[id] != nil {
+                guard current[id] == prior[id] else { throw ModelValidationError.componentTextIntentWouldBeLost }
+            }
         }
     }
 }
@@ -975,6 +1082,7 @@ enum ProjectCreation {
 }
 
 enum ModelValidationError: Error, Equatable, LocalizedError {
+    case componentTextIntentWouldBeLost
     case revisionNotIncrementable
     case emptyPageList
     case duplicatePageID
@@ -1015,6 +1123,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .componentTextIntentWouldBeLost: "This text property has authored instance values. Reset those values or detach the affected instances before removing its source or binding."
         case .revisionNotIncrementable: "The document revision cannot accept another transaction."
         case .invalidComponentReference: "The component reference is malformed or belongs to an incompatible object."
         case .emptyPageList: "A project must contain at least one page."
@@ -1502,6 +1611,12 @@ private extension DocumentPage {
                   !nodes.contains(where: { $0.kind == .component }) else {
                 throw ModelValidationError.incompatibleChildOwnership
             }
+            let exposed = CanonicalComponentText.properties(in: self)
+            guard exposed.count <= CanonicalComponentText.maximumProperties,
+                  Set(exposed.map(\.id)).count == exposed.count,
+                  Set(exposed.map { $0.label.lowercased() }).count == exposed.count else {
+                throw ModelValidationError.invalidComponentReference
+            }
         }
         let childrenByParent = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, Set($0.childIDs)) })
         for rootID in rootNodeIDs {
@@ -1564,6 +1679,7 @@ private extension DocumentPage {
             }
             try CanonicalFillLayerNamespaceValidator.validate(node)
             try CanonicalComponentReference.validate(node)
+            try CanonicalComponentText.validate(node, inDefinition: role == .componentDefinition)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
             try CanonicalLinkTarget.validate(node)
@@ -1666,9 +1782,9 @@ enum DocumentSerializationError: Error, Equatable, LocalizedError {
 }
 
 enum DocumentSerializer {
-    // Schema 6 adds Button/Link kinds and their closed v1 property namespace.
-    // Historical schemas cannot acquire these kinds by permissive decoding.
-    static let currentSchemaVersion = 7
+    // Schema 8 adds exposed component text bindings and instance overrides.
+    // Historical schemas cannot acquire newer closed namespaces by permissive decoding.
+    static let currentSchemaVersion = 8
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -1963,7 +2079,7 @@ enum DocumentSerializer {
             } catch {
                 throw DocumentSerializationError.malformedInput
             }
-        case 5, 6, currentSchemaVersion:
+        case 5, 6, 7, currentSchemaVersion:
             do {
                 let strictDecoder = JSONDecoder()
                 strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
@@ -1979,6 +2095,12 @@ enum DocumentSerializer {
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
         try checkpoint()
+        if header.schemaVersion < 8, document.pages.contains(where: { page in
+            page.nodes.contains { node in node.properties.contains {
+                $0.key.rawValue.hasPrefix(CanonicalComponentText.namespace)
+                    || $0.key.rawValue.hasPrefix(CanonicalComponentText.overrideNamespace)
+            } }
+        }) { throw DocumentSerializationError.malformedInput }
         if header.schemaVersion < 7,
            document.pages.contains(where: { $0.role == .componentDefinition || $0.nodes.contains(where: {
                $0.properties.contains { $0.key.rawValue.hasPrefix(CanonicalComponentReference.namespace) }

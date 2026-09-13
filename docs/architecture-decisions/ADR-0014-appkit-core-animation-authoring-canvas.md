@@ -27,6 +27,25 @@ Metal is not an initial dependency. The renderer boundary must permit a later Me
 
 ## Evidence
 
+### Native composition coordinates
+
+SF-CANVAS-POINTER-001 corrects an additional container inversion. AppKit sets
+the flipped viewport's backing-layer geometry; owned content/text/overlay
+containers must remain unflipped. `CALayer.convert` confirms that flipping
+such a container reflects its local Y around its height. NSEvent conversion
+through NSView produces top-left viewport coordinates; CanvasCoordinateTransform
+performs only translation/scale. Leaf Core Graphics/text drawing conversions
+are local to those APIs and must not change child placement. Native event/layer
+tests and pointer-screen pixel assertions are required; matching model and AX
+rectangles alone cannot prove composition appears under the pointer.
+The tile's AppKit graphics-context wrapper must declare the actual already
+top-left basis as flipped; that declaration is not another CTM transform.
+Misdeclaring it produces upside-down Frame/control labels despite correct
+surface placement. Exact top-inset pixel tests and native screenshot review
+cover this separate leaf-drawing boundary.
+
+### Original backend measurements
+
 On the retained Mac16,13 optimized run, 100-object full rasters were below 1.1 ms P95 for AppKit, SwiftUI Canvas, and Core Animation. At 10,000 objects, AppKit full offscreen raster was 17.633 ms P95, Core Animation layer-tree raster 18.183 ms, and SwiftUI Canvas 36.574 ms. After a single model change, AppKit dirty-region raster was 0.074 ms P95 and a Core Animation one-layer transaction was 0.107 ms, while SwiftUI Canvas rerasterized the surface at 29.244 ms. Uniform-grid hit testing measured 0.000125 ms P95 at 10,000 objects.
 
 The full AppKit/Core Animation stress rasters sometimes crossed the 16.67 ms reference interval, so the decision requires dirty tiles and compositor transforms rather than full repaint per pan/zoom. The Metal probe measured buffer mutation plus an empty command round trip (0.023 ms P95 at 10,000 objects) but did not implement shaders or presentation and therefore is not evidence that Metal improves end-to-end rendering.

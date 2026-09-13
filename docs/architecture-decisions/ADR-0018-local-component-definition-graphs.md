@@ -36,6 +36,35 @@ intersection; it does not rewrite definition or responsive geometry. Detachment
 materializes each supported breakpoint's child geometry with stable root identity
 and exact history inverses.
 
+## Exposed plain text (SF-AUTHORING-024)
+
+Schema v8 adds one bounded property type. A definition Text node owns an
+exposed property ID, label and `plain-text` type in `component.exposedText.v1`.
+Its existing `content.text` is the sole default. Instance values are authored
+strings under `component.instance.v1.text.<property-id>`, scoped by definition
+identity. Renaming preserves the binding. Empty strings are authored values;
+Reset removes overrides and reveals the current default. Labels are unique
+within the definition, trimmed and bounded to 256 UTF-8 bytes; the limits are
+64 exposed properties per definition and 64 KiB per text value.
+
+Schemas 1–7 acquire no bindings or overrides. New namespaces under an older
+header are rejected. V8 reuses ordered properties, IDs, origins and existing
+package/history/recovery adapters rather than adding a second content store.
+
+The existing component registry validates captured document/page/revision/
+scene/renderer and exact single-selection identities before atomic edits.
+Native Inspector drafts commit with Apply or Return; Cancel/Escape restores
+the displayed committed value. Selection/revision replacement discards an
+obsolete draft. Multiple selection is explicitly inspection-only in this slice.
+
+Derived expansion resolves text before raster/accessibility preparation.
+Virtual children remain noncanonical; detachment materializes effective text
+without binding metadata. A complete-transaction guard rejects source/binding
+removal or retargeting while a surviving instance's authored value depends on
+it. Reset or explicit detach resolves that intent. Loaded unresolved values
+remain inspectable; detach is rejected until restoration or explicit reset.
+No destructive migration is inferred.
+
 ## Deferred
 
 Nested authoring, variants, slots, per-child overrides, remote libraries,

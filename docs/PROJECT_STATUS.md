@@ -1,11 +1,20 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-08.
+Last updated: 2026-09-13.
+
+Current work is SF-AUTHORING-024 exposed component text properties and reset.
+The bounded implementation passes 11 focused non-UI checks and one native
+journey; five original-resolution captures passed review. The authoritative
+gate passed 429 non-UI + 61 UI = 490 tests, zero failures, on September 13.
+Hosted confirmation is pending. SF-CANVAS-POINTER-001 repairs native pointer/compositor parity
+in the same checkpoint; independent event/layer and painted-edge tests cover
+the first incorrect boundary rather than adding object offsets. No later
+feature is started.
 
 SF-AUTHORING-023 application Appearance Settings is locally verified and DONE.
 Six model tests, one actual-app journey and five reviewed Settings captures
 cover the bounded scope. Its single final `./sf verify` passed 420 non-UI +
-59 UI = 479 tests, zero failures. Hosted CI is pending the checkpoint push.
+59 UI = 479 tests, zero failures. Hosted Actions `34252345248` passed at `b50375c`.
 
 Current checkpoint: SF-AUTHORING-022 reusable local components and the preserved
 SF-AUTHORING-021 pointer repair are hosted verified. Actions `34172995329`

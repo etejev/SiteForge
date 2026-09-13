@@ -12,6 +12,45 @@ None.
 
 ## DONE
 
+- [x] `SF-CANVAS-POINTER-001` Shared native pointer/compositor placement repair (P1, locally verified).
+  - Bounded SF-0401-001/003/008, SF-0405-002/003/008 and SF-0407-001/003/008.
+  - Plan: establish native event/view/layer conversion numerically, remove the
+    duplicate container inversion, prove preview/commit movement independently
+    against pointer pixels, retain upright text and exact canonical geometry.
+    Run affected focused tests, then one combined SF024 verification gate.
+  - No per-tool offsets, persisted coordinate changes, new authoring scope or
+    editor chrome in authored output. Preserve the existing immutable adoption.
+  - All ten affected renderer tests have passing focused evidence; the native
+    pointer journey passes, with twelve reviewed captures. Combined final
+    verification passed 429 non-UI + 61 UI = 490 tests, zero failures.
+    Evidence: `docs/evidence/SF-CANVAS-POINTER-001.md`. Hosted confirmation pending.
+
+- [x] `SF-AUTHORING-024` Exposed component text properties and instance reset (locally verified).
+  - Bounded SF-0902-001–008 and SF-0905-001–008; broad modules remain Partial.
+  - Plan: extend ADR-0018's canonical definition graph with stable exposed
+    plain-text bindings and instance overrides; reuse identity-gated commands,
+    exact history and derived expansion. Add native definition/instance controls,
+    focused migration/resolution/history/resource/UI evidence and visual review,
+    then one authoritative verification gate.
+  - Acceptance: named Text property, independent values in two linked instances,
+    valid authored empty text, default propagation, reset one/all by removal,
+    cancel/invalid/stale neutrality, exact undo/redo, safe binding removal,
+    duplication/remapping, effective-text detachment and save/recovery/reopen.
+    Virtual expanded nodes remain noncanonical. Existing v7 components migrate
+    without invented exposed properties or lost references.
+  - Removal policy: reject source/property removal while authored overrides
+    depend on it; retain unresolved loaded overrides and report missing bindings.
+    No destructive automatic migration of instance content.
+  - Exclusions: media/boolean/enum/action props, slots, variants, nested
+    components, arbitrary style overrides, remote libraries, export/release.
+  - Settings baseline `b50375c` is separate; hosted run `34252345248` passed.
+    No unchanged Settings or baseline rerun is required.
+  - Focused acceptance: 11/11 non-UI + 1/1 two-instance UI journey;
+    five original-resolution captures reviewed. The draft/adoption race is
+    covered by an independent regression. Combined final `./sf verify` passed
+    429 non-UI + 61 UI = 490 tests, zero failures; repository checks passed.
+    Hosted confirmation pending. No SF-AUTHORING-025 implementation started.
+
 - [x] `SF-AUTHORING-023` Native application Appearance Settings (locally verified).
   - Bounded SF-0206-002/003/004/006/008 evidence; module remains Partial.
   - Plan: typed versioned app-local appearance preference under ADR-0006;
@@ -29,7 +68,7 @@ None.
     Settings screenshots reviewed. Native Close/Command-W rollback and AX
     value semantics are covered. Final `./sf verify` passed 420 unit/integration
     + 59 UI = 479 tests, zero failures; repository checks passed. Hosted CI
-    is pending the verified checkpoint push. Evidence:
+    passed at `b50375c` in Actions `34252345248`. Evidence:
     `docs/evidence/SF-AUTHORING-023-APPEARANCE-SETTINGS.md`.
 
 - [x] `SF-AUTHORING-022` Reusable local components (hosted verified).

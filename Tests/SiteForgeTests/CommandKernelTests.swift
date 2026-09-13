@@ -3,6 +3,280 @@ import XCTest
 
 @MainActor
 final class CommandKernelTests: XCTestCase {
+    private func componentTextFixture() throws -> CanonicalDocument {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/Legacy/schema-v7-linked-text-document.json")
+        return try DocumentSerializer.decode(Data(contentsOf: url))
+    }
+
+    private func textCommand(_ edit: ComponentEdit, document: CanonicalDocument, pageID: PageID,
+                             selected: NodeID) throws -> PreparedComponentEdit {
+        let scene = CanvasViewportSceneID()
+        return try ComponentCommandRegistry().prepare(edit, identity: .init(documentID: document.id, pageID: pageID,
+            revision: document.revision, sceneID: scene, rendererGeneration: document.revision), in: document,
+            context: .init(activePageID: pageID, currentSceneID: scene, rendererGeneration: document.revision,
+                selectedNodeIDs: [selected], availableNodeIDs: [selected], isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+    }
+
+    private func exposedTextSession() throws -> DocumentSession {
+        let document = try componentTextFixture(), definition = document.componentDefinitions[0]
+        let node = definition.nodes[1]
+        let session = DocumentSession(document: document)
+        try session.execute(textCommand(.exposeText(nodeID: node.id, label: "Title", defaultValue: "Original"),
+            document: document, pageID: definition.id, selected: node.id).command)
+        return session
+    }
+
+    func testComponentTextV7MigrationAndStrictBindingValidation() throws {
+        let legacy = try componentTextFixture()
+        XCTAssertTrue(CanonicalComponentText.properties(in: legacy.componentDefinitions[0]).isEmpty)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(legacy)), legacy)
+        let session = try exposedTextSession(), document = session.document
+        XCTAssertEqual(document.websitePages, legacy.websitePages)
+        let encoded = try DocumentSerializer.encode(document)
+        XCTAssertThrowsError(try DocumentSerializer.decode(Data(String(decoding: encoded, as: UTF8.self)
+            .replacingOccurrences(of: "\"schemaVersion\":8", with: "\"schemaVersion\":7").utf8)))
+        for (suffix, value) in [("id", "not-an-id"), ("type", "media"), ("label", " "), ("label", "Title\n")] {
+            var invalid = document
+            let index = invalid.pages[2].nodes[1].properties.firstIndex { $0.key.rawValue == CanonicalComponentText.namespace + suffix }!
+            invalid.pages[2].nodes[1].properties[index].value = .string(value)
+            XCTAssertThrowsError(try DocumentSerializer.encode(invalid))
+        }
+        for suffix in ["future", "type"] {
+            var invalid = document
+            if suffix == "future" { invalid.pages[2].nodes[1].properties.append(.init(key: .init(rawValue: CanonicalComponentText.namespace + suffix), value: .string("x"))) }
+            else { invalid.pages[2].nodes[1].properties.removeAll { $0.key.rawValue == CanonicalComponentText.namespace + suffix } }
+            XCTAssertThrowsError(try DocumentSerializer.encode(invalid))
+        }
+        var invalid = document
+        invalid.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: CanonicalComponentText.overrideNamespace + "bad"), value: .string("x")))
+        XCTAssertThrowsError(try DocumentSerializer.encode(invalid))
+        invalid = document
+        let metadata = invalid.pages[2].nodes[1].properties.firstIndex { $0.key.rawValue == CanonicalComponentText.namespace + "label" }!
+        invalid.pages[2].nodes[1].properties[metadata].origin = .defaulted
+        XCTAssertThrowsError(try DocumentSerializer.encode(invalid))
+    }
+
+    func testComponentTextIndependentEmptyOverridesDefaultPropagationAndExactResetHistory() throws {
+        let session = try exposedTextSession()
+        let definition = session.document.componentDefinitions[0], text = definition.nodes[1]
+        let binding = try XCTUnwrap(CanonicalComponentText.property(on: text))
+        let pageID = session.document.pages[0].id, first = session.document.pages[0].nodes[1].id
+        let second = session.document.pages[0].nodes[2].id
+        func apply(_ edit: ComponentEdit, _ page: PageID, _ target: NodeID) throws {
+            try session.execute(textCommand(edit, document: session.document, pageID: page, selected: target).command)
+        }
+        let inherited = session.document.pages
+        try apply(.setTextOverride(instanceID: first, propertyID: binding.id, value: ""), pageID, first)
+        let overridden = session.document.pages
+        XCTAssertEqual(CanonicalComponentText.overrides(on: overridden[0].nodes[1])[binding.id], "")
+        try apply(.exposeText(nodeID: text.id, label: "Heading", defaultValue: "Updated"), definition.id, text.id)
+        XCTAssertEqual(CanonicalComponentText.property(on: session.document.pages[2].nodes[1])?.id, binding.id)
+        for breakpoint in ResponsiveBreakpoint.allCases {
+            let resolved = try ComponentGraphResolver.resolvedPage(session.document.pages[0], in: session.document, breakpoint: breakpoint)
+            let childID = NodeID(DocumentPage.deterministicUUID(namespace: first.rawValue, label: "component-child:" + text.id.description))
+            let otherID = NodeID(DocumentPage.deterministicUUID(namespace: second.rawValue, label: "component-child:" + text.id.description))
+            XCTAssertEqual(resolved.nodes.first { $0.id == childID }?.insertionStringProperty("content.text"), "")
+            XCTAssertEqual(resolved.nodes.first { $0.id == otherID }?.insertionStringProperty("content.text"), "Updated")
+            XCTAssertFalse(session.document.pages[0].nodes.contains { $0.id == childID })
+            XCTAssertFalse(resolved.nodes.contains { $0.properties.contains { $0.key.rawValue.hasPrefix(CanonicalComponentText.namespace) } })
+        }
+        let beforeReset = session.document.pages
+        try apply(.resetTextOverride(instanceID: first, propertyID: binding.id), pageID, first)
+        XCTAssertNil(session.document.pages[0].nodes[1].insertionProperty(CanonicalComponentText.overrideKey(binding.id)))
+        let reset = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, beforeReset)
+        try session.redo(); XCTAssertEqual(session.document.pages, reset)
+        try session.undo(); try session.undo(); XCTAssertEqual(session.document.pages, overridden)
+        try session.undo(); XCTAssertEqual(session.document.pages, inherited)
+        try session.redo()
+        try apply(.setTextOverride(instanceID: second, propertyID: binding.id, value: "Independent"), pageID, second)
+        XCTAssertFalse(session.redoAvailability.isEnabled)
+        try apply(.resetAllTextOverrides(first), pageID, first)
+        XCTAssertTrue(CanonicalComponentText.overrides(on: session.document.pages[0].nodes[1]).isEmpty)
+        XCTAssertEqual(CanonicalComponentText.overrides(on: session.document.pages[0].nodes[2])[binding.id], "Independent")
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    func testComponentTextStaleCancelledInvalidAndVirtualTargetsAreNeutral() throws {
+        let session = try exposedTextSession(), document = session.document
+        let page = document.pages[0], first = page.nodes[1], scene = CanvasViewportSceneID()
+        let binding = CanonicalComponentText.properties(in: document.componentDefinitions[0])[0]
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: page.id,
+            revision: document.revision, sceneID: scene, rendererGeneration: document.revision)
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: scene, rendererGeneration: document.revision,
+            selectedNodeIDs: [first.id], availableNodeIDs: [first.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let edit = ComponentEdit.setTextOverride(instanceID: first.id, propertyID: binding.id, value: "Private draft")
+        let registry = ComponentCommandRegistry()
+        XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: document, context: context, cancelled: true))
+        for stale in [
+            DesignInspectorOperationIdentity(documentID: DocumentID(), pageID: page.id, revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: PageID(), revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: page.id, revision: 0, sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: page.id, revision: document.revision, sceneID: CanvasViewportSceneID(), rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: page.id, revision: document.revision, sceneID: scene, rendererGeneration: 0)
+        ] { XCTAssertThrowsError(try registry.prepare(edit, identity: stale, in: document, context: context)) }
+        for selection in [[], [first.id, page.nodes[2].id], [first.id, first.id], [NodeID()]] as [[NodeID]] {
+            let changed = TransformValidationContext(activePageID: page.id, currentSceneID: scene, rendererGeneration: document.revision,
+                selectedNodeIDs: selection, availableNodeIDs: [first.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+            XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: document, context: changed))
+        }
+        for key in ["locked", "hidden"] {
+            var blocked = document
+            blocked.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: key), value: .boolean(true)))
+            XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: blocked, context: context))
+        }
+        XCTAssertThrowsError(try textCommand(.setTextOverride(instanceID: first.id, propertyID: binding.id,
+            value: String(repeating: "x", count: 65_537)), document: document, pageID: page.id, selected: first.id))
+        XCTAssertThrowsError(try textCommand(.setTextOverride(instanceID: first.id, propertyID: ComponentTextPropertyID(), value: "x"),
+            document: document, pageID: page.id, selected: first.id))
+        let virtual = NodeID(DocumentPage.deterministicUUID(namespace: first.id.rawValue, label: "component-child:" + binding.sourceNodeID.description))
+        XCTAssertThrowsError(try textCommand(.setTextOverride(instanceID: virtual, propertyID: binding.id, value: "x"),
+            document: document, pageID: page.id, selected: virtual))
+        let before = try DocumentSerializer.encode(document)
+        XCTAssertEqual(try DocumentSerializer.encode(session.document), before)
+        let diagnostics = CommandDiagnostics()
+        diagnostics.recordComponentOperation(pageID: page.id, nodeIDs: [first.id], succeeded: false, durationMilliseconds: 1)
+        XCTAssertTrue(diagnostics.records[0].requirementIDs.contains("SF-0902-008"))
+        XCTAssertFalse(String(describing: diagnostics.records).contains("Private draft"))
+        XCTAssertFalse(String(describing: diagnostics.records).contains(first.id.description))
+    }
+
+    func testComponentTextSourceRemovalGuardAndUnresolvedIntentPreservation() throws {
+        let session = try exposedTextSession(), definition = session.document.componentDefinitions[0]
+        let text = definition.nodes[1], binding = CanonicalComponentText.properties(in: definition)[0]
+        let first = session.document.pages[0].nodes[1], pageID = session.document.pages[0].id
+        try session.execute(textCommand(.setTextOverride(instanceID: first.id, propertyID: binding.id, value: "Retain"),
+            document: session.document, pageID: pageID, selected: first.id).command)
+        let before = session.document
+        XCTAssertThrowsError(try textCommand(.removeTextProperty(text.id), document: before, pageID: definition.id, selected: text.id))
+        for command: DocumentCommand in [
+            .removeNode(.init(pageID: definition.id, nodeID: text.id)),
+            .removePage(.init(pageID: definition.id)),
+            .setProperty(.init(pageID: pageID, nodeID: first.id, property: .init(
+                id: first.insertionProperty(CanonicalComponentReference.key)!.id,
+                key: .init(rawValue: CanonicalComponentReference.key), value: .string(PageID().description)))),
+            .batch(text.properties.filter { CanonicalComponentText.metadataKeys.contains($0.key.rawValue) }.map {
+                .removeProperty(.init(pageID: definition.id, nodeID: text.id, propertyID: $0.id))
+            })
+        ] {
+            XCTAssertThrowsError(try session.execute(command))
+            XCTAssertEqual(session.document, before)
+        }
+        var unresolved = before
+        unresolved.pages[2].nodes[1].properties.removeAll { CanonicalComponentText.metadataKeys.contains($0.key.rawValue) }
+        let loaded = try DocumentSerializer.decode(DocumentSerializer.encode(unresolved))
+        XCTAssertEqual(CanonicalComponentText.unresolvedOverrides(on: loaded.pages[0].nodes[1], definition: loaded.pages[2]), [binding.id])
+        XCTAssertNil(ComponentGraphResolver.detachedNodes(loaded.pages[0].nodes[1], definition: loaded.pages[2], page: loaded.pages[0]))
+        try session.execute(textCommand(.resetAllTextOverrides(first.id), document: before, pageID: pageID, selected: first.id).command)
+        try session.execute(textCommand(.removeTextProperty(text.id), document: session.document, pageID: definition.id, selected: text.id).command)
+        XCTAssertTrue(CanonicalComponentText.properties(in: session.document.componentDefinitions[0]).isEmpty)
+        XCTAssertEqual(session.document.pages[2].nodes[1].insertionStringProperty("content.text"), "Original")
+        try session.undo(); try session.undo()
+        XCTAssertEqual(session.document.pages, before.pages)
+    }
+
+    func testComponentTextMultipleBindingsResetAllAndNoOpPreserveExactPresence() throws {
+        let session = try exposedTextSession(), definition = session.document.componentDefinitions[0]
+        let title = CanonicalComponentText.properties(in: definition)[0]
+        let subtitle = DocumentNode(kind: .text, name: "Subtitle", parent: .node(definition.rootNodeIDs[0]),
+            properties: definition.nodes[1].properties.filter { !CanonicalComponentText.metadataKeys.contains($0.key.rawValue) }
+                .map { .init(key: $0.key, value: $0.value, origin: $0.origin) })
+        try session.execute(.insertNode(.init(pageID: definition.id, node: subtitle, index: 1)))
+        try session.execute(textCommand(.exposeText(nodeID: subtitle.id, label: "Subtitle", defaultValue: "Secondary"),
+            document: session.document, pageID: definition.id, selected: subtitle.id).command)
+        XCTAssertThrowsError(try textCommand(.exposeText(nodeID: subtitle.id, label: "title", defaultValue: "Secondary"),
+            document: session.document, pageID: definition.id, selected: subtitle.id))
+        let binding = try XCTUnwrap(CanonicalComponentText.property(on: session.document.pages[2].nodes.first { $0.id == subtitle.id }!))
+        let pageID = session.document.pages[0].id, instanceID = session.document.pages[0].nodes[1].id
+        for (id, text) in [(title.id, ""), (binding.id, "Authored subtitle")] {
+            try session.execute(textCommand(.setTextOverride(instanceID: instanceID, propertyID: id, value: text),
+                document: session.document, pageID: pageID, selected: instanceID).command)
+        }
+        let noOp = try textCommand(.setTextOverride(instanceID: instanceID, propertyID: title.id, value: ""),
+            document: session.document, pageID: pageID, selected: instanceID)
+        guard case .batch(let commands) = noOp.command else { return XCTFail("Expected property transaction") }
+        XCTAssertTrue(commands.isEmpty, "Unchanged authored value must not create a UI history entry")
+        let before = session.document.pages
+        try session.execute(textCommand(.resetTextOverride(instanceID: instanceID, propertyID: title.id),
+            document: session.document, pageID: pageID, selected: instanceID).command)
+        XCTAssertEqual(CanonicalComponentText.overrides(on: session.document.pages[0].nodes[1]), [binding.id: "Authored subtitle"])
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.execute(textCommand(.resetAllTextOverrides(instanceID), document: session.document, pageID: pageID, selected: instanceID).command)
+        XCTAssertTrue(CanonicalComponentText.overrides(on: session.document.pages[0].nodes[1]).isEmpty)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+    }
+
+    func testComponentTextEffectiveDetachAndPageDuplicationPreserveStableIntent() throws {
+        let session = try exposedTextSession(), definition = session.document.componentDefinitions[0]
+        let binding = CanonicalComponentText.properties(in: definition)[0], page = session.document.pages[0]
+        let first = page.nodes[1]
+        try session.execute(textCommand(.setTextOverride(instanceID: first.id, propertyID: binding.id, value: "Detached value"),
+            document: session.document, pageID: page.id, selected: first.id).command)
+        let original = session.document.pages
+        let expected = try ComponentGraphResolver.resolvedPage(session.document.pages[0], in: session.document, breakpoint: .desktop)
+        try session.execute(textCommand(.detach(first.id), document: session.document, pageID: page.id, selected: first.id).command)
+        let materialized = session.document.pages[0]
+        let childID = NodeID(DocumentPage.deterministicUUID(namespace: first.id.rawValue, label: "component-child:" + binding.sourceNodeID.description))
+        XCTAssertEqual(materialized.nodes.first { $0.id == childID }?.insertionStringProperty("content.text"), "Detached value")
+        XCTAssertEqual(materialized.nodes.first { $0.id == childID }?.insertionGeometry, expected.nodes.first { $0.id == childID }?.insertionGeometry)
+        XCTAssertFalse(materialized.nodes.contains { $0.properties.contains { $0.key.rawValue.hasPrefix(CanonicalComponentText.namespace) } })
+        try session.undo(); XCTAssertEqual(session.document.pages, original)
+        let duplicated = try PageCommandRegistry().prepare(.duplicate,
+            identity: .init(documentID: session.document.id, revision: session.document.revision, pageID: page.id),
+            in: session.document, isAvailable: true)
+        try session.execute(duplicated.command)
+        let copy = try XCTUnwrap(session.document.pages.first { $0.id == duplicated.selectedPageID })
+        let copied = try XCTUnwrap(copy.nodes.first { $0.name == first.name })
+        XCTAssertNotEqual(copied.id, first.id)
+        XCTAssertEqual(CanonicalComponentReference.definitionID(for: copied), definition.id)
+        XCTAssertEqual(CanonicalComponentText.overrides(on: copied)[binding.id], "Detached value")
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    func testComponentTextImmutableRendererAndAccessibilityUseEffectiveRevision() async throws {
+        let session = try exposedTextSession(), definition = session.document.componentDefinitions[0]
+        let binding = CanonicalComponentText.properties(in: definition)[0], page = session.document.pages[0]
+        let first = page.nodes[1]
+        let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: 1_000, height: 700),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 900)), pixelRatio: .init(2))
+        let worker = WorkspaceScenePreparationWorker(), surface = CanvasRenderSurfaceID()
+        let old = try await worker.prepare(.init(document: session.document, activePageID: page.id,
+            activeContainerID: nil, viewport: viewport, surfaceID: surface))
+        try session.execute(textCommand(.setTextOverride(instanceID: first.id, propertyID: binding.id, value: "Effective value"),
+            document: session.document, pageID: page.id, selected: first.id).command)
+        let next = try await worker.prepare(.init(document: session.document, activePageID: page.id,
+            activeContainerID: nil, viewport: viewport, surfaceID: surface))
+        let id = NodeID(DocumentPage.deterministicUUID(namespace: first.id.rawValue, label: "component-child:" + binding.sourceNodeID.description))
+        XCTAssertEqual(old.renderScene.objects.first { $0.id == id }?.plainText, "Original")
+        XCTAssertEqual(next.renderScene.objects.first { $0.id == id }?.plainText, "Effective value")
+        XCTAssertEqual(next.renderScene.identity.sceneGeneration, session.document.revision)
+        XCTAssertEqual(old.renderScene.objects.first { $0.id == id }?.frame, next.renderScene.objects.first { $0.id == id }?.frame)
+        let plan = try CanvasRendererCore().prepare(scene: next.renderScene, overlays: next.overlays, viewport: viewport,
+                                                    previous: old.renderScene)
+        XCTAssertEqual(plan.accessibilityElements.first { $0.objectID == id }?.textContent, "Effective value")
+        XCTAssertFalse(session.document.pages[0].nodes.contains { $0.id == id })
+    }
+
+    func testComponentTextDraftIdentityWaitsForAdoptedRevision() throws {
+        let document = try componentTextFixture(), pageID = document.pages[0].id, scene = CanvasViewportSceneID()
+        let oldPlan = try CanvasRenderRequestIdentity(documentID: document.id, revision: document.revision,
+            sceneID: scene, sceneGeneration: document.revision, viewportGeneration: 0, scale: .init(2))
+        let first = try XCTUnwrap(ComponentCommandRegistry.draftIdentity(document: document, pageID: pageID, renderer: oldPlan))
+        var edited = document; edited.revision += 1
+        XCTAssertNil(ComponentCommandRegistry.draftIdentity(document: edited, pageID: pageID, renderer: oldPlan),
+                     "Publication before adoption must not initialize an editable draft with an obsolete renderer")
+        let adopted = try CanvasRenderRequestIdentity(documentID: edited.id, revision: edited.revision,
+            sceneID: scene, sceneGeneration: edited.revision, viewportGeneration: 1, scale: .init(2))
+        let next = try XCTUnwrap(ComponentCommandRegistry.draftIdentity(document: edited, pageID: pageID, renderer: adopted))
+        XCTAssertNotEqual(first, next)
+        XCTAssertEqual(next.revision, edited.revision)
+        XCTAssertEqual(next.rendererGeneration, edited.revision)
+        XCTAssertNil(ComponentCommandRegistry.draftIdentity(document: edited, pageID: PageID(), renderer: adopted))
+        XCTAssertNil(ComponentCommandRegistry.draftIdentity(document: edited, pageID: pageID, renderer: nil))
+    }
+
     func testComponentInsertionPlacementUsesVisibleParentIntersectionWithoutChangingSource() throws {
         let source = InsertionGeometry(origin: .init(x: 900, y: 800), size: .init(width: 240, height: 160))
         let artboard = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: 768, height: 1024))
@@ -74,11 +348,11 @@ final class CommandKernelTests: XCTestCase {
         document.pages[0].nodes.append(instance)
         let bytes = try DocumentSerializer.encode(document)
         XCTAssertEqual(try DocumentSerializer.decode(bytes), document)
-        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":7", with: "\"schemaVersion\":6")
+        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":8", with: "\"schemaVersion\":6")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(old.utf8)))
-        let future = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":7", with: "\"schemaVersion\":8")
+        let future = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":8", with: "\"schemaVersion\":9")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(future.utf8))) {
-            XCTAssertEqual($0 as? DocumentSerializationError, .unsupportedSchema(8))
+            XCTAssertEqual($0 as? DocumentSerializationError, .unsupportedSchema(9))
         }
         var invalid = document
         invalid.pages[0].nodes[1].properties[0].value = .string("invalid")
@@ -794,7 +1068,7 @@ final class CommandKernelTests: XCTestCase {
 
         XCTAssertEqual(first, second)
         let json = String(decoding: first, as: UTF8.self)
-        XCTAssertTrue(json.contains("\"schemaVersion\":7"))
+        XCTAssertTrue(json.contains("\"schemaVersion\":8"))
         XCTAssertTrue(json.contains("\"origin\":\"authored\""))
     }
 
@@ -808,7 +1082,7 @@ final class CommandKernelTests: XCTestCase {
     // SF-0302-004, SF-1702-004, SF-1702-008
     func testUnknownMalformedAndInvalidSchemaInputsAreRejected() throws {
         let valid = String(decoding: try DocumentSerializer.encode(populatedDocument()), as: UTF8.self)
-        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":7", with: "\"schemaVersion\":99").utf8)
+        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":8", with: "\"schemaVersion\":99").utf8)
         XCTAssertThrowsError(try DocumentSerializer.decode(unknown)) { error in
             XCTAssertEqual(error as? DocumentSerializationError, .unsupportedSchema(99))
         }

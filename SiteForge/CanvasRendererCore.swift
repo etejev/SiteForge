@@ -410,6 +410,13 @@ struct CanvasAccessibilityElementSnapshot: Equatable, Sendable {
     let label: String
     let frame: ViewportRect
     let paintOrder: Int
+    let textContent: String?
+
+    init(id: CanvasAccessibilityID, objectID: NodeID, label: String, frame: ViewportRect,
+         paintOrder: Int, textContent: String? = nil) {
+        self.id = id; self.objectID = objectID; self.label = label; self.frame = frame
+        self.paintOrder = paintOrder; self.textContent = textContent
+    }
 }
 
 enum CanvasAccessibilityFocusPolicy {
@@ -528,7 +535,8 @@ struct CanvasRendererCore: Sendable {
                         height: visibleFrame.size.height * viewport.zoom.value
                     )
                 ),
-                paintOrder: object.paintOrder
+                paintOrder: object.paintOrder,
+                textContent: object.plainText
             ))
         }
         return CanvasRenderPlan(

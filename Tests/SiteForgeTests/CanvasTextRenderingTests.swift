@@ -4,6 +4,59 @@ import XCTest
 
 @MainActor
 final class CanvasTextRenderingTests: XCTestCase {
+    // SF-0401/0405/0407: compare real NSEvent and native backing-layer
+    // conversion, not two copies of the renderer's own transform formula.
+    func testNativePointerPreviewAndOwnedLayersShareUnreflectedViewportCoordinates() throws {
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 700, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = NativeCanvasViewportView(frame: .init(x: 0, y: 0, width: 700, height: 500))
+        window.contentView = view
+        view.layoutSubtreeIfNeeded()
+        let root = try XCTUnwrap(view.layer)
+        XCTAssertTrue(root.isGeometryFlipped, "AppKit owns the only composition flip")
+        for zoom in [0.25, 0.66, 1.0, 2.0, 8.0] {
+            for scale in [1.0, 2.0] {
+                for origin in [WorldPoint(x: -40, y: 25), WorldPoint(x: 120, y: -80)] {
+                    view.viewportState = try CanvasViewportState(worldOrigin: origin,
+                        viewportSize: .init(width: 700, height: 500), zoom: CanvasZoom(zoom), pixelRatio: CanvasPixelRatio(scale))
+                    for local in [CGPoint(x: 60, y: 80), .init(x: 260, y: 80), .init(x: 260, y: 230), .init(x: 60, y: 230)] {
+                        let native = view.convert(local, to: nil)
+                        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: native,
+                            modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                            context: nil, eventNumber: 1, clickCount: 0, pressure: 0))
+                        var received: WorldPoint?
+                        view.onPointerPreview = { received = $0 }
+                        view.mouseMoved(with: event)
+                        let world = try XCTUnwrap(received)
+                        XCTAssertEqual(world.x, local.x / zoom + origin.x, accuracy: 1e-8)
+                        XCTAssertEqual(world.y, local.y / zoom + origin.y, accuracy: 1e-8)
+                        for kind in InsertionKind.allCases {
+                            let nodeID = NodeID()
+                            let geometry = InsertionGeometry.defaultValue(for: kind, at: world)
+                            view.insertionPreviewOverlay = .init(id: CanvasOverlayID(), objectID: nodeID,
+                                frame: geometry.frame, kind: "insertion-preview")
+                            let containers = try XCTUnwrap(root.sublayers)
+                            for name in ["renderer.authored-content", "renderer.authored-text", "renderer.editor-overlays"] {
+                                let container = try XCTUnwrap(containers.first { $0.name == name })
+                                XCTAssertEqual(container.convert(local, to: root).x, local.x, accuracy: 1 / scale)
+                                XCTAssertEqual(container.convert(local, to: root).y, local.y, accuracy: 1 / scale)
+                            }
+                            let overlays = try XCTUnwrap(containers.first { $0.name == "renderer.editor-overlays" })
+                            let preview = try XCTUnwrap(overlays.sublayers?.first { $0.name == "renderer.overlay.insertion-preview" })
+                            let painted = overlays.convert(preview.frame, to: root)
+                            XCTAssertEqual(painted.minX, local.x, accuracy: 1 / scale)
+                            XCTAssertEqual(painted.minY, local.y, accuracy: 1 / scale)
+                            XCTAssertEqual(painted.width, geometry.size.width * zoom, accuracy: 1 / scale)
+                            XCTAssertEqual(painted.height, geometry.size.height * zoom, accuracy: 1 / scale)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // SF-1102-001/006: Button surfaces must not suppress their authored text
     // subtree. Link and Button glyphs use the same upright layout at zoom.
     func testControlGlyphPixelsRemainVisibleWithinAuthoredBounds() throws {
@@ -74,9 +127,11 @@ final class CanvasTextRenderingTests: XCTestCase {
         )
         XCTAssertFalse(frameLabelPixels.isEmpty)
         XCTAssertTrue(
-            frameLabelPixels.allSatisfy { (32..<212).contains($0.x) && (16..<74).contains($0.y) },
+            frameLabelPixels.allSatisfy { (32..<212).contains($0.x) && (24..<66).contains($0.y) },
             "Frame-name pixels escaped the authored frame: \(pixelBounds(frameLabelPixels))"
         )
+        XCTAssertLessThan(try XCTUnwrap(frameLabelPixels.map(\.y).max()), 48,
+                          "Native labels start at the top inset, never reflected into the lower half.")
     }
 
     // SF-0401-001, SF-0401-004, SF-0402-006, SF-0405-006, SF-0406-001 —
@@ -292,18 +347,16 @@ final class CanvasTextRenderingTests: XCTestCase {
                         size: .init(width: 80 / zoom.value, height: 48 / zoom.value)
                     )
                     let viewportOrigin = try viewport.transform.worldToViewport(worldFrame.origin)
-                    // `CALayer.render(in:)` writes its bitmap scanlines in
-                    // Core Graphics' bottom-left orientation. Convert the
-                    // authored top-left viewport centre once at the test
-                    // image boundary; the production tile itself remains
-                    // entirely top-left/Y-down.
+                    // rgba/changedPixels convert bitmap scanlines once into
+                    // top-left coordinates. Expected bounds therefore use
+                    // the native viewport rect without a second reflection.
                     let center = (
                         x: Int((viewportOrigin.x + worldFrame.size.width * zoom.value / 2).rounded()),
-                        y: Int((Double(120) - viewportOrigin.y - worldFrame.size.height * zoom.value / 2).rounded())
+                        y: Int((viewportOrigin.y + worldFrame.size.height * zoom.value / 2).rounded())
                     )
                     let expectedBitmapRect = CGRect(
                         x: viewportOrigin.x,
-                        y: Double(120) - viewportOrigin.y - worldFrame.size.height * zoom.value,
+                        y: viewportOrigin.y,
                         width: worldFrame.size.width * zoom.value,
                         height: worldFrame.size.height * zoom.value
                     )
@@ -500,7 +553,7 @@ final class CanvasTextRenderingTests: XCTestCase {
             from: rasterizedBytes(object: withoutShadow, viewport: viewport),
             to: pixels, width: 300
         )
-        let objectBitmapRect = CGRect(x: 60, y: 120 - 24 - 64, width: 120, height: 64)
+        let objectBitmapRect = CGRect(x: 60, y: 24, width: 120, height: 64)
         XCTAssertTrue(
             shadowOnlyPixels.contains { !objectBitmapRect.contains(CGPoint(x: $0.x, y: $0.y)) },
             "The production shadow must paint beyond the authored object without changing its frame."
@@ -522,21 +575,21 @@ final class CanvasTextRenderingTests: XCTestCase {
                 space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             )!
-            // Render through the same flipped layer composition used by the
+            // Render through the same native layer composition used by the
             // native viewport. Calling tile.draw(in:) directly bypasses
             // CALayer's geometry transform and cannot prove text/clip parity.
             let root = CALayer()
             root.frame = CGRect(x: 0, y: 0, width: width, height: height)
             // `NativeCanvasViewportView` is an `NSView.isFlipped` host. Its
-            // root layer therefore establishes the same top-left coordinate
-            // space as every owned canvas subtree before tiles are added.
+            // root layer establishes top-left coordinates. Owned containers
+            // must not reflect their descendants a second time.
             root.isGeometryFlipped = true
             let container = CALayer()
             container.frame = root.bounds
-            container.isGeometryFlipped = true
+            container.isGeometryFlipped = false
             root.addSublayer(container)
             let layer = CanvasContentTileLayer()
-            // A nonzero tile origin proves the explicit flipped container
+            // A nonzero tile origin proves the unreflected container
             // keeps tile placement and tile-local text/clipping coordinates
             // in the same authored viewport space.
             layer.frame = CGRect(x: 8, y: 12, width: width - 8, height: height - 12)

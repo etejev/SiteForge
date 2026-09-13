@@ -33,9 +33,16 @@ final class ProjectResourceTests: XCTestCase {
             NodeProperty(key: .init(rawValue: "layout.width"), value: .number(80)),
             NodeProperty(key: .init(rawValue: "layout.height"), value: .number(60))
         ])
-        frame.childIDs = [image.id]
+        let text = DocumentNode(kind: .text, name: "Caption", parent: .node(frame.id), properties: [
+            .init(key: .init(rawValue: "content.text"), value: .string("Default caption")),
+            .init(key: .init(rawValue: "layout.x"), value: .number(100)),
+            .init(key: .init(rawValue: "layout.y"), value: .number(175)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(160)),
+            .init(key: .init(rawValue: "layout.height"), value: .number(24))
+        ])
+        frame.childIDs = [image.id, text.id]
         document.pages[0].nodes[0].childIDs = [frame.id]
-        document.pages[0].nodes += [frame, image]
+        document.pages[0].nodes += [frame, image, text]
         try document.validate()
         let session = DocumentSession(document: document), sceneID = CanvasViewportSceneID()
         let prepared = try ComponentCommandRegistry().prepare(.create(frame.id), identity: .init(
@@ -44,12 +51,26 @@ final class ProjectResourceTests: XCTestCase {
             context: .init(activePageID: pageID, currentSceneID: sceneID, rendererGeneration: document.revision,
                 selectedNodeIDs: [frame.id], availableNodeIDs: [frame.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil))
         try session.execute(prepared.command)
+        let definition = try XCTUnwrap(session.document.componentDefinitions.first)
+        let source = try XCTUnwrap(definition.nodes.first { $0.kind == .text })
+        func textEdit(_ edit: ComponentEdit, page: PageID, selected: NodeID) throws {
+            let change = try ComponentCommandRegistry().prepare(edit, identity: .init(documentID: document.id,
+                pageID: page, revision: session.document.revision, sceneID: sceneID,
+                rendererGeneration: session.document.revision), in: session.document,
+                context: .init(activePageID: page, currentSceneID: sceneID, rendererGeneration: session.document.revision,
+                    selectedNodeIDs: [selected], availableNodeIDs: [selected], isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+            try session.execute(change.command)
+        }
+        try textEdit(.exposeText(nodeID: source.id, label: "Caption", defaultValue: "Default caption"), page: definition.id, selected: source.id)
+        let binding = try XCTUnwrap(CanonicalComponentText.properties(in: session.document.componentDefinitions[0]).first)
+        try textEdit(.setTextOverride(instanceID: frame.id, propertyID: binding.id, value: "Saved caption"), page: pageID, selected: frame.id)
         let duplicate = try PageCommandRegistry().prepare(.duplicate, identity: .init(documentID: document.id,
             revision: session.document.revision, pageID: pageID), in: session.document, isAvailable: true)
         try session.execute(duplicate.command)
         XCTAssertEqual(session.document.componentDefinitions.count, 1)
         let instances = session.document.websitePages.flatMap(\.nodes).filter { $0.kind == .component }
         XCTAssertEqual(instances.count, 2)
+        XCTAssertTrue(instances.allSatisfy { CanonicalComponentText.overrides(on: $0)[binding.id] == "Saved caption" })
         XCTAssertEqual(Set(instances.compactMap { CanonicalComponentReference.definitionID(for: $0) }).count, 1)
         let package = try ProjectPackage(document: session.document).withResource(descriptor, data: bytes)
         let backend = DocumentLifecycleBackend()
@@ -77,6 +98,9 @@ final class ProjectResourceTests: XCTestCase {
             let resolved = try ComponentGraphResolver.resolvedPage(page, in: recovered.package.document, breakpoint: .mobile)
             for node in resolved.nodes where node.kind == .image {
                 XCTAssertEqual(node.insertionStringProperty("content.image.v1.assetID"), asset.id.description)
+            }
+            for node in resolved.nodes where node.kind == .text {
+                XCTAssertEqual(node.insertionStringProperty("content.text"), "Saved caption")
             }
         }
     }
@@ -613,7 +637,7 @@ final class ProjectResourceTests: XCTestCase {
         legacyObject["document"] = legacyDocument
         let migrated = try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacyObject))
         XCTAssertTrue(migrated.imageAssets.isEmpty)
-        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":7"))
+        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":8"))
     }
 
     func testImageInspectorRejectsInvalidStaleAndInapplicableEditsWithoutMutation() throws {

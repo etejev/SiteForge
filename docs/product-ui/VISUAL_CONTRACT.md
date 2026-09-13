@@ -1,5 +1,28 @@
 # SiteForge Visual Contract
 
+## Native pointer and composition contract
+
+The flipped AppKit canvas backing layer owns the top-left/Y-down conversion.
+Owned content, text and overlay composition containers must not flip again.
+Raster/text leaf APIs retain their single local drawing conversion. Native
+pointer screen positions, painted preview edges and committed accessible bounds
+must coincide without changing canonical coordinates or adding tool offsets.
+When a creation tool is armed, the empty-state card and empty-only convenience
+row yield so they neither obscure the preview nor resize the viewport on commit.
+The empty project remains genuinely empty until the user commits insertion.
+
+## Exposed component text (SF-AUTHORING-024)
+
+Content Inspector names plain-text properties on one linked instance and
+distinguishes inherited definition content from authored values, including
+empty strings. Native draft fields provide Apply/Return, Cancel/Escape, Reset
+and Reset All Text Overrides. Definition Text selection exposes a property-name
+and default form; future property types are not presented as working controls.
+Missing bindings retain authored text for inspection and explicit reset.
+Canvas accessibility text comes from the same immutable snapshot as raster
+glyphs. Component badges, clipping, practical-minimum panes and maximized-window
+policy are unchanged.
+
 ## Local components (SF-AUTHORING-022)
 
 The Components destination is reachable through the native navigator overflow

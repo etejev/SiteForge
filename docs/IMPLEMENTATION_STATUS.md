@@ -1,6 +1,21 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-08.
+Last updated: 2026-09-13.
+
+SF-CANVAS-POINTER-001 is locally verified: native backing-layer ownership removes
+the duplicate container reflection; empty guidance yields during creation.
+Independent native-event and painted-edge regression evidence is recorded in
+`docs/evidence/SF-CANVAS-POINTER-001.md`. Ten affected renderer checks and the
+native pointer journey pass; twelve final captures passed visual review.
+
+SF-AUTHORING-024 is locally verified: exposed plain-text definition properties,
+independent instance overrides, removal-based reset, non-destructive binding
+guards and schema-v8 compatibility. Eight new model/renderer checks and three
+affected budget/resource checks pass, plus the native two-instance journey.
+Five original-resolution captures passed visual review. The combined final
+`./sf verify` passed 429 non-UI + 61 UI = 490 tests, zero failures, including
+repository checks. Hosted confirmation pending. Bounded SF-0902/0905 remain Partial; see
+`docs/evidence/SF-AUTHORING-024-COMPONENT-TEXT.md`.
 
 SF-AUTHORING-023 is locally verified and DONE: native application-only Appearance Settings,
 with preview/apply/cancel/reset/restoration and versioned app-local persistence.
@@ -9,7 +24,7 @@ Bounded SF-0206-002/003/004/006/008 evidence is recorded in
 No canonical project preference coverage is claimed. Focused acceptance passed
 6 model + 1 UI tests; five native Settings captures were visually reviewed.
 Final `./sf verify` passed 420 unit/integration + 59 UI = 479 tests, zero failures.
-Repository checks passed. Hosted CI remains pending the verified checkpoint push.
+Repository checks passed. Hosted Actions `34252345248` passed at `b50375c`.
 
 SF-AUTHORING-022 and the integrated SF-AUTHORING-021 hosted repair are VERIFIED
 AND DONE within their bounded scopes. Actions `34172995329` at `bb5992f`

@@ -404,6 +404,155 @@ private struct NavigatorView: View {
     }
 }
 
+/// SF-0902/0905: drafts belong to the selected scene/revision, not the
+/// definition or expanded renderer nodes. All actions use the component registry.
+private struct ComponentTextInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Component Text").font(.headline)
+            if let node = state.selectedDefinitionText {
+                ComponentTextDefinitionFields(state: state, node: node)
+                    .disabled(!state.componentTextEditingAvailable)
+            } else if let instance = state.selectedComponent {
+                let properties = state.componentTextProperties
+                let overrides = CanonicalComponentText.overrides(on: instance)
+                if properties.isEmpty {
+                    Text("No exposed text properties. Edit the definition, select a Text layer, then expose its content here.")
+                        .font(.caption)
+                }
+                ForEach(properties) { property in
+                    ComponentTextInstanceFields(state: state, instanceID: instance.id, property: property,
+                        authored: overrides[property.id])
+                        .disabled(!state.componentTextEditingAvailable)
+                }
+                ForEach(overrides.keys.filter { id in !properties.contains { $0.id == id } }.sorted { $0.description < $1.description }, id: \.self) { id in
+                    VStack(alignment: .leading) {
+                        Text("Missing text binding").font(.headline)
+                        Text("Authored value retained. Restore the definition binding or explicitly reset this value.").font(.caption)
+                        Text(overrides[id] ?? "").textSelection(.enabled)
+                        Button("Reset Missing Value") {
+                            if let identity = state.componentTextDraftIdentity {
+                                state.commitComponentText(.resetTextOverride(instanceID: instance.id, propertyID: id), identity: identity)
+                            }
+                        }.accessibilityIdentifier("component.text.missing.reset.\(id)")
+                    }
+                }
+                Button("Reset All Text Overrides") {
+                    if let identity = state.componentTextDraftIdentity {
+                        state.commitComponentText(.resetAllTextOverrides(instance.id), identity: identity)
+                    }
+                }
+                .disabled(overrides.isEmpty || !state.componentTextEditingAvailable)
+                .accessibilityIdentifier("component.text.resetAll")
+                Text("Reset removes authored values and restores definition defaults. Empty text is an authored value.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text(state.editingComponentID != nil
+                     ? "Select one Text layer in this definition to expose a plain-text property. Multiple selection is inspection-only."
+                     : "Select one linked instance to edit its text properties. Multiple selection is inspection-only.")
+                    .font(.caption)
+            }
+            if !state.componentTextEditingAvailable {
+                Text("Editing requires one available, unlocked, visible canonical object.").font(.caption)
+            }
+            Text(state.componentAnnouncement)
+                .font(.caption).accessibilityLabel("Component text status")
+                .accessibilityValue(state.componentAnnouncement)
+                .accessibilityIdentifier("component.text.status")
+        }
+    }
+}
+
+private struct ComponentTextDefinitionFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let node: DocumentNode
+    @State private var label: String
+    @State private var content: String
+    @State private var identity: DesignInspectorOperationIdentity?
+    @State private var cancelled = false
+
+    init(state: WorkspaceShellState, node: DocumentNode) {
+        self.state = state; self.node = node
+        _label = State(initialValue: CanonicalComponentText.property(on: node)?.label ?? "Text")
+        _content = State(initialValue: node.insertionStringProperty("content.text") ?? "")
+        _identity = State(initialValue: state.componentTextDraftIdentity)
+    }
+    private var exposed: ExposedComponentTextProperty? { CanonicalComponentText.property(on: node) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(exposed == nil ? "Not exposed · plain text" : "Exposed · plain text · definition default")
+                .font(.caption).accessibilityIdentifier("component.text.definition.provenance")
+            Text("Property name").font(.caption)
+            TextField("Property name", text: Binding(get: { label }, set: { label = $0; cancelled = false }))
+                .accessibilityLabel("Component text property name")
+                .accessibilityIdentifier("component.text.definition.name")
+            Text("Default text").font(.caption)
+            TextField("Default text", text: Binding(get: { content }, set: { content = $0; cancelled = false }), axis: .vertical).lineLimit(1...4)
+                .accessibilityLabel("Component default text")
+                .accessibilityIdentifier("component.text.definition.default")
+            Text("Draft — Apply commits; Escape or Cancel restores the last committed value.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button(exposed == nil ? "Expose Text" : "Apply") { commit() }
+                    .accessibilityIdentifier("component.text.definition.apply")
+                Button("Cancel") { cancel() }.accessibilityIdentifier("component.text.definition.cancel")
+            }
+            Button("Remove Text Property") {
+                if let identity { state.commitComponentText(.removeTextProperty(node.id), identity: identity) }
+            }.disabled(exposed == nil).accessibilityIdentifier("component.text.definition.remove")
+            if cancelled { Text("Draft cancelled; committed text unchanged.").font(.caption) }
+        }
+        .onSubmit { commit() }
+        .onExitCommand { cancel() }
+    }
+    private func commit() {
+        if let identity { state.commitComponentText(.exposeText(nodeID: node.id, label: label, defaultValue: content), identity: identity) }
+    }
+    private func cancel() {
+        label = exposed?.label ?? "Text"; content = node.insertionStringProperty("content.text") ?? ""; cancelled = true
+    }
+}
+
+private struct ComponentTextInstanceFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let instanceID: NodeID
+    let property: ExposedComponentTextProperty
+    let authored: String?
+    @State private var draft: String
+    @State private var identity: DesignInspectorOperationIdentity?
+    @State private var cancelled = false
+    init(state: WorkspaceShellState, instanceID: NodeID, property: ExposedComponentTextProperty, authored: String?) {
+        self.state = state; self.instanceID = instanceID; self.property = property; self.authored = authored
+        _draft = State(initialValue: authored ?? property.defaultValue)
+        _identity = State(initialValue: state.componentTextDraftIdentity)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(property.label).font(.headline).fixedSize(horizontal: false, vertical: true)
+            Text(authored == nil ? "Inherited · definition default" : "Authored · this instance")
+                .font(.caption).accessibilityIdentifier("component.text.provenance.\(property.id)")
+            TextField(property.label, text: Binding(get: { draft }, set: { draft = $0; cancelled = false }), axis: .vertical).lineLimit(1...4)
+                .accessibilityLabel(property.label + " component text")
+                .accessibilityIdentifier("component.text.value.\(property.id)")
+                .onSubmit { commit() }
+            HStack {
+                Button("Apply") { commit() }.accessibilityIdentifier("component.text.apply.\(property.id)")
+                Button("Cancel") { cancel() }.accessibilityIdentifier("component.text.cancel.\(property.id)")
+                Button("Reset") {
+                    if let identity { state.commitComponentText(.resetTextOverride(instanceID: instanceID, propertyID: property.id), identity: identity) }
+                }.disabled(authored == nil).accessibilityIdentifier("component.text.reset.\(property.id)")
+            }
+            if cancelled { Text("Draft cancelled; committed text unchanged.").font(.caption) }
+        }.onExitCommand { cancel() }
+    }
+    private func commit() {
+        if let identity { state.commitComponentText(.setTextOverride(instanceID: instanceID, propertyID: property.id, value: draft), identity: identity) }
+    }
+    private func cancel() { draft = authored ?? property.defaultValue; cancelled = true }
+}
+
 private struct ComponentsNavigatorView: View {
     @ObservedObject var state: WorkspaceShellState
     @State private var deleting: PageID?
@@ -1215,7 +1364,7 @@ private struct CanvasPlaceholderView: View {
                             .controlSize(.small)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
-                    } else if state.canvasRenderPlan?.authoredObjects.isEmpty == true {
+                    } else if state.canvasRenderPlan?.authoredObjects.isEmpty == true && state.selectedTool == .select {
                         // ContentUnavailableView expands to its proposed
                         // canvas size on macOS, which would turn its empty
                         // area into an invisible pointer shield. This bounded
@@ -1369,7 +1518,7 @@ private struct ViewportControlsView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("canvas.viewport.zoomControls")
 
-            if state.canvasRenderPlan?.authoredObjects.isEmpty == true
+            if (state.canvasRenderPlan?.authoredObjects.isEmpty == true && state.selectedTool == .select)
                 || state.selectionOutsideActiveArtboard {
                 HStack(spacing: 8) {
                     if state.canvasRenderPlan?.authoredObjects.isEmpty == true {
@@ -2348,6 +2497,9 @@ private struct InspectorView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.accessibility.summary")
+        case .content where state.hasComponentTextInspectorContext:
+            ComponentTextInspectorView(state: state)
+                .id("component-text:" + state.componentTextInspectorKey)
         case .content, .interactions:
             ControlInspectorFieldsView(state: state, interactions: state.inspectorTab == .interactions)
                 .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ",") + state.inspectorTab.rawValue)
@@ -4487,7 +4639,7 @@ enum CanvasAuthoredTextLayerFactory {
     }
 }
 
-private final class NativeCanvasViewportView: NSView {
+final class NativeCanvasViewportView: NSView {
     var viewportState = try! CanvasViewportState() {
         didSet {
             // A raster plan is defined in one immutable viewport generation.
@@ -4590,13 +4742,13 @@ private final class NativeCanvasViewportView: NSView {
         contentContainer.name = "renderer.authored-content"
         textContainer.name = "renderer.authored-text"
         overlayContainer.name = "renderer.editor-overlays"
-        // The viewport's coordinate contract is top-left-origin. CALayer
-        // subtrees do not inherit NSView.isFlipped, so declare it on each
-        // owned container to keep tiles, overlays, clipping, and hit-test
-        // geometry in the same coordinate system as CanvasViewportState.
-        contentContainer.isGeometryFlipped = true
-        textContainer.isGeometryFlipped = true
-        overlayContainer.isGeometryFlipped = true
+        // AppKit already flips this view's backing layer. Flipping an owned
+        // container again reflects its child coordinates around its height:
+        // pointer Y=80 would paint at height-80. Keep composition containers
+        // unflipped; only leaf raster/text APIs own their drawing conversion.
+        contentContainer.isGeometryFlipped = false
+        textContainer.isGeometryFlipped = false
+        overlayContainer.isGeometryFlipped = false
         contentContainer.masksToBounds = true
         textContainer.masksToBounds = true
         overlayContainer.masksToBounds = true
@@ -5453,10 +5605,12 @@ private final class NativeCanvasViewportView: NSView {
                 height: item.frame.size.height
             ))
             element.setAccessibilityLabel(item.label)
+            var values = item.textContent.map { ["Text: " + $0] } ?? []
             if let context = selectedOverlays[item.objectID]?.label {
-                element.setAccessibilityValue(context)
+                values.append(context)
                 element.setAccessibilityHelp("Selection context: \(context)")
             }
+            if !values.isEmpty { element.setAccessibilityValue(values.joined(separator: "; ")) }
             element.setAccessibilityParent(self)
             element.setAccessibilityIdentifier("canvas.object.\(item.objectID.description)")
             element.setAccessibilitySelected(selectedIDs.contains(item.objectID))
@@ -6071,13 +6225,12 @@ final class CanvasContentTileLayer: CALayer {
         defer { NSGraphicsContext.restoreGraphicsState() }
         context.saveGState()
         defer { context.restoreGState() }
-        // The enclosing tile already converted Core Graphics to SiteForge's
-        // top-left coordinate space. AppKit must see that pre-flipped Core
-        // Graphics basis (rather than apply a second flipped-view contract),
-        // otherwise frame labels are painted upside down while their surface
-        // and selection outline remain correct.
+        // The enclosing tile already converted Core Graphics to top-left.
+        // Tell AppKit the actual basis so it lays out upright glyphs from the
+        // top of this rect. This flag describes the CTM; it does not add a
+        // second container transform.
         context.clip(to: rect)
-        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         attributed.draw(
             with: rect,
             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]

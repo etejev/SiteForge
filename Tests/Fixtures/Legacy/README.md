@@ -1,5 +1,11 @@
 # Legacy project-package goldens
 
+`schema-v7-linked-text-document.json` is a checked-in historical-format fixture
+with two linked instances, one definition and a defaulted Text source. It has
+fixed IDs and no v8 property metadata. The SF024 tests load these actual bytes,
+then expose/override content and exercise current serialization. It is not a
+claim that the current encoder can emit historical schemas.
+
 `schema-v5-blank-document.json` is an immutable canonical document emitted by the schema-v5 encoder at `70e7c42`. It exercises schema-v6 adaptation without introducing Button or Link nodes into historical data. Its document, page, and root identities must survive migration unchanged.
 
 These Base64 files are immutable byte-for-byte SiteForge package-v1 fixtures whose canonical payload uses a supported historical document schema. They were produced once from the documented `SFPKG001` container layout, not through the current production encoder, and are decoded to raw package bytes by the migration tests.

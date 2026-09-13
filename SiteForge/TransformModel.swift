@@ -835,6 +835,11 @@ enum ComponentEdit: Sendable {
     case insert(definitionID: PageID, parentID: NodeID, geometry: InsertionGeometry)
     case detach(NodeID)
     case delete(definitionID: PageID, detachUses: Bool)
+    case exposeText(nodeID: NodeID, label: String, defaultValue: String)
+    case removeTextProperty(NodeID)
+    case setTextOverride(instanceID: NodeID, propertyID: ComponentTextPropertyID, value: String)
+    case resetTextOverride(instanceID: NodeID, propertyID: ComponentTextPropertyID)
+    case resetAllTextOverrides(NodeID)
 }
 
 struct PreparedComponentEdit: Sendable {
@@ -847,6 +852,15 @@ struct PreparedComponentEdit: Sendable {
 /// atomic command kernel. Graph replacement preserves storage order as well as
 /// ownership order, and therefore has an exact existing-command inverse.
 struct ComponentCommandRegistry {
+    static func draftIdentity(document: CanonicalDocument, pageID: PageID?,
+                              renderer: CanvasRenderRequestIdentity?) -> DesignInspectorOperationIdentity? {
+        guard let pageID, document.pages.contains(where: { $0.id == pageID }), let renderer,
+              renderer.documentID == document.id, renderer.revision == document.revision,
+              renderer.sceneGeneration == document.revision else { return nil }
+        return .init(documentID: document.id, pageID: pageID, revision: document.revision,
+                     sceneID: renderer.sceneID, rendererGeneration: renderer.sceneGeneration)
+    }
+
     func prepare(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity,
                  in document: CanonicalDocument, context: TransformValidationContext,
                  cancelled: Bool = false) throws -> PreparedComponentEdit {
@@ -861,8 +875,13 @@ struct ComponentCommandRegistry {
         guard identity.pageID == context.activePageID,
               let index = document.pages.firstIndex(where: { $0.id == identity.pageID }) else { throw TransformError.pageUnavailable }
         var page = document.pages[index]
-        guard page.role != .componentDefinition else {
-            throw CommandExecutionError.disabled("Exit definition editing before creating, inserting or detaching an instance.")
+        switch edit {
+        case .exposeText, .removeTextProperty:
+            guard page.role == .componentDefinition else { throw TransformError.incompatibleGeometry }
+        default:
+            guard page.role != .componentDefinition else {
+                throw CommandExecutionError.disabled("Exit definition editing before editing an instance.")
+            }
         }
         func replace(_ graph: DocumentPage, at index: Int) -> [DocumentCommand] {
             [.removePage(.init(pageID: graph.id)), .insertPage(.init(page: graph, index: index))]
@@ -875,7 +894,64 @@ struct ComponentCommandRegistry {
             guard !node.selectionBooleanProperty("hidden") else { throw TransformError.hiddenTarget }
             return node
         }
+        func properties(_ node: DocumentNode, setting: [(String, String)] = [], removing: Set<String> = []) throws -> PreparedComponentEdit {
+            var commands: [DocumentCommand] = []
+            var updated = node
+            for property in node.properties where removing.contains(property.key.rawValue) {
+                commands.append(.removeProperty(.init(pageID: page.id, nodeID: node.id, propertyID: property.id)))
+                updated.properties.removeAll { $0.id == property.id }
+            }
+            for (key, text) in setting {
+                let old = node.properties.first { $0.key.rawValue == key }
+                guard old?.value != .string(text) || old?.origin != .authored else { continue }
+                let property = NodeProperty(id: old?.id ?? PropertyID(), key: .init(rawValue: key),
+                                            value: .string(text), origin: .authored)
+                commands.append(.setProperty(.init(pageID: page.id, nodeID: node.id, property: property)))
+                if let i = updated.properties.firstIndex(where: { $0.key == property.key }) { updated.properties[i] = property }
+                else { updated.properties.append(property) }
+            }
+            var candidate = document
+            candidate.pages[index].nodes[page.nodes.firstIndex(where: { $0.id == node.id })!] = updated
+            try candidate.validate()
+            try CanonicalComponentText.validateTransition(from: document, to: candidate)
+            return .init(command: .batch(commands), selectedNodeID: node.id,
+                         definitionID: page.role == .componentDefinition ? page.id : CanonicalComponentReference.definitionID(for: node))
+        }
         switch edit {
+        case .exposeText(let id, let label, let text):
+            let node = try selected(id)
+            guard node.kind == .text, CanonicalComponentText.validLabel(label),
+                  text.utf8.count <= CanonicalComponentText.maximumTextBytes else {
+                throw CommandExecutionError.disabled("Use a unique, nonempty property name and plain text of at most 64 KiB.")
+            }
+            let propertyID = CanonicalComponentText.property(on: node)?.id ?? ComponentTextPropertyID()
+            return try properties(node, setting: [
+                (CanonicalComponentText.namespace + "id", propertyID.description),
+                (CanonicalComponentText.namespace + "label", label),
+                (CanonicalComponentText.namespace + "type", "plain-text"), ("content.text", text)])
+        case .removeTextProperty(let id):
+            let node = try selected(id)
+            guard node.kind == .text else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: CanonicalComponentText.metadataKeys)
+        case .setTextOverride(let id, let propertyID, let text):
+            let node = try selected(id)
+            guard let definitionID = CanonicalComponentReference.definitionID(for: node),
+                  let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+                  CanonicalComponentText.properties(in: definition).contains(where: { $0.id == propertyID }),
+                  text.utf8.count <= CanonicalComponentText.maximumTextBytes else {
+                throw CommandExecutionError.disabled("The text binding is missing or the draft exceeds 64 KiB. Restore the binding or shorten the draft.")
+            }
+            return try properties(node, setting: [(CanonicalComponentText.overrideKey(propertyID), text)])
+        case .resetTextOverride(let id, let propertyID):
+            let node = try selected(id)
+            guard node.kind == .component else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: [CanonicalComponentText.overrideKey(propertyID)])
+        case .resetAllTextOverrides(let id):
+            let node = try selected(id)
+            guard node.kind == .component else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: Set(node.properties.map(\.key.rawValue).filter {
+                $0.hasPrefix(CanonicalComponentText.overrideNamespace)
+            }))
         case .create(let id):
             let root = try selected(id)
             guard root.kind.acceptsAuthoredChildren, let rootGeometry = root.insertionGeometry,
@@ -948,7 +1024,7 @@ struct ComponentCommandRegistry {
             guard let definitionID = CanonicalComponentReference.definitionID(for: instance),
                   let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
                   let expanded = ComponentGraphResolver.detachedNodes(instance, definition: definition, page: page) else {
-                throw CommandExecutionError.disabled("The definition is missing. Restore it before detaching to preserve appearance.")
+                throw CommandExecutionError.disabled("The definition or an authored text binding is missing. Restore it or reset unresolved values before detaching.")
             }
             page.nodes = page.nodes.flatMap { $0.id == id ? expanded : [$0] }
             return .init(command: .batch(replace(page, at: index)), selectedNodeID: id, definitionID: nil)

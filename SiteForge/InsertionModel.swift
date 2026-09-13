@@ -757,7 +757,8 @@ enum ComponentGraphResolver {
     /// identities; derived child coordinates become ordinary overrides.
     static func detachedNodes(_ instance: DocumentNode, definition: DocumentPage,
                               page: DocumentPage) -> [DocumentNode]? {
-        guard let geometry = page.resolvedStructuralGeometry(breakpoint: .desktop)[instance.id],
+        guard CanonicalComponentText.unresolvedOverrides(on: instance, definition: definition).isEmpty,
+              let geometry = page.resolvedStructuralGeometry(breakpoint: .desktop)[instance.id],
               var nodes = expand(instance, definition: definition, pageID: page.id,
                                  geometry: geometry, breakpoint: .desktop) else { return nil }
         for breakpoint in ResponsiveBreakpoint.allCases where breakpoint != .desktop {
@@ -833,6 +834,7 @@ enum ComponentGraphResolver {
               let rootID = definition.rootNodeIDs.first,
               !definition.nodes.contains(where: { $0.kind == .component }) else { return nil }
         let frames = definition.resolvedStructuralGeometry(breakpoint: breakpoint)
+        let textOverrides = CanonicalComponentText.overrides(on: instance)
         guard let rootGeometry = frames[rootID] else { return nil }
         let ids = Dictionary(uniqueKeysWithValues: definition.nodes.map { node in
             (node.id, node.id == rootID ? instance.id : NodeID(DocumentPage.deterministicUUID(
@@ -843,10 +845,19 @@ enum ComponentGraphResolver {
             let isRoot = node.id == rootID
             var properties = node.properties.filter {
                 !$0.key.rawValue.hasPrefix("responsive.geometry.v1.")
+                    && !$0.key.rawValue.hasPrefix(CanonicalComponentText.namespace)
             }.map { property in
                 NodeProperty(id: PropertyID(DocumentPage.deterministicUUID(namespace: id.rawValue,
                     label: "component-property:" + property.id.description)), key: property.key,
                     value: property.value, origin: property.origin)
+            }
+            // One resolution for raster, accessibility and detachment. An
+            // authored empty string is a value, never an inheritance sentinel.
+            if let binding = CanonicalComponentText.property(on: node),
+               let text = textOverrides[binding.id],
+               let index = properties.firstIndex(where: { $0.key.rawValue == "content.text" }) {
+                properties[index].value = .string(text)
+                properties[index].origin = .authored
             }
             if let frame = frames[node.id] {
                 let values: [String: Double] = [
