@@ -2,6 +2,11 @@
 
 ## Locally verified — SF-CANVAS-POINTER-001
 
+- Hosted follow-up: retain the truthful artboard clip and keep pointer test
+  samples inside the visible artboard on narrow displays. The original hosted
+  run passed all product checks except this new test's off-page assumption;
+  independent narrow sampling coverage is added without relaxing assertions.
+
 - Removed a duplicate native layer inversion that reflected authored content
   and insertion/selection chrome away from the real pointer. AppKit owns the
   viewport flip; leaf text/raster drawing retains its local conversion.

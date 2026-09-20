@@ -87,3 +87,32 @@ security, traceability, architecture, migration and evidence checks passed.
 Result: `full-20d3f1fe-cbca-4099-b029-d9a9c449e92c.xcresult`.
 The full log contains no publish-during-view-update or invalid-geometry warning.
 Hosted confirmation is pending; no unchanged full rerun is needed.
+
+## Hosted narrow-display follow-up
+
+Actions `34742950348` at `3f8e61f` passed all 429 non-UI and 60/61 UI tests.
+The sole failure was the newly added pointer journey at actual size: a fixed
+65-point local X lay 63 points left of the visible artboard. The preview was
+at screen X 228; the committed AX rectangle correctly began at the artboard
+edge X 291. The retained hosted screenshot
+`E7A33650-8BE5-4C4F-A10F-E7BAC53BD820.png` confirms pasteboard sampling, not
+canonical movement or compositor reflection. Artboard clipping must not be
+weakened to make an off-page AX frame equal the full authored rectangle.
+
+The test now plans all six positions inside the intersection of the actual
+viewport and Desktop artboard, with sufficient room for the full object.
+Right/down/left/up and an edge sample remain; exact mouse-screen/pixel/AX
+assertions are unchanged. `testNativePointerSamplesStayInsideVisibleArtboardAtNarrowWidths`
+independently covers 500/1044-point viewports, positive/negative artboard
+origins, 28/66/80/100% scale and Frame/Text sizes. No production code changes
+are required. The narrow-sampling regression passed 1/1 (0.038 seconds).
+On September 20, the desktop was confirmed unlocked and the runner started,
+but XCTest timed out enabling Automation Mode before the test body:
+`Failed to initialize for UI testing ... Timed out while enabling automation
+mode.` This is a recurrence of the separately tracked test-harness service
+failure, not a placement assertion. Result:
+`focused-e4a19d23-d14e-4925-9d10-ebffb3665cf7.xcresult`.
+No SiteForge runner remains active. Do not retry unchanged locally; run the
+exact selector from Xcode's Test navigator once macOS UI Automation is healthy.
+The follow-up remains uncommitted pending native validation and a new SHA's
+hosted gate. Do not repeat unchanged broad suites.

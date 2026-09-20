@@ -8,11 +8,7 @@ None.
 
 ## IN PROGRESS
 
-None.
-
-## DONE
-
-- [x] `SF-CANVAS-POINTER-001` Shared native pointer/compositor placement repair (P1, locally verified).
+- [ ] `SF-CANVAS-POINTER-001` Shared native pointer/compositor placement repair (P1, hosted pointer-sampling correction).
   - Bounded SF-0401-001/003/008, SF-0405-002/003/008 and SF-0407-001/003/008.
   - Plan: establish native event/view/layer conversion numerically, remove the
     duplicate container inversion, prove preview/commit movement independently
@@ -24,6 +20,20 @@ None.
     pointer journey passes, with twelve reviewed captures. Combined final
     verification passed 429 non-UI + 61 UI = 490 tests, zero failures.
     Evidence: `docs/evidence/SF-CANVAS-POINTER-001.md`. Hosted confirmation pending.
+  - Run `34742950348` passed 429 non-UI and 60/61 UI tests. The new pointer
+    journey sampled pasteboard on the narrow hosted display and mistook the
+    correctly clipped AX rectangle for a placement error. Bound test samples
+    to the visible artboard; retain every pixel/geometry assertion. Add narrow
+    sampling regression and rerun only these affected selectors before push.
+  - Narrow sampling passes 1/1. On September 20 the desktop was unlocked and
+    the XCTest runner launched, but XCTest timed out enabling Automation Mode
+    before the pointer test body. This is a recurrence of the separately
+    closed SF-TEST-HARNESS-001 service failure, not a product assertion.
+    Do not retry unchanged locally; run the exact selector from Xcode's Test
+    navigator once macOS UI Automation is healthy, then commit/push this
+    test-only correction and inspect CI.
+
+## DONE
 
 - [x] `SF-AUTHORING-024` Exposed component text properties and instance reset (locally verified).
   - Bounded SF-0902-001–008 and SF-0905-001–008; broad modules remain Partial.

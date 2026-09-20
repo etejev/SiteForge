@@ -11,6 +11,19 @@ SF-CANVAS-POINTER-001 additionally repairs duplicate native layer inversion,
 empty-card obstruction and a misdeclared AppKit label drawing basis. Ten
 affected renderer tests and the native pointer journey pass; twelve final
 pointer captures passed visual review. Hosted confirmation remains pending.
+Hosted run `34742950348` passed 429 non-UI and 60/61 UI tests; the only failure
+was the new pointer journey sampling pasteboard at 100% on a narrow display.
+The production AX clip was correct. The follow-up changes only test sample
+planning and documentation; do not repeat unchanged product suites. Run the
+two affected pointer selectors, then repository checks and inspect the new
+pushed SHA's hosted result. Preserve exact pixel and bounds assertions.
+The narrow-coordinate regression passes 1/1. On September 20 the desktop was
+unlocked and the runner launched, but XCTest timed out enabling Automation
+Mode before the test body. This is a recurrence of SF-TEST-HARNESS-001, not a
+product assertion. Do not retry unchanged locally: use Xcode's Test navigator
+to run only `testNativePointerPreviewAndFrameTextCommitFollowScreenCoordinates`
+once Automation Mode is healthy. The test-only follow-up is preserved
+uncommitted. No SiteForge runner remains active.
 
 The preceding SF-AUTHORING-023 checkpoint `b50375c` is pushed and hosted-green:
 Actions `34252345248` passed. Its local gate was 420 unit/integration plus

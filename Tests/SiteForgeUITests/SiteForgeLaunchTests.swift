@@ -3603,22 +3603,19 @@ final class SiteForgeLaunchTests: XCTestCase {
                 XCTAssertTrue(application.descendants(matching: .any)["canvas.empty.state"].waitForNonExistence(timeout: 3))
                 let size = CGSize(width: (kind == "Frame" ? 240 : 120) * zoom,
                                   height: (kind == "Frame" ? 160 : 24) * zoom)
-                let start = CGPoint(x: canvas.frame.width * 0.27, y: canvas.frame.height * 0.32)
-                // Right, down, left, up, including a position toward the
-                // fitted artboard's leading edge. No model/test mutation.
-                var points = [start, CGPoint(x: start.x + 100, y: start.y),
-                              CGPoint(x: start.x + 100, y: start.y + 100),
-                              CGPoint(x: start.x - 70, y: start.y + 100),
-                              CGPoint(x: start.x - 70, y: start.y - 35)]
-                if mode == "fitted" {
-                    let current = try XCTUnwrap(canvas.value as? String)
-                    let origin = current.components(separatedBy: "origin ")[1].components(separatedBy: ";")[0]
-                        .split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces))! }
-                    // Four points inside the real top/leading artboard edge.
-                    // Assertions still use the independent native pointer and
-                    // screenshot pixels, not a model-render equality oracle.
-                    points.append(.init(x: max(24, -origin[0] * zoom + 4), y: max(24, -origin[1] * zoom + 4)))
-                }
+                let current = try XCTUnwrap(canvas.value as? String)
+                let origin = current.components(separatedBy: "origin ")[1].components(separatedBy: ";")[0]
+                    .split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                XCTAssertEqual(origin.count, 2)
+                // Plan genuine pointer positions inside this blank Desktop
+                // artboard (1440 x 900), not pasteboard. On a narrow display
+                // the correctly clipped AX frame is not the full object rect.
+                // The assertions below still use independent mouse positions
+                // and painted pixels, never renderer-derived expected bounds.
+                let points = nativePointerSamplePoints(canvasSize: canvas.frame.size,
+                    artboard: CGRect(x: -origin[0] * zoom, y: -origin[1] * zoom,
+                                     width: 1440 * zoom, height: 900 * zoom), objectSize: size)
+                XCTAssertEqual(points.count, 6, "The visible artboard must fit the entire test object.")
                 for point in points {
                     canvas.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: point.x, dy: point.y)).hover()
                     XCTAssertTrue(waitForValue(application.descendants(matching: .any)["status.insertion"], containing: "Previewing"))
@@ -3641,6 +3638,45 @@ final class SiteForgeLaunchTests: XCTestCase {
                 XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
             }
         }
+    }
+
+    @MainActor
+    func testNativePointerSamplesStayInsideVisibleArtboardAtNarrowWidths() {
+        for width in [500.0, 1044.0] {
+            for zoom in [0.28, 0.66, 0.8, 1.0] {
+                let canvas = CGSize(width: width, height: 618)
+                // Hosted 100% artboard starts 128 points into the viewport;
+                // include a negative origin to cover a panned artboard too.
+                for origin in [CGPoint(x: 128, y: 108), CGPoint(x: -90, y: -60)] {
+                    let artboard = CGRect(origin: origin, size: CGSize(width: 1440 * zoom, height: 900 * zoom))
+                    let visible = CGRect(origin: .zero, size: canvas).intersection(artboard)
+                    for size in [CGSize(width: 240 * zoom, height: 160 * zoom),
+                                 CGSize(width: 120 * zoom, height: 24 * zoom)] {
+                        let points = nativePointerSamplePoints(canvasSize: canvas, artboard: artboard, objectSize: size)
+                        XCTAssertEqual(points.count, 6)
+                        for point in points { XCTAssertTrue(visible.contains(CGRect(origin: point, size: size))) }
+                        guard points.count == 6 else { continue }
+                        XCTAssertGreaterThan(points[1].x, points[0].x)
+                        XCTAssertGreaterThan(points[2].y, points[1].y)
+                        XCTAssertLessThan(points[3].x, points[2].x)
+                        XCTAssertLessThan(points[4].y, points[3].y)
+                    }
+                }
+            }
+        }
+    }
+
+    private func nativePointerSamplePoints(canvasSize: CGSize, artboard: CGRect, objectSize: CGSize) -> [CGPoint] {
+        let visible = CGRect(origin: .zero, size: canvasSize).intersection(artboard).insetBy(dx: 8, dy: 8)
+        guard visible.width > objectSize.width, visible.height > objectSize.height else { return [] }
+        let left = visible.minX, right = visible.maxX - objectSize.width
+        let top = visible.minY, bottom = visible.maxY - objectSize.height
+        let center = CGPoint(x: (left + right) / 2, y: (top + bottom) / 2)
+        let dx = min(100, (right - left) / 2), dy = min(100, (bottom - top) / 2)
+        return [center, .init(x: center.x + dx, y: center.y),
+                .init(x: center.x + dx, y: center.y + dy),
+                .init(x: center.x - dx, y: center.y + dy),
+                .init(x: center.x - dx, y: center.y - dy), .init(x: left, y: top)]
     }
 
     private func assertPointerChromePixels(canvas: XCUIElement, localRect: CGRect,
