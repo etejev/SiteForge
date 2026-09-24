@@ -7,6 +7,19 @@
   run passed all product checks except this new test's off-page assumption;
   independent narrow sampling coverage is added without relaxing assertions.
 
+## Locally verified — SF-AUTHORING-025
+
+- Replaced the Preview placeholder with a local, immutable revision snapshot.
+  Preview and Refresh are deliberate operations; the editor, selection chrome,
+  grid and tools never enter the preview surface. Local page rendering covers
+  current authored frames, text, fills and images without adding a web runtime
+  or export path.
+
+- Focused snapshot, native Preview/Refresh, narrow-display pointer, and
+  component text reveal coverage passed. The final gate passed 430
+  unit/integration + 63 UI tests (493 total), with repository checks green.
+  SF-1201/SF-1202 remain Partial outside the documented local-preview scope.
+
 - Removed a duplicate native layer inversion that reflected authored content
   and insertion/selection chrome away from the real pointer. AppKit owns the
   viewport flip; leaf text/raster drawing retains its local conversion.

@@ -35,11 +35,13 @@ private enum PointerWindowPlacement {
         start.click(forDuration: 0.1, thenDragTo: destination)
     }
 
-    // Align the complete native window to the needed display edge. A tiny
-    // per-control correction can remain within AppKit's drag threshold.
+    // Align the *live target* to the usable display. The production window may
+    // intentionally exceed a narrow display, so window-edge alignment alone
+    // cannot guarantee a control in its obscured strip becomes hittable.
     static func horizontalTranslation(window: CGRect, target: CGRect, visible: CGRect) -> CGFloat {
-        if target.minX < visible.minX { return visible.minX - window.minX }
-        if target.maxX > visible.maxX { return visible.maxX - window.maxX }
+        _ = window // Width is preserved by the native title-bar drag.
+        if target.minX < visible.minX { return visible.minX - target.minX }
+        if target.maxX > visible.maxX { return visible.maxX - target.maxX }
         return 0
     }
 }
@@ -2529,16 +2531,30 @@ final class SiteForgeLaunchTests: XCTestCase {
         let leadingWindow = CGRect(x: 16, y: 47, width: 1100, height: 642)
         let undo = CGRect(x: 993, y: 47, width: 41, height: 52)
         let trailingShift = PointerWindowPlacement.horizontalTranslation(window: leadingWindow, target: undo, visible: visible)
-        XCTAssertEqual(trailingShift, -92)
+        XCTAssertEqual(trailingShift, -10)
         let trailingWindow = leadingWindow.offsetBy(dx: trailingShift, dy: 0)
         XCTAssertEqual(trailingWindow.width, 1100)
-        XCTAssertEqual(trailingWindow.maxX, visible.maxX)
         XCTAssertLessThanOrEqual(undo.offsetBy(dx: trailingShift, dy: 0).maxX, visible.maxX)
         let pages = CGRect(x: -32.5, y: 97.5, width: 44, height: 26)
         let leadingShift = PointerWindowPlacement.horizontalTranslation(window: trailingWindow, target: pages, visible: visible)
-        XCTAssertEqual(leadingShift, 76)
+        XCTAssertEqual(leadingShift, 32.5)
         XCTAssertGreaterThanOrEqual(pages.offsetBy(dx: leadingShift, dy: 0).minX, visible.minX)
         XCTAssertEqual(trailingWindow.offsetBy(dx: leadingShift, dy: 0).width, 1100)
+        // Both a long Content-Inspector field and a canvas target can live
+        // in the obscured strip of the approved 1100-point window. The same
+        // real title-bar translation must reveal either actual target.
+        let componentTextField = CGRect(x: 1_070, y: 260, width: 210, height: 22)
+        let componentShift = PointerWindowPlacement.horizontalTranslation(
+            window: leadingWindow, target: componentTextField, visible: visible
+        )
+        XCTAssertEqual(componentShift, -256)
+        XCTAssertLessThanOrEqual(componentTextField.offsetBy(dx: componentShift, dy: 0).maxX, visible.maxX)
+        let canvasTarget = CGRect(x: -86, y: 340, width: 240, height: 160)
+        let canvasShift = PointerWindowPlacement.horizontalTranslation(
+            window: leadingWindow, target: canvasTarget, visible: visible
+        )
+        XCTAssertEqual(canvasShift, 86)
+        XCTAssertGreaterThanOrEqual(canvasTarget.offsetBy(dx: canvasShift, dy: 0).minX, visible.minX)
         XCTAssertEqual(PointerWindowPlacement.horizontalTranslation(window: trailingWindow,
             target: CGRect(x: 200, y: 100, width: 100, height: 30), visible: visible), 0)
     }
@@ -3342,8 +3358,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(preview.isEnabled)
         XCTAssertEqual(preview.label, "Preview")
         application.typeKey("p", modifierFlags: [.command, .shift])
-        XCTAssertTrue(application.descendants(matching: .any)["preview.placeholder"].waitForExistence(timeout: 2))
-        application.buttons["preview.done"].click()
+        XCTAssertTrue(application.descendants(matching: .any)["preview.local"].waitForExistence(timeout: 2))
+        XCTAssertTrue(application.descendants(matching: .any)["preview.status"].exists)
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertFalse(application.descendants(matching: .any)["preview.local"].waitForExistence(timeout: 1))
         XCTAssertTrue(hasKeyboardFocus(application.buttons["navigator.tab.pages"]))
     }
 
@@ -3355,7 +3373,28 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         XCTAssertTrue(waitForHittable(preview, in: application))
         preview.click()
-        XCTAssertTrue(application.descendants(matching: .any)["preview.placeholder"].waitForExistence(timeout: 2))
+        XCTAssertTrue(application.descendants(matching: .any)["preview.local"].waitForExistence(timeout: 2))
+    }
+
+    // SF-1201-001/002/003/004/006, SF-1202-001/003/006 — Preview owns a
+    // deliberate immutable authored snapshot and contains no editor canvas.
+    @MainActor
+    func testLocalPreviewRefreshesOnlyOnExplicitRequestJourney() throws {
+        let application = launchWorkspace()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"]
+        application.buttons["toolbar.tool.frame"].click()
+        XCTAssertTrue(waitForHittable(canvas, in: application))
+        canvas.coordinate(withNormalizedOffset: .init(dx: 0.52, dy: 0.48)).click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        application.buttons["toolbar.preview"].click()
+        XCTAssertTrue(application.descendants(matching: .any)["preview.local"].waitForExistence(timeout: 3))
+        XCTAssertTrue(application.descendants(matching: .any)["preview.canvas"].exists)
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["preview.status"], containing: "Previewing revision"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-025 local preview authored snapshot")
+        application.buttons["preview.refresh"].click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["preview.status"], containing: "already shows the current revision"))
+        application.buttons["preview.done"].click()
+        XCTAssertTrue(hasKeyboardFocus(application.buttons["navigator.tab.pages"]))
     }
 
     // SF-0201-006, SF-0201-008, SF-0406-006, SF-1902-008

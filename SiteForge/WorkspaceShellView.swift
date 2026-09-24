@@ -69,10 +69,13 @@ struct WorkspaceShellView: View {
         .toolbar {
             WorkspaceToolbar(state: state)
         }
-        .sheet(isPresented: $state.isPreviewPresented) {
-            PreviewPlaceholderView {
+        .sheet(isPresented: $state.isPreviewPresented, onDismiss: {
+            state.closePreview()
+            DispatchQueue.main.async {
                 focusedControl = .navigatorPages
             }
+        }) {
+            LocalPreviewView(state: state)
         }
         .sheet(isPresented: Binding(
             get: { state.lifecycle.isRecoveryDetailsPresented },
@@ -220,11 +223,11 @@ private struct WorkspaceToolbar: ToolbarContent {
 
         ToolbarItem(placement: .primaryAction) {
             Button {
-                state.isPreviewPresented = true
+                state.openPreview()
             } label: {
                 Label("Preview", systemImage: "play.fill")
             }
-            .help("Open a bounded preview placeholder")
+            .help("Open a local snapshot preview")
             .accessibilityIdentifier("toolbar.preview")
         }
     }
@@ -3975,30 +3978,124 @@ private struct StatusBarView: View {
     }
 }
 
-private struct PreviewPlaceholderView: View {
+private struct LocalPreviewView: View {
     @Environment(\.dismiss) private var dismiss
-    let onDismiss: () -> Void
+    @ObservedObject var state: WorkspaceShellState
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "play.rectangle")
-                .font(.system(size: 42))
-                .accessibilityHidden(true)
-            Text("Preview Placeholder")
-                .font(.title2)
-            Text("Live preview is intentionally deferred to a later milestone.")
-                .foregroundStyle(.secondary)
-            Button("Done") {
-                dismiss()
-                onDismiss()
-            }
-                .keyboardShortcut(.defaultAction)
+        VStack(spacing: 0) {
+            HStack {
+                Label("Local Preview", systemImage: "play.rectangle.fill")
+                    .font(.headline)
+                Spacer()
+                Text(state.previewState.snapshot.map { "Revision \($0.revision)" } ?? "Unavailable")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("preview.revision")
+                Button("Refresh") { state.refreshPreview() }
+                    .accessibilityIdentifier("preview.refresh")
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("preview.done")
+            }
+            .padding(16)
+            Divider()
+            if let snapshot = state.previewState.snapshot {
+                LocalPreviewCanvas(snapshot: snapshot)
+                    .accessibilityIdentifier("preview.canvas")
+            } else {
+                ContentUnavailableView(
+                    "Preview unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(state.previewState.status)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            Divider()
+            Text(state.previewState.status)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .accessibilityIdentifier("preview.status")
         }
-        .padding(32)
-        .frame(minWidth: 420, minHeight: 240)
+        .frame(minWidth: 620, minHeight: 420)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("preview.placeholder")
+        .accessibilityIdentifier("preview.local")
+    }
+}
+
+private struct LocalPreviewCanvas: View {
+    let snapshot: CanvasPreviewSceneSnapshot
+
+    var body: some View {
+        GeometryReader { proxy in
+            let bounds = previewBounds(snapshot.objects)
+            let inset: CGFloat = 28
+            let scale = min(
+                (proxy.size.width - inset * 2) / max(1, bounds.size.width),
+                (proxy.size.height - inset * 2) / max(1, bounds.size.height)
+            )
+            ZStack(alignment: .topLeading) {
+                Color.white
+                ForEach(snapshot.objects.filter(\.isVisible).sorted { $0.paintOrder < $1.paintOrder }, id: \.id) { object in
+                    LocalPreviewObject(object: object)
+                        .frame(width: object.frame.size.width * scale, height: object.frame.size.height * scale)
+                        .position(
+                            x: inset + (object.frame.origin.x - bounds.origin.x) * scale + object.frame.size.width * scale / 2,
+                            y: inset + (object.frame.origin.y - bounds.origin.y) * scale + object.frame.size.height * scale / 2
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: object.cornerRadius * scale))
+                }
+            }
+            .clipShape(Rectangle())
+            .accessibilityLabel("Preview page, revision \(snapshot.revision), \(snapshot.objects.count) authored objects")
+        }
+        .background(Color.white)
+    }
+
+    private func previewBounds(_ objects: [CanvasRenderObject]) -> CGRect {
+        guard let first = objects.first else { return CGRect(x: 0, y: 0, width: 1440, height: 900) }
+        return objects.dropFirst().reduce(CGRect(
+            x: first.frame.origin.x, y: first.frame.origin.y,
+            width: first.frame.size.width, height: first.frame.size.height
+        )) { partial, object in
+            partial.union(CGRect(x: object.frame.origin.x, y: object.frame.origin.y,
+                               width: object.frame.size.width, height: object.frame.size.height))
+        }
+    }
+}
+
+private struct LocalPreviewObject: View {
+    let object: CanvasRenderObject
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            previewFill
+            if let text = object.plainText {
+                Text(text)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(6)
+                    .accessibilityLabel(object.accessibilityLabel)
+            } else if object.style == .imagePlaceholder, let data = object.imageData, let image = NSImage(data: data) {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: object.imageFitMode == .fill ? .fill : .fit)
+            }
+        }
+        .opacity(object.opacity)
+        .overlay(RoundedRectangle(cornerRadius: object.cornerRadius).stroke(Color.black.opacity(0.12), lineWidth: 1))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(object.accessibilityLabel)
+    }
+
+    @ViewBuilder private var previewFill: some View {
+        if let rgba = CanvasAuthoredFillCompositor.resolvedColor(layers: object.fillLayers, atNormalizedPoint: (0.5, 0.5)) ?? object.fillRGBA,
+           rgba.count == 4 {
+            Color(red: rgba[0], green: rgba[1], blue: rgba[2], opacity: rgba[3])
+        } else {
+            Color(nsColor: .controlBackgroundColor)
+        }
     }
 }
 
@@ -4309,7 +4406,7 @@ struct SiteForgeCommands: Commands {
 
         CommandMenu("Preview") {
             Button("Open Preview") {
-                state?.isPreviewPresented = true
+                state?.openPreview()
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
             .disabled(state == nil)

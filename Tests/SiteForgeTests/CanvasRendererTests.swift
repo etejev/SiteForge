@@ -911,6 +911,30 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(plan.identity, prepared.renderScene.identity)
     }
 
+    // SF-1201-001/003/004/005 — Preview adopts only an immutable authored
+    // render plan and refresh never mutates the source plan or its overlays.
+    func testLocalPreviewStateFreezesRevisionAndRejectsStaleRefreshes() throws {
+        let fixture = try makeFixture(count: 2)
+        let plan = try CanvasRendererCore().prepare(
+            scene: fixture.scene, overlays: fixture.overlays, viewport: fixture.viewport
+        )
+        var preview = LocalPreviewState()
+        preview.open(plan: plan)
+        let first = try XCTUnwrap(preview.snapshot)
+        XCTAssertEqual(first.documentID, plan.identity.documentID)
+        XCTAssertEqual(first.revision, 7)
+        XCTAssertEqual(first.objects, plan.authoredObjects)
+        preview.refresh(plan: plan)
+        XCTAssertEqual(preview.snapshot, first)
+        XCTAssertEqual(preview.status, "Preview already shows the current revision.")
+        preview.open(plan: nil)
+        XCTAssertNil(preview.snapshot)
+        XCTAssertEqual(preview.status, "Preview unavailable until the current canvas is ready.")
+        preview.close()
+        XCTAssertNil(preview.snapshot)
+        XCTAssertEqual(preview.status, "Preview closed")
+    }
+
     private struct Fixture {
         let scene: CanvasRenderSceneSnapshot
         let overlays: CanvasEditorOverlaySnapshot

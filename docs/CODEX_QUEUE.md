@@ -33,6 +33,31 @@ None.
     navigator once macOS UI Automation is healthy, then commit/push this
     test-only correction and inspect CI.
 
+- [x] `SF-AUTHORING-025` Local Preview v1 (P1, locally verified; hosted confirmation pending).
+  - Requirements: bounded evidence for `SF-1201-001`–`008` and
+    `SF-1202-001`–`008`; `SF-1203`/`SF-1204` remain explicitly deferred.
+  - Delivered: freeze an immutable revision-tagged authored render snapshot at
+    deliberate Preview/Refresh boundaries; display it in an editor-chrome-free
+    native sheet using the existing canvas object contract, with visible
+    loading/empty/error state and stale-result rejection. Reuse canonical
+    geometry, fills, images and text; the preview never writes document or
+    history state.
+  - Acceptance: Preview command/toolbar/accessibility opens a readable local
+    page snapshot, Refresh adopts only a newer matching revision, Close/Escape
+    returns focus, and visible diagnostics identify unsupported runtime
+    features. Snapshot tests and a native visual journey cover editor-chrome
+    exclusion, immutable adoption and supported-object rendering.
+  - Exclusions: publishing, export files, HTML/CSS generation, JavaScript,
+    runtime routing/CMS/remote content, browser deployment, preview/export
+    parity, and release acceptance.
+  - Evidence: immutable snapshot model, Preview/Refresh UI journey, narrow
+    display pointer regression, and the formerly failing component journey all
+    pass. The final gate passed 430 unit/integration + 63 UI = 493 tests,
+    zero failures; repository checks passed. The native journey retains the
+    original-resolution `SF-AUTHORING-025 local preview authored snapshot`
+    attachment. See `docs/evidence/SF-AUTHORING-025-LOCAL-PREVIEW.md`.
+    SF-1201/SF-1202 stay Partial outside this deliberately local preview.
+
 ## DONE
 
 - [x] `SF-AUTHORING-024` Exposed component text properties and instance reset (locally verified).

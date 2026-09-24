@@ -1,6 +1,15 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-13.
+Last updated: 2026-09-24.
+
+SF-AUTHORING-025 is locally verified: the native Preview command captures an
+immutable adopted render-plan snapshot at an explicit open/refresh boundary.
+The preview is scene-local and has no document/history write path. Focused
+model and native UI evidence covers empty/unavailable status, snapshot refresh,
+editor-chrome exclusion and Close focus restoration. The final gate passed 430
+unit/integration + 63 UI = 493 tests with zero failures. SF-1201/SF-1202 remain
+Partial; browser runtime, HTML/CSS/JS, export/publishing and SF-1203/SF-1204
+are excluded. Hosted confirmation is pending.
 
 SF-CANVAS-POINTER-001 is locally verified: native backing-layer ownership removes
 the duplicate container reflection; empty guidance yields during creation.

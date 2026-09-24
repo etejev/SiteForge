@@ -3,6 +3,51 @@ import AppKit
 import os
 import SwiftUI
 
+/// Scene-local immutable ownership for the currently open preview. It never
+/// mutates canonical content or authoring history.
+struct LocalPreviewState: Equatable, Sendable {
+    private(set) var snapshot: CanvasPreviewSceneSnapshot?
+    private(set) var status = "Preview is ready"
+
+    mutating func open(plan: CanvasRenderPlan?) {
+        guard let plan else {
+            snapshot = nil
+            status = "Preview unavailable until the current canvas is ready."
+            return
+        }
+        snapshot = CanvasPreviewSceneSnapshot(
+            documentID: plan.identity.documentID,
+            revision: plan.identity.revision,
+            objects: plan.authoredObjects,
+            deterministicDigest: plan.deterministicDigest
+        )
+        status = plan.authoredObjects.isEmpty
+            ? "Previewing an empty page. Insert content in the editor, then Refresh Preview."
+            : "Previewing revision \(plan.identity.revision). Refresh Preview to adopt later edits."
+    }
+
+    mutating func refresh(plan: CanvasRenderPlan?) {
+        guard let plan else {
+            status = "Preview refresh unavailable until the current canvas is ready."
+            return
+        }
+        guard snapshot?.documentID == nil || snapshot?.documentID == plan.identity.documentID else {
+            status = "Preview belongs to a different document. Close it and open Preview again."
+            return
+        }
+        guard snapshot?.revision != plan.identity.revision || snapshot?.deterministicDigest != plan.deterministicDigest else {
+            status = "Preview already shows the current revision."
+            return
+        }
+        open(plan: plan)
+    }
+
+    mutating func close() {
+        snapshot = nil
+        status = "Preview closed"
+    }
+}
+
 private enum CanvasRendererSignposts {
     static let log = OSLog(subsystem: "app.siteforge.SiteForge", category: "canvas-renderer")
 }
@@ -1038,6 +1083,7 @@ final class WorkspaceShellState: ObservableObject {
             }
         }
     }
+    @Published private(set) var previewState = LocalPreviewState()
     let documentSession: DocumentSession
     let lifecycle: DocumentLifecycleController
     private var documentSessionObservation: AnyCancellable?
@@ -1125,6 +1171,25 @@ final class WorkspaceShellState: ObservableObject {
             }
         }
         refreshImageThumbnails(for: documentSession.document)
+    }
+
+    /// Preview snapshots are deliberately captured at an explicit user action.
+    /// Subsequent editor changes do not mutate an open preview until Refresh.
+    func openPreview() {
+        previewState.open(plan: canvasRenderPlan)
+        isPreviewPresented = true
+        announcementPoster.post(previewState.status)
+    }
+
+    func refreshPreview() {
+        previewState.refresh(plan: canvasRenderPlan)
+        announcementPoster.post(previewState.status)
+    }
+
+    func closePreview() {
+        isPreviewPresented = false
+        previewState.close()
+        announcementPoster.post(previewState.status)
     }
 
     var canUndo: Bool { documentSession.canUndo }

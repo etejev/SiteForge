@@ -1,15 +1,15 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-13.
+Last updated: 2026-09-24.
 
-Current work is SF-AUTHORING-024 exposed component text properties and reset.
-The bounded implementation passes 11 focused non-UI checks and one native
-journey; five original-resolution captures passed review. The authoritative
-gate passed 429 non-UI + 61 UI = 490 tests, zero failures, on September 13.
-Hosted confirmation is pending. SF-CANVAS-POINTER-001 repairs native pointer/compositor parity
-in the same checkpoint; independent event/layer and painted-edge tests cover
-the first incorrect boundary rather than adding object offsets. No later
-feature is started.
+Current work is SF-AUTHORING-025 Local Preview v1. The native Preview command
+captures an immutable revision-tagged authored snapshot through explicit Open
+and Refresh actions; editor chrome, tools, grid and selection never enter the
+local preview. Focused snapshot, native preview, narrow-display pointer and
+component reveal regressions pass. The authoritative local gate passed 430
+unit/integration + 63 UI = 493 tests with zero failures. SF-1201/SF-1202 stay
+Partial: browser runtime, HTML/CSS/JS, export/publishing and SF-1203/SF-1204
+remain deferred. Hosted confirmation is pending.
 
 SF-AUTHORING-023 application Appearance Settings is locally verified and DONE.
 Six model tests, one actual-app journey and five reviewed Settings captures
