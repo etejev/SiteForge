@@ -15,10 +15,10 @@ concurrency:
 jobs:
   verify:
     runs-on: macos-latest
-    # The 413 non-UI / 56 UI hosted gate reached test completion at 39 minutes.
-    # Reserve bounded build/cleanup/artifact headroom, not longer XCTest waits
-    # or relaxed application performance budgets.
-    timeout-minutes: 50
+    # The 430 non-UI / 63 UI gate reaches the former 50-minute limit on hosted
+    # macOS. Reserve bounded build, cleanup, and runner-variance headroom—not
+    # longer XCTest waits or relaxed application performance budgets.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - name: Select Xcode
