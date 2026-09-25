@@ -31,6 +31,15 @@ tests (493 total, zero failures). The result bundle records the preview and
 grid-window attachments; it is intentionally not checked into the repository.
 Hosted confirmation for the pending checkpoint remains separate.
 
+## Hosted follow-up
+
+Actions `36106023892` completed within the corrected 60-minute job budget but
+failed only two pre-existing native-interaction helpers: a constrained
+title-bar drag was clamped before one live Layers target became visible, and
+the system OpenPanel retained its visible Go-to-Folder field after Return. The
+follow-up keeps strict assertions and uses real live-state re-query/Go-button
+completion; it does not modify Preview behavior or reduce coverage.
+
 ## Explicit exclusions
 
 No browser runtime, HTML/CSS/JS generation, routing, remote data/CMS,

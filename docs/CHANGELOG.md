@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-CI-025
+
+- Corrected native-test interaction helpers after hosted OpenPanel and narrow
+  constrained-window evidence. Helpers now re-query the real target after a
+  title-bar drag and explicitly complete the visible Go-to-Folder action.
+  Product interaction, coverage, and the 1100-point window policy are intact.
+
 ## Locally verified — SF-CANVAS-POINTER-001
 
 - Hosted follow-up: retain the truthful artboard clip and keep pointer test

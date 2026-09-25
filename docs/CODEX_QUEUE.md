@@ -8,6 +8,16 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-CI-025` Hosted native-interaction stabilization (P1).
+  - Hosted run `36106023892` passed 430 non-UI tests but exposed two real
+    native-test transitions: constrained title-bar drag clamping and OpenPanel
+    Go-to-Folder confirmation. The shared helpers now re-query live AX state
+    after each genuine action, with one bounded corrective drag and the
+    native Go button only when the field remains visible. Product width,
+    import behavior and strict hit-target assertions are unchanged.
+  - Local build and repository checks pass. Local UI Automation timed out
+    before the focused test body; hosted CI is the pending authoritative run.
+
 - [ ] `SF-CANVAS-POINTER-001` Shared native pointer/compositor placement repair (P1, hosted pointer-sampling correction).
   - Bounded SF-0401-001/003/008, SF-0405-002/003/008 and SF-0407-001/003/008.
   - Plan: establish native event/view/layer conversion numerically, remove the

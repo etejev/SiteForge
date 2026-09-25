@@ -1294,8 +1294,15 @@ final class SiteForgeLaunchTests: XCTestCase {
         // whichever sheet replaces it (the open panel also has text fields).
         let pathField = application.sheets.textFields["PathTextField"]
         XCTAssertTrue(pathField.waitForExistence(timeout: 3))
+        pathField.click()
         pathField.typeText(imageURL.path)
-        application.typeKey(.return, modifierFlags: [])
+        pathField.typeKey(.return, modifierFlags: [])
+        // Native OpenPanel variants either accept Return in the path field or
+        // expose the real Go action. Do not proceed until that sheet changes.
+        if pathField.exists {
+            let go = application.sheets.buttons["Go"]
+            if go.exists && go.isEnabled { go.click() }
+        }
         let assetRow = application.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@", "assets.row.", "siteforge-image"
         )).firstMatch
@@ -2549,6 +2556,15 @@ final class SiteForgeLaunchTests: XCTestCase {
         )
         XCTAssertEqual(componentShift, -256)
         XCTAssertLessThanOrEqual(componentTextField.offsetBy(dx: componentShift, dy: 0).maxX, visible.maxX)
+        // A constrained AppKit drag can be clamped before it applies the full
+        // request. Re-querying the live target yields one bounded corrective
+        // translation instead of assuming the first drag completed.
+        let partiallyMovedComponent = componentTextField.offsetBy(dx: -180, dy: 0)
+        let correctiveShift = PointerWindowPlacement.horizontalTranslation(
+            window: leadingWindow.offsetBy(dx: -180, dy: 0), target: partiallyMovedComponent, visible: visible
+        )
+        XCTAssertEqual(correctiveShift, -76)
+        XCTAssertLessThanOrEqual(partiallyMovedComponent.offsetBy(dx: correctiveShift, dy: 0).maxX, visible.maxX)
         let canvasTarget = CGRect(x: -86, y: 340, width: 240, height: 160)
         let canvasShift = PointerWindowPlacement.horizontalTranslation(
             window: leadingWindow, target: canvasTarget, visible: visible
@@ -2604,12 +2620,15 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTFail("The app must be active and the live pointer control enabled: \(application.debugDescription)")
             return query
         }
-        let window = application.windows.firstMatch
-        let delta = PointerWindowPlacement.horizontalTranslation(window: window.frame,
-            target: query.frame, visible: visible)
-        if delta != 0 {
-            // The upper window edge is a resize hit region. Use the visible
-            // unified title-bar interior for a genuine native window drag.
+        // AppKit can accept a constrained title-bar drag while clamping the
+        // window origin. Re-query the AX target after each real drag and make
+        // one bounded corrective movement when it remains clipped.
+        for _ in 0..<2 {
+            let live = application.descendants(matching: .any).matching(identifier: identifier).firstMatch
+            let delta = PointerWindowPlacement.horizontalTranslation(
+                window: application.windows.firstMatch.frame, target: live.frame, visible: visible
+            )
+            guard delta != 0 else { break }
             PointerWindowPlacement.moveWindowHorizontally(by: delta, in: application)
         }
         XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -2651,10 +2670,12 @@ final class SiteForgeLaunchTests: XCTestCase {
             // A control already inside the display is valid. The constrained
             // window inset is not an additional per-control clipping margin.
             let safe = visible
-            let window = application.windows.firstMatch
-            let delta = PointerWindowPlacement.horizontalTranslation(window: window.frame,
-                target: query().frame, visible: safe)
-            if delta != 0 {
+            for _ in 0..<2 {
+                let live = query()
+                let delta = PointerWindowPlacement.horizontalTranslation(
+                    window: application.windows.firstMatch.frame, target: live.frame, visible: safe
+                )
+                guard delta != 0 else { break }
                 // Use the native title-bar interior, not the upper resize
                 // edge. X coordinates agree between AppKit and XCTest.
                 PointerWindowPlacement.moveWindowHorizontally(by: delta, in: application)
