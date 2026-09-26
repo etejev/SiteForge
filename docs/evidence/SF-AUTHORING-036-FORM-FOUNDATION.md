@@ -1,4 +1,4 @@
-# SF-AUTHORING-036 — Form model and safe-control output v1
+# SF-AUTHORING-036 — Form model, insertion, and field Inspector v1
 
 Bounded evidence for `SF-1006` and the existing internal static-output safety
 boundary. Canonical text-field metadata now recognizes `text`, `email`,
@@ -19,16 +19,30 @@ transactions provide atomic property history; page duplication regenerates
 select option IDs while retaining option labels and values; package and owned
 recovery round trips preserve field identity and ordered options.
 
-Focused evidence passed 5/5 on 2026-09-26:
+The native editor exposes Form in Elements and Insert, creating an empty 320×180
+canonical Form container through the shared insertion transaction. Its Content
+destination truthfully explains that submission, destination, validation, and
+visitor data are unavailable. A selected Text child of Form receives native
+Field controls for kind, label, machine name, help, required, and ordered
+Select options. Local drafts use `FormInspectorCommandRegistry`, which gates
+document/page/revision/scene/renderer/selection identity, validates ownership
+and typed field data, applies only applicable children, and emits one
+invertible generic command. Invalid, cancelled, stale, locked, hidden,
+unavailable, missing, duplicate, and inapplicable input is neutral.
+
+Focused evidence passed 9/9 on 2026-09-26:
 
 - `CanvasRendererTests.testSafeHTMLEmitterSafelyEmitsCheckboxSelectAndUnconfiguredSubmit`
 - `CanvasRendererTests.testSafeHTMLEmitterRejectsNonFormOrMalformedSelectControls`
 - `CanvasRendererTests.testCanonicalFormSelectOptionsPreserveStableOrderAndRejectUnsafeValues`
 - `CommandKernelTests.testFormFieldsPreserveAtomicHistoryAndRemapSelectOptionsOnPageDuplicate`
 - `ProjectPackageTests.testFormPackageRoundTripPreservesOrderedControlMetadata`
+- `InsertionModelTests.testFormInsertionIsCanonicalEmptyContainerWithStableIdentity`
+- `TransformModelTests.testFormInspectorRegistryCommitsExactMetadataHistoryAndMixedSubset`
+- `TransformModelTests.testFormInspectorRegistryRejectsInvalidCancelledAndStaleEdits`
+- `ProjectPackageTests.testFormInspectorTransactionPersistsThroughPackageAndRecovery`
 
-Deferred: native Form/field insertion and Inspector controls, a form-specific
-identity-gated edit registry and diagnostics, accessible app journeys,
-visitor-entered values, validation rules, submission destinations, success or
-error surfaces, anti-abuse controls, runtime behavior, scale evidence, and
-release acceptance. No completion claim is made for SF-AUTHORING-036.
+Deferred: native actual-app UI automation and visual evidence; visitor-entered
+values, validation rules, submission destinations, success/error surfaces,
+anti-abuse controls, runtime behavior, scale evidence, and release acceptance.
+No completion claim is made for SF-AUTHORING-036.

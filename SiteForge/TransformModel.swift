@@ -2905,6 +2905,175 @@ enum ImageInspectorError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
+// MARK: - Form field inspector command boundary
+
+/// The Inspector owns only this typed edit intent. Canonical metadata remains
+/// the existing `form.field.v1.*` property namespace on a Text child of Form.
+enum FormFieldKind: String, CaseIterable, Sendable {
+    case text, email, textarea, checkbox, select, submit
+
+    var title: String { rawValue == "textarea" ? "Text Area" : rawValue.capitalized }
+}
+
+struct FormFieldConfiguration: Equatable, Sendable {
+    let kind: FormFieldKind
+    let label: String
+    let name: String
+    let help: String?
+    let required: Bool
+    let options: [CanonicalFormSelectOption]
+}
+
+/// A Form edit is intentionally scoped independently from Image Inspector
+/// identity so future Form-only lifecycle diagnostics cannot alias an Image
+/// operation while sharing the same document/scene revision contract.
+struct FormInspectorOperationIdentity: Equatable, Sendable {
+    let documentID: DocumentID
+    let pageID: PageID
+    let revision: UInt64
+    let sceneID: CanvasViewportSceneID
+    let rendererGeneration: UInt64
+    let selectedNodeIDs: [NodeID]
+}
+
+enum FormInspectorEdit: Equatable, Sendable {
+    case configure(FormFieldConfiguration)
+    case removeConfiguration
+}
+
+struct FormInspectorCommand: Equatable, Sendable {
+    let identity: FormInspectorOperationIdentity
+    let edit: FormInspectorEdit
+    let cancelled: Bool
+}
+
+struct PreparedFormInspectorEdit: Equatable, Sendable {
+    let command: DocumentCommand
+    let applicableNodeIDs: [NodeID]
+    let skippedNodeIDs: [NodeID]
+}
+
+enum FormInspectorError: Error, Equatable, LocalizedError, Sendable {
+    case cancelled, stale, emptySelection, duplicateTarget, pageUnavailable,
+         selectionMismatch, missingTarget, lockedTarget, hiddenTarget,
+         unavailableTarget, noApplicableTarget, invalidConfiguration,
+         revisionExhausted, noChanges
+
+    var errorDescription: String? {
+        switch self {
+        case .cancelled: "Form field draft cancelled; committed metadata is unchanged."
+        case .stale, .selectionMismatch: "The document, selection, or canvas changed before this Form edit committed."
+        case .emptySelection: "Select a Text child of a Form to configure a field."
+        case .duplicateTarget: "A Form field edit cannot contain the same object twice."
+        case .pageUnavailable: "The active Form page is unavailable."
+        case .missingTarget: "A selected Form field no longer exists."
+        case .lockedTarget: "Unlock the selected Form field before editing."
+        case .hiddenTarget: "Show the selected Form field before editing."
+        case .unavailableTarget: "The selected Form field is unavailable in this scene."
+        case .noApplicableTarget: "Select a Text child of a Form to configure a field."
+        case .invalidConfiguration: "Enter a valid field label, machine name, and select options."
+        case .revisionExhausted: "The document revision cannot accept another Form edit."
+        case .noChanges: "The Form field already has that configuration."
+        }
+    }
+}
+
+struct FormInspectorCommandRegistry: Sendable {
+    static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-1006-%03d", $0) })
+    private static let ownedKeys: Set<String> = [
+        CanonicalFormField.kindKey, CanonicalFormField.labelKey,
+        CanonicalFormField.nameKey, CanonicalFormField.helpKey,
+        CanonicalFormField.requiredKey, CanonicalFormField.optionsKey,
+    ]
+
+    func prepare(_ input: FormInspectorCommand, in document: CanonicalDocument,
+                 context: TransformValidationContext) throws -> PreparedFormInspectorEdit {
+        guard !input.cancelled else { throw FormInspectorError.cancelled }
+        let identity = input.identity
+        guard identity.documentID == document.id, identity.revision == document.revision,
+              identity.sceneID == context.currentSceneID,
+              identity.rendererGeneration == context.rendererGeneration else { throw FormInspectorError.stale }
+        guard context.isLifecycleAvailable else { throw FormInspectorError.unavailableTarget }
+        guard identity.pageID == context.activePageID,
+              let page = document.pages.first(where: { $0.id == identity.pageID }) else {
+            throw FormInspectorError.pageUnavailable
+        }
+        guard !identity.selectedNodeIDs.isEmpty else { throw FormInspectorError.emptySelection }
+        guard Set(identity.selectedNodeIDs).count == identity.selectedNodeIDs.count else { throw FormInspectorError.duplicateTarget }
+        guard identity.selectedNodeIDs == context.selectedNodeIDs else { throw FormInspectorError.selectionMismatch }
+        guard document.revision < UInt64.max - 1 else { throw FormInspectorError.revisionExhausted }
+        if case .configure(let configuration) = input.edit { try validate(configuration) }
+
+        let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        var commands: [DocumentCommand] = []
+        var applicable: [NodeID] = []
+        var skipped: [NodeID] = []
+        for id in identity.selectedNodeIDs {
+            guard let node = nodesByID[id] else { throw FormInspectorError.missingTarget }
+            guard node.kind == .text,
+                  case .node(let parentID) = node.parent,
+                  nodesByID[parentID]?.kind == .form else {
+                skipped.append(id); continue
+            }
+            if node.insertionBooleanProperty("locked") { throw FormInspectorError.lockedTarget }
+            if node.insertionBooleanProperty("hidden") { throw FormInspectorError.hiddenTarget }
+            guard context.availableNodeIDs.contains(id) else { throw FormInspectorError.unavailableTarget }
+            applicable.append(id)
+
+            let desired: [(String, PropertyValue, PropertyOrigin)]
+            switch input.edit {
+            case .removeConfiguration:
+                desired = []
+            case .configure(let value):
+                var values: [(String, PropertyValue, PropertyOrigin)] = [
+                    (CanonicalFormField.kindKey, .string(value.kind.rawValue), .authored),
+                    (CanonicalFormField.labelKey, .string(value.label), .authored),
+                    (CanonicalFormField.nameKey, .string(value.name), .authored),
+                    (CanonicalFormField.requiredKey, .boolean(value.required), .authored),
+                ]
+                if let help = value.help, !help.isEmpty {
+                    values.append((CanonicalFormField.helpKey, .string(help), .authored))
+                }
+                if value.kind == .select {
+                    values.append((CanonicalFormField.optionsKey,
+                                   .string(try CanonicalFormSelectOptions.encode(value.options)), .authored))
+                }
+                desired = values
+            }
+            let desiredKeys = Set(desired.map(\.0))
+            for property in node.properties where Self.ownedKeys.contains(property.key.rawValue) && !desiredKeys.contains(property.key.rawValue) {
+                commands.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: property.id)))
+            }
+            for (key, value, origin) in desired {
+                let prior = node.insertionProperty(key)
+                guard prior?.value != value || prior?.origin != origin else { continue }
+                commands.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                    property: .init(id: prior?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: origin))))
+            }
+        }
+        guard !applicable.isEmpty else { throw FormInspectorError.noApplicableTarget }
+        guard !commands.isEmpty else { throw FormInspectorError.noChanges }
+        let command: DocumentCommand = commands.count == 1 ? commands[0] : .batch(commands)
+        guard CommandRegistry().availability(for: command, in: document).isEnabled else { throw FormInspectorError.stale }
+        return .init(command: command, applicableNodeIDs: applicable, skippedNodeIDs: skipped)
+    }
+
+    private func validate(_ value: FormFieldConfiguration) throws {
+        guard !value.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              value.label.count <= 256,
+              value.name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil,
+              value.help.map({ $0.count <= 512 && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }) ?? true else {
+            throw FormInspectorError.invalidConfiguration
+        }
+        if value.kind == .select {
+            do { try CanonicalFormSelectOptions.validate(value.options) }
+            catch { throw FormInspectorError.invalidConfiguration }
+        } else if !value.options.isEmpty {
+            throw FormInspectorError.invalidConfiguration
+        }
+    }
+}
+
 enum LinkInspectorEdit: Equatable, Sendable {
     case label(String?)
     case target(CanonicalLinkTarget?)

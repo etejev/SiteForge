@@ -800,7 +800,7 @@ private struct ElementCatalogRow: View {
             // Structural catalogue rows have a useful non-pointer equivalent:
             // they commit one validated default insertion. Frame/Text retain
             // their established tool-arming workflow for canvas placement.
-            if let kind = item.insertionKind, [.section, .stack, .grid, .button, .link].contains(kind) {
+            if let kind = item.insertionKind, [.section, .stack, .grid, .button, .link, .form].contains(kind) {
                 state.performDefaultInsertion(kind, provenance: .accessibility)
             } else {
                 state.selectTool(tool)
@@ -2211,6 +2211,130 @@ private final class FocusableViewportPresetPopUpButton: NSPopUpButton {
     }
 }
 
+private struct FormInspectorFieldsView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @State private var kind: FormFieldKind = .text
+    @State private var label = ""
+    @State private var name = ""
+    @State private var help = ""
+    @State private var required = false
+    @State private var options = "Option=option"
+    @State private var identity: FormInspectorOperationIdentity?
+    @State private var status = ""
+
+    private var fields: [DocumentNode] { state.selectedFormFields }
+    private var form: DocumentNode? { state.selectedFormContainer }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if let form {
+                Text("Form").font(.headline)
+                Text("Submission, destinations, validation rules, and visitor data are unavailable in this bounded editor slice.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.form.submission.unavailable")
+                Text("\(form.childIDs.count) child object\(form.childIDs.count == 1 ? "" : "s"). Add a Text child, then select it to configure a field.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if fields.isEmpty {
+                ContentUnavailableView("Select a Form Field", systemImage: "list.bullet.rectangle",
+                    description: Text("Select a Text child of a Form to configure its field metadata."))
+            } else {
+                Text("Form Field").font(.headline)
+                Text("\(fields.count) applicable; \(state.selectionState.count - fields.count) incompatible unchanged")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.form.applicability")
+                Picker("Field kind", selection: $kind) {
+                    ForEach(FormFieldKind.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .accessibilityIdentifier("inspector.form.kind")
+                TextField("Visible label", text: $label)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("inspector.form.label")
+                TextField("Machine name", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("inspector.form.name")
+                TextField("Help text (optional)", text: $help)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("inspector.form.help")
+                Toggle("Required", isOn: $required)
+                    .accessibilityIdentifier("inspector.form.required")
+                if kind == .select {
+                    TextField("Options: Label=value, one per line", text: $options, axis: .vertical)
+                        .lineLimit(2...5).textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("inspector.form.options")
+                }
+                HStack {
+                    Button("Apply", action: apply)
+                        .disabled(!state.formInspectorIsEnabled)
+                        .accessibilityIdentifier("inspector.form.apply")
+                    Button("Cancel", action: refresh)
+                        .accessibilityIdentifier("inspector.form.cancel")
+                    Button("Remove Field Metadata") {
+                        if state.commitFormInspectorEdit(.removeConfiguration, identity: identity) { refresh() }
+                        status = state.lastFormInspectorAnnouncement
+                    }
+                    .disabled(!state.formInspectorIsEnabled || fields.allSatisfy { $0.properties.allSatisfy { !$0.key.rawValue.hasPrefix("form.field.v1.") } })
+                    .accessibilityIdentifier("inspector.form.remove")
+                }
+                Text(status.isEmpty ? state.lastFormInspectorAnnouncement : status)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Form field edit status")
+                    .accessibilityIdentifier("inspector.form.status")
+            }
+        }
+        .padding(.horizontal, 4)
+        .onAppear(perform: refresh)
+        .onChange(of: state.canvasRenderPlan?.identity) { _, _ in refresh() }
+        .onExitCommand { refresh(); status = "Draft cancelled; committed metadata is unchanged." }
+    }
+
+    private func refresh() {
+        identity = state.formInspectorIdentity
+        guard let field = fields.first else { return }
+        kind = FormFieldKind(rawValue: field.insertionStringProperty(CanonicalFormField.kindKey) ?? "text") ?? .text
+        label = field.insertionStringProperty(CanonicalFormField.labelKey) ?? field.name
+        name = field.insertionStringProperty(CanonicalFormField.nameKey) ?? "field"
+        help = field.insertionStringProperty(CanonicalFormField.helpKey) ?? ""
+        required = field.insertionBooleanProperty(CanonicalFormField.requiredKey)
+        if let encoded = field.insertionStringProperty(CanonicalFormField.optionsKey),
+           let values = try? CanonicalFormSelectOptions.decode(encoded) {
+            options = values.map { "\($0.label)=\($0.value)" }.joined(separator: "\n")
+        } else {
+            options = "Option=option"
+        }
+        status = ""
+    }
+
+    private func apply() {
+        let parsed: [CanonicalFormSelectOption]
+        if kind == .select {
+            // Values are the canonical uniqueness key. Preserve the existing
+            // option identity when an author reorders or relabels a value;
+            // create an identity only for a newly authored value.
+            let existingOptions: [CanonicalFormSelectOption]
+            if let field = fields.first,
+               let encoded = field.insertionStringProperty(CanonicalFormField.optionsKey),
+               let decoded = try? CanonicalFormSelectOptions.decode(encoded) {
+                existingOptions = decoded
+            } else {
+                existingOptions = []
+            }
+            let existingByValue = Dictionary(uniqueKeysWithValues: existingOptions.map { ($0.value, $0.id) })
+            parsed = options.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+                let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count == 2 else { return nil }
+                let value = String(parts[1])
+                return .init(id: existingByValue[value] ?? FormOptionID(), label: String(parts[0]), value: value)
+            }
+        } else {
+            parsed = []
+        }
+        let configuration = FormFieldConfiguration(kind: kind, label: label, name: name,
+            help: help.isEmpty ? nil : help, required: required, options: parsed)
+        if state.commitFormInspectorEdit(.configure(configuration), identity: identity) { refresh() }
+        status = state.lastFormInspectorAnnouncement
+    }
+}
+
 private struct ControlInspectorFieldsView: View {
     @ObservedObject var state: WorkspaceShellState
     let interactions: Bool
@@ -2503,6 +2627,9 @@ private struct InspectorView: View {
         case .content where state.hasComponentTextInspectorContext:
             ComponentTextInspectorView(state: state)
                 .id("component-text:" + state.componentTextInspectorKey)
+        case .content where state.hasFormInspectorContext:
+            FormInspectorFieldsView(state: state)
+                .id("form-field:" + state.geometryInspectorSelectionKey)
         case .content, .interactions:
             ControlInspectorFieldsView(state: state, interactions: state.inspectorTab == .interactions)
                 .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ",") + state.inspectorTab.rawValue)
@@ -4373,6 +4500,9 @@ struct SiteForgeCommands: Commands {
             Button("Insert Link at Center") { commandState?.performDefaultInsertion(.link, provenance: .menu) }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
                 .disabled(commandState?.insertionAvailability(.link).isEnabled != true)
+            Button("Insert Form at Center") { commandState?.performDefaultInsertion(.form, provenance: .menu) }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(commandState?.insertionAvailability(.form).isEnabled != true)
             Divider()
             Button("Insert Section at Center") {
                 commandState?.performDefaultInsertion(.section, provenance: .menu)

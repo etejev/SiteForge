@@ -2,13 +2,15 @@
 
 Last updated: 2026-09-26.
 
-SF-AUTHORING-036 remains IN PROGRESS. The headless canonical field model and
-safe internal HTML boundary cover text, email, textarea, checkbox, select and
-unconfigured-submit vocabulary with ordered option validation. Validated
-canonical pages compile to nested safe static markup; generic document history,
-page duplication, package reopen, and owned recovery preserve field properties
-and option identities. Native authoring UI, a form-specific transaction and
-diagnostic surface, runtime submission and visitor values remain deferred; see
+SF-AUTHORING-036 remains IN PROGRESS. Form is now an enabled canonical Elements
+and Insert action; its empty 320×180 container uses the shared insertion,
+selection, Layers, renderer, and package path. Content presents a truthful
+unavailable Form summary, while Text children of Form receive native field
+kind, label, machine name, help, required, and Select-options controls. One
+identity-gated `FormInspectorCommandRegistry` compiles validated edits into
+atomic generic history with exact undo/redo and package/recovery preservation.
+Focused non-UI coverage is green; actual-app UI evidence, visitor/runtime
+submission behavior, validation, and release acceptance remain deferred. See
 `docs/evidence/SF-AUTHORING-036-FORM-FOUNDATION.md`.
 
 SF-AUTHORING-026 is IN PROGRESS: current authored node kinds resolve a typed,

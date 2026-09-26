@@ -2,12 +2,12 @@
 
 ## Current checkpoint
 
-SF-AUTHORING-036 Accessible form authoring v1 remains IN PROGRESS. Its current
-headless checkpoint validates typed Form-owned field metadata, compiles
-canonical page hierarchy to safe nested static controls, and preserves ordered
-select options through generic history, page duplication, package reopen, and
-owned recovery. The focused five-test checkpoint passed on 2026-09-26; it is
-not a native authoring or submission completion claim.
+SF-AUTHORING-036 Accessible form authoring v1 remains IN PROGRESS. Form is now
+an enabled Elements/Insert container and its Text children have native bounded
+Content Inspector field controls. `FormInspectorCommandRegistry` is the sole
+identity-gated canonical edit boundary; focused foundation plus current-slice
+coverage is green (9/9). Actual-app UI evidence and all visitor/runtime
+submission behavior remain deferred.
 
 ## Current Form boundary
 
@@ -15,10 +15,10 @@ not a native authoring or submission completion claim.
 - Static output permits only escaped text/email/textarea/checkbox/select and
   disabled unconfigured-submit controls; it has no runtime submission path.
 - Page duplication remaps stable select-option IDs but keeps labels and values.
-- The next bounded task is native Form/field insertion and Inspector editing
-  through one identity-gated transaction path. Keep visitor values, submission
-  destinations, validation rules, anti-abuse, generated-site runtime, scale,
-  and release acceptance out of scope.
+- The next bounded task is actual-app keyboard, pointer, and accessibility
+  evidence for Form insertion and field editing. Keep visitor values,
+  submission destinations, validation rules, anti-abuse, generated-site
+  runtime, scale, and release acceptance out of scope.
 
 ## Earlier delivered boundary
 

@@ -1990,6 +1990,115 @@ final class TransformModelTests: XCTestCase {
         XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .padding, node: grid, breakpoint: .mobile)?.0, .number(16))
         XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .columns, node: grid, breakpoint: .tablet)?.0, .number(2))
     }
+
+    // SF-1006-001...008 — one Inspector transaction configures only Text
+    // children of Form, preserving option/property identities through history.
+    func testFormInspectorRegistryCommitsExactMetadataHistoryAndMixedSubset() throws {
+        let formID = NodeID(UUID(uuidString: "A6100000-0000-4000-8000-000000000001")!)
+        let fieldID = NodeID(UUID(uuidString: "A6100000-0000-4000-8000-000000000002")!)
+        let frameID = NodeID(UUID(uuidString: "A6100000-0000-4000-8000-000000000003")!)
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let rootID = document.pages[0].rootNodeIDs[0]
+        document.pages[0].nodes[0].childIDs = [formID, frameID]
+        document.pages[0].nodes += [
+            .init(id: formID, kind: .form, name: "Contact", parent: .node(rootID), childIDs: [fieldID]),
+            .init(id: fieldID, kind: .text, name: "Plan", parent: .node(formID)),
+            .init(id: frameID, kind: .frame, name: "Not a field", parent: .node(rootID)),
+        ]
+        try document.validate()
+
+        let sceneID = CanvasViewportSceneID(UUID(uuidString: "A6100000-0000-4000-8000-000000000004")!)
+        let registry = FormInspectorCommandRegistry()
+        let configuration = FormFieldConfiguration(
+            kind: .select, label: "Plan", name: "plan", help: "Choose a plan.", required: true,
+            options: [
+                .init(id: FormOptionID(UUID(uuidString: "A6100000-0000-4000-8000-000000000005")!), label: "Starter", value: "starter"),
+                .init(id: FormOptionID(UUID(uuidString: "A6100000-0000-4000-8000-000000000006")!), label: "Pro", value: "pro"),
+            ]
+        )
+        func context(_ current: CanonicalDocument, _ selected: [NodeID]) -> TransformValidationContext {
+            .init(activePageID: pageID, currentSceneID: sceneID, rendererGeneration: 17,
+                  selectedNodeIDs: selected, availableNodeIDs: Set(current.pages[0].nodes.map(\.id)),
+                  isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        }
+        func command(_ current: CanonicalDocument, _ selected: [NodeID], edit: FormInspectorEdit, cancelled: Bool = false) -> FormInspectorCommand {
+            .init(identity: .init(documentID: current.id, pageID: pageID, revision: current.revision,
+                                 sceneID: sceneID, rendererGeneration: 17, selectedNodeIDs: selected),
+                  edit: edit, cancelled: cancelled)
+        }
+
+        let prepared = try registry.prepare(command(document, [fieldID, frameID], edit: .configure(configuration)),
+                                            in: document, context: context(document, [fieldID, frameID]))
+        XCTAssertEqual(prepared.applicableNodeIDs, [fieldID])
+        XCTAssertEqual(prepared.skippedNodeIDs, [frameID])
+        let session = DocumentSession(document: document)
+        try session.execute(prepared.command)
+        let configured = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fieldID })
+        XCTAssertEqual(configured.insertionStringProperty(CanonicalFormField.kindKey), "select")
+        XCTAssertEqual(configured.insertionStringProperty(CanonicalFormField.nameKey), "plan")
+        XCTAssertEqual(try CanonicalFormSelectOptions.decode(try XCTUnwrap(configured.insertionStringProperty(CanonicalFormField.optionsKey))), configuration.options)
+        let propertyIDs = configured.properties.filter { $0.key.rawValue.hasPrefix("form.field.v1.") }.map(\.id)
+        XCTAssertFalse(propertyIDs.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == frameID }).properties.isEmpty)
+
+        try session.undo()
+        XCTAssertTrue(try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fieldID }).properties.isEmpty)
+        try session.redo()
+        XCTAssertEqual(try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fieldID }).properties.filter { $0.key.rawValue.hasPrefix("form.field.v1.") }.map(\.id), propertyIDs)
+
+        let reordered = FormFieldConfiguration(kind: .select, label: "Plan", name: "plan",
+            help: "Choose a plan.", required: true, options: Array(configuration.options.reversed()))
+        let reorder = try registry.prepare(command(session.document, [fieldID], edit: .configure(reordered)),
+            in: session.document, context: context(session.document, [fieldID]))
+        try session.execute(reorder.command)
+        let reorderedOptions = try CanonicalFormSelectOptions.decode(try XCTUnwrap(
+            session.document.pages[0].nodes.first { $0.id == fieldID }?.insertionStringProperty(CanonicalFormField.optionsKey)
+        ))
+        XCTAssertEqual(reorderedOptions.map(\.id), configuration.options.reversed().map(\.id))
+
+        let removal = try registry.prepare(command(session.document, [fieldID], edit: .removeConfiguration),
+                                           in: session.document, context: context(session.document, [fieldID]))
+        try session.execute(removal.command)
+        XCTAssertTrue(try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fieldID }).properties.isEmpty)
+        try session.undo()
+        XCTAssertEqual(try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fieldID }).properties.filter { $0.key.rawValue.hasPrefix("form.field.v1.") }.map(\.id), propertyIDs)
+    }
+
+    // SF-1006-002, SF-1006-005, SF-1006-008 — invalid drafts, cancellation,
+    // and stale identity have no command and leave canonical content untouched.
+    func testFormInspectorRegistryRejectsInvalidCancelledAndStaleEdits() throws {
+        let formID = NodeID(), fieldID = NodeID()
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let rootID = document.pages[0].rootNodeIDs[0]
+        document.pages[0].nodes[0].childIDs = [formID]
+        document.pages[0].nodes += [
+            .init(id: formID, kind: .form, name: "Form", parent: .node(rootID), childIDs: [fieldID]),
+            .init(id: fieldID, kind: .text, name: "Field", parent: .node(formID)),
+        ]
+        let sceneID = CanvasViewportSceneID()
+        let context = TransformValidationContext(activePageID: pageID, currentSceneID: sceneID,
+            rendererGeneration: 9, selectedNodeIDs: [fieldID], availableNodeIDs: Set(document.pages[0].nodes.map(\.id)),
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let identity = FormInspectorOperationIdentity(documentID: document.id, pageID: pageID,
+            revision: document.revision, sceneID: sceneID, rendererGeneration: 9, selectedNodeIDs: [fieldID])
+        let registry = FormInspectorCommandRegistry()
+        let invalid = FormFieldConfiguration(kind: .select, label: " ", name: "1 bad", help: nil,
+                                             required: false, options: [])
+        XCTAssertThrowsError(try registry.prepare(.init(identity: identity, edit: .configure(invalid), cancelled: false), in: document, context: context)) {
+            XCTAssertEqual($0 as? FormInspectorError, .invalidConfiguration)
+        }
+        XCTAssertThrowsError(try registry.prepare(.init(identity: identity, edit: .removeConfiguration, cancelled: true), in: document, context: context)) {
+            XCTAssertEqual($0 as? FormInspectorError, .cancelled)
+        }
+        let stale = FormInspectorOperationIdentity(documentID: document.id, pageID: pageID,
+            revision: document.revision + 1, sceneID: sceneID, rendererGeneration: 9, selectedNodeIDs: [fieldID])
+        XCTAssertThrowsError(try registry.prepare(.init(identity: stale, edit: .removeConfiguration, cancelled: false), in: document, context: context)) {
+            XCTAssertEqual($0 as? FormInspectorError, .stale)
+        }
+        XCTAssertEqual(document.pages[0].nodes.first { $0.id == fieldID }?.properties, [])
+    }
 }
 
 private struct TransformFixture {

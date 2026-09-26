@@ -125,6 +125,52 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(decodedOptions.map(\.value), ["starter", "professional"])
     }
 
+    // SF-1006-001, SF-1006-004, SF-1006-005 — the Form Inspector's typed
+    // transaction writes ordinary package content, so save/reopen and recovery
+    // preserve field/property and select-option identity without UI drafts.
+    @MainActor
+    func testFormInspectorTransactionPersistsThroughPackageAndRecovery() async throws {
+        let formID = NodeID(), fieldID = NodeID()
+        let rootID = NodeID()
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+            rootNodeIDs: [rootID], nodes: [
+                .init(id: rootID, kind: .frame, name: "Root", parent: .page(pageID), childIDs: [formID]),
+                .init(id: formID, kind: .form, name: "Contact", parent: .node(rootID), childIDs: [fieldID]),
+                .init(id: fieldID, kind: .text, name: "Email", parent: .node(formID)),
+            ])
+        let initial = CanonicalDocument(id: documentID, pages: [page])
+        let sceneID = CanvasViewportSceneID()
+        let context = TransformValidationContext(activePageID: pageID, currentSceneID: sceneID,
+            rendererGeneration: 4, selectedNodeIDs: [fieldID], availableNodeIDs: [rootID, formID, fieldID],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let edit = FormFieldConfiguration(kind: .email, label: "Work email", name: "work_email",
+            help: "We only use this to reply.", required: true, options: [])
+        let command = FormInspectorCommand(identity: .init(documentID: initial.id, pageID: pageID,
+            revision: initial.revision, sceneID: sceneID, rendererGeneration: 4, selectedNodeIDs: [fieldID]),
+            edit: .configure(edit), cancelled: false)
+        let session = DocumentSession(document: initial)
+        let prepared = try FormInspectorCommandRegistry().prepare(command, in: initial, context: context)
+        try session.execute(prepared.command)
+        let authored = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fieldID })
+        let authoredPropertyIDs = authored.properties.map(\.id)
+
+        let package = ProjectPackage(projectID: projectID,
+            createdAt: ProjectTimestamp("2026-07-19T12:00:00.000Z"),
+            modifiedAt: ProjectTimestamp("2026-07-19T12:30:00.000Z"), document: session.document)
+        let store = ProjectPackageStore()
+        let bytes = try await store.encode(package)
+        let reopened = try await store.decode(bytes)
+        let reopenedField = try XCTUnwrap(reopened.document.pages[0].nodes.first { $0.id == fieldID })
+        XCTAssertEqual(reopenedField.properties.map(\.id), authoredPropertyIDs)
+        XCTAssertEqual(reopenedField.insertionStringProperty(CanonicalFormField.nameKey), "work_email")
+        let recoveryDirectory = try fixtureDirectory().appendingPathComponent("form-inspector-recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(recoveryDirectory)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: projectID, in: recoveryDirectory)
+        try await store.write(package, to: recoveryURL, policy: .recovery(projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(from: recoveryURL, expectedProjectID: projectID).package
+        XCTAssertEqual(recovered.document, session.document)
+    }
+
     // SF-0301-004, SF-0301-007, SF-0301-008
     func testCancellationInsideContainerAndCanonicalValidationIsDistinctAndNonAdopting() async throws {
         let encoded = try await ProjectPackageStore().encode(package())

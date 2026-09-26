@@ -10,6 +10,10 @@
   history, duplicate-page option-ID remapping, package reopen, and owned
   recovery preserve ordered control metadata without visitor values or
   submission state.
+- Enabled Form in Elements and Insert. Empty Form containers use the shared
+  canonical insertion path; Form Text children expose bounded native Content
+  Inspector metadata controls through one identity-gated, atomic field-edit
+  registry with exact undo/redo and persistence coverage.
 
 ## In progress — SF-AUTHORING-030
 

@@ -56,6 +56,30 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertTrue(section.node.properties.allSatisfy { $0.origin == .defaulted || $0.key.rawValue == "layout.x" || $0.key.rawValue == "layout.y" })
     }
 
+    // SF-0405-001, SF-1006-001 — Form uses the same bounded, canonical
+    // container insertion transaction as structural elements. It is empty
+    // until an author explicitly adds Text children to configure as fields.
+    func testFormInsertionIsCanonicalEmptyContainerWithStableIdentity() throws {
+        let fixture = makeFixture()
+        let formID = NodeID(UUID(uuidString: "61000000-0000-4000-8000-000000000001")!)
+        let prepared = try prepare(.form, fixture: fixture, nodeID: formID)
+
+        XCTAssertEqual(prepared.node.kind, .form)
+        XCTAssertEqual(prepared.node.id, formID)
+        XCTAssertEqual(prepared.node.parent, .node(fixture.rootID))
+        XCTAssertEqual(prepared.node.childIDs, [])
+        XCTAssertEqual(prepared.geometry.size, .init(width: 320, height: 180))
+
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(prepared.documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == formID }?.kind, .form)
+        XCTAssertNoThrow(try session.document.validate())
+        try session.undo()
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == formID })
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == formID }?.id, formID)
+    }
+
     // SF-0502-001, SF-0503-001 — render/selection geometry derives from the
     // one canonical hierarchy, not an editor preview or stored duplicate.
     func testStackAndGridResolveChildrenFromCanonicalDefaults() throws {

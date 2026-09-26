@@ -101,10 +101,12 @@ unimplemented commands are not represented as enabled lookalikes.
 
 The left-side navigation architecture is Pages, Layers, Elements, Assets, and
 Components. Pages and Layers remain functional. Elements is a real accessible
-catalogue: Section, Stack, Grid, Frame; Text, Button, Link, Divider; Navbar,
+catalogue: Section, Stack, Grid, Frame, Form; Text, Button, Link, Divider; Navbar,
 and Footer have stable identities, icons, shortcuts/capability contracts, and
-availability state. Section, Stack, Grid, Frame, and plain Text route to the
-verified canonical insertion registry today. Section is a 960×320 structural
+availability state. Section, Stack, Grid, Frame, Form, and plain Text route to the
+verified canonical insertion registry today. Form is an empty 320×180 semantic
+container; its submission/destination behavior remains explicitly unavailable.
+Section is a 960×320 structural
 container with 48-point default padding; Stack is vertical/start with 24-point
 padding and gap; Grid is two equal row-major columns with 24-point padding and
 gap. Button, Link, Divider, Navbar, and Footer remain disabled with a specific
@@ -166,6 +168,11 @@ Interactions are intentionally
 selectable native unavailable surfaces: each states why it cannot operate and
 what later canonical milestone is required. They expose no simulated editable
 fields, interaction controls, command, history, package, or canonical mutation.
+For a Form selection, Content truthfully summarizes its unavailable submission
+workflow. A selected Text child of Form exposes non-wrapping local draft fields
+for field kind, label, machine name, help, required, and ordered Select
+options; Apply is one identity-gated canonical transaction and Cancel leaves
+the document unchanged.
 
 ## Surface system
 
@@ -293,8 +300,8 @@ other private data.
 ## Implemented versus future capability
 
 Implemented now: one full-size native scene/window, project lifecycle states,
-Pages/Layers, the bounded Elements catalogue (Section, Stack, Grid, Frame, and
-plain Text enabled), a bounded canvas/renderer/overlay system, selection,
+Pages/Layers, the bounded Elements catalogue (Section, Stack, Grid, Frame,
+Form, and plain Text enabled), a bounded canvas/renderer/overlay system, selection,
 insertion, transforms, guides,
 bounded plain-text editing, local drag/reorder, bounded editable Design
 solid/linear-gradient fill controls, bounded editable Layout fixed-geometry

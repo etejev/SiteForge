@@ -66,6 +66,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case image
     case button
     case link
+    case form
     case component
 
     var id: String { rawValue }
@@ -85,6 +86,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .image: "photo"
         case .button: "capsule"
         case .link: "link"
+        case .form: "list.bullet.rectangle"
         case .component: "square.stack.3d.up"
         }
     }
@@ -100,6 +102,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .image: "i"
         case .button: "b"
         case .link: "l"
+        case .form: "m"
         case .component: "c"
         }
     }
@@ -122,14 +125,14 @@ enum ElementCatalogAvailability: Equatable {
 }
 
 enum ElementCatalogItem: String, CaseIterable, Identifiable {
-    case section, stack, grid, frame, text, image, button, link, divider, navbar, footer
+    case section, stack, grid, frame, text, image, button, link, form, divider, navbar, footer
 
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
     var category: String {
         switch self {
         case .section, .stack, .grid, .frame: "Layout"
-        case .text, .image, .button, .link, .divider: "Basic"
+        case .text, .image, .button, .link, .form, .divider: "Basic"
         case .navbar, .footer: "Site"
         }
     }
@@ -143,6 +146,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .image: "photo"
         case .button: "capsule"
         case .link: "link"
+        case .form: "list.bullet.rectangle"
         case .divider: "minus"
         case .navbar: "rectangle.topthird.inset.filled"
         case .footer: "rectangle.bottomthird.inset.filled"
@@ -155,6 +159,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .image: "I"
         case .button: "B"
         case .link: "L"
+        case .form: "No shortcut"
         default: "No shortcut"
         }
     }
@@ -168,6 +173,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .image: .available(.image)
         case .button: .available(.button)
         case .link: .available(.link)
+        case .form: .available(.form)
         case .divider:
             .unavailable("This basic element is not available until its canonical content command is implemented.")
         case .navbar, .footer:
@@ -185,6 +191,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .image: .image
         case .button: .button
         case .link: .link
+        case .form: .form
         case .divider, .navbar, .footer: nil
         }
     }
@@ -200,6 +207,7 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
         case .available(.image): "Inserts the selected local image asset through the transactional Image path."
         case .available(.button): "Arms transactional Button insertion with an editable label and navigation intent."
         case .available(.link): "Arms transactional Link insertion with an editable label and navigation intent."
+        case .available(.form): "Inserts a transactional Form container. Add Text children, then configure each field in Content Inspector."
         case .available(.select), .available(.component): "No insertion capability is available for this tool."
         case .unavailable(let reason): reason
         }
@@ -1057,6 +1065,7 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var imageInspectorFailure: ImageInspectorError?
     @Published private(set) var lastImageInspectorAnnouncement = "Image Inspector inactive"
     @Published private(set) var lastLinkInspectorAnnouncement = "Button and Link properties"
+    @Published private(set) var lastFormInspectorAnnouncement = "Form field properties"
     @Published var pageEditorRequest: PageEditorRequest?
     @Published private(set) var pageAnnouncement = ""
     @Published private(set) var componentAnnouncement = ""
@@ -1109,6 +1118,7 @@ final class WorkspaceShellState: ObservableObject {
     private let imageImportWorker = ImageImportWorker()
     private let imageThumbnailWorker = ImageThumbnailWorker()
     private let imageInspectorRegistry = ImageInspectorCommandRegistry()
+    private let formInspectorRegistry = FormInspectorCommandRegistry()
     private let snapResolver = SnapResolver()
     private let guideRegistry = GuideCommandRegistry()
     private let renderSurfaceID = CanvasRenderSurfaceID()
@@ -1457,6 +1467,52 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     var selectedLinkControls: [DocumentNode] { selectedCanonicalNodes.filter { $0.kind.isLinkControl } }
+    var selectedFormFields: [DocumentNode] {
+        guard let page = activeAuthoringPage else { return [] }
+        let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        return selectedCanonicalNodes.filter { node in
+            node.kind == .text && {
+                guard case .node(let parentID) = node.parent else { return false }
+                return nodesByID[parentID]?.kind == .form
+            }()
+        }
+    }
+    var selectedFormContainer: DocumentNode? {
+        selectedCanonicalNodes.count == 1 && selectedCanonicalNodes[0].kind == .form ? selectedCanonicalNodes[0] : nil
+    }
+    var hasFormInspectorContext: Bool { !selectedFormFields.isEmpty || selectedFormContainer != nil }
+    var formInspectorIdentity: FormInspectorOperationIdentity? {
+        guard let identity = linkInspectorIdentity else { return nil }
+        return .init(documentID: identity.documentID, pageID: identity.pageID,
+                     revision: identity.revision, sceneID: identity.sceneID,
+                     rendererGeneration: identity.rendererGeneration,
+                     selectedNodeIDs: identity.selectedNodeIDs)
+    }
+    var formInspectorIsEnabled: Bool {
+        !selectedFormFields.isEmpty && transformValidationContext.isLifecycleAvailable
+            && selectedFormFields.allSatisfy {
+                !$0.insertionBooleanProperty("locked") && !$0.insertionBooleanProperty("hidden")
+                    && transformValidationContext.availableNodeIDs.contains($0.id)
+            }
+    }
+    @discardableResult
+    func commitFormInspectorEdit(_ edit: FormInspectorEdit, identity: FormInspectorOperationIdentity?, cancelled: Bool = false) -> Bool {
+        do {
+            guard let identity, formInspectorIdentity != nil else { throw FormInspectorError.stale }
+            let prepared = try formInspectorRegistry.prepare(.init(identity: identity, edit: edit, cancelled: cancelled),
+                in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.command)
+            lastFormInspectorAnnouncement = "Form field metadata committed for \(prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s"); skipped \(prepared.skippedNodeIDs.count) incompatible object\(prepared.skippedNodeIDs.count == 1 ? "" : "s")."
+            announcementPoster.post(lastFormInspectorAnnouncement)
+            return true
+        } catch let error as FormInspectorError {
+            lastFormInspectorAnnouncement = error.localizedDescription
+        } catch {
+            lastFormInspectorAnnouncement = "Form field metadata could not commit; committed properties are unchanged."
+        }
+        announcementPoster.post(lastFormInspectorAnnouncement)
+        return false
+    }
     var linkInspectorIdentity: ImageInspectorOperationIdentity? {
         guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan,
               plan.identity.documentID == documentSession.document.id,
@@ -1570,6 +1626,7 @@ final class WorkspaceShellState: ObservableObject {
         case .text: armInsertion(.text)
         case .button: armInsertion(.button)
         case .link: armInsertion(.link)
+        case .form: armInsertion(.form)
         case .image:
             if selectedAssetID != nil {
                 armInsertion(.image)
