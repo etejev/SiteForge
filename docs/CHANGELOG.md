@@ -1,5 +1,10 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-027
+
+- Started typed, versioned CSS-rule intent with deterministic NodeID-derived
+  selector resolution; raw CSS and generated output remain deferred.
+
 ## In progress — SF-AUTHORING-026
 
 - Started bounded semantic HTML element authoring for existing canonical node

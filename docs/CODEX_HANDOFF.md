@@ -7,6 +7,8 @@ SF-AUTHORING-025 Local Preview v1 and SF-CI-025 are hosted verified. Actions
 and zero failures. SF-AUTHORING-026 Semantic HTML element authoring v1 is in
 progress; its focused model/package/preview checks pass and its retained native
 Inspector journey passed before a later external XCTest automation-mode error.
+SF-AUTHORING-027 now contains the typed CSS-rule marker foundation; its next
+bounded task is the identity-gated transaction registry and persistence tests.
 
 ## Delivered boundary
 

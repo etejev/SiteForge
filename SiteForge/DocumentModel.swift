@@ -408,6 +408,37 @@ enum CanonicalSemanticElement {
     }
 }
 
+// SF-1204 v1 stores typed rule intent, never raw CSS text. The renderer and
+// preview derive a collision-free selector solely from the stable NodeID.
+enum CanonicalCSSRule {
+    static let key = "css.rule.v1"
+    static let defaultValue = "node"
+    static func selector(for nodeID: NodeID) -> String {
+        "[data-siteforge-node=\"\(nodeID.rawValue.uuidString.lowercased())\"]"
+    }
+}
+
+enum CSSRuleEdit: Sendable { case set, reset }
+
+struct CSSRuleCommand: Sendable {
+    let identity: DesignInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let edit: CSSRuleEdit
+    let cancelled: Bool
+}
+
+enum CSSRuleCommandError: Error, LocalizedError, Equatable, Sendable {
+    case stale, cancelled, unavailable, noChanges
+    var errorDescription: String? {
+        switch self {
+        case .stale: "The CSS rule target changed before the operation could commit."
+        case .cancelled: "The CSS rule operation was cancelled; committed content is unchanged."
+        case .unavailable: "The selected object is unavailable for CSS rule authoring."
+        case .noChanges: "The CSS rule already has that state."
+        }
+    }
+}
+
 struct CanonicalTypography: Equatable, Sendable {
     static let namespace = "style.typography.v1."
     static let defaultFamily = "System"
@@ -1415,6 +1446,16 @@ enum CanonicalSemanticElementValidator {
     }
 }
 
+enum CanonicalCSSRuleValidator {
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue == CanonicalCSSRule.key }
+        guard owned.count <= 1 else { throw ModelValidationError.invalidSemanticElementState }
+        guard let property = owned.first else { return }
+        guard property.origin == .authored, case .string(let value) = property.value,
+              value == CanonicalCSSRule.defaultValue else { throw ModelValidationError.invalidSemanticElementState }
+    }
+}
+
 enum CanonicalImageNamespaceValidator {
     static let root = "content.image.v1."
     private static let required: Set<String> = [
@@ -1736,6 +1777,7 @@ private extension DocumentPage {
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
             try CanonicalSemanticElementValidator.validate(node)
+            try CanonicalCSSRuleValidator.validate(node)
             try CanonicalLinkTarget.validate(node)
             try CanonicalImageNamespaceValidator.validate(node)
             try CanonicalResponsiveGeometryNamespaceValidator.validate(node)

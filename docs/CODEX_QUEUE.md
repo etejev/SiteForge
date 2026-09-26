@@ -8,6 +8,13 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-027` CSS-rule authoring foundation v1 (P1).
+  - Requirements: bounded model-first evidence for `SF-1204-001`–`008`.
+    Typed `css.rule.v1` intent derives a stable NodeID selector; no raw CSS,
+    generated files, browser runtime, export or publishing is included.
+  - SF-AUTHORING-026 remains IN PROGRESS pending its separately scheduled UI
+    and hosted gate.
+
 - [ ] `SF-AUTHORING-026` Semantic HTML element authoring v1 (P1).
   - Requirements: bounded implementation of `SF-1203-001`–`008` for the
     existing authored node kinds only. Plan: add a canonical versioned
