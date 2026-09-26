@@ -423,6 +423,25 @@ enum InternalRenderTreeCompiler {
     }
 }
 
+// SF-1203 v1 output is intentionally in-memory only. The fixed vocabulary and
+// allowlist prevent authored content from becoming executable markup.
+enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity }
+
+enum SafeHTMLEmitter {
+    static func emit(_ tree: InternalRenderTreeSnapshot) throws -> String {
+        try tree.nodes.map(emit).joined(separator: "\n")
+    }
+
+    private static func emit(_ node: InternalRenderTreeNode) throws -> String {
+        let allowed = Set(["div", "section", "main", "header", "footer", "nav", "article", "aside", "p", "h1", "h2", "h3", "h4", "h5", "h6", "img", "button", "a"])
+        guard allowed.contains(node.semanticElement) else { throw SafeHTMLEmissionError.unsupportedTag }
+        let identifier = node.id.rawValue.uuidString.lowercased()
+        guard identifier == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeHTMLEmissionError.invalidIdentity }
+        let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\""
+        return node.semanticElement == "img" ? "<img\(attributes)>" : "<\(node.semanticElement)\(attributes)></\(node.semanticElement)>"
+    }
+}
+
 struct CanvasRenderTileID: Codable, Hashable, Comparable, Sendable {
     let column: Int
     let row: Int

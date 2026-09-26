@@ -2,6 +2,17 @@ import XCTest
 @testable import SiteForge
 
 final class CanvasRendererTests: XCTestCase {
+    func testSafeHTMLEmitterUsesFixedVocabularyAndStableIdentity() throws {
+        let id = NodeID()
+        let tree = InternalRenderTreeSnapshot(documentID: DocumentID(), revision: 4, nodes: [
+            .init(id: id, sourceNodeID: id, paintOrder: 0, semanticElement: "article", cssSelector: "ignored")
+        ])
+        let output = try SafeHTMLEmitter.emit(tree)
+        XCTAssertEqual(output, "<article data-siteforge-node=\"\(id.rawValue.uuidString.lowercased())\" class=\"sf-node-\(id.rawValue.uuidString.lowercased())\"></article>")
+        XCTAssertThrowsError(try SafeHTMLEmitter.emit(.init(documentID: tree.documentID, revision: 4, nodes: [
+            .init(id: id, sourceNodeID: id, paintOrder: 0, semanticElement: "script", cssSelector: "")
+        ])))
+    }
     // SF-0802-001, SF-0802-004, SF-0802-008 — Fit/Fill/Stretch share one
     // top-left/Y-down geometry contract and focal points never change bounds.
     func testImageLayoutFitFillStretchFocalAndInvalidInputsAreDeterministic() throws {

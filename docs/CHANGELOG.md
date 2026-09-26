@@ -1,5 +1,9 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-029
+
+- Added in-memory safe HTML emission from the typed internal render tree only.
+
 ## In progress — SF-AUTHORING-028
 
 - Started internal immutable render-tree compilation from adopted preview

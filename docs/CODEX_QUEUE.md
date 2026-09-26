@@ -8,6 +8,10 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-029` Safe HTML emission foundation v1 (P1).
+  - Requirements: bounded internal evidence for `SF-1203-001`–`008`; fixed
+    semantic vocabulary and NodeID-derived attributes only. No files/runtime.
+
 - [ ] `SF-AUTHORING-028` Render-tree compilation foundation v1 (P1).
   - Requirements: bounded internal evidence for `SF-1202-001`–`008`; immutable
     adopted-scene compilation only, with NodeID provenance, semantic intent and
