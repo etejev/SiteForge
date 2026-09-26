@@ -2,15 +2,25 @@
 
 ## Current checkpoint
 
-SF-AUTHORING-025 Local Preview v1 and SF-CI-025 are hosted verified. Actions
-`36166584811` passed at `1ab912e` with 430 unit/integration + 63 UI = 493 tests
-and zero failures. SF-AUTHORING-026 Semantic HTML element authoring v1 is in
-progress; its focused model/package/preview checks pass and its retained native
-Inspector journey passed before a later external XCTest automation-mode error.
-SF-AUTHORING-027 now contains the typed CSS-rule marker foundation; its next
-bounded task is the identity-gated transaction registry and persistence tests.
+SF-AUTHORING-036 Accessible form authoring v1 remains IN PROGRESS. Its current
+headless checkpoint validates typed Form-owned field metadata, compiles
+canonical page hierarchy to safe nested static controls, and preserves ordered
+select options through generic history, page duplication, package reopen, and
+owned recovery. The focused five-test checkpoint passed on 2026-09-26; it is
+not a native authoring or submission completion claim.
 
-## Delivered boundary
+## Current Form boundary
+
+- Form field metadata is valid only on Text nodes owned by a Form node.
+- Static output permits only escaped text/email/textarea/checkbox/select and
+  disabled unconfigured-submit controls; it has no runtime submission path.
+- Page duplication remaps stable select-option IDs but keeps labels and values.
+- The next bounded task is native Form/field insertion and Inspector editing
+  through one identity-gated transaction path. Keep visitor values, submission
+  destinations, validation rules, anti-abuse, generated-site runtime, scale,
+  and release acceptance out of scope.
+
+## Earlier delivered boundary
 
 - `WorkspaceShellState` owns a scene-local `LocalPreviewState` containing an
   immutable `CanvasPreviewSceneSnapshot` captured only by Preview or Refresh.

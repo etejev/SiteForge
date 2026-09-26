@@ -1,12 +1,14 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-25.
+Last updated: 2026-09-26.
 
 SF-AUTHORING-036 remains IN PROGRESS. The headless canonical field model and
-safe internal HTML boundary now cover the bounded text, email, textarea,
-checkbox, select and unconfigured-submit vocabulary with ordered option
-validation. Native authoring UI, transactions, persistence/migration and
-runtime submission remain deferred; see
+safe internal HTML boundary cover text, email, textarea, checkbox, select and
+unconfigured-submit vocabulary with ordered option validation. Validated
+canonical pages compile to nested safe static markup; generic document history,
+page duplication, package reopen, and owned recovery preserve field properties
+and option identities. Native authoring UI, a form-specific transaction and
+diagnostic surface, runtime submission and visitor values remain deferred; see
 `docs/evidence/SF-AUTHORING-036-FORM-FOUNDATION.md`.
 
 SF-AUTHORING-026 is IN PROGRESS: current authored node kinds resolve a typed,

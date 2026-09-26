@@ -443,6 +443,59 @@ enum InternalRenderTreeCompiler {
     }
 }
 
+/// The static build path starts from validated canonical document state rather
+/// than a live canvas scene. It projects only typed form metadata; visitor
+/// values and submission destinations never enter the build snapshot.
+enum InternalDocumentRenderTreeCompiler {
+    static func compile(page: DocumentPage, documentID: DocumentID, revision: UInt64) throws -> InternalRenderTreeSnapshot {
+        let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        let nodes = try page.canonicalDepthFirstNodes().enumerated().map { paintOrder, node in
+            let formField = try field(for: node, nodesByID: nodesByID)
+            return InternalRenderTreeNode(
+                id: node.id, sourceNodeID: node.id, paintOrder: paintOrder,
+                frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 0, height: 0)),
+                semanticElement: CanonicalSemanticElement.defaultElement(for: node.kind)?.rawValue ?? "div",
+                cssSelector: CanonicalCSSRule.selector(for: node.id), formField: formField
+            )
+        }
+        return .init(documentID: documentID, revision: revision, nodes: nodes)
+    }
+
+    private static func field(for node: DocumentNode, nodesByID: [NodeID: DocumentNode]) throws -> InternalFormField? {
+        guard node.properties.contains(where: { $0.key.rawValue.hasPrefix("form.field.v1.") }) else { return nil }
+        // The compiler can be called independently of package decode. Reuse
+        // the canonical validator so malformed field state never becomes
+        // permissive static output through this second boundary.
+        do {
+            try CanonicalFormFieldValidator.validate(node)
+        } catch {
+            throw SafeHTMLEmissionError.invalidFormField
+        }
+        guard case .node(let formID) = node.parent, nodesByID[formID]?.kind == .form,
+              let kind = node.insertionStringProperty(CanonicalFormField.kindKey),
+              let label = node.insertionStringProperty(CanonicalFormField.labelKey),
+              let name = node.insertionStringProperty(CanonicalFormField.nameKey),
+              let requiredProperty = node.insertionProperty(CanonicalFormField.requiredKey),
+              case .boolean(let required) = requiredProperty.value else {
+            throw SafeHTMLEmissionError.invalidFormField
+        }
+        let options: [InternalFormOption]
+        if kind == "select" {
+            guard let encoded = node.insertionStringProperty(CanonicalFormField.optionsKey) else {
+                throw SafeHTMLEmissionError.invalidFormField
+            }
+            options = try CanonicalFormSelectOptions.decode(encoded).map {
+                .init(id: $0.id, label: $0.label, value: $0.value)
+            }
+        } else {
+            options = []
+        }
+        return .init(kind: kind, label: label, name: name,
+                     help: node.insertionStringProperty(CanonicalFormField.helpKey),
+                     required: required, formID: formID, options: options)
+    }
+}
+
 // SF-1204 v1 emits only fixed layout declarations derived from typed geometry.
 // It is pure/in-memory; authored text cannot enter this syntax surface.
 enum SafeCSSEmissionError: Error, Equatable, Sendable { case invalidGeometry, invalidIdentity }
@@ -511,10 +564,9 @@ enum MultiPageStaticBuildPlanner {
         for page in pages.sorted(by: { $0.route.rawValue < $1.route.rawValue }) {
             let output = try outputPath(for: page)
             guard paths.insert(output).inserted else { throw MultiPageStaticBuildError.collision }
-            let body = page.nodes.map { node -> String in
-                let tag = CanonicalSemanticElement.defaultElement(for: node.kind)?.rawValue ?? "div"
-                return "<\(tag) data-siteforge-node=\"\(node.id.rawValue.uuidString.lowercased())\"></\(tag)>"
-            }.joined(separator: "\n")
+            let body = try SafeHTMLEmitter.emit(
+                InternalDocumentRenderTreeCompiler.compile(page: page, documentID: document.id, revision: document.revision)
+            )
             files.append(.init(path: output, contents: body))
         }
         files.append(.init(path: "manifest.txt", contents: files.map(\.path).sorted().joined(separator: "\n")))
@@ -574,16 +626,37 @@ enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, in
 
 enum SafeHTMLEmitter {
     static func emit(_ tree: InternalRenderTreeSnapshot) throws -> String {
-        let formIDs = Set(tree.nodes.filter { $0.semanticElement == "form" }.map(\.id))
-        return try tree.nodes.map { try emit($0, formIDs: formIDs) }.joined(separator: "\n")
+        let ordered = tree.nodes.sorted { $0.paintOrder < $1.paintOrder }
+        let formIDs = Set(ordered.filter { $0.semanticElement == "form" }.map(\.id))
+        let fieldsByForm = Dictionary(grouping: ordered.compactMap { node -> InternalRenderTreeNode? in
+            node.formField == nil ? nil : node
+        }, by: { $0.formField!.formID })
+        guard Set(fieldsByForm.keys).isSubset(of: formIDs) else { throw SafeHTMLEmissionError.invalidFormField }
+        return try ordered.compactMap { node in
+            if node.formField != nil { return nil }
+            if node.semanticElement == "form" {
+                let identifier = try validatedIdentifier(node)
+                let fields = try (fieldsByForm[node.id] ?? []).map { try emitField($0, formIDs: formIDs) }.joined()
+                return "<form data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\">\(fields)</form>"
+            }
+            return try emitNode(node, formIDs: formIDs)
+        }.joined(separator: "\n")
     }
 
-    private static func emit(_ node: InternalRenderTreeNode, formIDs: Set<NodeID>) throws -> String {
+    private static func emitNode(_ node: InternalRenderTreeNode, formIDs: Set<NodeID>) throws -> String {
         let allowed = Set(["div", "section", "main", "header", "footer", "nav", "article", "aside", "p", "h1", "h2", "h3", "h4", "h5", "h6", "img", "button", "a", "form"])
         guard allowed.contains(node.semanticElement) else { throw SafeHTMLEmissionError.unsupportedTag }
-        let identifier = node.id.rawValue.uuidString.lowercased()
-        guard identifier == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeHTMLEmissionError.invalidIdentity }
-        if let field = node.formField {
+        let identifier = try validatedIdentifier(node)
+        if node.formField != nil {
+            return try emitField(node, formIDs: formIDs)
+        }
+        let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\""
+        return node.semanticElement == "img" ? "<img\(attributes)>" : "<\(node.semanticElement)\(attributes)></\(node.semanticElement)>"
+    }
+
+    private static func emitField(_ node: InternalRenderTreeNode, formIDs: Set<NodeID>) throws -> String {
+        guard let field = node.formField else { throw SafeHTMLEmissionError.invalidFormField }
+        let identifier = try validatedIdentifier(node)
             guard node.semanticElement == "p", formIDs.contains(field.formID),
                   ["text", "email", "textarea", "checkbox", "select", "submit"].contains(field.kind),
                   field.name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil,
@@ -617,9 +690,12 @@ enum SafeHTMLEmitter {
                 control = "<input id=\"\(controlID)\" name=\"\(escapedName)\" type=\"\(field.kind)\"\(describedBy)\(required)>"
             }
             return "<label for=\"\(controlID)\">\(escape(field.label))</label>\(control)\(help)"
-        }
-        let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\""
-        return node.semanticElement == "img" ? "<img\(attributes)>" : "<\(node.semanticElement)\(attributes)></\(node.semanticElement)>"
+    }
+
+    private static func validatedIdentifier(_ node: InternalRenderTreeNode) throws -> String {
+        let identifier = node.id.rawValue.uuidString.lowercased()
+        guard identifier == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeHTMLEmissionError.invalidIdentity }
+        return identifier
     }
 
     private static func validText(_ value: String, maximum: Int) -> Bool {

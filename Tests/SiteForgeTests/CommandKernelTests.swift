@@ -673,6 +673,70 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertFalse(session.document.pages.contains { $0.id == pageID })
     }
 
+    // SF-1006-001, SF-1006-004, SF-1006-005 — the generic transaction
+    // kernel owns form metadata exactly like other canonical properties. A
+    // page copy must not alias nested select-option identity.
+    func testFormFieldsPreserveAtomicHistoryAndRemapSelectOptionsOnPageDuplicate() throws {
+        let formID = NodeID(), selectID = NodeID(), checkboxID = NodeID(), submitID = NodeID()
+        let options = [
+            CanonicalFormSelectOption(label: "Starter", value: "starter"),
+            CanonicalFormSelectOption(label: "Professional", value: "pro"),
+        ]
+        let properties: (String, String, String, Bool, [NodeProperty]) -> [NodeProperty] = { kind, label, name, required, extra in
+            [
+                .init(key: .init(rawValue: CanonicalFormField.kindKey), value: .string(kind)),
+                .init(key: .init(rawValue: CanonicalFormField.labelKey), value: .string(label)),
+                .init(key: .init(rawValue: CanonicalFormField.nameKey), value: .string(name)),
+                .init(key: .init(rawValue: CanonicalFormField.requiredKey), value: .boolean(required)),
+            ] + extra
+        }
+        let pageID = PageID()
+        let form = DocumentNode(id: formID, kind: .form, name: "Contact form", parent: .page(pageID), childIDs: [selectID, checkboxID, submitID])
+        let select = DocumentNode(id: selectID, kind: .text, name: "Plan", parent: .node(formID), properties: properties("select", "Plan", "plan", true, [
+            .init(key: .init(rawValue: CanonicalFormField.optionsKey), value: .string(try CanonicalFormSelectOptions.encode(options))),
+        ]))
+        let checkbox = DocumentNode(id: checkboxID, kind: .text, name: "Terms", parent: .node(formID), properties: properties("checkbox", "Terms", "terms", true, []))
+        let submit = DocumentNode(id: submitID, kind: .text, name: "Submit", parent: .node(formID), properties: properties("submit", "Submit", "submit", false, []))
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [formID], nodes: [form, select, checkbox, submit])
+        let session = DocumentSession(document: .init(pages: [page]))
+        try session.document.validate()
+
+        let original = session.document
+        var label = try XCTUnwrap(session.document.pages[0].nodes[1].insertionProperty(CanonicalFormField.labelKey))
+        label.value = .string("Choose a plan")
+        try session.execute(.setProperty(.init(pageID: pageID, nodeID: selectID, property: label)))
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionStringProperty(CanonicalFormField.labelKey), "Choose a plan")
+        try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionStringProperty(CanonicalFormField.labelKey), "Plan")
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionStringProperty(CanonicalFormField.labelKey), "Choose a plan")
+        XCTAssertTrue(session.canUndo)
+
+        let firstBuild = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        XCTAssertEqual(firstBuild, try MultiPageStaticBuildPlanner.plan(document: session.document))
+        let html = try XCTUnwrap(firstBuild.files.first { $0.path == "index.html" }?.contents)
+        XCTAssertTrue(html.contains("<form data-siteforge-node="))
+        XCTAssertTrue(html.contains("<select"))
+        XCTAssertTrue(html.contains("<input"))
+        XCTAssertTrue(html.contains("type=\"checkbox\""))
+        XCTAssertTrue(html.contains("data-siteforge-submission=\"unconfigured\""))
+
+        let registry = PageCommandRegistry()
+        let prepared = try registry.prepare(.duplicate, identity: .init(documentID: session.document.id,
+            revision: session.document.revision, pageID: pageID), in: session.document, isAvailable: true)
+        let copiedID = prepared.selectedPageID
+        try session.execute(prepared.command)
+        let source = try XCTUnwrap(session.document.pages.first { $0.id == pageID })
+        let copy = try XCTUnwrap(session.document.pages.first { $0.id == copiedID })
+        let sourceOptions = try CanonicalFormSelectOptions.decode(try XCTUnwrap(source.nodes.first { $0.name == "Plan" }?.insertionStringProperty(CanonicalFormField.optionsKey)))
+        let copiedOptions = try CanonicalFormSelectOptions.decode(try XCTUnwrap(copy.nodes.first { $0.name == "Plan" }?.insertionStringProperty(CanonicalFormField.optionsKey)))
+        XCTAssertEqual(sourceOptions.map(\.label), copiedOptions.map(\.label))
+        XCTAssertEqual(sourceOptions.map(\.value), copiedOptions.map(\.value))
+        XCTAssertTrue(Set(sourceOptions.map(\.id)).isDisjoint(with: Set(copiedOptions.map(\.id))))
+        XCTAssertNotEqual(original.pages[0].nodes[1].properties[0].id, copy.nodes[1].properties[0].id)
+    }
+
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {
         let document = BlankProjectDefaults.document()
         let registry = PageCommandRegistry()

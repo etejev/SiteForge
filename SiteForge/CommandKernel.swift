@@ -142,12 +142,12 @@ struct PageCommandRegistry {
         case .duplicate:
             let newID = PageID()
             let ids = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, NodeID()) })
-            let nodes = page.nodes.map { node in
+            let nodes = try page.nodes.map { node in
                 let parent: NodeParent = switch node.parent {
                 case .page: .page(newID)
                 case .node(let id): .node(ids[id]!)
                 }
-                let properties = node.properties.map { property in
+                let properties = try node.properties.map { property in
                     var value = property.value
                     if property.key.rawValue == CanonicalLinkTarget.namespace + "pageID",
                        value == .string(page.id.description) { value = .string(newID.description) }
@@ -155,6 +155,10 @@ struct PageCommandRegistry {
                        node.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == page.id.description,
                        case .string(let raw) = value, let old = NodeID(uuidString: raw), let replacement = ids[old] {
                         value = .string(replacement.description)
+                    }
+                    if property.key.rawValue == CanonicalFormField.optionsKey,
+                       case .string(let encoded) = value {
+                        value = .string(try CanonicalFormSelectOptions.remappingStableIDs(in: encoded))
                     }
                     return NodeProperty(key: property.key, value: value, origin: property.origin)
                 }

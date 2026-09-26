@@ -6,6 +6,10 @@
   submit vocabulary. Ordered select options have stable IDs and strict safe
   validation; internal static output escapes field values and never configures
   a submission destination.
+- Added canonical-page compilation for nested safe Form controls. Generic
+  history, duplicate-page option-ID remapping, package reopen, and owned
+  recovery preserve ordered control metadata without visitor values or
+  submission state.
 
 ## In progress — SF-AUTHORING-030
 

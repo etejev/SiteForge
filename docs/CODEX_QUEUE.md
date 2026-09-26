@@ -9,11 +9,19 @@ None.
 ## IN PROGRESS
 
 - [ ] `SF-AUTHORING-036` Accessible form authoring v1 (P1).
-  - Started strict canonical field metadata and safe internal control output:
-    text/email/textarea/checkbox/select/submit, typed ordered select options,
-    Form ownership and unconfigured submit semantics. Native insertion,
-    Inspector transactions, persistence/migration and app journeys remain
-    required before this item can close.
+  - Requirements: bounded headless evidence for `SF-1006-001`–`005`, `008`;
+    all of `SF-1006` remains Partial until the native authoring workflow and
+    runtime behavior exist.
+  - Completed checkpoint: strict canonical text/email/textarea/checkbox/select/
+    submit metadata, typed ordered select options, Form ownership, canonical
+    page-to-render-tree compilation, safe nested static control emission, and
+    unconfigured submit semantics. Generic history, page duplication (with
+    select-option ID remapping), package reopen, and owned recovery preserve
+    ordered control state.
+  - Next bounded task: native Form/field insertion and Inspector editing through
+    a dedicated identity-gated registry with accessible UI evidence. Visitor
+    values, submission routing, validation/anti-abuse, runtime success/error
+    behavior, performance and release acceptance remain excluded.
 
 - [ ] `SF-AUTHORING-035` Local build profiles and compatibility diagnostics v1 (P1).
   - Bounded SF-1208/SF-1211 noncanonical development/production build reports.

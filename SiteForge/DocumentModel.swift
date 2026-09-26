@@ -470,6 +470,15 @@ enum CanonicalFormSelectOptions {
         return options
     }
 
+    /// Page duplication owns all nested canonical identity remapping. Option
+    /// labels and submitted values are intentional content; only option IDs
+    /// are regenerated so a later reorder/delete cannot alias the source page.
+    static func remappingStableIDs(in value: String) throws -> String {
+        try encode(try decode(value).map { option in
+            .init(label: option.label, value: option.value)
+        })
+    }
+
     static func validate(_ options: [CanonicalFormSelectOption]) throws {
         guard !options.isEmpty, options.count <= maximumOptions,
               Set(options.map(\.id)).count == options.count,
@@ -482,27 +491,6 @@ enum CanonicalFormSelectOptions {
                   !option.value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
               }) else {
             throw ModelValidationError.invalidSemanticElementState
-        }
-    }
-}
-
-enum CSSRuleEdit: Sendable { case set, reset }
-
-struct CSSRuleCommand: Sendable {
-    let identity: DesignInspectorOperationIdentity
-    let orderedNodeIDs: [NodeID]
-    let edit: CSSRuleEdit
-    let cancelled: Bool
-}
-
-enum CSSRuleCommandError: Error, LocalizedError, Equatable, Sendable {
-    case stale, cancelled, unavailable, noChanges
-    var errorDescription: String? {
-        switch self {
-        case .stale: "The CSS rule target changed before the operation could commit."
-        case .cancelled: "The CSS rule operation was cancelled; committed content is unchanged."
-        case .unavailable: "The selected object is unavailable for CSS rule authoring."
-        case .noChanges: "The CSS rule already has that state."
         }
     }
 }

@@ -77,6 +77,54 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(decoded.document.id, documentID)
     }
 
+    // SF-1006-001, SF-1006-005 — form metadata remains ordinary canonical
+    // package content: no visitor values, paths, or submission state are
+    // serialized, while ordered option identity survives reopen unchanged.
+    func testFormPackageRoundTripPreservesOrderedControlMetadata() async throws {
+        let formID = NodeID(), selectID = NodeID(), checkboxID = NodeID(), submitID = NodeID()
+        let options = try CanonicalFormSelectOptions.encode([
+            .init(label: "Starter", value: "starter"),
+            .init(label: "Professional", value: "professional"),
+        ])
+        func field(_ id: NodeID, _ kind: String, _ label: String, _ name: String, extra: [NodeProperty] = []) -> DocumentNode {
+            .init(id: id, kind: .text, name: label, parent: .node(formID), properties: [
+                .init(key: .init(rawValue: CanonicalFormField.kindKey), value: .string(kind)),
+                .init(key: .init(rawValue: CanonicalFormField.labelKey), value: .string(label)),
+                .init(key: .init(rawValue: CanonicalFormField.nameKey), value: .string(name)),
+                .init(key: .init(rawValue: CanonicalFormField.requiredKey), value: .boolean(kind != "submit")),
+            ] + extra)
+        }
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+            rootNodeIDs: [formID], nodes: [
+                .init(id: formID, kind: .form, name: "Contact", parent: .page(pageID), childIDs: [selectID, checkboxID, submitID]),
+                field(selectID, "select", "Plan", "plan", extra: [.init(key: .init(rawValue: CanonicalFormField.optionsKey), value: .string(options))]),
+                field(checkboxID, "checkbox", "Terms", "terms"),
+                field(submitID, "submit", "Send", "send"),
+            ])
+        let document = CanonicalDocument(id: documentID, pages: [page])
+        let original = ProjectPackage(projectID: projectID,
+            createdAt: ProjectTimestamp("2026-07-19T12:00:00.000Z"),
+            modifiedAt: ProjectTimestamp("2026-07-19T12:30:00.000Z"), document: document)
+        let store = ProjectPackageStore()
+        let bytes = try await store.encode(original)
+        let decoded = try await store.decode(bytes)
+        XCTAssertEqual(decoded, original)
+        let destination = try fixtureDirectory().appendingPathComponent("Form.siteforge")
+        try await store.write(original, to: destination)
+        let reopened = try await store.read(from: destination)
+        XCTAssertEqual(reopened, original)
+        let recoveryDirectory = try fixtureDirectory().appendingPathComponent("form-recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(recoveryDirectory)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: projectID, in: recoveryDirectory)
+        try await store.write(original, to: recoveryURL, policy: .recovery(projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(
+            from: recoveryURL, expectedProjectID: projectID
+        ).package
+        XCTAssertEqual(recovered, original)
+        let decodedOptions = try CanonicalFormSelectOptions.decode(try XCTUnwrap(decoded.document.pages[0].nodes.first { $0.id == selectID }?.insertionStringProperty(CanonicalFormField.optionsKey)))
+        XCTAssertEqual(decodedOptions.map(\.value), ["starter", "professional"])
+    }
+
     // SF-0301-004, SF-0301-007, SF-0301-008
     func testCancellationInsideContainerAndCanonicalValidationIsDistinctAndNonAdopting() async throws {
         let encoded = try await ProjectPackageStore().encode(package())
