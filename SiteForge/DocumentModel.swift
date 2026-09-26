@@ -428,6 +428,8 @@ enum CanonicalFormField {
     static let labelKey = "form.field.v1.label"
     static let nameKey = "form.field.v1.name"
     static let requiredKey = "form.field.v1.required"
+    static let helpKey = "form.field.v1.help"
+    static let kindKey = "form.field.v1.kind"
 }
 
 enum CSSRuleEdit: Sendable { case set, reset }
@@ -1470,7 +1472,7 @@ enum CanonicalCSSRuleValidator {
 
 enum CanonicalFormFieldValidator {
     static func validate(_ node: DocumentNode) throws {
-        let owned = node.properties.filter { [CanonicalFormField.labelKey, CanonicalFormField.nameKey, CanonicalFormField.requiredKey].contains($0.key.rawValue) }
+        let owned = node.properties.filter { [CanonicalFormField.labelKey, CanonicalFormField.nameKey, CanonicalFormField.requiredKey, CanonicalFormField.helpKey, CanonicalFormField.kindKey].contains($0.key.rawValue) }
         guard owned.count == Set(owned.map(\.key)).count else { throw ModelValidationError.invalidSemanticElementState }
         guard !owned.isEmpty else { return }
         guard node.kind == .text else { throw ModelValidationError.invalidSemanticElementState }
@@ -1482,6 +1484,10 @@ enum CanonicalFormFieldValidator {
                 guard case .string(let value) = property.value, value.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw ModelValidationError.invalidSemanticElementState }
             case CanonicalFormField.requiredKey:
                 guard case .boolean = property.value else { throw ModelValidationError.invalidSemanticElementState }
+            case CanonicalFormField.helpKey:
+                guard case .string(let value) = property.value, value.count <= 512 else { throw ModelValidationError.invalidSemanticElementState }
+            case CanonicalFormField.kindKey:
+                guard case .string(let value) = property.value, ["text", "textarea"].contains(value) else { throw ModelValidationError.invalidSemanticElementState }
             default: break
             }
         }
