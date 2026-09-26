@@ -8,15 +8,16 @@ None.
 
 ## IN PROGRESS
 
-- [ ] `SF-CI-025` Hosted native-interaction stabilization (P1).
-  - Hosted run `36106023892` passed 430 non-UI tests but exposed two real
-    native-test transitions: constrained title-bar drag clamping and OpenPanel
-    Go-to-Folder confirmation. The shared helpers now re-query live AX state
-    after each genuine action, with one bounded corrective drag and the
-    native Go button only when the field remains visible. Product width,
-    import behavior and strict hit-target assertions are unchanged.
-  - Local build and repository checks pass. Local UI Automation timed out
-    before the focused test body; hosted CI is the pending authoritative run.
+- [ ] `SF-AUTHORING-026` Semantic HTML element authoring v1 (P1).
+  - Requirements: bounded implementation of `SF-1203-001`–`008` for the
+    existing authored node kinds only. Plan: add a canonical versioned
+    semantic-element value with omitted/defaulted/authored provenance; resolve
+    it through the existing identity-gated Inspector transaction path; expose
+    a native, accessible inspector control; and prove history, package,
+    recovery, preview provenance and renderer adoption with focused evidence.
+  - Exclusions: raw HTML, arbitrary attributes, custom elements, DOM/script
+    authoring, generated HTML/CSS files, browser runtime, routing, export,
+    publishing, accessibility-tree generation and release acceptance.
 
 - [ ] `SF-CANVAS-POINTER-001` Shared native pointer/compositor placement repair (P1, hosted pointer-sampling correction).
   - Bounded SF-0401-001/003/008, SF-0405-002/003/008 and SF-0407-001/003/008.
@@ -43,7 +44,7 @@ None.
     navigator once macOS UI Automation is healthy, then commit/push this
     test-only correction and inspect CI.
 
-- [x] `SF-AUTHORING-025` Local Preview v1 (P1, locally verified; hosted confirmation pending).
+- [x] `SF-AUTHORING-025` Local Preview v1 (P1, hosted verified).
   - Requirements: bounded evidence for `SF-1201-001`–`008` and
     `SF-1202-001`–`008`; `SF-1203`/`SF-1204` remain explicitly deferred.
   - Delivered: freeze an immutable revision-tagged authored render snapshot at
@@ -67,8 +68,19 @@ None.
     original-resolution `SF-AUTHORING-025 local preview authored snapshot`
     attachment. See `docs/evidence/SF-AUTHORING-025-LOCAL-PREVIEW.md`.
     SF-1201/SF-1202 stay Partial outside this deliberately local preview.
+    Hosted Actions `36166584811` passed at `1ab912e` with the same 430
+    unit/integration + 63 UI = 493 tests after closing SF-CI-025.
 
 ## DONE
+
+- [x] `SF-CI-025` Hosted native-interaction stabilization (P1).
+  - Hosted run `36106023892` exposed constrained title-bar drag clamping and
+    OpenPanel Go-to-Folder confirmation. Shared helpers now re-query live AX
+    state after each genuine action, make one bounded corrective drag, and use
+    the native Go button only when its field remains visible. Product width,
+    import behavior and strict hit-target assertions remain unchanged.
+  - Actions `36166584811` passed at `1ab912e`: 430 non-UI + 63 UI = 493 tests,
+    zero failures. This closes the hosted confirmation for SF-AUTHORING-025.
 
 - [x] `SF-AUTHORING-024` Exposed component text properties and instance reset (locally verified).
   - Bounded SF-0902-001–008 and SF-0905-001–008; broad modules remain Partial.

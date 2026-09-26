@@ -240,6 +240,9 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     let imageFitMode: CanvasImageFitMode?
     let imageFocalX: Double
     let imageFocalY: Double
+    /// Read-only canonical semantic provenance carried into immutable Preview
+    /// snapshots. It is metadata, never a rendered/editor-chrome pixel.
+    let semanticElement: String?
 
     init(
         id: NodeID,
@@ -264,7 +267,8 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         imagePixelHeight: Int? = nil,
         imageFitMode: CanvasImageFitMode? = nil,
         imageFocalX: Double = 0.5,
-        imageFocalY: Double = 0.5
+        imageFocalY: Double = 0.5,
+        semanticElement: String? = nil
     ) {
         self.id = id
         self.frame = frame
@@ -289,6 +293,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.imageFitMode = imageFitMode
         self.imageFocalX = imageFocalX
         self.imageFocalY = imageFocalY
+        self.semanticElement = semanticElement
     }
 }
 

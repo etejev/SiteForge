@@ -619,6 +619,40 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: recoveredNode), expected)
     }
 
+    @MainActor
+    func testSemanticElementPersistsAcrossPackageReopenAndOwnedRecovery() async throws {
+        var document = ProjectCreation.blank()
+        let page = try XCTUnwrap(document.pages.first)
+        let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+        let nodeID = NodeID(UUID(uuidString: "87000000-0000-4000-8000-000000000026")!)
+        document.pages[0].nodes[0].childIDs.append(nodeID)
+        document.pages[0].nodes.append(DocumentNode(id: nodeID, kind: .frame, name: "Frame", parent: .node(rootID)))
+        let sceneID = CanvasViewportSceneID(UUID(uuidString: "88000000-0000-4000-8000-000000000026")!)
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: sceneID,
+            rendererGeneration: 26, selectedNodeIDs: [nodeID],
+            availableNodeIDs: Set(document.pages[0].nodes.map(\.id)), isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let session = DocumentSession(document: document)
+        let registry = SemanticElementCommandRegistry()
+        let command = SemanticElementCommand(identity: .init(documentID: session.document.id, pageID: page.id,
+            revision: session.document.revision, sceneID: sceneID, rendererGeneration: 26),
+            orderedNodeIDs: [nodeID], edit: .set(.article), provenance: .automation, cancelled: false)
+        _ = try session.execute(registry.prepare(command, in: session.document, context: context).documentCommand)
+        let baseline = package()
+        let authored = ProjectPackage(projectID: baseline.projectID, createdAt: baseline.createdAt,
+            modifiedAt: baseline.modifiedAt, document: session.document, optionalMembers: baseline.optionalMembers,
+            compatibility: baseline.compatibility)
+        let store = ProjectPackageStore()
+        let encoded = try await store.encode(authored)
+        let reopened = try await store.decode(encoded)
+        XCTAssertEqual(SemanticElementCommandRegistry.resolvedElement(for: try XCTUnwrap(reopened.document.pages[0].nodes.first(where: { $0.id == nodeID })) )?.0, .article)
+        let recoveryDirectory = try fixtureDirectory().appendingPathComponent("semantic-element-recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(recoveryDirectory)
+        let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: baseline.projectID, in: recoveryDirectory)
+        try await store.write(reopened, to: recoveryURL, policy: .recovery(baseline.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(from: recoveryURL, expectedProjectID: baseline.projectID).package
+        XCTAssertEqual(SemanticElementCommandRegistry.resolvedElement(for: try XCTUnwrap(recovered.document.pages[0].nodes.first(where: { $0.id == nodeID })) )?.0, .article)
+    }
+
     // SF-0601-002/004/005; SF-0602-001/004/005 — breakpoint overrides use
     // the production package and owned-recovery paths while the selected
     // editor breakpoint remains scene-local and absent from canonical data.

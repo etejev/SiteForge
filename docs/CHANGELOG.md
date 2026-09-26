@@ -1,11 +1,17 @@
 # SiteForge Development Changelog
 
-## In progress — SF-CI-025
+## In progress — SF-AUTHORING-026
 
-- Corrected native-test interaction helpers after hosted OpenPanel and narrow
-  constrained-window evidence. Helpers now re-query the real target after a
-  title-bar drag and explicitly complete the visible Go-to-Folder action.
-  Product interaction, coverage, and the 1100-point window policy are intact.
+- Started bounded semantic HTML element authoring for existing canonical node
+  kinds. Raw HTML, generated markup, browser runtime and publishing remain out
+  of scope.
+
+## Verified — SF-CI-025 and SF-AUTHORING-025
+
+- Hosted Actions `36166584811` passed at `1ab912e` with 430 unit/integration
+  and 63 UI tests (493 total, zero failures). The native OpenPanel and narrow
+  constrained-window helpers retain strict live-target behavior without
+  changing production interaction or the 1100-point window policy.
 
 ## Locally verified — SF-CANVAS-POINTER-001
 
@@ -14,7 +20,7 @@
   run passed all product checks except this new test's off-page assumption;
   independent narrow sampling coverage is added without relaxing assertions.
 
-## Locally verified — SF-AUTHORING-025
+## Verified — SF-AUTHORING-025
 
 - Replaced the Preview placeholder with a local, immutable revision snapshot.
   Preview and Refresh are deliberate operations; the editor, selection chrome,

@@ -890,7 +890,8 @@ actor WorkspaceScenePreparationWorker {
                 imagePixelHeight: imageAsset?.pixelHeight,
                 imageFitMode: imageFit,
                 imageFocalX: imageFocalX,
-                imageFocalY: imageFocalY
+                imageFocalY: imageFocalY,
+                semanticElement: SemanticElementCommandRegistry.resolvedElement(for: node)?.0.rawValue
             ))
         }
 
@@ -1103,6 +1104,7 @@ final class WorkspaceShellState: ObservableObject {
     private let designInspectorRegistry = DesignInspectorCommandRegistry()
     private let designBoxStyleRegistry = DesignBoxStyleCommandRegistry()
     private let typographyRegistry = TypographyCommandRegistry()
+    private let semanticElementRegistry = SemanticElementCommandRegistry()
     private let imageImportWorker = ImageImportWorker()
     private let imageThumbnailWorker = ImageThumbnailWorker()
     private let imageInspectorRegistry = ImageInspectorCommandRegistry()
@@ -2328,6 +2330,44 @@ final class WorkspaceShellState: ObservableObject {
 
     func typographyInspectorValue() -> TypographyInspectorValue {
         TypographyCommandRegistry.selectionValue(nodes: selectedCanonicalNodes)
+    }
+
+    func semanticElementInspectorValue() -> SemanticElementInspectorValue {
+        SemanticElementCommandRegistry.selectionValue(nodes: selectedCanonicalNodes)
+    }
+
+    @discardableResult
+    func commitSemanticElement(_ edit: SemanticElementEdit, operation: String, provenance: DesignInspectorProvenance = .keyboard) -> Bool {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan,
+              plan.identity.documentID == documentSession.document.id,
+              plan.identity.revision == documentSession.document.revision else {
+            lastDesignInspectorAnnouncement = SemanticElementCommandError.stale.localizedDescription
+            return false
+        }
+        do {
+            let prepared = try semanticElementRegistry.prepare(.init(
+                identity: .init(documentID: documentSession.document.id, pageID: pageID,
+                    revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+                    rendererGeneration: plan.identity.sceneGeneration),
+                orderedNodeIDs: selectionState.orderedIDs, edit: edit,
+                provenance: provenance, cancelled: false
+            ), in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.documentCommand)
+            let applied = prepared.applicableNodeIDs.count, skipped = prepared.skippedNodeIDs.count
+            lastDesignInspectorAnnouncement = skipped == 0
+                ? "Semantic element (operation) committed for (applied) object\(applied == 1 ? "" : "s")"
+                : "Semantic element (operation) committed for (applied) object\(applied == 1 ? "" : "s"); skipped (skipped) incompatible object\(skipped == 1 ? "" : "s")"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
+        } catch let error as SemanticElementCommandError {
+            lastDesignInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        } catch {
+            lastDesignInspectorAnnouncement = "Semantic element (operation) could not commit; metadata is unchanged"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        }
     }
 
     var typographyResolutionStatus: String? {

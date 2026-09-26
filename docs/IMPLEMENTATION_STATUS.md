@@ -1,15 +1,22 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-24.
+Last updated: 2026-09-25.
 
-SF-AUTHORING-025 is locally verified: the native Preview command captures an
+SF-AUTHORING-026 is IN PROGRESS: current authored node kinds resolve a typed,
+versioned semantic HTML element with omitted/defaulted/authored provenance.
+The native Design Inspector uses the identity-gated transaction path; raw HTML,
+generated markup, browser runtime and publishing remain out of scope. See
+`docs/evidence/SF-AUTHORING-026-SEMANTIC-ELEMENTS.md`.
+
+SF-AUTHORING-025 is hosted verified: the native Preview command captures an
 immutable adopted render-plan snapshot at an explicit open/refresh boundary.
 The preview is scene-local and has no document/history write path. Focused
 model and native UI evidence covers empty/unavailable status, snapshot refresh,
 editor-chrome exclusion and Close focus restoration. The final gate passed 430
 unit/integration + 63 UI = 493 tests with zero failures. SF-1201/SF-1202 remain
-Partial; browser runtime, HTML/CSS/JS, export/publishing and SF-1203/SF-1204
-are excluded. Hosted confirmation is pending.
+Partial; browser runtime, HTML/CSS/JS, export/publishing and SF-1204
+are excluded. Actions `36166584811` passed at `1ab912e` with the same 493
+tests and zero failures. SF-CI-025 is closed.
 
 SF-CANVAS-POINTER-001 is locally verified: native backing-layer ownership removes
 the duplicate container reflection; empty guidance yields during creation.

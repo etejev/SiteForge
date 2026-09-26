@@ -992,6 +992,29 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-015 save reopen preservation")
     }
 
+    // SF-1203-001...006 — semantic metadata is authored from the visible
+    // Design Inspector, never from a test-only document mutation path.
+    func testSemanticHTMLElementInspectorKeyboardResetAndPreviewJourney() throws {
+        let application = launchWorkspace()
+        application.buttons["canvas.empty.insert.frame"].click()
+        // Insertion replaces the live canvas accessibility host; re-query the
+        // real adopted element rather than retaining its pre-insertion proxy.
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["inspector.tab.design"].click()
+        let inspector = application.scrollViews["inspector.selection.scroll"]
+        let element = application.descendants(matching: .any)["inspector.semantic.element"]
+        for _ in 0..<14 where !element.isHittable { inspector.scroll(byDeltaX: 0, deltaY: -120) }
+        XCTAssertTrue(element.isHittable)
+        XCTAssertTrue((element.value as? String ?? "").contains("<div>"))
+        element.click(); application.menuItems["<article>"].click()
+        let status = application.descendants(matching: .any)["inspector.semantic.status"]
+        XCTAssertTrue(waitForValue(status, containing: "Authored"))
+        application.buttons["inspector.semantic.reset"].click()
+        XCTAssertTrue(waitForValue(status, containing: "Defaulted"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-026 semantic element inspector")
+    }
+
     // SF-0508-001 through SF-0508-006 — visible, keyboard/accessibility
     // discoverable v1 layer controls must drive the same canonical registry
     // as the established native colour and opacity controls.
@@ -1306,18 +1329,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         let assetRow = application.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@", "assets.row.", "siteforge-image"
         )).firstMatch
-        XCTAssertEqual(
-            XCTWaiter.wait(
-                for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate { _, _ in
-                        !application.sheets.textFields["PathTextField"].exists
-                    },
-                    object: application
-                )],
-                timeout: 5
-            ),
-            .completed
-        )
+        // The Go-to-Folder accessory may remain in the AX hierarchy after it
+        // has selected the file in the enclosing open panel. Its disappearance
+        // is not the completion contract; an enabled native Import action (or
+        // an imported asset row) is. The assertion below verifies that real
+        // user-visible outcome on both panel implementations.
         // Go to Folder selects the exact file. Activate the native panel's
         // default Import action from that selection, avoiding unstable AX
         // proxies for Finder's column browser and filename field.

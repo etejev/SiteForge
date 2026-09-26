@@ -646,7 +646,8 @@ final class CommandKernelTests: XCTestCase {
         let pageID = try apply(.create(name: "Destination", route: "/destination"), home)
         let root = try XCTUnwrap(session.document.pages.last?.rootNodeIDs.first)
         let link = DocumentNode(kind: .link, name: "Self link", parent: .node(root), properties:
-            CanonicalLinkTarget.page(pageID).properties.map { .init(key: .init(rawValue: $0.0), value: $0.1) })
+            CanonicalLinkTarget.page(pageID).properties.map { .init(key: .init(rawValue: $0.0), value: $0.1) }
+            + [.init(key: .init(rawValue: CanonicalSemanticElement.key), value: .string(SemanticHTMLElement.a.rawValue), origin: .authored)])
         try session.execute(.insertNode(.init(pageID: pageID, node: link, index: 0)))
         let copyID = try apply(.duplicate, pageID)
         let original = try XCTUnwrap(session.document.pages.first { $0.id == pageID })
@@ -654,6 +655,9 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertTrue(Set(original.nodes.map(\.id)).isDisjoint(with: copy.nodes.map(\.id)))
         XCTAssertEqual(try CanonicalLinkTarget.resolve(copy.nodes[1]), .page(copyID))
         XCTAssertNotEqual(original.nodes[1].properties[0].id, copy.nodes[1].properties[0].id)
+        XCTAssertEqual(SemanticElementCommandRegistry.resolvedElement(for: copy.nodes[1])?.0, .a)
+        XCTAssertNotEqual(original.nodes[1].insertionProperty(CanonicalSemanticElement.key)?.id,
+                          copy.nodes[1].insertionProperty(CanonicalSemanticElement.key)?.id)
         let homeRoot = session.document.pages[0].rootNodeIDs[0]
         let inbound = DocumentNode(kind: .link, name: "Inbound", parent: .node(homeRoot), properties:
             CanonicalLinkTarget.page(pageID).properties.map { .init(key: .init(rawValue: $0.0), value: $0.1) })

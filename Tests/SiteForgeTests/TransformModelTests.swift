@@ -1538,6 +1538,59 @@ final class TransformModelTests: XCTestCase {
         }
     }
 
+    // SF-1203-001...006 — semantic tags are provenance-aware canonical
+    // metadata and use the same identity-gated history boundary as Inspector
+    // appearance and typography edits.
+    func testSemanticElementRegistryValidatesMixedSelectionAndExactHistory() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        fixture.document.pages[0].nodes[1].kind = .frame
+        fixture.document.pages[0].nodes[2].kind = .text
+        let registry = SemanticElementCommandRegistry()
+        func command(_ document: CanonicalDocument, ids: [NodeID], edit: SemanticElementEdit, cancelled: Bool = false) -> SemanticElementCommand {
+            .init(identity: .init(documentID: document.id, pageID: fixture.pageID, revision: document.revision,
+                                  sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                  orderedNodeIDs: ids, edit: edit, provenance: .automation, cancelled: cancelled)
+        }
+        let initial = fixture.document.pages[0].nodes[1]
+        XCTAssertEqual(SemanticElementCommandRegistry.resolvedElement(for: initial)?.0, .div)
+        XCTAssertEqual(SemanticElementCommandRegistry.resolvedElement(for: initial)?.1, .defaulted)
+
+        let mixed = try registry.prepare(command(fixture.document, ids: [fixture.nodeID, fixture.secondNodeID], edit: .set(.article)), in: fixture.document, context: fixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID]))
+        XCTAssertEqual(mixed.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(mixed.skippedNodeIDs, [fixture.secondNodeID])
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(mixed.documentCommand)
+        var node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+        let property = try XCTUnwrap(node.insertionProperty(CanonicalSemanticElement.key))
+        XCTAssertEqual(property.origin, .authored)
+        XCTAssertEqual(SemanticElementCommandRegistry.resolvedElement(for: node)?.0, .article)
+        let propertyID = property.id
+        try session.undo()
+        node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+        XCTAssertNil(node.insertionProperty(CanonicalSemanticElement.key))
+        try session.redo()
+        node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+        XCTAssertEqual(node.insertionProperty(CanonicalSemanticElement.key)?.id, propertyID)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+
+        let reset = try registry.prepare(command(session.document, ids: [fixture.nodeID], edit: .reset), in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))
+        _ = try session.execute(reset.documentCommand)
+        node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+        XCTAssertNil(node.insertionProperty(CanonicalSemanticElement.key))
+        XCTAssertEqual(SemanticElementCommandRegistry.resolvedElement(for: node)?.0, .div)
+
+        XCTAssertThrowsError(try registry.prepare(command(session.document, ids: [fixture.nodeID], edit: .set(.h1)), in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? SemanticElementCommandError, .noApplicableTargets)
+        }
+        XCTAssertThrowsError(try registry.prepare(command(session.document, ids: [fixture.nodeID], edit: .set(.article), cancelled: true), in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? SemanticElementCommandError, .cancelled)
+        }
+        let stale = SemanticElementCommand(identity: .init(documentID: DocumentID(), pageID: fixture.pageID, revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: [fixture.nodeID], edit: .set(.article), provenance: .automation, cancelled: false)
+        XCTAssertThrowsError(try registry.prepare(stale, in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? SemanticElementCommandError, .stale)
+        }
+    }
+
     // SF-0502-001...006 / SF-0503-001...006 / SF-0506-001...006
     func testContainerLayoutRegistryValidatesMixesResetsAndPreservesExactHistory() throws {
         var fixture = makeFixture(selectedIDs: [])

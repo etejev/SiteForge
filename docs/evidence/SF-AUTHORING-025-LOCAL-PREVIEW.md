@@ -29,7 +29,8 @@ path. Empty and unavailable snapshots report a bounded recovery message.
 `./sf verify` passed repository checks, 430 unit/integration tests, and 63 UI
 tests (493 total, zero failures). The result bundle records the preview and
 grid-window attachments; it is intentionally not checked into the repository.
-Hosted confirmation for the pending checkpoint remains separate.
+Hosted Actions `36166584811` passed at `1ab912e` with the same 493 tests and
+zero failures, closing the pending checkpoint.
 
 ## Hosted follow-up
 
@@ -39,6 +40,11 @@ title-bar drag was clamped before one live Layers target became visible, and
 the system OpenPanel retained its visible Go-to-Folder field after Return. The
 follow-up keeps strict assertions and uses real live-state re-query/Go-button
 completion; it does not modify Preview behavior or reduce coverage.
+
+## Hosted completion
+
+Actions `36166584811` verified the follow-up at `1ab912e`: 430 unit/integration
+and 63 UI tests passed with zero failures. No Preview product behavior changed.
 
 ## Explicit exclusions
 

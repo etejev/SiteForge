@@ -2,9 +2,11 @@
 
 ## Current checkpoint
 
-SF-AUTHORING-025 Local Preview v1 is locally verified. The authoritative gate
-passed 430 unit/integration + 63 UI = 493 tests with zero failures. The pending
-action is hosted confirmation for the commit containing this checkpoint.
+SF-AUTHORING-025 Local Preview v1 and SF-CI-025 are hosted verified. Actions
+`36166584811` passed at `1ab912e` with 430 unit/integration + 63 UI = 493 tests
+and zero failures. SF-AUTHORING-026 Semantic HTML element authoring v1 is in
+progress; its focused model/package/preview checks pass and its retained native
+Inspector journey passed before a later external XCTest automation-mode error.
 
 ## Delivered boundary
 
@@ -28,8 +30,8 @@ action is hosted confirmation for the commit containing this checkpoint.
   and `SiteForgeLaunchTests.testLocalPreviewRefreshesOnlyOnExplicitRequestJourney`
   are the focused Preview checks.
 - Do not turn preview scene state into canonical document/history state or add
-  browser runtime, HTML/CSS/JS, export, publishing, routes, remote content,
-  CMS, SF-1203 or SF-1204 behavior within this slice.
+  browser runtime, generated HTML/CSS/JS, export, publishing, routes, remote
+  content or CMS. SF-1203 semantic authoring begins as its own bounded slice.
 
 ## Deferred scope
 

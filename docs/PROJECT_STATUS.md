@@ -1,15 +1,20 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-24.
+Last updated: 2026-09-25.
 
-Current work is SF-AUTHORING-025 Local Preview v1. The native Preview command
+Current work is SF-AUTHORING-026 Semantic HTML element authoring v1. Its
+canonical semantic element state and native Inspector controls are in progress;
+raw markup, browser runtime and publishing remain deferred.
+
+SF-AUTHORING-025 Local Preview v1 is hosted verified. The native Preview command
 captures an immutable revision-tagged authored snapshot through explicit Open
 and Refresh actions; editor chrome, tools, grid and selection never enter the
 local preview. Focused snapshot, native preview, narrow-display pointer and
 component reveal regressions pass. The authoritative local gate passed 430
 unit/integration + 63 UI = 493 tests with zero failures. SF-1201/SF-1202 stay
-Partial: browser runtime, HTML/CSS/JS, export/publishing and SF-1203/SF-1204
-remain deferred. Hosted confirmation is pending.
+Partial: browser runtime, HTML/CSS/JS, export/publishing and SF-1204
+remain deferred. Actions `36166584811` passed at `1ab912e` with 493 tests and
+zero failures. Current work is SF-AUTHORING-026 Semantic HTML element authoring v1.
 
 SF-AUTHORING-023 application Appearance Settings is locally verified and DONE.
 Six model tests, one actual-app journey and five reviewed Settings captures

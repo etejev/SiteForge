@@ -2659,6 +2659,7 @@ private struct DesignInspectorFieldsView: View {
             Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("inspector.design.announcement")
             FillLayerListInspectorView(state: state)
             typographyControls
+            semanticElementControls
             boxStyleControls
         }
         .accessibilityElement(children: .contain)
@@ -3030,6 +3031,69 @@ private struct DesignInspectorFieldsView: View {
         switch value {
         case .single(let style, let origin): return "\(origin == .authored ? "Authored" : "Defaulted") · \(style.family) · \(Self.formatTypographyNumber(style.size)) pt"
         case .mixed(let applicable, let skipped): return "Mixed typography · \(applicable) editable, \(skipped) skipped"
+        case .unavailable(let reason): return reason
+        }
+    }
+
+    @ViewBuilder private var semanticElementControls: some View {
+        let value = state.semanticElementInspectorValue()
+        let element: SemanticHTMLElement? = if case .single(let element, _) = value { element } else { nil }
+        let enabled: Bool = if case .unavailable = value { false } else { true }
+        Divider()
+        HStack {
+            Text("Semantic HTML").font(.headline)
+            Spacer()
+            Button("Reset") { _ = state.commitSemanticElement(.reset, operation: "reset") }
+                .disabled(!enabled)
+                .accessibilityIdentifier("inspector.semantic.reset")
+        }
+        Picker("Element", selection: Binding(
+            get: { element ?? .div },
+            set: { selected in _ = state.commitSemanticElement(.set(selected), operation: "element") }
+        )) {
+            let choices = element.map { CanonicalSemanticElement.supportedElements(for: semanticElementKind(for: $0)) } ?? SemanticHTMLElement.allCases
+            ForEach(choices, id: \.rawValue) { tag in Text("<\(tag.rawValue)>").tag(tag) }
+        }
+        .disabled(!enabled || isMixedSemantic(value))
+        .accessibilityLabel("Semantic HTML element")
+        .accessibilityValue(semanticElementAccessibility(value))
+        .accessibilityHint("Choose the canonical HTML element for the selected authored object.")
+        .accessibilityIdentifier("inspector.semantic.element")
+        Text(semanticElementProvenance(value))
+            .font(.caption2).foregroundStyle(.secondary)
+            .accessibilityIdentifier("inspector.semantic.status")
+    }
+
+    // The selected element itself determines the compatible picker list. The
+    // default mapping is intentionally conservative for an unavailable/mixed
+    // selection; commits still revalidate each stable target in the registry.
+    private func semanticElementKind(for element: SemanticHTMLElement) -> NodeKind {
+        switch element {
+        case .p, .h1, .h2, .h3, .h4, .h5, .h6: .text
+        case .img: .image
+        case .button: .button
+        case .a: .link
+        default: .frame
+        }
+    }
+
+    private func isMixedSemantic(_ value: SemanticElementInspectorValue) -> Bool {
+        if case .mixed = value { return true }
+        return false
+    }
+
+    private func semanticElementAccessibility(_ value: SemanticElementInspectorValue) -> String {
+        switch value {
+        case .single(let element, let origin): return "<\(element.rawValue)>, \(origin == .authored ? "authored" : "defaulted")"
+        case .mixed: return "Mixed values"
+        case .unavailable(let reason): return reason
+        }
+    }
+
+    private func semanticElementProvenance(_ value: SemanticElementInspectorValue) -> String {
+        switch value {
+        case .single(let element, let origin): return "\(origin == .authored ? "Authored" : "Defaulted") · <\(element.rawValue)>"
+        case .mixed(let applicable, let skipped): return "Mixed semantic elements · \(applicable) editable, \(skipped) skipped"
         case .unavailable(let reason): return reason
         }
     }

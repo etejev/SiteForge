@@ -924,6 +924,7 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(first.documentID, plan.identity.documentID)
         XCTAssertEqual(first.revision, 7)
         XCTAssertEqual(first.objects, plan.authoredObjects)
+        XCTAssertEqual(first.objects.first?.semanticElement, "article")
         preview.refresh(plan: plan)
         XCTAssertEqual(preview.snapshot, first)
         XCTAssertEqual(preview.status, "Preview already shows the current revision.")
@@ -965,7 +966,8 @@ final class CanvasRendererTests: XCTestCase {
                 paintOrder: index,
                 style: index.isMultiple(of: 2) ? .container : .page,
                 isVisible: true,
-                accessibilityLabel: "Object \(index + 1)"
+                accessibilityLabel: "Object \(index + 1)",
+                semanticElement: index == 0 ? "article" : "p"
             )
         }
         let viewport = try CanvasViewportState(

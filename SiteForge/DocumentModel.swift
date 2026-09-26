@@ -371,6 +371,43 @@ enum CanonicalTextAlignment: String, CaseIterable, Sendable {
     case leading, center, trailing
 }
 
+// SF-1203-001...008 — semantic output stays typed canonical document state.
+// Absence means the deterministic node-kind default; an authored property
+// records only a deliberate author choice. No markup string is stored here.
+enum SemanticHTMLElement: String, CaseIterable, Sendable {
+    case div, section, main, header, footer, nav, article, aside
+    case p, h1, h2, h3, h4, h5, h6
+    case img, button, a
+}
+
+enum CanonicalSemanticElement {
+    static let key = "semantic.html.v1.element"
+
+    static func defaultElement(for kind: NodeKind) -> SemanticHTMLElement? {
+        switch kind {
+        case .frame, .stack, .grid: .div
+        case .section: .section
+        case .text: .p
+        case .image: .img
+        case .button: .button
+        case .link: .a
+        case .component: nil
+        }
+    }
+
+    static func supportedElements(for kind: NodeKind) -> [SemanticHTMLElement] {
+        switch kind {
+        case .frame, .stack, .grid: [.div, .section, .main, .header, .footer, .nav, .article, .aside]
+        case .section: [.section, .main, .header, .footer, .nav, .article, .aside, .div]
+        case .text: [.p, .h1, .h2, .h3, .h4, .h5, .h6]
+        case .image: [.img]
+        case .button: [.button]
+        case .link: [.a]
+        case .component: []
+        }
+    }
+}
+
 struct CanonicalTypography: Equatable, Sendable {
     static let namespace = "style.typography.v1."
     static let defaultFamily = "System"
@@ -1111,6 +1148,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case invalidFillLayerState
     case invalidBoxStyleState
     case invalidTypographyState
+    case invalidSemanticElementState
     case invalidResponsiveGeometryState
     case invalidResponsiveContainerState
     case invalidResponsiveVisibilityState
@@ -1153,6 +1191,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .invalidFillLayerState: "The document contains an invalid canonical fill-layer state."
         case .invalidBoxStyleState: "The document contains an invalid canonical border, radius, or shadow state."
         case .invalidTypographyState: "The document contains invalid canonical typography state."
+        case .invalidSemanticElementState: "The document contains an invalid canonical semantic HTML element state."
         case .invalidResponsiveGeometryState: "The document contains invalid responsive geometry state."
         case .invalidResponsiveContainerState: "The document contains invalid responsive container-layout state."
         case .invalidResponsiveVisibilityState: "The document contains invalid responsive visibility state."
@@ -1359,6 +1398,20 @@ enum CanonicalTypographyNamespaceValidator {
             alignment: { if case .string(let value)? = values["alignment"] { CanonicalTextAlignment(rawValue: value) ?? fallback.alignment } else { fallback.alignment } }()
         )
         guard typography.isValid else { throw ModelValidationError.invalidTypographyState }
+    }
+}
+
+enum CanonicalSemanticElementValidator {
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue == CanonicalSemanticElement.key }
+        guard owned.count <= 1 else { throw ModelValidationError.invalidSemanticElementState }
+        guard let property = owned.first else { return }
+        guard property.origin == .authored,
+              case .string(let raw) = property.value,
+              let element = SemanticHTMLElement(rawValue: raw),
+              CanonicalSemanticElement.supportedElements(for: node.kind).contains(element) else {
+            throw ModelValidationError.invalidSemanticElementState
+        }
     }
 }
 
@@ -1682,6 +1735,7 @@ private extension DocumentPage {
             try CanonicalComponentText.validate(node, inDefinition: role == .componentDefinition)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
+            try CanonicalSemanticElementValidator.validate(node)
             try CanonicalLinkTarget.validate(node)
             try CanonicalImageNamespaceValidator.validate(node)
             try CanonicalResponsiveGeometryNamespaceValidator.validate(node)
