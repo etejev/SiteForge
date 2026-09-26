@@ -2,22 +2,29 @@ import XCTest
 @testable import SiteForge
 
 final class CanvasRendererTests: XCTestCase {
+    func testSafeHTMLEmitterEmitsAccessibleTextField() throws {
+        let id = NodeID()
+        let node = InternalRenderTreeNode(id: id, sourceNodeID: id, paintOrder: 0, frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 1, height: 1)), semanticElement: "p", cssSelector: "", formField: .init(label: "Email", name: "email", help: nil, required: true))
+        let output = try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 1, nodes: [node]))
+        XCTAssertTrue(output.contains("<label for=\"sf-field-"))
+        XCTAssertTrue(output.contains("name=\"email\" type=\"text\" required"))
+    }
     func testSafeHTMLEmitterUsesFixedVocabularyAndStableIdentity() throws {
         let id = NodeID()
         let tree = InternalRenderTreeSnapshot(documentID: DocumentID(), revision: 4, nodes: [
-            .init(id: id, sourceNodeID: id, paintOrder: 0, frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 0, height: 0)), semanticElement: "article", cssSelector: "ignored")
+            .init(id: id, sourceNodeID: id, paintOrder: 0, frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 0, height: 0)), semanticElement: "article", cssSelector: "ignored", formField: nil)
         ])
         let output = try SafeHTMLEmitter.emit(tree)
         XCTAssertEqual(output, "<article data-siteforge-node=\"\(id.rawValue.uuidString.lowercased())\" class=\"sf-node-\(id.rawValue.uuidString.lowercased())\"></article>")
         XCTAssertThrowsError(try SafeHTMLEmitter.emit(.init(documentID: tree.documentID, revision: 4, nodes: [
-            .init(id: id, sourceNodeID: id, paintOrder: 0, frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 0, height: 0)), semanticElement: "script", cssSelector: "")
+            .init(id: id, sourceNodeID: id, paintOrder: 0, frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 0, height: 0)), semanticElement: "script", cssSelector: "", formField: nil)
         ])))
     }
 
     func testSafeCSSEmitterUsesFixedOrderedGeometryOnly() throws {
         let id = NodeID()
         let node = InternalRenderTreeNode(id: id, sourceNodeID: id, paintOrder: 0,
-            frame: .init(origin: .init(x: 4, y: 5), size: .init(width: 6, height: 7)), semanticElement: "div", cssSelector: "")
+            frame: .init(origin: .init(x: 4, y: 5), size: .init(width: 6, height: 7)), semanticElement: "div", cssSelector: "", formField: nil)
         XCTAssertEqual(try SafeCSSEmitter.emit(.init(documentID: DocumentID(), revision: 1, nodes: [node])),
             "[data-siteforge-node=\"\(id.rawValue.uuidString.lowercased())\"] { height: 7.0px; left: 4.0px; position: absolute; top: 5.0px; width: 6.0px; }")
     }

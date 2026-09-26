@@ -403,6 +403,14 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     let frame: WorldRect
     let semanticElement: String
     let cssSelector: String
+    let formField: InternalFormField?
+}
+
+struct InternalFormField: Equatable, Sendable {
+    let label: String
+    let name: String
+    let help: String?
+    let required: Bool
 }
 
 struct InternalRenderTreeSnapshot: Equatable, Sendable {
@@ -417,7 +425,7 @@ enum InternalRenderTreeCompiler {
             InternalRenderTreeNode(
                 id: object.id, sourceNodeID: object.id, paintOrder: object.paintOrder, frame: object.frame,
                 semanticElement: object.semanticElement ?? "div",
-                cssSelector: CanonicalCSSRule.selector(for: object.id)
+                cssSelector: CanonicalCSSRule.selector(for: object.id), formField: nil
             )
         }
         return .init(documentID: scene.documentID, revision: scene.revision, nodes: nodes)
@@ -563,6 +571,13 @@ enum SafeHTMLEmitter {
         guard allowed.contains(node.semanticElement) else { throw SafeHTMLEmissionError.unsupportedTag }
         let identifier = node.id.rawValue.uuidString.lowercased()
         guard identifier == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeHTMLEmissionError.invalidIdentity }
+        if let field = node.formField {
+            guard node.semanticElement == "p", field.name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw SafeHTMLEmissionError.unsupportedTag }
+            let controlID = "sf-field-\(identifier)"
+            let required = field.required ? " required" : ""
+            let help = field.help.map { "<span id=\"\(controlID)-help\">\($0)</span>" } ?? ""
+            return "<label for=\"\(controlID)\">\(field.label)</label><input id=\"\(controlID)\" name=\"\(field.name)\" type=\"text\"\(required)>\(help)"
+        }
         let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\""
         return node.semanticElement == "img" ? "<img\(attributes)>" : "<\(node.semanticElement)\(attributes)></\(node.semanticElement)>"
     }
