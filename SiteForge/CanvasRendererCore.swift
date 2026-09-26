@@ -482,6 +482,36 @@ enum LocalStaticBuildWriter {
     }
 }
 
+enum MultiPageStaticBuildError: Error, Equatable, Sendable { case invalidRoute, collision }
+
+enum MultiPageStaticBuildPlanner {
+    static func plan(document: CanonicalDocument) throws -> LocalStaticBuildPlan {
+        let pages = document.pages.filter { $0.role != .componentDefinition }
+        var files: [LocalStaticBuildPlan.File] = []
+        var paths = Set<String>()
+        for page in pages.sorted(by: { $0.route.rawValue < $1.route.rawValue }) {
+            let output = try outputPath(for: page)
+            guard paths.insert(output).inserted else { throw MultiPageStaticBuildError.collision }
+            let body = page.nodes.map { node -> String in
+                let tag = CanonicalSemanticElement.defaultElement(for: node.kind)?.rawValue ?? "div"
+                return "<\(tag) data-siteforge-node=\"\(node.id.rawValue.uuidString.lowercased())\"></\(tag)>"
+            }.joined(separator: "\n")
+            files.append(.init(path: output, contents: body))
+        }
+        files.append(.init(path: "manifest.txt", contents: files.map(\.path).sorted().joined(separator: "\n")))
+        return .init(revision: document.revision, files: files)
+    }
+    static func outputPath(for page: DocumentPage) throws -> String {
+        let route = page.route.rawValue
+        guard route.first == "/", !route.contains(".."), !route.contains("//"), !route.contains("?"), !route.contains("#") else { throw MultiPageStaticBuildError.invalidRoute }
+        if page.role == .notFound { return "404.html" }
+        if route == "/" { return "index.html" }
+        let slug = String(route.dropFirst())
+        guard !slug.isEmpty, slug.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "/" }) else { throw MultiPageStaticBuildError.invalidRoute }
+        return slug + ".html"
+    }
+}
+
 // SF-1203 v1 output is intentionally in-memory only. The fixed vocabulary and
 // allowlist prevent authored content from becoming executable markup.
 enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity }

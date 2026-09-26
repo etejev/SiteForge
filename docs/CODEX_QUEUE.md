@@ -8,9 +8,13 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-032` Multi-page static-output foundation v1 (P1).
+  - Bounded SF-1206/SF-0303/SF-0306 route planning for static persisted pages.
+
 - [ ] `SF-AUTHORING-031` Local static-site build foundation v1 (P1).
   - Bounded internal plan evidence for SF-1202/1203/1204/1206. Deterministic
-    in-memory index/styles build plans only; controlled output writing remains next.
+    controlled staged output writer is implemented; multi-page routing remains
+    the successor work.
 
 - [ ] `SF-AUTHORING-030` Safe CSS emission foundation v1 (P1).
   - Requirements: bounded internal evidence for `SF-1204-001`–`008`; fixed
