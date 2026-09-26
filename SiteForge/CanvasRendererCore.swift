@@ -394,6 +394,35 @@ struct CanvasPreviewSceneSnapshot: Equatable, Sendable {
     let deterministicDigest: String
 }
 
+// SF-1202 v1: immutable internal render-tree metadata. This compiler consumes
+// an already-adopted scene; it cannot write canonical content or UI state.
+struct InternalRenderTreeNode: Equatable, Sendable {
+    let id: NodeID
+    let sourceNodeID: NodeID
+    let paintOrder: Int
+    let semanticElement: String
+    let cssSelector: String
+}
+
+struct InternalRenderTreeSnapshot: Equatable, Sendable {
+    let documentID: DocumentID
+    let revision: UInt64
+    let nodes: [InternalRenderTreeNode]
+}
+
+enum InternalRenderTreeCompiler {
+    static func compile(_ scene: CanvasPreviewSceneSnapshot) -> InternalRenderTreeSnapshot {
+        let nodes = scene.objects.filter(\.isVisible).sorted { $0.paintOrder < $1.paintOrder }.map { object in
+            InternalRenderTreeNode(
+                id: object.id, sourceNodeID: object.id, paintOrder: object.paintOrder,
+                semanticElement: object.semanticElement ?? "div",
+                cssSelector: CanonicalCSSRule.selector(for: object.id)
+            )
+        }
+        return .init(documentID: scene.documentID, revision: scene.revision, nodes: nodes)
+    }
+}
+
 struct CanvasRenderTileID: Codable, Hashable, Comparable, Sendable {
     let column: Int
     let row: Int

@@ -8,6 +8,11 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-028` Render-tree compilation foundation v1 (P1).
+  - Requirements: bounded internal evidence for `SF-1202-001`–`008`; immutable
+    adopted-scene compilation only, with NodeID provenance, semantic intent and
+    deterministic derived CSS selector metadata. No generated files/runtime.
+
 - [ ] `SF-AUTHORING-027` CSS-rule authoring foundation v1 (P1).
   - Requirements: bounded model-first evidence for `SF-1204-001`–`008`.
     Typed `css.rule.v1` intent derives a stable NodeID selector; no raw CSS,

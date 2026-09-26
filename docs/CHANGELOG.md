@@ -1,5 +1,10 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-028
+
+- Started internal immutable render-tree compilation from adopted preview
+  snapshots; output remains internal metadata only.
+
 ## In progress — SF-AUTHORING-027
 
 - Started typed, versioned CSS-rule intent with deterministic NodeID-derived
