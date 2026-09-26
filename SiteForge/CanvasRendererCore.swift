@@ -400,6 +400,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     let id: NodeID
     let sourceNodeID: NodeID
     let paintOrder: Int
+    let frame: WorldRect
     let semanticElement: String
     let cssSelector: String
 }
@@ -414,12 +415,29 @@ enum InternalRenderTreeCompiler {
     static func compile(_ scene: CanvasPreviewSceneSnapshot) -> InternalRenderTreeSnapshot {
         let nodes = scene.objects.filter(\.isVisible).sorted { $0.paintOrder < $1.paintOrder }.map { object in
             InternalRenderTreeNode(
-                id: object.id, sourceNodeID: object.id, paintOrder: object.paintOrder,
+                id: object.id, sourceNodeID: object.id, paintOrder: object.paintOrder, frame: object.frame,
                 semanticElement: object.semanticElement ?? "div",
                 cssSelector: CanonicalCSSRule.selector(for: object.id)
             )
         }
         return .init(documentID: scene.documentID, revision: scene.revision, nodes: nodes)
+    }
+}
+
+// SF-1204 v1 emits only fixed layout declarations derived from typed geometry.
+// It is pure/in-memory; authored text cannot enter this syntax surface.
+enum SafeCSSEmissionError: Error, Equatable, Sendable { case invalidGeometry, invalidIdentity }
+
+enum SafeCSSEmitter {
+    static func emit(_ tree: InternalRenderTreeSnapshot) throws -> String {
+        try tree.nodes.sorted { $0.paintOrder < $1.paintOrder }.map { node in
+            let f = node.frame
+            guard [f.origin.x, f.origin.y, f.size.width, f.size.height].allSatisfy(\.isFinite),
+                  f.size.width >= 0, f.size.height >= 0 else { throw SafeCSSEmissionError.invalidGeometry }
+            let id = node.id.rawValue.uuidString.lowercased()
+            guard id == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeCSSEmissionError.invalidIdentity }
+            return "[data-siteforge-node=\"\(id)\"] { height: \(f.size.height)px; left: \(f.origin.x)px; position: absolute; top: \(f.origin.y)px; width: \(f.size.width)px; }"
+        }.joined(separator: "\n")
     }
 }
 

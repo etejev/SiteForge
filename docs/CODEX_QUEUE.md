@@ -8,6 +8,10 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-030` Safe CSS emission foundation v1 (P1).
+  - Requirements: bounded internal evidence for `SF-1204-001`–`008`; fixed
+    geometry declaration allowlist only. No raw CSS, files, runtime or export.
+
 - [ ] `SF-AUTHORING-029` Safe HTML emission foundation v1 (P1).
   - Requirements: bounded internal evidence for `SF-1203-001`–`008`; fixed
     semantic vocabulary and NodeID-derived attributes only. No files/runtime.
