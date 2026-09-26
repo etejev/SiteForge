@@ -8,6 +8,9 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-033` Portable static asset-export foundation v1 (P1).
+  - Bounded project-owned PNG/JPEG content-addressed export planning only.
+
 - [ ] `SF-AUTHORING-032` Multi-page static-output foundation v1 (P1).
   - Bounded SF-1206/SF-0303/SF-0306 route planning for static persisted pages.
 

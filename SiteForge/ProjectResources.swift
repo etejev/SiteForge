@@ -241,6 +241,29 @@ struct ProjectResourceIndex: Codable, Equatable, Sendable {
     }
 }
 
+// SF-1206 v1: portable output names derive from verified content, never a
+// Finder path or user-provided filename. Callers supply package-owned bytes.
+enum StaticAssetExportError: Error, Equatable, Sendable { case unsupported, corrupt, oversized }
+
+struct StaticAssetExportEntry: Equatable, Sendable {
+    let resourceID: ResourceID
+    let outputPath: String
+    let sha256: String
+}
+
+enum StaticAssetExportPlanner {
+    static func plan(index: ProjectResourceIndex, blobs: [String: Data]) throws -> [StaticAssetExportEntry] {
+        try index.resources.map { resource in
+            guard resource.mediaType == "image/png" || resource.mediaType == "image/jpeg",
+                  resource.byteCount >= 0, resource.byteCount <= ProjectResourceIndex.maximumResourceBytes else { throw StaticAssetExportError.unsupported }
+            guard let bytes = blobs[resource.sha256], bytes.count == resource.byteCount,
+                  ProjectResourceStore.digest(bytes) == resource.sha256 else { throw StaticAssetExportError.corrupt }
+            let ext = resource.mediaType == "image/png" ? "png" : "jpg"
+            return .init(resourceID: resource.id, outputPath: "assets/\(resource.sha256).\(ext)", sha256: resource.sha256)
+        }.sorted { $0.outputPath < $1.outputPath }
+    }
+}
+
 enum ProjectResourceError: Error, Equatable, LocalizedError, Sendable {
     case unsupportedIndexVersion(Int)
     case duplicateResource
