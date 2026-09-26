@@ -1487,7 +1487,7 @@ enum CanonicalFormFieldValidator {
             case CanonicalFormField.helpKey:
                 guard case .string(let value) = property.value, value.count <= 512 else { throw ModelValidationError.invalidSemanticElementState }
             case CanonicalFormField.kindKey:
-                guard case .string(let value) = property.value, ["text", "textarea"].contains(value) else { throw ModelValidationError.invalidSemanticElementState }
+                guard case .string(let value) = property.value, ["text", "email", "textarea"].contains(value) else { throw ModelValidationError.invalidSemanticElementState }
             default: break
             }
         }

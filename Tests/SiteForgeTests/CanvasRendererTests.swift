@@ -4,10 +4,10 @@ import XCTest
 final class CanvasRendererTests: XCTestCase {
     func testSafeHTMLEmitterEmitsAccessibleTextField() throws {
         let id = NodeID()
-        let node = InternalRenderTreeNode(id: id, sourceNodeID: id, paintOrder: 0, frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 1, height: 1)), semanticElement: "p", cssSelector: "", formField: .init(label: "Email", name: "email", help: nil, required: true))
+        let node = InternalRenderTreeNode(id: id, sourceNodeID: id, paintOrder: 0, frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 1, height: 1)), semanticElement: "p", cssSelector: "", formField: .init(kind: "email", label: "Email", name: "email", help: nil, required: true))
         let output = try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 1, nodes: [node]))
         XCTAssertTrue(output.contains("<label for=\"sf-field-"))
-        XCTAssertTrue(output.contains("name=\"email\" type=\"text\" required"))
+        XCTAssertTrue(output.contains("name=\"email\" type=\"email\" required"))
     }
     func testSafeHTMLEmitterUsesFixedVocabularyAndStableIdentity() throws {
         let id = NodeID()

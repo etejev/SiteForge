@@ -407,6 +407,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
 }
 
 struct InternalFormField: Equatable, Sendable {
+    let kind: String
     let label: String
     let name: String
     let help: String?
@@ -572,11 +573,12 @@ enum SafeHTMLEmitter {
         let identifier = node.id.rawValue.uuidString.lowercased()
         guard identifier == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeHTMLEmissionError.invalidIdentity }
         if let field = node.formField {
-            guard node.semanticElement == "p", field.name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw SafeHTMLEmissionError.unsupportedTag }
+            guard node.semanticElement == "p", ["text", "email", "textarea"].contains(field.kind), field.name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw SafeHTMLEmissionError.unsupportedTag }
             let controlID = "sf-field-\(identifier)"
             let required = field.required ? " required" : ""
             let help = field.help.map { "<span id=\"\(controlID)-help\">\($0)</span>" } ?? ""
-            return "<label for=\"\(controlID)\">\(field.label)</label><input id=\"\(controlID)\" name=\"\(field.name)\" type=\"text\"\(required)>\(help)"
+            let control = field.kind == "textarea" ? "<textarea id=\"\(controlID)\" name=\"\(field.name)\"\(required)></textarea>" : "<input id=\"\(controlID)\" name=\"\(field.name)\" type=\"\(field.kind)\"\(required)>"
+            return "<label for=\"\(controlID)\">\(field.label)</label>\(control)\(help)"
         }
         let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\""
         return node.semanticElement == "img" ? "<img\(attributes)>" : "<\(node.semanticElement)\(attributes)></\(node.semanticElement)>"
