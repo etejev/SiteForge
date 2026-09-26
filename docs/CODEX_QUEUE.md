@@ -8,6 +8,9 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-035` Local build profiles and compatibility diagnostics v1 (P1).
+  - Bounded SF-1208/SF-1211 noncanonical development/production build reports.
+
 - [ ] `SF-AUTHORING-034` SEO and static metadata foundation v1 (P1).
   - Bounded `SF-1207-001`–`008` internal typed metadata/head emission.
 

@@ -526,6 +526,29 @@ enum StaticSEOEmitter {
     }
 }
 
+// SF-1208/SF-1211 v1: profile selection is an explicit noncanonical request.
+enum LocalBuildProfile: String, Sendable { case development, production }
+struct LocalBuildReport: Equatable, Sendable {
+    let revision: UInt64
+    let profile: LocalBuildProfile
+    let filePaths: [String]
+    let deferredCapabilities: [String]
+}
+
+enum LocalBuildProfileCompiler {
+    static func compile(_ plan: LocalStaticBuildPlan, profile: LocalBuildProfile) -> (LocalStaticBuildPlan, LocalBuildReport) {
+        let files = plan.files.sorted { $0.path < $1.path }.map { file in
+            let contents: String
+            switch profile {
+            case .development: contents = file.contents
+            case .production: contents = file.contents.replacingOccurrences(of: "\n", with: "")
+        }
+            return LocalStaticBuildPlan.File(path: file.path, contents: contents)
+        }
+        return (.init(revision: plan.revision, files: files), .init(revision: plan.revision, profile: profile, filePaths: files.map(\.path), deferredCapabilities: ["browser-runtime", "publishing"]))
+    }
+}
+
 // SF-1203 v1 output is intentionally in-memory only. The fixed vocabulary and
 // allowlist prevent authored content from becoming executable markup.
 enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity }
