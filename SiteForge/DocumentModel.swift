@@ -418,6 +418,15 @@ enum CanonicalCSSRule {
     }
 }
 
+// SF-1006 v1 text-field intent is canonical metadata; submitted values never
+// enter project state. The three properties retain omitted/defaulted/authored
+// provenance independently through the existing property model.
+enum CanonicalFormField {
+    static let labelKey = "form.field.v1.label"
+    static let nameKey = "form.field.v1.name"
+    static let requiredKey = "form.field.v1.required"
+}
+
 enum CSSRuleEdit: Sendable { case set, reset }
 
 struct CSSRuleCommand: Sendable {
@@ -1456,6 +1465,26 @@ enum CanonicalCSSRuleValidator {
     }
 }
 
+enum CanonicalFormFieldValidator {
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { [CanonicalFormField.labelKey, CanonicalFormField.nameKey, CanonicalFormField.requiredKey].contains($0.key.rawValue) }
+        guard owned.count == Set(owned.map(\.key)).count else { throw ModelValidationError.invalidSemanticElementState }
+        guard !owned.isEmpty else { return }
+        guard node.kind == .text else { throw ModelValidationError.invalidSemanticElementState }
+        for property in owned {
+            switch property.key.rawValue {
+            case CanonicalFormField.labelKey:
+                guard case .string(let value) = property.value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.count <= 256 else { throw ModelValidationError.invalidSemanticElementState }
+            case CanonicalFormField.nameKey:
+                guard case .string(let value) = property.value, value.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw ModelValidationError.invalidSemanticElementState }
+            case CanonicalFormField.requiredKey:
+                guard case .boolean = property.value else { throw ModelValidationError.invalidSemanticElementState }
+            default: break
+            }
+        }
+    }
+}
+
 enum CanonicalImageNamespaceValidator {
     static let root = "content.image.v1."
     private static let required: Set<String> = [
@@ -1778,6 +1807,7 @@ private extension DocumentPage {
             try CanonicalTypographyNamespaceValidator.validate(node)
             try CanonicalSemanticElementValidator.validate(node)
             try CanonicalCSSRuleValidator.validate(node)
+            try CanonicalFormFieldValidator.validate(node)
             try CanonicalLinkTarget.validate(node)
             try CanonicalImageNamespaceValidator.validate(node)
             try CanonicalResponsiveGeometryNamespaceValidator.validate(node)
