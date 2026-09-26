@@ -1353,7 +1353,7 @@ private func applyStructuralDefaultsForPackageTest(kind: NodeKind, node: inout D
         [("layout.container.kind", .string("grid")), ("layout.padding", .number(24)),
          ("layout.gap", .number(24)), ("layout.grid.columns", .number(2)),
          ("layout.grid.placement", .string("row-major"))]
-    case .frame, .text, .image, .button, .link, .component: []
+    case .frame, .text, .image, .button, .link, .form, .component: []
     }
     node.properties.append(contentsOf: values.map {
         NodeProperty(key: .init(rawValue: $0.0), value: $0.1, origin: .defaulted)

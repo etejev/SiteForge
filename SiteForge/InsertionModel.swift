@@ -180,6 +180,7 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
     case image
     case button
     case link
+    case form
 
     var nodeKind: NodeKind {
         switch self {
@@ -191,6 +192,7 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
         case .image: .image
         case .button: .button
         case .link: .link
+        case .form: .form
         }
     }
 
@@ -202,6 +204,7 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
         case .grid: "SF-0503-001"
         case .image: "SF-0802-002"
         case .button, .link: "SF-1102-002"
+        case .form: "SF-1006-001"
         }
     }
 }
@@ -231,6 +234,7 @@ struct InsertionGeometry: Codable, Equatable, Sendable {
         case .image: WorldSize(width: 320, height: 240)
         case .button: WorldSize(width: 160, height: 44)
         case .link: WorldSize(width: 120, height: 24)
+        case .form: WorldSize(width: 320, height: 180)
         }
         return Self(origin: point, size: size)
     }
@@ -661,7 +665,7 @@ struct InsertionCommandRegistry: Sendable {
         case .button, .link:
             properties += [property(command.nodeID, CanonicalLinkTarget.namespace + "kind", .string("none"), .defaulted),
                            property(command.nodeID, CanonicalLinkTarget.namespace + "context", .string("same"), .defaulted)]
-        case .frame, .text: break
+        case .frame, .text, .form: break
         }
         if let text = command.text {
             properties.append(property(command.nodeID, command.kind.nodeKind.isLinkControl ? CanonicalLinkTarget.labelKey : "content.text", .string(text), .defaulted))
@@ -979,22 +983,22 @@ extension DocumentPage {
             guard let parentGeometry = result[parent.id] else { continue }
             let children = parent.childIDs.filter(visibleNodeIDs.contains).compactMap { nodesByID[$0] }
             switch parent.kind {
-            case .section, .stack:
+            case .section, .stack, .form:
                 let padding = ResponsiveContainerLayoutResolver.value(for: .padding, node: parent, breakpoint: breakpoint)
                     .flatMap { if case .number(let value) = $0.0 { value } else { nil } }
                     ?? (parent.kind == .section ? 48 : 24)
                 let gap: Double
-                if parent.kind == .section {
+                if parent.kind == .section || parent.kind == .form {
                     gap = 0
                 } else {
                     gap = ResponsiveContainerLayoutResolver.value(for: .gap, node: parent, breakpoint: breakpoint)
                         .flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 24
                 }
-                let axis = parent.kind == .section
+                let axis = parent.kind == .section || parent.kind == .form
                     ? ContainerLayoutAxis.vertical
                     : (ResponsiveContainerLayoutResolver.value(for: .axis, node: parent, breakpoint: breakpoint)
                         .flatMap { if case .axis(let value) = $0.0 { value } else { nil } } ?? .vertical)
-                let alignment = parent.kind == .section
+                let alignment = parent.kind == .section || parent.kind == .form
                     ? ContainerLayoutAlignment.start
                     : (ResponsiveContainerLayoutResolver.value(for: .alignment, node: parent, breakpoint: breakpoint)
                         .flatMap { if case .alignment(let value) = $0.0 { value } else { nil } } ?? .start)

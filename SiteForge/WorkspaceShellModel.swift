@@ -782,6 +782,7 @@ actor WorkspaceScenePreparationWorker {
             case .button: .frameSurface
             case .link: .textPlaceholder
             case .image: .imagePlaceholder
+            case .form: .container
             case .component: .container
             }
             let fillLayers = DesignInspectorCommandRegistry.resolvedLayers(for: node).map { layer in

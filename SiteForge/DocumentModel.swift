@@ -347,11 +347,12 @@ enum NodeKind: String, Codable, CaseIterable, Sendable {
     case image
     case button
     case link
+    case form
     case component
 
     var acceptsAuthoredChildren: Bool {
         switch self {
-        case .frame, .section, .stack, .grid: true
+        case .frame, .section, .stack, .grid, .form: true
         case .text, .image, .button, .link, .component: false
         }
     }
@@ -391,6 +392,7 @@ enum CanonicalSemanticElement {
         case .image: .img
         case .button: .button
         case .link: .a
+        case .form: .div
         case .component: nil
         }
     }
@@ -403,6 +405,7 @@ enum CanonicalSemanticElement {
         case .image: [.img]
         case .button: [.button]
         case .link: [.a]
+        case .form: [.div]
         case .component: []
         }
     }
@@ -1888,7 +1891,7 @@ private extension DocumentNode {
                   string("layout.grid.placement", equals: "row-major") else {
                 throw ModelValidationError.invalidStructuralDefaults
             }
-        case .frame, .text, .image, .button, .link, .component: break
+        case .frame, .text, .image, .button, .link, .form, .component: break
         }
     }
 }
