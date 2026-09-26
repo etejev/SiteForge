@@ -441,6 +441,19 @@ enum SafeCSSEmitter {
     }
 }
 
+// SF-1206 foundation: build plans are deterministic and side-effect free.
+struct LocalStaticBuildPlan: Equatable, Sendable {
+    struct File: Equatable, Sendable { let path: String; let contents: String }
+    let revision: UInt64
+    let files: [File]
+}
+
+enum LocalStaticBuildPlanner {
+    static func plan(_ tree: InternalRenderTreeSnapshot) throws -> LocalStaticBuildPlan {
+        .init(revision: tree.revision, files: [.init(path: "index.html", contents: try SafeHTMLEmitter.emit(tree)), .init(path: "styles.css", contents: try SafeCSSEmitter.emit(tree))])
+    }
+}
+
 // SF-1203 v1 output is intentionally in-memory only. The fixed vocabulary and
 // allowlist prevent authored content from becoming executable markup.
 enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity }

@@ -8,6 +8,10 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-031` Local static-site build foundation v1 (P1).
+  - Bounded internal plan evidence for SF-1202/1203/1204/1206. Deterministic
+    in-memory index/styles build plans only; controlled output writing remains next.
+
 - [ ] `SF-AUTHORING-030` Safe CSS emission foundation v1 (P1).
   - Requirements: bounded internal evidence for `SF-1204-001`–`008`; fixed
     geometry declaration allowlist only. No raw CSS, files, runtime or export.
