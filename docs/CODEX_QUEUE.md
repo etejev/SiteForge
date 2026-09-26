@@ -9,8 +9,11 @@ None.
 ## IN PROGRESS
 
 - [ ] `SF-AUTHORING-036` Accessible form authoring v1 (P1).
-  - Started strict canonical text-field metadata validation; container/insertion
-    integration remains required before this item can close.
+  - Started strict canonical field metadata and safe internal control output:
+    text/email/textarea/checkbox/select/submit, typed ordered select options,
+    Form ownership and unconfigured submit semantics. Native insertion,
+    Inspector transactions, persistence/migration and app journeys remain
+    required before this item can close.
 
 - [ ] `SF-AUTHORING-035` Local build profiles and compatibility diagnostics v1 (P1).
   - Bounded SF-1208/SF-1211 noncanonical development/production build reports.

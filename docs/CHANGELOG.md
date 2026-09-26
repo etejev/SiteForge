@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-036
+
+- Extended bounded canonical form-field validation with checkbox, select and
+  submit vocabulary. Ordered select options have stable IDs and strict safe
+  validation; internal static output escapes field values and never configures
+  a submission destination.
+
 ## In progress — SF-AUTHORING-030
 
 - Added deterministic in-memory geometry CSS emission for typed render nodes.

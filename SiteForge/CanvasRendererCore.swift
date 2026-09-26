@@ -412,6 +412,16 @@ struct InternalFormField: Equatable, Sendable {
     let name: String
     let help: String?
     let required: Bool
+    let formID: NodeID
+    let options: [InternalFormOption]
+}
+
+/// Render-only projection of a canonical select option. The option identity is
+/// never derived from a display label, so reordering and renaming remain safe.
+struct InternalFormOption: Equatable, Sendable {
+    let id: FormOptionID
+    let label: String
+    let value: String
 }
 
 struct InternalRenderTreeSnapshot: Equatable, Sendable {
@@ -560,28 +570,75 @@ enum LocalBuildProfileCompiler {
 
 // SF-1203 v1 output is intentionally in-memory only. The fixed vocabulary and
 // allowlist prevent authored content from becoming executable markup.
-enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity }
+enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity, invalidFormField }
 
 enum SafeHTMLEmitter {
     static func emit(_ tree: InternalRenderTreeSnapshot) throws -> String {
-        try tree.nodes.map(emit).joined(separator: "\n")
+        let formIDs = Set(tree.nodes.filter { $0.semanticElement == "form" }.map(\.id))
+        return try tree.nodes.map { try emit($0, formIDs: formIDs) }.joined(separator: "\n")
     }
 
-    private static func emit(_ node: InternalRenderTreeNode) throws -> String {
-        let allowed = Set(["div", "section", "main", "header", "footer", "nav", "article", "aside", "p", "h1", "h2", "h3", "h4", "h5", "h6", "img", "button", "a"])
+    private static func emit(_ node: InternalRenderTreeNode, formIDs: Set<NodeID>) throws -> String {
+        let allowed = Set(["div", "section", "main", "header", "footer", "nav", "article", "aside", "p", "h1", "h2", "h3", "h4", "h5", "h6", "img", "button", "a", "form"])
         guard allowed.contains(node.semanticElement) else { throw SafeHTMLEmissionError.unsupportedTag }
         let identifier = node.id.rawValue.uuidString.lowercased()
         guard identifier == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeHTMLEmissionError.invalidIdentity }
         if let field = node.formField {
-            guard node.semanticElement == "p", ["text", "email", "textarea"].contains(field.kind), field.name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw SafeHTMLEmissionError.unsupportedTag }
+            guard node.semanticElement == "p", formIDs.contains(field.formID),
+                  ["text", "email", "textarea", "checkbox", "select", "submit"].contains(field.kind),
+                  field.name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil,
+                  validText(field.label, maximum: 256),
+                  field.help.map({ validText($0, maximum: 512) }) ?? true else {
+                throw SafeHTMLEmissionError.invalidFormField
+            }
+            if field.kind == "select" {
+                guard validOptions(field.options) else { throw SafeHTMLEmissionError.invalidFormField }
+            } else {
+                guard field.options.isEmpty else { throw SafeHTMLEmissionError.invalidFormField }
+            }
             let controlID = "sf-field-\(identifier)"
             let required = field.required ? " required" : ""
-            let help = field.help.map { "<span id=\"\(controlID)-help\">\($0)</span>" } ?? ""
-            let control = field.kind == "textarea" ? "<textarea id=\"\(controlID)\" name=\"\(field.name)\"\(required)></textarea>" : "<input id=\"\(controlID)\" name=\"\(field.name)\" type=\"\(field.kind)\"\(required)>"
-            return "<label for=\"\(controlID)\">\(field.label)</label>\(control)\(help)"
+            let escapedName = escape(field.name)
+            let help = field.help.map { "<span id=\"\(controlID)-help\">\(escape($0))</span>" } ?? ""
+            let describedBy = field.help == nil ? "" : " aria-describedby=\"\(controlID)-help\""
+            let control: String
+            switch field.kind {
+            case "textarea":
+                control = "<textarea id=\"\(controlID)\" name=\"\(escapedName)\"\(describedBy)\(required)></textarea>"
+            case "select":
+                let options = field.options.map { "<option value=\"\(escape($0.value))\">\(escape($0.label))</option>" }.joined()
+                control = "<select id=\"\(controlID)\" name=\"\(escapedName)\"\(describedBy)\(required)>\(options)</select>"
+            case "submit":
+                // Submission wiring is deliberately deferred: the emitted
+                // control remains keyboard-accessible but cannot navigate or
+                // exfiltrate data without an explicitly configured route.
+                control = "<button id=\"\(controlID)\" type=\"submit\" disabled aria-disabled=\"true\" data-siteforge-submission=\"unconfigured\">\(escape(field.label))</button>"
+            default:
+                control = "<input id=\"\(controlID)\" name=\"\(escapedName)\" type=\"\(field.kind)\"\(describedBy)\(required)>"
+            }
+            return "<label for=\"\(controlID)\">\(escape(field.label))</label>\(control)\(help)"
         }
         let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\""
         return node.semanticElement == "img" ? "<img\(attributes)>" : "<\(node.semanticElement)\(attributes)></\(node.semanticElement)>"
+    }
+
+    private static func validText(_ value: String, maximum: Int) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        value.count <= maximum &&
+        !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+
+    private static func validOptions(_ options: [InternalFormOption]) -> Bool {
+        !options.isEmpty && options.count <= CanonicalFormSelectOptions.maximumOptions &&
+        Set(options.map(\.id)).count == options.count && Set(options.map(\.value)).count == options.count &&
+        options.allSatisfy { validText($0.label, maximum: CanonicalFormSelectOptions.maximumTextLength) && validText($0.value, maximum: CanonicalFormSelectOptions.maximumTextLength) }
+    }
+
+    private static func escape(_ value: String) -> String {
+        value.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
     }
 }
 

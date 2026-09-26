@@ -3,11 +3,70 @@ import XCTest
 
 final class CanvasRendererTests: XCTestCase {
     func testSafeHTMLEmitterEmitsAccessibleTextField() throws {
+        let formID = NodeID()
         let id = NodeID()
-        let node = InternalRenderTreeNode(id: id, sourceNodeID: id, paintOrder: 0, frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 1, height: 1)), semanticElement: "p", cssSelector: "", formField: .init(kind: "email", label: "Email", name: "email", help: nil, required: true))
-        let output = try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 1, nodes: [node]))
+        let nodes = [
+            formNode(formID),
+            InternalRenderTreeNode(id: id, sourceNodeID: id, paintOrder: 1, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "email", label: "Email", name: "email", help: nil, required: true, formID: formID, options: [])),
+        ]
+        let output = try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 1, nodes: nodes))
         XCTAssertTrue(output.contains("<label for=\"sf-field-"))
         XCTAssertTrue(output.contains("name=\"email\" type=\"email\" required"))
+    }
+
+    func testSafeHTMLEmitterSafelyEmitsCheckboxSelectAndUnconfiguredSubmit() throws {
+        let formID = NodeID()
+        let selectID = NodeID()
+        let checkboxID = NodeID()
+        let submitID = NodeID()
+        let options = [
+            InternalFormOption(id: FormOptionID(), label: "One & <two>", value: "one"),
+            InternalFormOption(id: FormOptionID(), label: "Three", value: "three"),
+        ]
+        let nodes = [
+            formNode(formID),
+            InternalRenderTreeNode(id: selectID, sourceNodeID: selectID, paintOrder: 1, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "select", label: "Plan", name: "plan", help: "Pick <one>", required: true, formID: formID, options: options)),
+            InternalRenderTreeNode(id: checkboxID, sourceNodeID: checkboxID, paintOrder: 2, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "checkbox", label: "Accept terms", name: "terms", help: nil, required: true, formID: formID, options: [])),
+            InternalRenderTreeNode(id: submitID, sourceNodeID: submitID, paintOrder: 3, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "submit", label: "Send", name: "send", help: nil, required: false, formID: formID, options: [])),
+        ]
+        let output = try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 2, nodes: nodes))
+        XCTAssertTrue(output.contains("<select"))
+        XCTAssertTrue(output.contains("<option value=\"one\">One &amp; &lt;two&gt;</option>"))
+        XCTAssertTrue(output.contains("Pick &lt;one&gt;"))
+        XCTAssertTrue(output.contains("name=\"terms\" type=\"checkbox\" required"))
+        XCTAssertTrue(output.contains("type=\"submit\" disabled aria-disabled=\"true\" data-siteforge-submission=\"unconfigured\""))
+    }
+
+    func testSafeHTMLEmitterRejectsNonFormOrMalformedSelectControls() throws {
+        let nodeID = NodeID()
+        let orphan = InternalRenderTreeNode(id: nodeID, sourceNodeID: nodeID, paintOrder: 0, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "select", label: "Plan", name: "plan", help: nil, required: false, formID: NodeID(), options: [.init(id: FormOptionID(), label: "One", value: "one")]))
+        XCTAssertThrowsError(try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 1, nodes: [orphan])))
+
+        let formID = NodeID()
+        let malformed = InternalRenderTreeNode(id: nodeID, sourceNodeID: nodeID, paintOrder: 1, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "select", label: "Plan", name: "plan", help: nil, required: false, formID: formID, options: [.init(id: FormOptionID(), label: "", value: "one")]))
+        XCTAssertThrowsError(try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 1, nodes: [formNode(formID), malformed])))
+    }
+
+    func testCanonicalFormSelectOptionsPreserveStableOrderAndRejectUnsafeValues() throws {
+        let first = CanonicalFormSelectOption(label: "Starter", value: "starter")
+        let second = CanonicalFormSelectOption(label: "Professional", value: "pro")
+        let encoded = try CanonicalFormSelectOptions.encode([first, second])
+        XCTAssertEqual(try CanonicalFormSelectOptions.decode(encoded), [first, second])
+        XCTAssertThrowsError(try CanonicalFormSelectOptions.encode([
+            .init(id: first.id, label: "Duplicate identity", value: "other"),
+            .init(id: first.id, label: "Also duplicate", value: "another"),
+        ]))
+        XCTAssertThrowsError(try CanonicalFormSelectOptions.encode([
+            first,
+            .init(label: "Duplicate value", value: "starter"),
+        ]))
+        XCTAssertThrowsError(try CanonicalFormSelectOptions.decode("[]"))
+    }
+
+    private static let frame = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: 1, height: 1))
+
+    private func formNode(_ id: NodeID) -> InternalRenderTreeNode {
+        .init(id: id, sourceNodeID: id, paintOrder: 0, frame: Self.frame, semanticElement: "form", cssSelector: "", formField: nil)
     }
     func testSafeHTMLEmitterUsesFixedVocabularyAndStableIdentity() throws {
         let id = NodeID()

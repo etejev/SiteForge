@@ -80,6 +80,10 @@ enum AssetIdentifierDomain: StableIdentifierDomain {
     static let diagnosticNamespace = "asset"
 }
 
+enum FormOptionIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "form-option"
+}
+
 typealias DocumentID = StableIdentifier<DocumentIdentifierDomain>
 typealias PageID = StableIdentifier<PageIdentifierDomain>
 typealias NodeID = StableIdentifier<NodeIdentifierDomain>
@@ -88,6 +92,7 @@ typealias TemplateID = StableIdentifier<TemplateIdentifierDomain>
 typealias GuideID = StableIdentifier<GuideIdentifierDomain>
 typealias ResourceID = StableIdentifier<ResourceIdentifierDomain>
 typealias AssetID = StableIdentifier<AssetIdentifierDomain>
+typealias FormOptionID = StableIdentifier<FormOptionIdentifierDomain>
 
 enum ImageAssetFormat: String, Codable, CaseIterable, Sendable {
     case png, jpeg, gif, tiff, heic
@@ -378,7 +383,7 @@ enum CanonicalTextAlignment: String, CaseIterable, Sendable {
 enum SemanticHTMLElement: String, CaseIterable, Sendable {
     case div, section, main, header, footer, nav, article, aside
     case p, h1, h2, h3, h4, h5, h6
-    case img, button, a
+    case img, button, a, form
 }
 
 enum CanonicalSemanticElement {
@@ -392,7 +397,7 @@ enum CanonicalSemanticElement {
         case .image: .img
         case .button: .button
         case .link: .a
-        case .form: .div
+        case .form: .form
         case .component: nil
         }
     }
@@ -405,7 +410,7 @@ enum CanonicalSemanticElement {
         case .image: [.img]
         case .button: [.button]
         case .link: [.a]
-        case .form: [.div]
+        case .form: [.form]
         case .component: []
         }
     }
@@ -430,6 +435,55 @@ enum CanonicalFormField {
     static let requiredKey = "form.field.v1.required"
     static let helpKey = "form.field.v1.help"
     static let kindKey = "form.field.v1.kind"
+    static let optionsKey = "form.field.v1.options"
+}
+
+/// Ordered select options are canonical typed data encoded through the
+/// scalar property envelope. Their stable identity is retained across edits,
+/// duplication, history, recovery, and package round trips.
+struct CanonicalFormSelectOption: Codable, Equatable, Identifiable, Sendable {
+    let id: FormOptionID
+    let label: String
+    let value: String
+
+    init(id: FormOptionID = FormOptionID(), label: String, value: String) {
+        self.id = id
+        self.label = label
+        self.value = value
+    }
+}
+
+enum CanonicalFormSelectOptions {
+    static let maximumOptions = 100
+    static let maximumTextLength = 256
+
+    static func encode(_ options: [CanonicalFormSelectOption]) throws -> String {
+        try validate(options)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(options), as: UTF8.self)
+    }
+
+    static func decode(_ value: String) throws -> [CanonicalFormSelectOption] {
+        let options = try JSONDecoder().decode([CanonicalFormSelectOption].self, from: Data(value.utf8))
+        try validate(options)
+        return options
+    }
+
+    static func validate(_ options: [CanonicalFormSelectOption]) throws {
+        guard !options.isEmpty, options.count <= maximumOptions,
+              Set(options.map(\.id)).count == options.count,
+              Set(options.map(\.value)).count == options.count,
+              options.allSatisfy({ option in
+                  !option.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                  !option.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                  option.label.count <= maximumTextLength && option.value.count <= maximumTextLength &&
+                  !option.label.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) &&
+                  !option.value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+              }) else {
+            throw ModelValidationError.invalidSemanticElementState
+        }
+    }
 }
 
 enum CSSRuleEdit: Sendable { case set, reset }
@@ -1472,10 +1526,12 @@ enum CanonicalCSSRuleValidator {
 
 enum CanonicalFormFieldValidator {
     static func validate(_ node: DocumentNode) throws {
-        let owned = node.properties.filter { [CanonicalFormField.labelKey, CanonicalFormField.nameKey, CanonicalFormField.requiredKey, CanonicalFormField.helpKey, CanonicalFormField.kindKey].contains($0.key.rawValue) }
+        let owned = node.properties.filter { [CanonicalFormField.labelKey, CanonicalFormField.nameKey, CanonicalFormField.requiredKey, CanonicalFormField.helpKey, CanonicalFormField.kindKey, CanonicalFormField.optionsKey].contains($0.key.rawValue) }
         guard owned.count == Set(owned.map(\.key)).count else { throw ModelValidationError.invalidSemanticElementState }
         guard !owned.isEmpty else { return }
         guard node.kind == .text else { throw ModelValidationError.invalidSemanticElementState }
+        var fieldKind: String?
+        var encodedOptions: String?
         for property in owned {
             switch property.key.rawValue {
             case CanonicalFormField.labelKey:
@@ -1487,9 +1543,20 @@ enum CanonicalFormFieldValidator {
             case CanonicalFormField.helpKey:
                 guard case .string(let value) = property.value, value.count <= 512 else { throw ModelValidationError.invalidSemanticElementState }
             case CanonicalFormField.kindKey:
-                guard case .string(let value) = property.value, ["text", "email", "textarea"].contains(value) else { throw ModelValidationError.invalidSemanticElementState }
+                guard case .string(let value) = property.value, ["text", "email", "textarea", "checkbox", "select", "submit"].contains(value) else { throw ModelValidationError.invalidSemanticElementState }
+                fieldKind = value
+            case CanonicalFormField.optionsKey:
+                guard case .string(let value) = property.value else { throw ModelValidationError.invalidSemanticElementState }
+                encodedOptions = value
             default: break
             }
+        }
+        guard let fieldKind else { throw ModelValidationError.invalidSemanticElementState }
+        if fieldKind == "select" {
+            guard let encodedOptions else { throw ModelValidationError.invalidSemanticElementState }
+            _ = try CanonicalFormSelectOptions.decode(encodedOptions)
+        } else if encodedOptions != nil {
+            throw ModelValidationError.invalidSemanticElementState
         }
     }
 }
@@ -1817,6 +1884,12 @@ private extension DocumentPage {
             try CanonicalSemanticElementValidator.validate(node)
             try CanonicalCSSRuleValidator.validate(node)
             try CanonicalFormFieldValidator.validate(node)
+            if node.properties.contains(where: { $0.key.rawValue.hasPrefix("form.field.v1.") }) {
+                guard case .node(let parentID) = node.parent,
+                      nodesByID[parentID]?.kind == .form else {
+                    throw ModelValidationError.invalidSemanticElementState
+                }
+            }
             try CanonicalLinkTarget.validate(node)
             try CanonicalImageNamespaceValidator.validate(node)
             try CanonicalResponsiveGeometryNamespaceValidator.validate(node)
