@@ -454,6 +454,34 @@ enum LocalStaticBuildPlanner {
     }
 }
 
+enum LocalStaticBuildWriteError: Error, Equatable, Sendable { case unsafeDestination, stale, cancelled, writeFailed }
+
+enum LocalStaticBuildWriter {
+    static func write(_ plan: LocalStaticBuildPlan, to destination: URL, expectedRevision: UInt64, cancelled: Bool = false) throws {
+        guard !cancelled else { throw LocalStaticBuildWriteError.cancelled }
+        guard plan.revision == expectedRevision else { throw LocalStaticBuildWriteError.stale }
+        let target = destination.standardizedFileURL
+        guard target.path != "/", !target.path.isEmpty,
+              !FileManager.default.fileExists(atPath: target.path) ||
+                (try? target.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else { throw LocalStaticBuildWriteError.unsafeDestination }
+        let parent = target.deletingLastPathComponent()
+        let stage = parent.appendingPathComponent(".siteforge-build-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
+            for file in plan.files {
+                guard !file.path.contains(".."), !file.path.contains("/") else { throw LocalStaticBuildWriteError.unsafeDestination }
+                try file.contents.data(using: .utf8)!.write(to: stage.appendingPathComponent(file.path), options: .atomic)
+            }
+            if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+            try FileManager.default.moveItem(at: stage, to: target)
+        } catch let error as LocalStaticBuildWriteError {
+            try? FileManager.default.removeItem(at: stage); throw error
+        } catch {
+            try? FileManager.default.removeItem(at: stage); throw LocalStaticBuildWriteError.writeFailed
+        }
+    }
+}
+
 // SF-1203 v1 output is intentionally in-memory only. The fixed vocabulary and
 // allowlist prevent authored content from becoming executable markup.
 enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity }

@@ -21,6 +21,16 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(try SafeCSSEmitter.emit(.init(documentID: DocumentID(), revision: 1, nodes: [node])),
             "[data-siteforge-node=\"\(id.rawValue.uuidString.lowercased())\"] { height: 7.0px; left: 4.0px; position: absolute; top: 5.0px; width: 6.0px; }")
     }
+    func testLocalStaticBuildWriterStagesDeterministicOutputAndRejectsStale() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let plan = LocalStaticBuildPlan(revision: 2, files: [.init(path: "index.html", contents: "ok"), .init(path: "styles.css", contents: "css")])
+        let destination = root.appendingPathComponent("build")
+        try LocalStaticBuildWriter.write(plan, to: destination, expectedRevision: 2)
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("index.html")), "ok")
+        XCTAssertThrowsError(try LocalStaticBuildWriter.write(plan, to: destination, expectedRevision: 3))
+    }
     // SF-0802-001, SF-0802-004, SF-0802-008 — Fit/Fill/Stretch share one
     // top-left/Y-down geometry contract and focal points never change bounds.
     func testImageLayoutFitFillStretchFocalAndInvalidInputsAreDeterministic() throws {
