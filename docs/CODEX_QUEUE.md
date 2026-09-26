@@ -8,6 +8,9 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-034` SEO and static metadata foundation v1 (P1).
+  - Bounded `SF-1207-001`–`008` internal typed metadata/head emission.
+
 - [ ] `SF-AUTHORING-033` Portable static asset-export foundation v1 (P1).
   - Bounded project-owned PNG/JPEG content-addressed export planning only.
 

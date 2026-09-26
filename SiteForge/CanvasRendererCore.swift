@@ -512,6 +512,20 @@ enum MultiPageStaticBuildPlanner {
     }
 }
 
+// SF-1207 v1 metadata is typed and emitted only from approved route paths.
+struct StaticSEOMetadata: Equatable, Sendable {
+    let siteName: String; let title: String; let description: String?; let language: String; let index: Bool; let follow: Bool
+}
+
+enum StaticSEOEmitter {
+    static func head(_ metadata: StaticSEOMetadata, route: String) -> String? {
+        guard !metadata.siteName.isEmpty, !metadata.title.isEmpty, route.first == "/", !route.contains("?") && !route.contains("#") else { return nil }
+        func escape(_ value: String) -> String { value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;").replacingOccurrences(of: "<", with: "&lt;") }
+        let description = metadata.description.map { "<meta name=\"description\" content=\"\(escape($0))\">" } ?? ""
+        return "<meta charset=\"utf-8\"><html lang=\"\(escape(metadata.language))\"><title>\(escape(metadata.title))</title>\(description)<meta name=\"robots\" content=\"\(metadata.index ? "index" : "noindex"), \(metadata.follow ? "follow" : "nofollow")\"><link rel=\"canonical\" href=\"\(route)\">"
+    }
+}
+
 // SF-1203 v1 output is intentionally in-memory only. The fixed vocabulary and
 // allowlist prevent authored content from becoming executable markup.
 enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity }
