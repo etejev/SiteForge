@@ -1057,6 +1057,64 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     // SF-0507-001...008 — the shipping Design Inspector authors canonical
     // typography and the same metrics drive committed and live inline text.
+    func testTextForegroundNativeInspectorTokenAndInlineParityJourney() throws {
+        let application = launchWorkspace()
+        application.buttons["canvas.empty.insert.text"].click()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["inspector.tab.design"].click()
+        let inspector = application.scrollViews["inspector.selection.scroll"]
+        func reveal(_ identifier: String) -> XCUIElement {
+            let element = application.descendants(matching: .any)[identifier].firstMatch
+            for _ in 0..<20 where !element.isHittable {
+                inspector.scroll(byDeltaX: 0, deltaY: element.frame.maxY > inspector.frame.maxY ? -100 : 100)
+            }
+            return element
+        }
+        let foreground = reveal("inspector.design.typography.foregroundHex")
+        XCTAssertTrue(foreground.isHittable && foreground.isEnabled)
+        XCTAssertTrue(waitForValue(reveal("inspector.design.typography.foregroundStatus"), containing: "Automatic"))
+        foreground.click(); foreground.typeText("#C02040FF"); foreground.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(reveal("inspector.design.typography.foregroundStatus"), containing: "Authored"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-060 authored text foreground")
+        foreground.click(); foreground.typeKey("a", modifierFlags: .command); foreground.typeText("bad")
+        foreground.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(reveal("inspector.design.validation").waitForExistence(timeout: 3))
+        foreground.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForValue(reveal("inspector.design.typography.foregroundStatus"), containing: "#C02040FF"))
+        reveal("inspector.tokens.new").click()
+        let name = reveal("inspector.tokens.name")
+        name.click(); name.typeKey("a", modifierFlags: .command); name.typeText("Ink")
+        let tokenColor = reveal("inspector.tokens.color")
+        tokenColor.click(); tokenColor.typeKey("a", modifierFlags: .command); tokenColor.typeText("#20A040FF")
+        reveal("inspector.tokens.apply").click()
+        let row = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "inspector.tokens.row.")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); reveal(row.identifier).click()
+        let target = reveal("inspector.tokens.target")
+        target.click(); application.menuItems["Text Foreground"].click()
+        XCTAssertTrue(waitForValue(reveal("inspector.tokens.targetStatus"), containing: "1 applicable"))
+        reveal("inspector.tokens.bind").click()
+        XCTAssertTrue(waitForValue(reveal("inspector.design.typography.foregroundStatus"), containing: "Ink"))
+        XCTAssertFalse(reveal("inspector.design.typography.foregroundHex").isEnabled)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-060 bound text foreground")
+        application.menuBars.menuBarItems["Selection"].click()
+        application.menuItems["Edit Selected Text"].click()
+        let editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let objectFrame = application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "canvas.object.")).firstMatch.frame
+        XCTAssertEqual(editor.frame.minX, objectFrame.minX, accuracy: 1)
+        XCTAssertEqual(editor.frame.minY, objectFrame.minY, accuracy: 1)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-060 bound foreground inline editor")
+        editor.typeKey(.escape, modifierFlags: [])
+        reveal("inspector.tokens.unbind").click()
+        XCTAssertTrue(waitForValue(reveal("inspector.design.typography.foregroundStatus"), containing: "Authored"))
+        reveal("inspector.design.typography.foregroundReset").click()
+        XCTAssertTrue(waitForValue(reveal("inspector.design.typography.foregroundStatus"), containing: "Automatic"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-060 automatic foreground restored")
+    }
+
     func testDesignInspectorTypographyInlineUndoRedoAccessibilityJourney() throws {
         let fixture = legacyFixtureURL(named: "schema-v4-legacy-surface")
         let project = fixtureRoot.appendingPathComponent("typography-native-save.siteforge")

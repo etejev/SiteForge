@@ -921,13 +921,17 @@ actor WorkspaceScenePreparationWorker {
                 } else {
                     resolvedFamily = systemFamily; usesFallback = true
                 }
-                return CanvasTypography(
+                var snapshot = CanvasTypography(
                     authoredFamily: authored.family, resolvedFamily: resolvedFamily,
                     weight: authored.weight.rawValue, size: authored.size,
                     lineHeight: authored.lineHeight, tracking: authored.tracking,
                     alignment: CanvasTextAlignment(rawValue: authored.alignment.rawValue) ?? .leading,
                     usesFallback: usesFallback
                 )
+                if let color = LocalColorTokenResolver.textForeground(for: node, tokens: request.document.colorTokens) {
+                    snapshot.foregroundRGBA = [color.red, color.green, color.blue, color.alpha]
+                }
+                return snapshot
             }
             let imageAssetID = node.kind == .image
                 ? node.insertionStringProperty(CanonicalImageStyle.namespace + "assetID").flatMap(AssetID.init(uuidString:))
@@ -2599,6 +2603,35 @@ final class WorkspaceShellState: ObservableObject {
         TypographyCommandRegistry.selectionValue(nodes: selectedCanonicalNodes)
     }
 
+    func textForegroundInspectorStatus() -> String {
+        let selected = selectedCanonicalNodes
+        let nodes = selected.filter { $0.kind.isTextual }
+        guard !nodes.isEmpty else { return "Select Text, Button, or Link to edit foreground color." }
+        let skipped = selected.count - nodes.count
+        let suffix = skipped == 0 ? "" : " · \(skipped) incompatible object\(skipped == 1 ? "" : "s") skipped"
+        let values = nodes.map { node -> String in
+            if let id = LocalColorTokenBinding.id(for: node, target: .textForeground) {
+                return "token:\(id.description)"
+            }
+            return CanonicalTextForeground.literal(for: node)?.hexadecimalRGBA ?? "automatic"
+        }
+        guard let first = values.first, values.dropFirst().allSatisfy({ $0 == first }) else { return "Mixed foreground colors\(suffix)" }
+        if first == "automatic" { return "Automatic foreground · defaulted\(suffix)" }
+        if first.hasPrefix("token:") {
+            return (LocalColorTokenResolver.status(for: nodes[0], in: documentSession.document, target: .textForeground)
+                ?? "Bound text foreground token") + suffix
+        }
+        return "Authored foreground \(first)\(suffix)"
+    }
+
+    func textForegroundInspectorColor() -> CanonicalSolidColor? {
+        let nodes = selectedCanonicalNodes.filter { $0.kind.isTextual }
+        guard let firstNode = nodes.first else { return nil }
+        let first = LocalColorTokenResolver.textForeground(for: firstNode, tokens: documentSession.document.colorTokens)
+        guard nodes.dropFirst().allSatisfy({ LocalColorTokenResolver.textForeground(for: $0, tokens: documentSession.document.colorTokens) == first }) else { return nil }
+        return first
+    }
+
     func semanticElementInspectorValue() -> SemanticElementInspectorValue {
         SemanticElementCommandRegistry.selectionValue(nodes: selectedCanonicalNodes)
     }
@@ -2818,11 +2851,13 @@ final class WorkspaceShellState: ObservableObject {
     var localColorTokenRevision: UInt64 { documentSession.document.revision }
 
     func selectedColorTokenStatus(target: LocalColorTarget = .fill) -> String? {
-        guard let pageID = effectiveSelectedPageID,
-              let page = documentSession.document.pages.first(where: { $0.id == pageID }),
-              let id = selectionState.orderedIDs.first,
-              let node = page.nodes.first(where: { $0.id == id }) else { return nil }
-        return LocalColorTokenResolver.status(for: node, in: documentSession.document, target: target)
+        let nodes = selectedCanonicalNodes
+        let bound = nodes.compactMap { LocalColorTokenBinding.id(for: $0, target: target) }
+        guard let first = bound.first else { return nil }
+        guard bound.count == nodes.count, bound.allSatisfy({ $0 == first }) else {
+            return "Mixed color-token bindings · \(bound.count) of \(nodes.count) selected objects bound"
+        }
+        return nodes.first.flatMap { LocalColorTokenResolver.status(for: $0, in: documentSession.document, target: target) }
     }
 
     func colorTokenTargetStatus(_ target: LocalColorTarget) -> String {
@@ -2835,9 +2870,10 @@ final class WorkspaceShellState: ObservableObject {
                 && DesignInspectorCommandRegistry.resolvedLayers(for: node).contains { $0.kind == .solid && $0.isEnabled }
             case .border: return DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.border != nil
             case .outerShadow: return DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.shadow != nil
+            case .textForeground: return node.kind.isTextual && CanonicalTextForeground.literal(for: node) != nil
             }
         }
-        if applicable.isEmpty { return "No applicable \(target.rawValue) color; add the authored appearance first." }
+        if applicable.isEmpty { return "No applicable \(target.displayName.lowercased()) color; add the authored appearance first." }
         let skipped = nodes.count - applicable.count
         return "\(applicable.count) applicable" + (skipped == 0 ? "" : "; \(skipped) incompatible or unavailable")
     }

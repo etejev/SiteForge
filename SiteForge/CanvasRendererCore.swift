@@ -65,11 +65,13 @@ struct CanvasTypography: Codable, Hashable, Sendable {
     let tracking: Double
     let alignment: CanvasTextAlignment
     let usesFallback: Bool
+    var foregroundRGBA: [Double]? = nil
     var isValid: Bool {
         !authoredFamily.isEmpty && !resolvedFamily.isEmpty
             && [size, lineHeight, tracking].allSatisfy(\.isFinite)
             && (1...1_000).contains(size) && (1...2_000).contains(lineHeight)
             && lineHeight >= size * 0.5 && (-100...100).contains(tracking)
+            && (foregroundRGBA == nil || (foregroundRGBA?.count == 4 && foregroundRGBA?.allSatisfy { $0.isFinite && (0...1).contains($0) } == true))
     }
 }
 
@@ -415,6 +417,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     /// Canonical typography intent is immutable metadata here; output maps
     /// only its closed allowlist and never consults installed fonts.
     let typography: CanonicalTypography?
+    let textForeground: CanonicalSolidColor?
     /// Image resource intent is canonical and path-independent. A verified
     /// content-addressed output path is optional because planning must retain
     /// a missing resource reference without manufacturing a URL.
@@ -434,6 +437,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
          semanticElement: String, cssSelector: String, formField: InternalFormField?,
          control: InternalStaticControl? = nil, anchorID: String? = nil,
          textContent: String? = nil, typography: CanonicalTypography? = nil,
+         textForeground: CanonicalSolidColor? = nil,
          image: InternalStaticImage? = nil, fillLayers: [CanonicalFillLayer] = [],
          opacity: Double? = nil, boxStyle: CanonicalBoxStyle? = nil,
          sizingConstraints: CanonicalSizingConstraints? = nil) {
@@ -449,6 +453,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
         self.anchorID = anchorID
         self.textContent = textContent
         self.typography = typography
+        self.textForeground = textForeground
         self.image = image
         self.fillLayers = fillLayers
         self.opacity = opacity
@@ -567,7 +572,8 @@ enum InternalDocumentRenderTreeCompiler {
                 control: control,
                 anchorID: sectionIDs[page.id]?.contains(node.id) == true ? anchorID(for: node.id) : nil,
                 textContent: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
-                typography: node.kind == .text ? CanonicalTypography.resolved(for: node) : nil,
+                typography: node.kind.isTextual ? CanonicalTypography.resolved(for: node) : nil,
+                textForeground: LocalColorTokenResolver.textForeground(for: node, tokens: colorTokens),
                 image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets),
                 fillLayers: staticFillLayers(for: node, colorTokens: colorTokens),
                 opacity: staticOpacity(for: node),
@@ -766,6 +772,9 @@ enum StaticTypographyOutputEmitter {
         ]
         if style.family == CanonicalTypography.defaultFamily {
             declarations.insert("font-family: system-ui;", at: 0)
+        }
+        if let color = node.textForeground {
+            declarations.append("color: rgba(\(number(color.red * 255)), \(number(color.green * 255)), \(number(color.blue * 255)), \(number(color.alpha)));")
         }
         return "\(CanonicalCSSRule.selector(for: node.id)) { \(declarations.joined(separator: " ")) }"
     }

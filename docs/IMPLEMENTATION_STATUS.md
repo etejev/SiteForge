@@ -2,6 +2,17 @@
 
 Last updated: 2026-09-27.
 
+SF-AUTHORING-060 adds a bounded native whole-object text foreground for
+Text, Button, and Link (`SF-0507`, `SF-0508`, `SF-0509` Partial). Optional
+normalized RGBA channels preserve automatic legacy color when omitted;
+target-keyed local Color Tokens retain a literal fallback. The existing typed
+typography/token transactions provide history and stable property identity.
+Native committed text and inline editing use sRGB, and the closed static
+projection emits the resolved color. Focused model, render, and actual-app
+checks passed; four Inspector/canvas captures were reviewed. See
+`docs/evidence/SF-AUTHORING-060-TEXT-FOREGROUND.md`. The prompt-seven full
+gate and hosted checkpoint have not run.
+
 SF-AUTHORING-059 extends the bounded local Color Token path to authored Border
 and Outer Shadow colors (`SF-0509`, `SF-0506`, `SF-0508` Partial). Schema ten
 migrates schema-nine fill-only references to a target-keyed property namespace

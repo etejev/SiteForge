@@ -2,6 +2,13 @@
 
 Last updated: 2026-09-27.
 
+Current local development prompt: SF-AUTHORING-060 (7 of 10), bounded native
+text foreground and local Color Token binding for Text, Button, and Link.
+Focused model/render/actual-app evidence is recorded in
+`docs/evidence/SF-AUTHORING-060-TEXT-FOREGROUND.md`; the full gate and hosted
+checkpoint remain reserved for prompt 10. SF-0507/0508/0509 remain Partial.
+The historical prompt-six note below describes the prior checkpoint.
+
 Current local development prompt: SF-AUTHORING-059 (6 of 10), local Color Token
 binding across Fill, Border, and Outer Shadow. Canonical migration, Inspector,
 renderer/static, and focused evidence are recorded in

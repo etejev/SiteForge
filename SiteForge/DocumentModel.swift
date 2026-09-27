@@ -163,7 +163,17 @@ struct LocalColorToken: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-enum LocalColorTarget: String, CaseIterable, Sendable { case fill, border, outerShadow }
+enum LocalColorTarget: String, CaseIterable, Sendable {
+    case fill, border, outerShadow, textForeground
+    var displayName: String {
+        switch self {
+        case .fill: "Fill"
+        case .border: "Border"
+        case .outerShadow: "Outer Shadow"
+        case .textForeground: "Text Foreground"
+        }
+    }
+}
 
 enum LocalColorTokenBinding {
     static let legacyKey = "style.fill.token.v1.id"
@@ -198,6 +208,10 @@ enum LocalColorTokenBinding {
             case .outerShadow:
                 guard [.frame, .section, .stack, .grid, .button].contains(node.kind),
                       node.insertionProperty("style.box.v1.shadow.offsetX") != nil else { throw ModelValidationError.invalidColorToken }
+            case .textForeground:
+                guard node.kind.isTextual, CanonicalTextForeground.literal(for: node) != nil else {
+                    throw ModelValidationError.invalidColorToken
+                }
             }
         }
     }
@@ -734,6 +748,25 @@ struct CanonicalTypography: Equatable, Sendable {
                 ?? (node.kind == .button ? .center : fallback.alignment)
         )
         return value.isValid ? value : nil
+    }
+}
+
+/// Optional whole-object foreground. Four normalized channels form one
+/// canonical value; absence keeps the existing automatic contrast policy.
+enum CanonicalTextForeground {
+    static let prefix = "style.typography.v1.foreground."
+    static let channels = ["red", "green", "blue", "alpha"]
+
+    static func literal(for node: DocumentNode) -> CanonicalSolidColor? {
+        let numbers = channels.compactMap { node.insertionNumberProperty(prefix + $0) }
+        guard numbers.count == 4 else { return nil }
+        let color = CanonicalSolidColor(red: numbers[0], green: numbers[1], blue: numbers[2], alpha: numbers[3])
+        return color.isValid ? color : nil
+    }
+
+    static func values(_ color: CanonicalSolidColor) -> [(String, PropertyValue)] {
+        zip(channels, [color.red, color.green, color.blue, color.alpha])
+            .map { (prefix + $0.0, .number($0.1)) }
     }
 }
 
@@ -1687,8 +1720,14 @@ enum CanonicalTypographyNamespaceValidator {
         guard !owned.isEmpty else { return }
         guard [.text, .button, .link].contains(node.kind) else { throw ModelValidationError.invalidTypographyState }
         let suffixes = owned.map { String($0.key.rawValue.dropFirst(root.count)) }
-        let allowed: Set<String> = ["family", "weight", "size", "lineHeight", "tracking", "alignment"]
+        let allowed: Set<String> = Set(["family", "weight", "size", "lineHeight", "tracking", "alignment"])
+            .union(CanonicalTextForeground.channels.map { "foreground." + $0 })
         guard Set(suffixes).count == suffixes.count, Set(suffixes).isSubset(of: allowed) else {
+            throw ModelValidationError.invalidTypographyState
+        }
+        let foregroundKeys = owned.filter { $0.key.rawValue.hasPrefix(CanonicalTextForeground.prefix) }
+        guard foregroundKeys.isEmpty ||
+            (foregroundKeys.count == 4 && CanonicalTextForeground.literal(for: node) != nil) else {
             throw ModelValidationError.invalidTypographyState
         }
         let values = Dictionary(uniqueKeysWithValues: owned.map { (String($0.key.rawValue.dropFirst(root.count)), $0.value) })

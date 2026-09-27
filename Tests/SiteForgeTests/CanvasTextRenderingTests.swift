@@ -4,6 +4,50 @@ import XCTest
 
 @MainActor
 final class CanvasTextRenderingTests: XCTestCase {
+    func testAuthoredTextForegroundSharesLiveLayerAndInlineEditorWithoutGeometryChange() throws {
+        let color = CanonicalSolidColor(red: 0.8, green: 0.1, blue: 0.2, alpha: 1)
+        for zoom in [0.25, 1.0, 8.0] {
+            for scale in [1.0, 2.0] {
+                var typography = CanvasTypography(authoredFamily: "System", resolvedFamily: "System",
+                    weight: "regular", size: 14, lineHeight: 17, tracking: 0,
+                    alignment: .leading, usesFallback: false)
+                let frame = WorldRect(origin: .init(x: 20, y: 24), size: .init(width: 120, height: 24))
+                let viewport = try CanvasViewportState(worldOrigin: .init(x: -12, y: 8),
+                    viewportSize: .init(width: 500, height: 300), zoom: CanvasZoom(zoom),
+                    pixelRatio: CanvasPixelRatio(scale))
+                let object = CanvasRenderObject(id: NodeID(), frame: frame, clipRect: nil, paintOrder: 0,
+                    style: .textPlaceholder, isVisible: true, accessibilityLabel: "Text object",
+                    plainText: "Text", typography: typography)
+                let automatic = try XCTUnwrap(CanvasAuthoredTextLayerFactory.makeLayer(for: object,
+                    viewport: viewport, contentsScale: scale))
+                typography.foregroundRGBA = [color.red, color.green, color.blue, color.alpha]
+                let coloredObject = CanvasRenderObject(id: object.id, frame: frame, clipRect: nil,
+                    paintOrder: 0, style: .textPlaceholder, isVisible: true,
+                    accessibilityLabel: "Text object", plainText: "Text", typography: typography)
+                let colored = try XCTUnwrap(CanvasAuthoredTextLayerFactory.makeLayer(for: coloredObject,
+                    viewport: viewport, contentsScale: scale))
+                XCTAssertEqual(colored.frame, automatic.frame)
+                XCTAssertEqual(colored.contentsScale, scale)
+                let ink = try XCTUnwrap(NSColor(cgColor: try XCTUnwrap(colored.foregroundColor))?.usingColorSpace(.sRGB))
+                XCTAssertEqual(ink.redComponent, color.red, accuracy: 1 / 255)
+                XCTAssertEqual(ink.greenComponent, color.green, accuracy: 1 / 255)
+                let layout = CanvasTextLayout(viewportObjectRect: colored.frame, zoom: zoom,
+                    text: "Text", typography: typography)
+                let editor = InlineCanvasTextView()
+                editor.string = "Text"
+                editor.frame = layout.viewportObjectRect
+                editor.applyCanvasTextLayout(layout)
+                XCTAssertEqual(editor.frame, layout.viewportObjectRect)
+                let editorInk = try XCTUnwrap((editor.textStorage?.attribute(.foregroundColor,
+                    at: 0, effectiveRange: nil) as? NSColor)?.usingColorSpace(.sRGB))
+                XCTAssertEqual(editorInk.redComponent,
+                    color.red, accuracy: 1 / 255)
+                XCTAssertEqual(editorInk.greenComponent, color.green, accuracy: 1 / 255)
+                XCTAssertTrue(layout.isInsideObjectRect)
+            }
+        }
+    }
+
     // SF-0401/0405/0407: compare real NSEvent and native backing-layer
     // conversion, not two copies of the renderer's own transform formula.
     func testNativePointerPreviewAndOwnedLayersShareUnreflectedViewportCoordinates() throws {

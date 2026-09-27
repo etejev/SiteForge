@@ -2729,6 +2729,7 @@ private struct DesignInspectorFieldsView: View {
     @State private var paddingDraft = ""
     @State private var shadowDraft = ""
     @State private var fontFamilyDraft = ""
+    @State private var textForegroundDraft = ""
     @State private var fontSizeDraft = ""
     @State private var lineHeightDraft = ""
     @State private var trackingDraft = ""
@@ -2868,6 +2869,7 @@ private struct DesignInspectorFieldsView: View {
                 Text("Fill").tag(LocalColorTarget.fill)
                 Text("Border").tag(LocalColorTarget.border)
                 Text("Outer Shadow").tag(LocalColorTarget.outerShadow)
+                Text("Text Foreground").tag(LocalColorTarget.textForeground)
             }
             .labelsHidden()
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -3014,6 +3016,7 @@ private struct DesignInspectorFieldsView: View {
         case .mixed, .unavailable:
             fontFamilyDraft = ""; fontSizeDraft = ""; lineHeightDraft = ""; trackingDraft = ""
         }
+        textForegroundDraft = state.textForegroundInspectorColor()?.hexadecimalRGBA ?? ""
     }
 
     @ViewBuilder
@@ -3190,7 +3193,7 @@ private struct DesignInspectorFieldsView: View {
         return ""
     }
 
-    private enum TypographyDraftField: Hashable { case family, size, lineHeight, tracking }
+    private enum TypographyDraftField: Hashable { case family, size, lineHeight, tracking, foreground }
 
     @ViewBuilder private var typographyControls: some View {
         let value = state.typographyInspectorValue()
@@ -3242,6 +3245,36 @@ private struct DesignInspectorFieldsView: View {
         Text(typographyProvenance(value))
             .font(.caption2).foregroundStyle(.secondary)
             .accessibilityIdentifier("inspector.design.typography.status")
+        HStack(spacing: 7) {
+            NativeDesignColorWell(
+                color: state.textForegroundInspectorColor() ?? CanonicalSolidColor(red: 0, green: 0, blue: 0, alpha: 1),
+                isEnabled: enabled && !state.hasBoundColorTokenSelection(target: .textForeground),
+                accessibilityValue: state.textForegroundInspectorStatus(),
+                accessibilityHint: "Choose an authored whole-object foreground color; unbind a token before editing its literal.",
+                accessibilityIdentifier: "inspector.design.typography.foregroundWell",
+                accessibilityLabel: "Text foreground color",
+                onCommit: { commitTypography(.foreground($0), operation: "foreground", provenance: .picker) }
+            )
+            TextField("Foreground #RRGGBBAA", text: $textForegroundDraft)
+                .textFieldStyle(.roundedBorder)
+                .disabled(!enabled || state.hasBoundColorTokenSelection(target: .textForeground))
+                .focused($typographyFocusedField, equals: .foreground)
+                .onSubmit { commitTextForeground() }
+                .onChange(of: typographyFocusedField) { old, current in
+                    if old == .foreground && current != .foreground { commitTextForeground(provenance: .focusLoss) }
+                }
+                .onExitCommand { textForegroundDraft = state.textForegroundInspectorColor()?.hexadecimalRGBA ?? ""; message = nil }
+                .accessibilityLabel("Text foreground hexadecimal color")
+                .accessibilityValue(state.textForegroundInspectorStatus())
+                .accessibilityIdentifier("inspector.design.typography.foregroundHex")
+            Button("Reset Color") { commitTypography(.foreground(nil), operation: "foreground reset") }
+                .disabled(!enabled || state.hasBoundColorTokenSelection(target: .textForeground)
+                    || state.textForegroundInspectorColor() == nil)
+                .accessibilityIdentifier("inspector.design.typography.foregroundReset")
+        }
+        Text(state.textForegroundInspectorStatus())
+            .font(.caption2).foregroundStyle(.secondary)
+            .accessibilityIdentifier("inspector.design.typography.foregroundStatus")
         if let fallback = state.typographyResolutionStatus {
             Text(fallback).font(.caption2).foregroundStyle(.orange)
                 .accessibilityIdentifier("inspector.design.typography.fallback")
@@ -3279,12 +3312,22 @@ private struct DesignInspectorFieldsView: View {
     }
 
     private func commitTypographyNumber(_ field: TypographyDraftField, provenance: DesignInspectorProvenance = .keyboard) {
-        let draft: String = switch field { case .size: fontSizeDraft; case .lineHeight: lineHeightDraft; case .tracking: trackingDraft; case .family: fontFamilyDraft }
+        guard field != .foreground else { return }
+        let draft: String = switch field { case .size: fontSizeDraft; case .lineHeight: lineHeightDraft; case .tracking: trackingDraft; case .family: fontFamilyDraft; case .foreground: "" }
         guard let number = Double(draft), number.isFinite else {
             message = TypographyCommandError.invalidValue.localizedDescription; return
         }
-        let edit: TypographyEdit = switch field { case .size: .size(number); case .lineHeight: .lineHeight(number); case .tracking: .tracking(number); case .family: .family(draft) }
+        let edit: TypographyEdit = switch field { case .size: .size(number); case .lineHeight: .lineHeight(number); case .tracking: .tracking(number); case .family: .family(draft); case .foreground: preconditionFailure("Foreground uses its color parser") }
         commitTypography(edit, operation: String(describing: field), provenance: provenance)
+    }
+
+    private func commitTextForeground(provenance: DesignInspectorProvenance = .keyboard) {
+        guard textForegroundDraft.hasPrefix("#"),
+              let color = CanonicalSolidColor.parse(hexadecimal: textForegroundDraft) else {
+            message = "Enter #RRGGBB or #RRGGBBAA; committed foreground is unchanged."
+            return
+        }
+        commitTypography(.foreground(color), operation: "foreground", provenance: provenance)
     }
 
     private func commitTypography(
@@ -5285,7 +5328,9 @@ enum CanvasAuthoredTextLayerFactory {
         // chrome. Resolve a readable neutral foreground from that same
         // immutable fill snapshot instead of the application's dark-mode ink.
         let foreground: NSColor
-        if object.style == .frameSurface,
+        if let rgba = object.typography?.foregroundRGBA, rgba.count == 4 {
+            foreground = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+        } else if object.style == .frameSurface,
            let rgba = CanvasAuthoredFillCompositor.resolvedColor(layers: object.fillLayers, atNormalizedPoint: (0.5, 0.5)) ?? object.fillRGBA,
            rgba.count == 4, rgba[3] >= 0.5 {
             foreground = 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2] > 0.5 ? .black : .white
@@ -6499,12 +6544,13 @@ final class InlineCanvasTextView: NSTextView {
 
     func applyCanvasTextLayout(_ layout: CanvasTextLayout) {
         font = layout.font
+        textColor = layout.foregroundColor
         textContainerInset = layout.textContainerInset
         textContainer?.lineFragmentPadding = 0
         alignment = layout.alignment
         typingAttributes = [
             .font: layout.font,
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: layout.foregroundColor,
             .kern: layout.tracking,
             .paragraphStyle: layout.paragraphStyle,
         ]
@@ -6925,9 +6971,15 @@ struct CanvasTextLayout: Equatable {
     let tracking: CGFloat
     let alignment: NSTextAlignment
     let paragraphStyle: NSParagraphStyle
+    var foregroundColor: NSColor {
+        guard let rgba = typographyForegroundRGBA, rgba.count == 4 else { return .labelColor }
+        return NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+    }
+    private let typographyForegroundRGBA: [Double]?
 
     init(viewportObjectRect: CGRect, zoom: Double, text: String, typography: CanvasTypography? = nil) {
         self.viewportObjectRect = viewportObjectRect
+        typographyForegroundRGBA = typography?.foregroundRGBA
         let scale = max(0.000_001, CGFloat(zoom))
         let insetX = Self.baseHorizontalInset * scale
         let usableWidth = max(0, viewportObjectRect.width - insetX * 2)

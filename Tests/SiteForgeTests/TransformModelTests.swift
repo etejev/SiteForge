@@ -4,6 +4,82 @@ import XCTest
 
 @MainActor
 final class TransformModelTests: XCTestCase {
+    func testTextForegroundLiteralTokenFallbackHistoryAndValidation() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[1].kind = .text
+        fixture.document.pages[0].nodes[2].kind = .button
+        let token = LocalColorToken(name: "Ink", color: .init(red: 0.8, green: 0.1, blue: 0.2, alpha: 1))
+        fixture.document.colorTokens = [token]
+        let literal = CanonicalSolidColor(red: 0.2, green: 0.3, blue: 0.4, alpha: 1)
+        let session = DocumentSession(document: fixture.document)
+        let ids = [fixture.nodeID, fixture.secondNodeID]
+        func node() -> DocumentNode { session.document.pages[0].nodes[1] }
+        func typography(_ edit: TypographyEdit) throws {
+            let command = TypographyCommand(identity: .init(documentID: session.document.id,
+                pageID: fixture.pageID, revision: session.document.revision,
+                sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: ids, edit: edit, provenance: .automation, cancelled: false)
+            let prepared = try TypographyCommandRegistry().prepare(command, in: session.document,
+                context: fixture.context(selectedIDs: ids))
+            XCTAssertEqual(prepared.applicableNodeIDs, ids)
+            try session.execute(prepared.documentCommand)
+        }
+        func tokenEdit(_ edit: LocalColorTokenEdit) throws {
+            try session.execute(LocalColorTokenCommandRegistry.prepare(edit, in: session.document,
+                expectedDocumentID: session.document.id, expectedRevision: session.document.revision,
+                pageID: fixture.pageID, selectedNodeIDs: ids))
+        }
+        XCTAssertNil(CanonicalTextForeground.literal(for: node()))
+        try typography(.foreground(literal))
+        let channelIDs = CanonicalTextForeground.channels.compactMap {
+            node().insertionProperty(CanonicalTextForeground.prefix + $0)?.id
+        }
+        XCTAssertEqual(channelIDs.count, 4)
+        XCTAssertEqual(CanonicalTextForeground.literal(for: node()), literal)
+        XCTAssertEqual(CanonicalTextForeground.literal(for: session.document.pages[0].nodes[2]), literal)
+        let literalCSS = try XCTUnwrap(MultiPageStaticBuildPlanner.plan(document: session.document)
+            .files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(literalCSS.contains("color: rgba(51.0, 76.5, 102.0, 1.0)"), literalCSS)
+        try tokenEdit(.bindTarget(token.id, .textForeground))
+        XCTAssertEqual(LocalColorTokenResolver.textForeground(for: node(), tokens: session.document.colorTokens), token.color)
+        XCTAssertEqual(CanonicalTextForeground.literal(for: node()), literal)
+        let tokenCSS = try XCTUnwrap(MultiPageStaticBuildPlanner.plan(document: session.document)
+            .files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(tokenCSS.contains("color: rgba(204.0, 25.5, 51.0, 1.0)"), tokenCSS)
+        XCTAssertThrowsError(try tokenEdit(.delete(token.id)))
+        try tokenEdit(.recolor(token.id, .init(red: 0.1, green: 0.7, blue: 0.2, alpha: 1)))
+        XCTAssertEqual(LocalColorTokenResolver.textForeground(for: node(), tokens: session.document.colorTokens)?.green, 0.7)
+        try session.undo()
+        XCTAssertEqual(LocalColorTokenResolver.textForeground(for: node(), tokens: session.document.colorTokens), token.color)
+        try session.redo()
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        var missing = session.document
+        missing.colorTokens = []
+        XCTAssertNoThrow(try missing.validate())
+        XCTAssertEqual(LocalColorTokenResolver.textForeground(for: missing.pages[0].nodes[1], tokens: []), literal)
+        try tokenEdit(.unbindTarget(.textForeground))
+        XCTAssertNil(LocalColorTokenBinding.id(for: node(), target: .textForeground))
+        XCTAssertEqual(CanonicalTextForeground.literal(for: node())?.green, 0.7)
+        try session.undo()
+        XCTAssertEqual(CanonicalTextForeground.literal(for: node()), literal)
+        XCTAssertEqual(CanonicalTextForeground.channels.compactMap {
+            node().insertionProperty(CanonicalTextForeground.prefix + $0)?.id
+        }, channelIDs)
+        try session.redo()
+        try typography(.foreground(nil))
+        XCTAssertNil(CanonicalTextForeground.literal(for: node()))
+        try session.undo()
+        XCTAssertEqual(CanonicalTextForeground.literal(for: node())?.green, 0.7)
+        XCTAssertThrowsError(try typography(.foreground(.init(red: .nan, green: 0, blue: 0, alpha: 1))))
+        var malformed = session.document
+        malformed.pages[0].nodes[1].properties.removeAll { $0.key.rawValue == CanonicalTextForeground.prefix + "alpha" }
+        XCTAssertThrowsError(try malformed.validate())
+        malformed = session.document
+        malformed.pages[0].nodes[1].kind = .frame
+        XCTAssertThrowsError(try malformed.validate())
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
     func testLocalColorTokenBorderShadowBindingHistoryAndStaticResolution() throws {
         var fixture = makeFixture()
         let literalBorder = CanonicalSolidColor(red: 0.2, green: 0.3, blue: 0.4, alpha: 1)

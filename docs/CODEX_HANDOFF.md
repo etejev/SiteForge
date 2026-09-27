@@ -5,11 +5,23 @@
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-059` is Development Prompt 6 of 10; Prompt 10
+its local commit. `SF-AUTHORING-060` is Development Prompt 7 of 10; Prompt 10
 triggers the next full verification and hosted checkpoint. Until then do not
 push or run broad gates. Normative modules remain Partial unless fully proven.
 
-## Current appearance-token checkpoint
+## Current text-foreground checkpoint
+
+SF-AUTHORING-060 adds optional normalized whole-object foreground channels to
+the existing typography namespace for Text/Button/Link. The existing token
+target registry binds local Color Tokens with literal fallback; omitted values
+retain automatic color. The native Design Inspector, committed CATextLayer,
+inline editor, and closed static output share resolution. Focused model,
+render, and actual-app evidence is in
+`docs/evidence/SF-AUTHORING-060-TEXT-FOREGROUND.md`. Do not infer rich-text
+spans, responsive typography color, themes, or broad SF-0507/0508/0509
+completion. Prompt 8 is next; no broad gate or push before Prompt 10.
+
+## Prior appearance-token checkpoint
 
 SF-AUTHORING-059 migrates schema-nine fill-only token bindings into a
 target-keyed schema-ten namespace. The same ColorTokenID collection and

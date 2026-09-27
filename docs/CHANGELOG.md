@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## Focused checkpoint — SF-AUTHORING-060
+
+- Text, Button, and Link now support an authored whole-object foreground color
+  or a local Color Token with a retained literal fallback. The native Design
+  Inspector offers a color well, hexadecimal entry, reset, and token binding.
+  Canvas and live inline text share sRGB color resolution; closed static output
+  uses the same resolved value. Omitted foreground remains automatic.
+
 ## In progress — SF-AUTHORING-059
 
 - Local project colors can now bind an existing authored Border or Outer Shadow

@@ -12,7 +12,7 @@ persistence/history/accessibility/cancellation, focused evidence, and factual
 documentation. Run focused affected tests before each local commit; do not run
 the full gate or hosted CI per slice.
 
-`SF-AUTHORING-059` is Development Prompt **6 of 10** once its focused slice is committed. After Prompt 10, run one
+`SF-AUTHORING-060` is Development Prompt **7 of 10**. After Prompt 10, run one
 authoritative `./sf verify`, repair failures, commit, push main, and monitor
 hosted CI until green. Debug-only owner add-ons do not increment this cadence.
 Until that checkpoint, commits stay local and no external GitHub/release action
@@ -24,6 +24,12 @@ actually evidenced.
 None.
 
 ## IN PROGRESS
+
+- [x] `SF-AUTHORING-060` Native text foreground color foundation v1 (P1; Development Prompt 7 of 10; focused local checkpoint).
+  - Requirements: bounded `SF-0507-001`–`008`, `SF-0508-001`–`008`, `SF-0509-001`–`008`, with `SF-0305`/`SF-0306`, `SF-0701`/`SF-0702`, and `SF-1204` integration.
+  - Plan: add a strictly validated optional whole-object literal foreground for Text/Button/Link; extend the existing target-keyed local Color Token binding and typed typography transaction; resolve token → literal → automatic foreground once for native canvas, inline editor, Preview, and closed static output; expose accessible Inspector author/reset/bind controls and focused history/render/UI evidence.
+  - Exclusions: rich-text spans, paragraph/background color, hover/visited states, font import/axes, token aliases/modes, arbitrary CSS, browser runtime, publishing, and release acceptance.
+  - Evidence: optional whole-object RGBA and target-keyed token bindings resolve through the existing typography/color registries for Text, Button, and Link; native Design controls edit and reset foreground, while committed/live text and closed static output consume the same resolved color. Focused model and native render checks passed; the real-app Inspector/inline journey passed and four original-resolution captures were reviewed. See `docs/evidence/SF-AUTHORING-060-TEXT-FOREGROUND.md`. The prompt-ten full gate has not run.
 
 - [ ] `SF-AUTHORING-059` Local color-token appearance bindings v1 (P1; Development Prompt 6 of 10).
   - Requirements: bounded `SF-0509-001`–`008`, `SF-0506-001`–`008`, `SF-0508-001`–`008`, with applicable `SF-0305`/`SF-0306`, `SF-0701`/`SF-0702`, and `SF-1204` integration.

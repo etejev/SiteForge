@@ -326,6 +326,7 @@ enum TypographyInspectorValue: Equatable, Sendable {
 
 enum TypographyEdit: Sendable {
     case reset
+    case foreground(CanonicalSolidColor?)
     case family(String?)
     case weight(CanonicalFontWeight?)
     case size(Double?)
@@ -350,7 +351,7 @@ enum TypographyCommandError: Error, LocalizedError, Equatable, Sendable {
         case .cancelled: "The typography draft was cancelled; committed text style is unchanged."
         case .invalidValue: "Enter a valid font family and finite typography values within the supported ranges."
         case .unavailable(let reason): reason
-        case .noApplicableTargets: "The selection has no plain Text object that supports typography."
+        case .noApplicableTargets: "The selection has no Text, Button, or Link object that supports typography."
         case .noChanges: "Typography already has that value."
         }
     }
@@ -365,9 +366,9 @@ struct TypographyCommandRegistry: Sendable {
     }
 
     static func selectionValue(nodes: [DocumentNode]) -> TypographyInspectorValue {
-        guard !nodes.isEmpty else { return .unavailable("Select plain Text to edit typography.") }
+        guard !nodes.isEmpty else { return .unavailable("Select Text, Button, or Link to edit typography.") }
         let applicable = nodes.filter { $0.kind.isTextual }
-        guard !applicable.isEmpty else { return .unavailable("Typography applies only to plain Text in this milestone.") }
+        guard !applicable.isEmpty else { return .unavailable("Typography applies only to Text, Button, or Link.") }
         let values = applicable.compactMap(resolvedTypography)
         guard values.count == applicable.count, let first = values.first,
               values.dropFirst().allSatisfy({ $0 == first }) else {
@@ -406,6 +407,29 @@ struct TypographyCommandRegistry: Sendable {
                 changes.append(contentsOf: node.properties
                     .filter { $0.key.rawValue.hasPrefix(Self.namespace) }
                     .map { .removeProperty(.init(pageID: page.id, nodeID: id, propertyID: $0.id)) })
+                if let binding = node.insertionProperty(LocalColorTokenBinding.key(for: .textForeground)) {
+                    changes.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: binding.id)))
+                }
+                continue
+            }
+            if case .foreground(let color) = command.edit {
+                guard LocalColorTokenBinding.id(for: node, target: .textForeground) == nil else {
+                    throw TypographyCommandError.unavailable("Unbind the text color token before editing its literal fallback.")
+                }
+                if let color, !color.isValid { throw TypographyCommandError.invalidValue }
+                applicable.append(id)
+                for channel in CanonicalTextForeground.channels {
+                    let key = CanonicalTextForeground.prefix + channel
+                    let old = node.insertionProperty(key)
+                    if let color, let value = CanonicalTextForeground.values(color).first(where: { $0.0 == key })?.1 {
+                        if old?.value != value || old?.origin != .authored {
+                            changes.append(.setProperty(.init(pageID: page.id, nodeID: id, property: .init(
+                                id: old?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored))))
+                        }
+                    } else if let old {
+                        changes.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: old.id)))
+                    }
+                }
                 continue
             }
             let key: String
@@ -413,6 +437,8 @@ struct TypographyCommandRegistry: Sendable {
             switch command.edit {
             case .reset:
                 preconditionFailure("Reset is handled before scalar typography edits.")
+            case .foreground:
+                preconditionFailure("Foreground is handled before scalar typography edits.")
             case .family(let next):
                 key = "family"; value = next.map(PropertyValue.string)
                 if let next { style = .init(family: next, weight: style.weight, size: style.size, lineHeight: style.lineHeight, tracking: style.tracking, alignment: style.alignment) }
@@ -1426,6 +1452,12 @@ struct DesignInspectorCommandRegistry: Sendable {
 /// remains the explicit literal fallback, so a missing token never destroys
 /// authored color intent and unbinding can preserve the resolved appearance.
 enum LocalColorTokenResolver {
+    static func textForeground(for node: DocumentNode, tokens: [LocalColorToken]) -> CanonicalSolidColor? {
+        let literal = CanonicalTextForeground.literal(for: node)
+        guard let id = LocalColorTokenBinding.id(for: node, target: .textForeground),
+              let token = tokens.first(where: { $0.id == id }) else { return literal }
+        return token.color
+    }
     static func resolvedBoxStyle(for node: DocumentNode, tokens: [LocalColorToken]) -> CanonicalBoxStyle? {
         guard let style = DesignBoxStyleCommandRegistry.resolvedStyle(for: node) else { return nil }
         func color(_ target: LocalColorTarget, fallback: CanonicalSolidColor) -> CanonicalSolidColor {
@@ -1480,7 +1512,7 @@ enum LocalColorTokenResolver {
         guard let token = document.colorTokens.first(where: { $0.id == id }) else {
             return "Missing color token · literal fallback retained"
         }
-        return "\(target.rawValue) token: \(token.name) / \(token.color.hexadecimalRGBA)"
+        return "\(target.displayName) token: \(token.name) / \(token.color.hexadecimalRGBA)"
     }
 }
 
@@ -1580,6 +1612,7 @@ struct LocalColorTokenCommandRegistry {
                 && DesignInspectorCommandRegistry.resolvedLayers(for: node).contains(where: { $0.kind == .solid && $0.isEnabled })
             case .border: style?.border != nil
             case .outerShadow: style?.shadow != nil
+            case .textForeground: node.kind.isTextual && CanonicalTextForeground.literal(for: node) != nil
             }
             guard supported else { continue }
             applicableCount += 1
@@ -1592,12 +1625,23 @@ struct LocalColorTokenCommandRegistry {
                     value: .string(tokenID.description), origin: .authored))))
             } else if let old {
                 if target != .fill {
-                    let literal = target == .border ? style?.border?.color : style?.shadow?.color
+                    let literal: CanonicalSolidColor? = switch target {
+                    case .border: style?.border?.color
+                    case .outerShadow: style?.shadow?.color
+                    case .textForeground: CanonicalTextForeground.literal(for: node)
+                    case .fill: nil
+                    }
                     let resolved = LocalColorTokenResolver.resolvedBoxStyle(for: node, tokens: document.colorTokens)
-                    let color = target == .border ? resolved?.border?.color : resolved?.shadow?.color
+                    let color: CanonicalSolidColor? = switch target {
+                    case .border: resolved?.border?.color
+                    case .outerShadow: resolved?.shadow?.color
+                    case .textForeground: LocalColorTokenResolver.textForeground(for: node, tokens: document.colorTokens)
+                    case .fill: nil
+                    }
                     if let literal, let color, literal != color {
-                        let prefix = DesignBoxStyleCommandRegistry.namespace
-                            + (target == .border ? "border.color." : "shadow.color.")
+                        let prefix = target == .textForeground ? CanonicalTextForeground.prefix
+                            : DesignBoxStyleCommandRegistry.namespace
+                                + (target == .border ? "border.color." : "shadow.color.")
                         for (channel, number) in [("red", color.red), ("green", color.green),
                                                   ("blue", color.blue), ("alpha", color.alpha)] {
                             let previous = node.insertionProperty(prefix + channel)
