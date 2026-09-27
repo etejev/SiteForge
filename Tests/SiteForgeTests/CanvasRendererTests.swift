@@ -38,6 +38,18 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(output.contains("type=\"submit\" disabled aria-disabled=\"true\" data-siteforge-submission=\"unconfigured\""))
     }
 
+    func testSafeCSSEmitterAddsOnlyFixedFormControlBaseline() throws {
+        let formID = NodeID(), fieldID = NodeID()
+        let tree = InternalRenderTreeSnapshot(documentID: DocumentID(), revision: 1, nodes: [
+            formNode(formID),
+            .init(id: fieldID, sourceNodeID: fieldID, paintOrder: 1, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "text", label: "Name", name: "name", help: nil, required: false, formID: formID, options: [])),
+        ])
+        let css = try SafeCSSEmitter.emit(tree)
+        XCTAssertTrue(css.contains("form input, form select, form textarea, form button"))
+        XCTAssertTrue(css.contains("form button[disabled]"))
+        XCTAssertFalse(css.contains("Name"))
+    }
+
     func testSafeHTMLEmitterRejectsNonFormOrMalformedSelectControls() throws {
         let nodeID = NodeID()
         let orphan = InternalRenderTreeNode(id: nodeID, sourceNodeID: nodeID, paintOrder: 0, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "select", label: "Plan", name: "plan", help: nil, required: false, formID: NodeID(), options: [.init(id: FormOptionID(), label: "One", value: "one")]))

@@ -511,7 +511,7 @@ enum SafeCSSEmissionError: Error, Equatable, Sendable { case invalidGeometry, in
 
 enum SafeCSSEmitter {
     static func emit(_ tree: InternalRenderTreeSnapshot) throws -> String {
-        try tree.nodes.sorted { $0.paintOrder < $1.paintOrder }.map { node in
+        let geometry = try tree.nodes.sorted { $0.paintOrder < $1.paintOrder }.map { node in
             let f = node.frame
             guard [f.origin.x, f.origin.y, f.size.width, f.size.height].allSatisfy(\.isFinite),
                   f.size.width >= 0, f.size.height >= 0 else { throw SafeCSSEmissionError.invalidGeometry }
@@ -519,6 +519,11 @@ enum SafeCSSEmitter {
             guard id == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeCSSEmissionError.invalidIdentity }
             return "[data-siteforge-node=\"\(id)\"] { height: \(f.size.height)px; left: \(f.origin.x)px; position: absolute; top: \(f.origin.y)px; width: \(f.size.width)px; }"
         }.joined(separator: "\n")
+        // Fixed output-only control baseline. It neither exposes authored
+        // values nor creates a submission path; per-control styling remains
+        // deferred until a typed Form-style model exists.
+        let controls = tree.nodes.contains { $0.formField != nil } ? "form { font: inherit; } form input, form select, form textarea, form button { box-sizing: border-box; font: inherit; max-width: 100%; } form button[disabled] { cursor: not-allowed; }" : ""
+        return [geometry, controls].filter { !$0.isEmpty }.joined(separator: "\n")
     }
 }
 
