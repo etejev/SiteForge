@@ -264,6 +264,18 @@ enum StaticAssetExportPlanner {
     }
 }
 
+// SF-0801/SF-0802 static-output v1: canonical assets resolve only through a
+// verified content-addressed export plan; filenames and local paths are never
+// output identifiers.
+enum StaticImageOutputReferencePlanner {
+    static func path(for asset: ImageAsset, entries: [StaticAssetExportEntry]) throws -> String {
+        try asset.validate()
+        guard let entry = entries.first(where: { $0.resourceID == asset.resourceID }),
+              entry.sha256 == asset.contentHash else { throw StaticAssetExportError.corrupt }
+        return entry.outputPath
+    }
+}
+
 enum ProjectResourceError: Error, Equatable, LocalizedError, Sendable {
     case unsupportedIndexVersion(Int)
     case duplicateResource

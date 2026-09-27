@@ -6,6 +6,15 @@ import XCTest
 @testable import SiteForge
 
 final class ProjectResourceTests: XCTestCase {
+
+    func testStaticImageOutputReferenceUsesOnlyVerifiedContentAddressedEntry() throws {
+        let bytes = Data([0x89, 0x50, 0x4e, 0x47])
+        let hash = ProjectResourceStore.digest(bytes)
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Card", originalFilename: "card.png", format: .png, pixelWidth: 1, pixelHeight: 1, byteCount: bytes.count, contentHash: hash)
+        let entry = StaticAssetExportEntry(resourceID: asset.resourceID, outputPath: "assets/\(hash).png", sha256: hash)
+        XCTAssertEqual(try StaticImageOutputReferencePlanner.path(for: asset, entries: [entry]), entry.outputPath)
+        XCTAssertThrowsError(try StaticImageOutputReferencePlanner.path(for: asset, entries: []))
+    }
     @MainActor
     func testComponentDefinitionResourcesSurviveLinkedDuplicationSaveAndRecovery() async throws {
         let fixture = try makeFixture()
