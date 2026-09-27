@@ -902,7 +902,7 @@ enum MultiPageStaticBuildPlanner {
         // editor layout. This remains an immutable planning artifact: it does
         // not create an authored CSS model or write a generated site.
         let layout = StaticLayoutOutputEmitter.emit(
-            nodes: pages.flatMap(\.canonicalDepthFirstNodes)
+            nodes: pages.flatMap { $0.canonicalDepthFirstNodes() }
         )
         let typography = StaticTypographyOutputEmitter.emit(nodes: staticNodes)
         let images = StaticImageStyleOutputEmitter.emit(nodes: staticNodes)
