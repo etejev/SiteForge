@@ -126,6 +126,17 @@ and publishing remain deferred; evidence is in
 `docs/evidence/SF-AUTHORING-042-STATIC-NAVIGATION.md`. Local test execution is
 paused by owner instruction.
 
+SF-AUTHORING-043 has begun a bounded static layout-output parity foundation.
+`StaticLayoutOutputEmitter` projects only typed canonical base geometry,
+explicit Tablet/Mobile overrides, and visibility into a NodeID-scoped CSS
+allowlist. It keeps base/inherited state and breakpoint overrides distinct,
+uses deterministic decimal rounding, and does not mutate or serialize
+document content. Raw CSS/media input, browser layout, flex/grid/container
+queries, static-file export, publishing, and release acceptance remain
+deferred. Evidence is in
+`docs/evidence/SF-AUTHORING-043-STATIC-LAYOUT.md`; local test execution is
+paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

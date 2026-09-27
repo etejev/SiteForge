@@ -8,6 +8,17 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-043` Static layout-output parity foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-1204-001`–`005`, with
+    typed responsive resolution from `SF-0601-003` and `SF-0603-003`.
+  - Plan: project only validated canonical base geometry, explicit Tablet/
+    Mobile overrides, and visibility provenance into a deterministic,
+    NodeID-scoped CSS allowlist. Base rules always establish a stable absolute
+    frame; breakpoint rules only contain explicitly authored overrides.
+  - Exclusions: arbitrary CSS or media strings, browser/runtime layout,
+    authored flex/grid/container queries, static-file export, publishing, and
+    release acceptance.
+
 - [ ] `SF-AUTHORING-042` Static navigation-output foundation (P1).
   - Requirements: bounded compiler evidence for `SF-0202-001`–`006`,
     `SF-0303-001`–`006`, and `SF-1102-001`–`006`.

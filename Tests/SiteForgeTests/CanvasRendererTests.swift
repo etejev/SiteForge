@@ -149,6 +149,29 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(output.report.appliedRuleCount, 2)
     }
 
+    // SF-1204-003, SF-0601-003, SF-0603-003 — base geometry, responsive
+    // overrides, and visibility all use the same typed property cascade.
+    func testStaticLayoutOutputUsesStableRoundingAndExplicitVisibilityOverrides() {
+        let id = NodeID()
+        let node = DocumentNode(id: id, kind: .frame, name: "Frame", parent: .page(PageID()), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(-0.0001), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.y"), value: .number(20), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.width"), value: .number(100), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.height"), value: .number(80), origin: .defaulted),
+            .init(key: .init(rawValue: "hidden"), value: .boolean(true), origin: .authored),
+            .init(key: .init(rawValue: ResponsiveGeometryResolver.key(.x, breakpoint: .tablet)), value: .number(48.23456), origin: .authored),
+            .init(key: .init(rawValue: ResponsiveVisibilityResolver.key(.mobile)), value: .boolean(true), origin: .authored),
+        ])
+        let output = StaticLayoutOutputEmitter.emit(nodes: [node])
+        XCTAssertTrue(output.css.contains("left: 0.0px;"))
+        XCTAssertTrue(output.css.contains("display: none;"))
+        XCTAssertTrue(output.css.contains("left: 48.235px;"))
+        XCTAssertTrue(output.css.contains("@media (max-width: 599px)"))
+        XCTAssertTrue(output.css.contains("display: block;"))
+        XCTAssertEqual(output.report.baseRuleCount, 1)
+        XCTAssertEqual(output.report.breakpoints, [.tablet, .mobile])
+    }
+
     func testSafeHTMLEmitterRejectsNonFormOrMalformedSelectControls() throws {
         let nodeID = NodeID()
         let orphan = InternalRenderTreeNode(id: nodeID, sourceNodeID: nodeID, paintOrder: 0, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "select", label: "Plan", name: "plan", help: nil, required: false, formID: NodeID(), options: [.init(id: FormOptionID(), label: "One", value: "one")]))

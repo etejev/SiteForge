@@ -174,29 +174,109 @@ struct ResponsiveStaticOutputReport: Equatable, Sendable {
     let breakpoints: [ResponsiveBreakpoint]
 }
 
+/// Immutable, static layout projection. This produces a small allowlisted CSS
+/// subset from typed canonical geometry and breakpoint overrides only; it has
+/// no authored CSS strings, browser execution, or document mutation path.
+struct StaticLayoutOutputReport: Equatable, Sendable {
+    let baseRuleCount: Int
+    let responsiveRuleCount: Int
+    let breakpoints: [ResponsiveBreakpoint]
+}
+
+enum StaticLayoutOutputEmitter {
+    static func emit(nodes: [DocumentNode]) -> (css: String, report: StaticLayoutOutputReport) {
+        let ordered = nodes.sorted { $0.id.description < $1.id.description }
+        let base = ordered.compactMap(baseRule(for:))
+        let responsive = responsiveRules(nodes: ordered)
+        let css = ([base.joined(separator: "\n"), responsive.css].filter { !$0.isEmpty }).joined(separator: "\n")
+        return (css, .init(baseRuleCount: base.count, responsiveRuleCount: responsive.report.appliedRuleCount,
+                           breakpoints: responsive.report.breakpoints))
+    }
+
+    fileprivate static func responsiveRules(nodes: [DocumentNode]) -> (css: String, report: ResponsiveStaticOutputReport) {
+        var output: [(ResponsiveBreakpoint, String)] = []
+        for breakpoint in [ResponsiveBreakpoint.tablet, .mobile] {
+            let rules = nodes.compactMap { responsiveRule(for: $0, breakpoint: breakpoint) }
+            if !rules.isEmpty { output.append((breakpoint, rules.joined(separator: " "))) }
+        }
+        let css = output.map { breakpoint, rules in
+            let query = breakpoint == .tablet
+                ? "@media (min-width: 600px) and (max-width: 1023px)"
+                : "@media (max-width: 599px)"
+            return "\(query) { \(rules) }"
+        }.joined(separator: "\n")
+        return (css, .init(appliedRuleCount: output.count, breakpoints: output.map(\.0)))
+    }
+
+    private static func baseRule(for node: DocumentNode) -> String? {
+        guard let geometry = ResponsiveGeometryResolver.geometry(for: node, breakpoint: .desktop),
+              isValid(geometry) else { return nil }
+        var declarations = geometryDeclarations(geometry)
+        if ResponsiveVisibilityResolver.supports(node),
+           !ResponsiveVisibilityResolver.isVisible(node, breakpoint: .desktop) {
+            declarations.append("display: none;")
+        } else {
+            // Absolute static layout needs an explicit compatible box model;
+            // this is not authored display/flex/grid state.
+            declarations.append("display: block;")
+        }
+        return "\(CanonicalCSSRule.selector(for: node.id)) { \(declarations.joined(separator: " ")) }"
+    }
+
+    private static func responsiveRule(for node: DocumentNode, breakpoint: ResponsiveBreakpoint) -> String? {
+        var declarations: [String] = []
+        for field in GeometryInspectorField.allCases {
+            let key = ResponsiveGeometryResolver.key(field, breakpoint: breakpoint)
+            guard let property = node.insertionProperty(key), case .number(let value) = property.value,
+                  isValid(value, for: field) else { continue }
+            declarations.append("\(cssProperty(for: field)): \(number(value))px;")
+        }
+        if ResponsiveVisibilityResolver.supports(node),
+           let property = node.insertionProperty(ResponsiveVisibilityResolver.key(breakpoint)),
+           case .boolean(let visible) = property.value {
+            declarations.append(visible ? "display: block;" : "display: none;")
+        }
+        guard !declarations.isEmpty else { return nil }
+        return "\(CanonicalCSSRule.selector(for: node.id)) { \(declarations.joined(separator: " ")) }"
+    }
+
+    private static func geometryDeclarations(_ geometry: InsertionGeometry) -> [String] {
+        [
+            "height: \(number(geometry.size.height))px;",
+            "left: \(number(geometry.origin.x))px;",
+            "position: absolute;",
+            "top: \(number(geometry.origin.y))px;",
+            "width: \(number(geometry.size.width))px;",
+        ]
+    }
+
+    private static func cssProperty(for field: GeometryInspectorField) -> String {
+        switch field { case .x: "left"; case .y: "top"; case .width: "width"; case .height: "height" }
+    }
+
+    private static func isValid(_ geometry: InsertionGeometry) -> Bool {
+        isValid(geometry.origin.x, for: .x) && isValid(geometry.origin.y, for: .y)
+            && isValid(geometry.size.width, for: .width) && isValid(geometry.size.height, for: .height)
+    }
+
+    private static func isValid(_ value: Double, for field: GeometryInspectorField) -> Bool {
+        value.isFinite && abs(value) <= 1_000_000_000 && (!field.requiresPositiveValue || value >= 1)
+    }
+
+    private static func number(_ value: Double) -> String {
+        let rounded = (value * 1_000).rounded() / 1_000
+        var output = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), rounded)
+        while output.contains(".") && output.last == "0" { output.removeLast() }
+        if output.last == "." { output.append("0") }
+        return output == "-0.0" ? "0.0" : output
+    }
+}
+
 /// Fixed-breakpoint static CSS only; all values originate in typed canonical
 /// override namespaces, never authored CSS/media strings.
 enum ResponsiveStaticCSSEmitter {
     static func emit(nodes: [DocumentNode]) -> (css: String, report: ResponsiveStaticOutputReport) {
-        var output: [(ResponsiveBreakpoint, String)] = []
-        for breakpoint in [ResponsiveBreakpoint.tablet, .mobile] {
-            let rules = nodes.sorted { $0.id.description < $1.id.description }.compactMap { node -> String? in
-                var d: [String] = []
-                for field in GeometryInspectorField.allCases {
-                    guard let p = node.insertionProperty(ResponsiveGeometryResolver.key(field, breakpoint: breakpoint)), case .number(let v) = p.value, v.isFinite else { continue }
-                    d.append("\(field == .x ? "left" : field == .y ? "top" : field.rawValue): \(v)px;")
-                }
-                if ResponsiveVisibilityResolver.supports(node), !ResponsiveVisibilityResolver.isVisible(node, breakpoint: breakpoint) { d.append("display: none;") }
-                guard !d.isEmpty else { return nil }
-                return "\(CanonicalCSSRule.selector(for: node.id)) { \(d.joined(separator: " ")) }"
-            }
-            if !rules.isEmpty { output.append((breakpoint, rules.joined(separator: " "))) }
-        }
-        let css = output.map { breakpoint, rules in
-            let q = breakpoint == .tablet ? "@media (min-width: 600px) and (max-width: 1023px)" : "@media (max-width: 599px)"
-            return "\(q) { \(rules) }"
-        }.joined(separator: "\n")
-        return (css, .init(appliedRuleCount: output.count, breakpoints: output.map(\.0)))
+        StaticLayoutOutputEmitter.responsiveRules(nodes: nodes.sorted { $0.id.description < $1.id.description })
     }
 }
 

@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-043
+
+- Added a deterministic static layout-output projection from typed canonical
+  geometry, responsive overrides, and visibility only. It emits stable
+  NodeID-scoped absolute geometry with fixed Tablet/Mobile media ranges,
+  canonical rounding, and inherited visibility behavior without exposing raw
+  CSS or changing document state.
+
 ## In progress — SF-AUTHORING-042
 
 - Added deterministic accessible static navigation projection from persisted

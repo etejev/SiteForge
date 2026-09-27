@@ -1,5 +1,20 @@
 # Codex Continuation Handoff
 
+## Current static-layout checkpoint
+
+SF-AUTHORING-043 adds `StaticLayoutOutputEmitter`, an immutable projection of
+typed canonical base geometry, explicit Tablet/Mobile overrides, and
+breakpoint visibility. It emits a fixed absolute-position CSS allowlist with
+NodeID-derived selectors and canonical three-decimal rounding. Responsive
+rules are emitted only for explicitly authored properties; base visibility
+continues to cascade naturally until a breakpoint override is present. This
+does not add raw CSS, browser execution, flex/grid/container-query authoring,
+static-file export, or publishing.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CanvasRendererTests.testStaticLayoutOutputUsesStableRoundingAndExplicitVisibilityOverrides`.
+
 ## Current static-navigation checkpoint
 
 SF-AUTHORING-042 adds `StaticNavigationEmitter`, an immutable static-output
