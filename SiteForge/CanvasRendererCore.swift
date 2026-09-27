@@ -399,6 +399,9 @@ struct CanvasPreviewSceneSnapshot: Equatable, Sendable {
 struct InternalRenderTreeNode: Equatable, Sendable {
     let id: NodeID
     let sourceNodeID: NodeID
+    /// Canonical parent identity is immutable output provenance. It is not a
+    /// browser DOM mutation or an editor-side hierarchy cache.
+    let parentNodeID: NodeID?
     let paintOrder: Int
     let frame: WorldRect
     let semanticElement: String
@@ -417,13 +420,14 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     /// a missing resource reference without manufacturing a URL.
     let image: InternalStaticImage?
 
-    init(id: NodeID, sourceNodeID: NodeID, paintOrder: Int, frame: WorldRect,
+    init(id: NodeID, sourceNodeID: NodeID, parentNodeID: NodeID? = nil, paintOrder: Int, frame: WorldRect,
          semanticElement: String, cssSelector: String, formField: InternalFormField?,
          control: InternalStaticControl? = nil, anchorID: String? = nil,
          textContent: String? = nil, typography: CanonicalTypography? = nil,
          image: InternalStaticImage? = nil) {
         self.id = id
         self.sourceNodeID = sourceNodeID
+        self.parentNodeID = parentNodeID
         self.paintOrder = paintOrder
         self.frame = frame
         self.semanticElement = semanticElement
@@ -495,7 +499,15 @@ struct InternalFormOption: Equatable, Sendable {
 struct InternalRenderTreeSnapshot: Equatable, Sendable {
     let documentID: DocumentID
     let revision: UInt64
+    let pageID: PageID?
     let nodes: [InternalRenderTreeNode]
+
+    init(documentID: DocumentID, revision: UInt64, pageID: PageID? = nil, nodes: [InternalRenderTreeNode]) {
+        self.documentID = documentID
+        self.revision = revision
+        self.pageID = pageID
+        self.nodes = nodes
+    }
 }
 
 enum InternalRenderTreeCompiler {
@@ -529,7 +541,9 @@ enum InternalDocumentRenderTreeCompiler {
             let formField = try field(for: node, nodesByID: nodesByID)
             let control = try control(for: node, staticRoutes: staticRoutes, sectionIDs: sectionIDs)
             return InternalRenderTreeNode(
-                id: node.id, sourceNodeID: node.id, paintOrder: paintOrder,
+                id: node.id, sourceNodeID: node.id,
+                parentNodeID: { if case .node(let parent) = node.parent { parent } else { nil } }(),
+                paintOrder: paintOrder,
                 frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 0, height: 0)),
                 semanticElement: CanonicalSemanticElement.resolved(for: node)?.0.rawValue ?? "div",
                 cssSelector: CanonicalCSSRule.selector(for: node.id), formField: formField,
@@ -540,7 +554,7 @@ enum InternalDocumentRenderTreeCompiler {
                 image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets)
             )
         }
-        return .init(documentID: documentID, revision: revision, nodes: nodes)
+        return .init(documentID: documentID, revision: revision, pageID: page.id, nodes: nodes)
     }
 
     private static func staticImage(
@@ -763,6 +777,28 @@ enum StaticImageStyleOutputEmitter {
     }
 }
 
+/// SF-1203 static-output v1: a content-free semantic outline gives a static
+/// plan deterministic hierarchy provenance without changing markup structure,
+/// introducing arbitrary HTML, or creating a browser/runtime path.
+enum StaticSemanticOutlineEmitter {
+    static func emit(trees: [InternalRenderTreeSnapshot]) -> String {
+        trees.sorted { ($0.pageID?.description ?? "") < ($1.pageID?.description ?? "") }
+            .flatMap { tree -> [String] in
+                let knownIDs = Set(tree.nodes.map(\.id))
+                let page = tree.pageID?.description ?? "-"
+                return tree.nodes.sorted { $0.paintOrder < $1.paintOrder }.compactMap { node in
+                    guard node.id == node.sourceNodeID,
+                          SemanticHTMLElement(rawValue: node.semanticElement) != nil else {
+                        return nil
+                    }
+                    let parent = node.parentNodeID.flatMap { knownIDs.contains($0) ? $0.description : nil } ?? "-"
+                    return "\(page)\t\(node.id.description)\t\(parent)\t\(node.semanticElement)"
+                }
+            }
+            .joined(separator: "\n")
+    }
+}
+
 // SF-1206 foundation: build plans are deterministic and side-effect free.
 struct LocalStaticBuildPlan: Equatable, Sendable {
     struct File: Equatable, Sendable { let path: String; let contents: String }
@@ -827,6 +863,7 @@ enum MultiPageStaticBuildPlanner {
         var files: [LocalStaticBuildPlan.File] = []
         var paths = Set<String>()
         var staticNodes: [InternalRenderTreeNode] = []
+        var staticTrees: [InternalRenderTreeSnapshot] = []
         for page in pages.sorted(by: { $0.route.rawValue < $1.route.rawValue }) {
             let output = try outputPath(for: page)
             guard paths.insert(output).inserted else { throw MultiPageStaticBuildError.collision }
@@ -844,6 +881,7 @@ enum MultiPageStaticBuildPlanner {
                 imageOutputPaths: imageOutputPaths, imageAssets: imageAssets
             )
             staticNodes += tree.nodes
+            staticTrees.append(tree)
             let body = try SafeHTMLEmitter.emit(tree)
             files.append(.init(path: output, contents: [navigation, body].filter { !$0.isEmpty }.joined(separator: "\n")))
         }
@@ -870,6 +908,11 @@ enum MultiPageStaticBuildPlanner {
         if !assetManifest.isEmpty {
             guard paths.insert("assets.manifest.txt").inserted else { throw MultiPageStaticBuildError.collision }
             files.append(.init(path: "assets.manifest.txt", contents: assetManifest))
+        }
+        let semanticOutline = StaticSemanticOutlineEmitter.emit(trees: staticTrees)
+        if !semanticOutline.isEmpty {
+            guard paths.insert("semantic-outline.txt").inserted else { throw MultiPageStaticBuildError.collision }
+            files.append(.init(path: "semantic-outline.txt", contents: semanticOutline))
         }
         files.append(.init(path: "manifest.txt", contents: files.map(\.path).sorted().joined(separator: "\n")))
         return .init(revision: document.revision, files: files)

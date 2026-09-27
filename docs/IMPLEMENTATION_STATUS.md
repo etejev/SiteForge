@@ -204,6 +204,13 @@ safely omitted. Evidence is in
 `docs/evidence/SF-AUTHORING-050-STATIC-SEMANTIC-RESOLUTION.md`; local test
 execution is paused by owner instruction.
 
+SF-AUTHORING-051 has begun static semantic-outline parity. Immutable static
+nodes retain canonical parent provenance, and the multi-page plan projects a
+validated page/node/parent/semantic outline without altering HTML nesting,
+canonical state, browser behavior, or file writes. Evidence is in
+`docs/evidence/SF-AUTHORING-051-STATIC-SEMANTIC-OUTLINE.md`; local test
+execution is paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

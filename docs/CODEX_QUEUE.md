@@ -8,6 +8,15 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-051` Static semantic-outline foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-1203-003`–`004` and
+    `SF-1206-003`–`004`.
+  - Plan: carry canonical parent NodeID provenance into immutable static nodes
+    and expose a deterministic content-free semantic outline plan artifact.
+  - Exclusions: nested browser DOM generation, arbitrary HTML/attributes,
+    browser execution, file writes, source maps, publishing, and release
+    acceptance.
+
 - [ ] `SF-AUTHORING-050` Static semantic-element resolution foundation (P1).
   - Requirements: bounded compiler evidence for `SF-1203-001`–`004`.
   - Plan: share the existing typed semantic resolver between the Inspector and

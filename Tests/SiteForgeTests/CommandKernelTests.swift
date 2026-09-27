@@ -822,6 +822,8 @@ final class CommandKernelTests: XCTestCase {
         let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
         XCTAssertTrue(html.contains("<article data-siteforge-node=\"\(nodeID.rawValue.uuidString.lowercased())\""))
         XCTAssertFalse(html.contains("<div data-siteforge-node=\"\(nodeID.rawValue.uuidString.lowercased())\""))
+        let outline = try XCTUnwrap(plan.files.first { $0.path == "semantic-outline.txt" }?.contents)
+        XCTAssertTrue(outline.contains("\(pageID.description)\t\(nodeID.description)\t-\tarticle"))
     }
 
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {

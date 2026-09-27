@@ -1,5 +1,17 @@
 # Codex Continuation Handoff
 
+## Current static semantic-outline checkpoint
+
+SF-AUTHORING-051 adds parent NodeID provenance to immutable static tree nodes
+and emits a validated `semantic-outline.txt` plan artifact. It has no effect
+on static HTML nesting, canonical state, resource bytes, browser behavior, or
+output writing. Only closed semantic types and known parent identities enter
+the artifact.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CommandKernelTests.testMultiPageStaticBuildPlanUsesAuthoredSemanticElementResolution`.
+
 ## Current static semantic-resolution checkpoint
 
 SF-AUTHORING-050 makes `CanonicalSemanticElement.resolved(for:)` the shared

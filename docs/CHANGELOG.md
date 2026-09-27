@@ -1,5 +1,11 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-051
+
+- Added a deterministic, content-free semantic outline to static multi-page
+  plans. It retains typed page/node/parent/semantic provenance without
+  changing canonical content, HTML nesting, browser behavior, or file writes.
+
 ## In progress — SF-AUTHORING-050
 
 - Unified static semantic-element output with the typed Inspector resolver.
