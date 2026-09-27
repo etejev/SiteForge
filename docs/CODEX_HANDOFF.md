@@ -2,8 +2,9 @@
 
 ## Current checkpoint
 
-SF-AUTHORING-037 Local form-validation and preview-state foundation v1 is IN
-PROGRESS. `LocalFormValidationEngine` resolves only caller-owned,
+SF-AUTHORING-038 adds fixed-breakpoint static CSS emission for canonical
+geometry and visibility overrides. SF-AUTHORING-037 Local form-validation and
+preview-state foundation v1 remains IN PROGRESS. `LocalFormValidationEngine` resolves only caller-owned,
 non-Codable `FormVisitorValueSnapshot` input against canonical Form metadata.
 Its results contain stable document/revision/form/field identities and failure
 categories only; it has no command, history, package, autosave, recovery,

@@ -169,6 +169,37 @@ enum ResponsiveVisibilityResolver {
     }
 }
 
+struct ResponsiveStaticOutputReport: Equatable, Sendable {
+    let appliedRuleCount: Int
+    let breakpoints: [ResponsiveBreakpoint]
+}
+
+/// Fixed-breakpoint static CSS only; all values originate in typed canonical
+/// override namespaces, never authored CSS/media strings.
+enum ResponsiveStaticCSSEmitter {
+    static func emit(nodes: [DocumentNode]) -> (css: String, report: ResponsiveStaticOutputReport) {
+        var output: [(ResponsiveBreakpoint, String)] = []
+        for breakpoint in [ResponsiveBreakpoint.tablet, .mobile] {
+            let rules = nodes.sorted { $0.id.description < $1.id.description }.compactMap { node -> String? in
+                var d: [String] = []
+                for field in GeometryInspectorField.allCases {
+                    guard let p = node.insertionProperty(ResponsiveGeometryResolver.key(field, breakpoint: breakpoint)), case .number(let v) = p.value, v.isFinite else { continue }
+                    d.append("\(field == .x ? "left" : field == .y ? "top" : field.rawValue): \(v)px;")
+                }
+                if ResponsiveVisibilityResolver.supports(node), !ResponsiveVisibilityResolver.isVisible(node, breakpoint: breakpoint) { d.append("display: none;") }
+                guard !d.isEmpty else { return nil }
+                return "\(CanonicalCSSRule.selector(for: node.id)) { \(d.joined(separator: " ")) }"
+            }
+            if !rules.isEmpty { output.append((breakpoint, rules.joined(separator: " "))) }
+        }
+        let css = output.map { breakpoint, rules in
+            let q = breakpoint == .tablet ? "@media (min-width: 600px) and (max-width: 1023px)" : "@media (max-width: 599px)"
+            return "\(q) { \(rules) }"
+        }.joined(separator: "\n")
+        return (css, .init(appliedRuleCount: output.count, breakpoints: output.map(\.0)))
+    }
+}
+
 // SF-0405-001...008 — bounded transactional frame/plain-text insertion foundation.
 
 enum InsertionKind: String, Codable, CaseIterable, Sendable {

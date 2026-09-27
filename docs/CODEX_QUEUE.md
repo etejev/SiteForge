@@ -8,6 +8,14 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-038` Responsive static-output parity foundation v1 (P1).
+  - Requirements: bounded compiler evidence for `SF-0601-001`–`005`,
+    `SF-0602-001`–`005`, and `SF-0603-001`–`005`.
+  - Delivered: fixed Tablet/Mobile media rules derive only from typed canonical
+    geometry and visibility overrides. Custom breakpoints, arbitrary CSS/media,
+    browser runtime, container queries, and fluid typography remain deferred.
+    Focused compiler evidence: 1/1 (2026-09-27).
+
 - [ ] `SF-AUTHORING-037` Local form-validation and preview-state foundation v1 (P1).
   - Requirements: bounded noncanonical evidence for `SF-1006-001`–`005`,
     `008`; `SF-1006` remains Partial.

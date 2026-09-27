@@ -1,6 +1,11 @@
 # SiteForge Development Changelog
 
-## In progress — SF-AUTHORING-037
+## In progress — SF-AUTHORING-038
+
+- Added fixed-breakpoint static CSS emission for typed Tablet/Mobile geometry
+  and visibility overrides; arbitrary responsive CSS remains unavailable.
+
+## SF-AUTHORING-037
 
 - Added a pure, noncanonical Form validation resolver for required text,
   bounded text length, local email syntax, checkbox consent, and Select
