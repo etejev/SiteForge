@@ -2239,8 +2239,13 @@ private struct FormInspectorFieldsView: View {
                 Text("Local validation").font(.subheadline.weight(.semibold))
                 Text(state.formValidationPreviewState.status)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(state.formValidationAccessibilitySummary.label)
+                    .accessibilityValue(state.formValidationAccessibilitySummary.value)
+                    .accessibilityHint(state.formValidationAccessibilitySummary.hint)
                     .accessibilityIdentifier("inspector.form.validation.status")
                 Button("Validate Empty Local Draft") { _ = state.validateSelectedFormLocally() }
+                    .keyboardShortcut("v", modifiers: [.command, .option])
+                    .disabled(!state.canValidateSelectedFormLocally)
                     .accessibilityIdentifier("inspector.form.validation.empty")
                 if let result = state.formValidationPreviewState.snapshot,
                    result.identity.formID == form.id {
@@ -4619,6 +4624,14 @@ struct SiteForgeCommands: Commands {
                 commandState?.performSelectionCommand(.clear, provenance: .menu)
             }
             .disabled(commandState?.selectionAvailability(.clear).isEnabled != true)
+        }
+
+        CommandMenu("Form") {
+            Button("Validate Selected Form Locally") {
+                _ = commandState?.validateSelectedFormLocally()
+            }
+            .keyboardShortcut("v", modifiers: [.command, .option])
+            .disabled(commandState?.canValidateSelectedFormLocally != true)
         }
 
         CommandMenu("Preview") {

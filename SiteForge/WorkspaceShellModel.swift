@@ -79,6 +79,20 @@ struct LocalFormValidationPreviewState: Equatable, Sendable {
     }
 }
 
+/// Accessibility presentation remains strictly scene-local and intentionally
+/// summarizes categories/counts, never visitor-entered values or field text.
+struct LocalFormValidationAccessibilitySummary: Equatable, Sendable {
+    let label: String
+    let value: String
+    let hint: String
+
+    init(state: LocalFormValidationPreviewState) {
+        label = "Local form validation"
+        value = state.status
+        hint = "Validate the selected Form locally. Submission is unavailable."
+    }
+}
+
 private enum CanvasRendererSignposts {
     static let log = OSLog(subsystem: "app.siteforge.SiteForge", category: "canvas-renderer")
 }
@@ -1267,6 +1281,15 @@ final class WorkspaceShellState: ObservableObject {
         }
         announcementPoster.post(formValidationPreviewState.status)
         return false
+    }
+
+    var canValidateSelectedFormLocally: Bool {
+        selectedFormContainer != nil && effectiveSelectedPageID != nil && canvasRenderPlan != nil
+            && transformValidationContext.isLifecycleAvailable
+    }
+
+    var formValidationAccessibilitySummary: LocalFormValidationAccessibilitySummary {
+        .init(state: formValidationPreviewState)
     }
 
     var canUndo: Bool { documentSession.canUndo }

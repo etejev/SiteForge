@@ -20,11 +20,12 @@ None.
     an optional authored 1…4,096 maximum-length rule for text-like fields,
     deterministic field/form identities, cancellation/stale/schema rejection,
     static-output compatibility indicator, package-reopen input proof,
-    Inspector-facing scene-local result adoption, and strict value redaction.
-    Focused non-UI validation evidence is 3/3
+    Inspector-facing scene-local result adoption, keyboard/menu validation
+    command, accessibility-focused category-only summary, and strict value
+    redaction. Focused non-UI evidence is 2/2 for this checkpoint
     (2026-09-26).
-  - Next bounded task: retain this result surface as scene-local and continue
-    Form actual-app authoring evidence separately.
+  - Next bounded task: deterministic static-output compatibility reporting and
+    explicitly disabled Form submission across multi-page builds.
   - Exclusions: network/server/browser runtime, real submission/destinations,
     anti-abuse, analytics, visitor-value persistence, UI automation, generated
     runtime success/error UI, performance/release acceptance.

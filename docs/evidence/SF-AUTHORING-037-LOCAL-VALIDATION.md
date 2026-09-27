@@ -17,6 +17,11 @@ destination. The existing native Form Inspector exposes one scene-local
 `Validate Empty Local Draft` action and category-only result/status surface.
 It never accepts or stores visitor input in canonical state.
 
+The same operation is available through the native Form menu using
+Command-Option-V. Its accessibility summary has a stable label, category/count
+value, and submission-unavailable hint; no field labels or visitor values
+cross that boundary.
+
 The Form Inspector also canonically stores an optional authored maximum-length
 rule for Text, Email, and Text Area fields. The rule is omitted when unset,
 strictly bounded to 1…4,096, and compiles through the existing atomic
@@ -29,6 +34,7 @@ Focused evidence passed 3/3 on 2026-09-26:
 - `TransformModelTests.testLocalFormValidationRejectsCancelledStaleAndInvalidSchemasWithoutMutation`
 - `CanvasRendererTests.testLocalFormValidationPreviewStateAdoptsOnlyCurrentCategorySnapshot`
 - `TransformModelTests.testFormInspectorValidationBoundCommitsAndRejectsInvalidKinds`
+- `CanvasRendererTests.testLocalFormValidationAccessibilitySummaryIsRedactedAndSceneLocal`
 
 Deferred: real visitor-input controls and actual-app accessibility/UI evidence,
 visitor value persistence, network/browser/server submission, destinations,

@@ -1055,6 +1055,24 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(state.status, "Local validation is stale. Review the live form and validate again.")
     }
 
+    // SF-1006-006/008 — accessibility surfaces receive only the local
+    // category/count summary; entered visitor values cannot leak through it.
+    func testLocalFormValidationAccessibilitySummaryIsRedactedAndSceneLocal() {
+        let documentID = DocumentID(), formID = NodeID(), fieldID = NodeID()
+        let result = FormValidationSnapshot(
+            identity: .init(documentID: documentID, revision: 3, formID: formID, fieldID: nil),
+            fields: [.init(identity: .init(documentID: documentID, revision: 3, formID: formID, fieldID: fieldID), failures: [.invalidEmail])],
+            staticOutputCompatibility: .unavailableSubmission
+        )
+        var state = LocalFormValidationPreviewState()
+        state.adopt(result, expectedDocumentID: documentID, revision: 3, formID: formID)
+        let summary = LocalFormValidationAccessibilitySummary(state: state)
+        XCTAssertEqual(summary.label, "Local form validation")
+        XCTAssertTrue(summary.value.contains("1 field issue"))
+        XCTAssertFalse(summary.value.contains(fieldID.description))
+        XCTAssertEqual(summary.hint, "Validate the selected Form locally. Submission is unavailable.")
+    }
+
     private struct Fixture {
         let scene: CanvasRenderSceneSnapshot
         let overlays: CanvasEditorOverlaySnapshot
