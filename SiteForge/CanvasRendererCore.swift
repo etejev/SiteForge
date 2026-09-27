@@ -888,6 +888,9 @@ enum StaticBoxStyleOutputEmitter {
             if let radius = style.cornerRadius { declarations.append("border-radius: \(number(radius))px;") }
             if let padding = style.padding { declarations.append("padding: \(number(padding))px;") }
             if style.clipsContent == true { declarations.append("overflow: hidden;") }
+            if let shadow = style.shadow, style.shadowEnabled != false {
+                declarations.append("box-shadow: \(number(shadow.offsetX))px \(number(shadow.offsetY))px \(number(shadow.blur))px \(number(shadow.spread))px \(rgba(shadow.color));")
+            }
             guard !declarations.isEmpty else { return nil }
             return "\(node.cssSelector) { \(declarations.joined(separator: " ")) }"
         }.joined(separator: "\n")

@@ -3359,6 +3359,28 @@ private struct DesignInspectorFieldsView: View {
                 resetDrafts()
             }.disabled(!enabled).accessibilityIdentifier("inspector.design.shadowToggle")
         }
+        if style?.shadow != nil, state.hasContentBoxSelection {
+            Toggle("Shadow enabled", isOn: Binding(
+                get: { style?.shadowEnabled != false },
+                set: { _ = state.commitDesignBoxStyle(.shadowEnabled($0), operation: "shadow enabled", provenance: .accessibility) }
+            ))
+            .toggleStyle(.checkbox)
+            .disabled(!enabled)
+            .accessibilityHint("Temporarily show or hide the authored outer shadow without removing its values.")
+            .accessibilityIdentifier("inspector.design.shadowEnabled")
+            HStack {
+                Text(style?.shadowEnabled == false ? "Outer shadow disabled" : "Outer shadow enabled")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                if style?.shadowEnabled != nil {
+                    Button("Reset") {
+                        _ = state.commitDesignBoxStyle(.shadowEnabled(nil), operation: "shadow enabled reset", provenance: .picker)
+                    }
+                    .disabled(!enabled)
+                    .accessibilityIdentifier("inspector.design.shadowEnabledReset")
+                }
+            }
+        }
         switch value {
         case .mixed(let applicable, let skipped): Text("Mixed box appearance across \(applicable) compatible objects; \(skipped) incompatible unchanged.").font(.caption2).foregroundStyle(.secondary)
         case .unavailable(let reason): Text(reason).font(.caption2).foregroundStyle(.secondary)
@@ -4339,6 +4361,12 @@ private struct LocalPreviewObject: View {
             }
         }
         .opacity(object.opacity)
+        .shadow(
+            color: previewShadowColor,
+            radius: previewShadowRadius,
+            x: previewShadowX,
+            y: previewShadowY
+        )
         .overlay {
             if let border = object.border, border.rgba.count == 4 {
                 RoundedRectangle(cornerRadius: object.cornerRadius).stroke(
@@ -4363,6 +4391,14 @@ private struct LocalPreviewObject: View {
         case .dotted: [1, 3]
         }
     }
+
+    private var previewShadowColor: Color {
+        guard let shadow = object.shadow, shadow.rgba.count == 4 else { return .clear }
+        return Color(red: shadow.rgba[0], green: shadow.rgba[1], blue: shadow.rgba[2], opacity: shadow.rgba[3])
+    }
+    private var previewShadowRadius: CGFloat { CGFloat(object.shadow?.blur ?? 0) }
+    private var previewShadowX: CGFloat { CGFloat(object.shadow?.offsetX ?? 0) }
+    private var previewShadowY: CGFloat { CGFloat(object.shadow?.offsetY ?? 0) }
 
     @ViewBuilder private var previewFill: some View {
         if let rgba = CanvasAuthoredFillCompositor.resolvedColor(layers: object.fillLayers, atNormalizedPoint: (0.5, 0.5)) ?? object.fillRGBA,

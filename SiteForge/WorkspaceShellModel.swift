@@ -900,10 +900,12 @@ actor WorkspaceScenePreparationWorker {
                     style: CanvasBorderStyle(rawValue: $0.style.rawValue) ?? .solid
                 )
             }
-            let shadow = boxStyle?.shadow.map {
-                CanvasAuthoredShadow(
-                    rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha],
-                    offsetX: $0.offsetX, offsetY: $0.offsetY, blur: $0.blur, spread: $0.spread
+            let shadow: CanvasAuthoredShadow? = boxStyle?.shadow.flatMap { resolvedShadow in
+                guard boxStyle?.shadowEnabled != false else { return nil }
+                return CanvasAuthoredShadow(
+                    rgba: [resolvedShadow.color.red, resolvedShadow.color.green, resolvedShadow.color.blue, resolvedShadow.color.alpha],
+                    offsetX: resolvedShadow.offsetX, offsetY: resolvedShadow.offsetY,
+                    blur: resolvedShadow.blur, spread: resolvedShadow.spread
                 )
             }
             let typography: CanvasTypography? = TypographyCommandRegistry.resolvedTypography(for: node).map { authored in

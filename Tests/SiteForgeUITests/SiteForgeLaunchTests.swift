@@ -856,6 +856,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         let shadow = reveal("inspector.design.shadowValues")
         replaceStructuralLayoutField(shadow, with: "2, 10, 20, 1", in: application)
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.design.announcement"], containing: "shadow committed"))
+        let shadowEnabled = reveal("inspector.design.shadowEnabled")
+        XCTAssertTrue(shadowEnabled.isHittable)
+        XCTAssertFalse(shadowEnabled.label.isEmpty)
+        shadowEnabled.click()
         attachWindowScreenshot(application, named: "SF-AUTHORING-014 shadow")
         let beforeCancel = shadow.value as? String
         replaceStructuralLayoutField(shadow, with: "invalid", in: application, endKey: .escape)

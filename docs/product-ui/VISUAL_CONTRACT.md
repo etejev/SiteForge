@@ -307,7 +307,7 @@ Form, and plain Text enabled), a bounded canvas/renderer/overlay system, selecti
 insertion, transforms, guides,
 bounded plain-text editing, local drag/reorder, bounded editable Design
 solid/linear-gradient fill controls, bounded editable Layout fixed-geometry
-controls, bounded uniform border/radius/single-shadow plus Frame/Section
+controls, bounded uniform border/radius/single enabled outer-shadow plus Frame/Section
 content-padding and clipping Design controls, the
 read-only Accessibility summary, native unavailable
 Content/Interactions destinations, native materials, and the central

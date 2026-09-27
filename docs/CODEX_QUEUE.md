@@ -12,7 +12,7 @@ persistence/history/accessibility/cancellation, focused evidence, and factual
 documentation. Run focused affected tests before each local commit; do not run
 the full gate or hosted CI per slice.
 
-`SF-AUTHORING-055` is Development Prompt **2 of 10**. After Prompt 10, run one
+`SF-AUTHORING-056` is Development Prompt **3 of 10**. After Prompt 10, run one
 authoritative `./sf verify`, repair failures, commit, push main, and monitor
 hosted CI until green. Debug-only owner add-ons do not increment this cadence.
 Until that checkpoint, commits stay local and no external GitHub/release action
@@ -24,6 +24,22 @@ actually evidenced.
 None.
 
 ## IN PROGRESS
+
+- [ ] `SF-AUTHORING-056` Native bounded outer-shadow authoring foundation (P1; Development Prompt 3 of 10).
+  - Requirements: bounded implementation/evidence for `SF-0506-001`–`008`,
+    `SF-0508-001`–`005`, `SF-0701-001`–`005`, `SF-0702-001`–`005`,
+    `SF-0305-001`–`005`, `SF-0306-001`–`005`, `SF-0407-003`–`005`, and
+    applicable `SF-1204-003`–`004`.
+  - Plan: retain the existing typed outer-shadow value and add explicit,
+    reversible enabled/default/authored provenance for Frame/Section only;
+    resolve it once through the Design transaction registry, native canvas,
+    Local Preview, and closed static output vocabulary.
+  - Exclusions: multiple, inner, inset, or layered shadows; blend/filter
+    effects; arbitrary CSS; browser runtime; unsupported node kinds;
+    publishing and release acceptance.
+  - Evidence: focused typed-registry, closed static-output, production-tile,
+    and native Inspector selectors passed 4/4 on 2026-09-27; see
+    `docs/evidence/SF-AUTHORING-056-OUTER-SHADOW.md`.
 
 - [ ] `SF-AUTHORING-055` Native spacing, border, corner-radius, and content-clipping authoring foundation (P1; Development Prompt 2 of 10).
   - Requirements: bounded implementation/evidence for `SF-0506-001`–`008`,

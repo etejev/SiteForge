@@ -225,6 +225,15 @@ browser-layout path. Evidence is in
 `docs/evidence/SF-AUTHORING-053-STATIC-BOX-MODEL.md`; local test execution is
 paused by owner instruction.
 
+SF-AUTHORING-056 is Development Prompt 3 of the restored ten-prompt cadence.
+It retains the canonical outer-shadow value and adds an explicit reversible
+enabled flag for Frame/Section. An omitted flag resolves to enabled for
+existing authored/legacy shadows; explicit disabled retains all typed values
+for exact undo/redo, persistence, and recovery. The same resolution reaches
+the native canvas, Local Preview, and closed static output vocabulary.
+Multiple/inner/inset shadows, filters, arbitrary CSS, browser runtime, and
+release acceptance remain deferred.
+
 SF-AUTHORING-055 is Development Prompt 2 of the restored ten-prompt cadence.
 It extends the existing validated `style.box.v1` representation for Frame and
 Section only: uniform content padding and explicit content clipping. The

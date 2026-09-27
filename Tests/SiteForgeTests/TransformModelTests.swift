@@ -1404,19 +1404,24 @@ final class TransformModelTests: XCTestCase {
             in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
         )
         _ = try session.execute(shadowEdit.documentCommand)
+        let disabledShadow = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .shadowEnabled(false)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )
+        _ = try session.execute(disabledShadow.documentCommand)
 
         func currentStyle() throws -> CanonicalBoxStyle {
             let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
             return try XCTUnwrap(DesignBoxStyleCommandRegistry.resolvedStyle(for: node))
         }
-        XCTAssertEqual(try currentStyle(), .init(border: border, cornerRadius: 14, shadow: shadow))
+        XCTAssertEqual(try currentStyle(), .init(border: border, cornerRadius: 14, shadow: shadow, shadowEnabled: false))
         XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
         let propertyIDs = session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!.properties
             .filter { $0.key.rawValue.hasPrefix(DesignBoxStyleCommandRegistry.namespace) }.map(\.id)
         try session.undo()
-        XCTAssertNil(try currentStyle().shadow)
+        XCTAssertNil(try currentStyle().shadowEnabled)
         try session.redo()
-        XCTAssertEqual(try currentStyle().shadow, shadow)
+        XCTAssertEqual(try currentStyle().shadowEnabled, false)
         let reopenedIDs = session.document.pages[0].nodes.first { $0.id == fixture.nodeID }!.properties
             .filter { $0.key.rawValue.hasPrefix(DesignBoxStyleCommandRegistry.namespace) }.map(\.id)
         XCTAssertEqual(propertyIDs, reopenedIDs)
@@ -1433,6 +1438,10 @@ final class TransformModelTests: XCTestCase {
         )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
         XCTAssertThrowsError(try registry.prepare(
             command(session.document, ids: [fixture.nodeID], edit: .cornerRadius(8), cancelled: true),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )) { XCTAssertEqual($0 as? DesignBoxStyleError, .cancelled) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .shadowEnabled(true), cancelled: true),
             in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
         )) { XCTAssertEqual($0 as? DesignBoxStyleError, .cancelled) }
         let stale = DesignBoxStyleCommand(

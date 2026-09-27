@@ -870,13 +870,36 @@ final class CommandKernelTests: XCTestCase {
             .init(key: .init(rawValue: "style.box.v1.radius.uniform"), value: .number(12), origin: .authored),
             .init(key: .init(rawValue: "style.box.v1.padding.uniform"), value: .number(24), origin: .authored),
             .init(key: .init(rawValue: "style.box.v1.clip.content"), value: .boolean(true), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.shadow.offsetX"), value: .number(2), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.shadow.offsetY"), value: .number(8), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.shadow.blur"), value: .number(12), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.shadow.spread"), value: .number(1), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.shadow.color.red"), value: .number(0), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.shadow.color.green"), value: .number(0), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.shadow.color.blue"), value: .number(0), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.shadow.color.alpha"), value: .number(0.25), origin: .authored),
         ]
         let frame = DocumentNode(id: frameID, kind: .frame, name: "Frame", parent: .page(pageID), properties: properties)
         let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
                                 rootNodeIDs: [frameID], nodes: [frame])
         let plan = try MultiPageStaticBuildPlanner.plan(document: .init(pages: [page]))
         let stylesheet = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
-        XCTAssertTrue(stylesheet.contains("\(CanonicalCSSRule.selector(for: frameID)) { border: 2.0px dashed rgba(25.5, 51.0, 76.5, 1.0); border-radius: 12.0px; padding: 24.0px; overflow: hidden; }"), stylesheet)
+        XCTAssertTrue(stylesheet.contains("\(CanonicalCSSRule.selector(for: frameID)) { border: 2.0px dashed rgba(25.5, 51.0, 76.5, 1.0); border-radius: 12.0px; padding: 24.0px; overflow: hidden; box-shadow:"), stylesheet)
+        XCTAssertTrue(stylesheet.contains("box-shadow: 2.0px 8.0px 12.0px 1.0px rgba(0.0, 0.0, 0.0, 0.25);"), stylesheet)
+
+        // SF-0506-003/005 — an explicit disabled state retains the typed
+        // authored values for later re-enable, but it must not enter output.
+        var disabledFrame = frame
+        disabledFrame.properties.append(.init(
+            key: .init(rawValue: "style.box.v1.shadow.enabled"),
+            value: .boolean(false),
+            origin: .authored
+        ))
+        var disabledPage = page
+        disabledPage.nodes = [disabledFrame]
+        let disabledPlan = try MultiPageStaticBuildPlanner.plan(document: .init(pages: [disabledPage]))
+        let disabledStylesheet = try XCTUnwrap(disabledPlan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertFalse(disabledStylesheet.contains("box-shadow:"), disabledStylesheet)
     }
 
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {

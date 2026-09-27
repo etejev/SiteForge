@@ -5,11 +5,18 @@
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-055` is Development Prompt 2 of 10; Prompt 10
+its local commit. `SF-AUTHORING-056` is Development Prompt 3 of 10; Prompt 10
 triggers the next full verification and hosted checkpoint. Until then do not
 push or run broad gates. Normative modules remain Partial unless fully proven.
 
-## Current native fill-authoring checkpoint
+## Current native outer-shadow checkpoint
+
+SF-AUTHORING-056 keeps outer-shadow geometry/color in the established typed
+`style.box.v1` model and adds `shadow.enabled` only for Frame/Section. Omitted
+state resolves to enabled; explicit false preserves the complete shadow value
+without rendering it. The identity-gated registry is the only write path, and
+native canvas, Local Preview, and typed static CSS all consume the same
+resolution. Do not introduce a separate shadow model or raw CSS pathway.
 
 ## Current native box-style checkpoint
 

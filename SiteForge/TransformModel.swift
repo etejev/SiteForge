@@ -71,6 +71,10 @@ struct CanonicalBoxStyle: Equatable, Sendable {
     let border: CanonicalBorder?
     let cornerRadius: Double?
     let shadow: CanonicalShadow?
+    /// An omitted enabled flag resolves to `true` for an existing legacy or
+    /// authored shadow. Explicit false retains the complete typed shadow for
+    /// reversible disable/enable without flattening its intent.
+    let shadowEnabled: Bool?
     /// Content padding is intentionally uniform in this bounded slice. `nil`
     /// means the explicit default (zero), retaining omitted/defaulted/authored
     /// provenance without introducing per-edge state.
@@ -83,12 +87,14 @@ struct CanonicalBoxStyle: Equatable, Sendable {
         border: CanonicalBorder?,
         cornerRadius: Double?,
         shadow: CanonicalShadow?,
+        shadowEnabled: Bool? = nil,
         padding: Double? = nil,
         clipsContent: Bool? = nil
     ) {
         self.border = border
         self.cornerRadius = cornerRadius
         self.shadow = shadow
+        self.shadowEnabled = shadowEnabled
         self.padding = padding
         self.clipsContent = clipsContent
     }
@@ -97,6 +103,7 @@ struct CanonicalBoxStyle: Equatable, Sendable {
         (border?.isValid ?? true)
             && (cornerRadius.map { $0.isFinite && (0...10_000).contains($0) } ?? true)
             && (shadow?.isValid ?? true)
+            && (shadow != nil || shadowEnabled == nil)
             && (padding.map { $0.isFinite && (0...10_000).contains($0) } ?? true)
     }
 }
@@ -111,6 +118,7 @@ enum DesignBoxStyleEdit: Sendable {
     case border(CanonicalBorder?)
     case cornerRadius(Double?)
     case shadow(CanonicalShadow?)
+    case shadowEnabled(Bool?)
     case padding(Double?)
     case clipsContent(Bool?)
 }
@@ -168,12 +176,16 @@ struct DesignBoxStyleCommandRegistry: Sendable {
             let result = CanonicalShadow(color: value, offsetX: x, offsetY: y, blur: blur, spread: spread)
             return result.isValid ? result : nil
         }()
+        let shadowEnabled: Bool? = node.insertionProperty(namespace + "shadow.enabled").flatMap {
+            if case .boolean(let value) = $0.value { return value }
+            return nil
+        }
         let padding = number("padding.uniform").flatMap { $0.isFinite && (0...10_000).contains($0) ? $0 : nil }
         let clipsContent: Bool? = node.insertionProperty(namespace + "clip.content").flatMap {
             if case .boolean(let value) = $0.value { return value }
             return nil
         }
-        return CanonicalBoxStyle(border: border, cornerRadius: radius, shadow: shadow,
+        return CanonicalBoxStyle(border: border, cornerRadius: radius, shadow: shadow, shadowEnabled: shadowEnabled,
                                  padding: padding, clipsContent: clipsContent)
     }
 
@@ -237,22 +249,27 @@ struct DesignBoxStyleCommandRegistry: Sendable {
             switch command.edit {
             case .border(let value):
                 if let value, !value.isValid { throw DesignBoxStyleError.invalidValue }
-                style = .init(border: value, cornerRadius: style.cornerRadius, shadow: style.shadow,
+                style = .init(border: value, cornerRadius: style.cornerRadius, shadow: style.shadow, shadowEnabled: style.shadowEnabled,
                               padding: style.padding, clipsContent: style.clipsContent)
             case .cornerRadius(let value):
                 if let value, (!value.isFinite || !(0...10_000).contains(value)) { throw DesignBoxStyleError.invalidValue }
-                style = .init(border: style.border, cornerRadius: value, shadow: style.shadow,
+                style = .init(border: style.border, cornerRadius: value, shadow: style.shadow, shadowEnabled: style.shadowEnabled,
                               padding: style.padding, clipsContent: style.clipsContent)
             case .shadow(let value):
                 if let value, !value.isValid { throw DesignBoxStyleError.invalidValue }
                 style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: value,
+                              shadowEnabled: value == nil ? nil : style.shadowEnabled,
                               padding: style.padding, clipsContent: style.clipsContent)
+            case .shadowEnabled(let value):
+                guard style.shadow != nil else { throw DesignBoxStyleError.unavailable("Add an outer shadow before changing its enabled state.") }
+                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: style.shadow,
+                              shadowEnabled: value, padding: style.padding, clipsContent: style.clipsContent)
             case .padding(let value):
                 if let value, (!value.isFinite || !(0...10_000).contains(value)) { throw DesignBoxStyleError.invalidValue }
-                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: style.shadow,
+                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: style.shadow, shadowEnabled: style.shadowEnabled,
                               padding: value, clipsContent: style.clipsContent)
             case .clipsContent(let value):
-                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: style.shadow,
+                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: style.shadow, shadowEnabled: style.shadowEnabled,
                               padding: style.padding, clipsContent: value)
             }
             guard style.isValid else { throw DesignBoxStyleError.invalidValue }
@@ -297,6 +314,7 @@ struct DesignBoxStyleCommandRegistry: Sendable {
             result[namespace + "shadow.blur"] = .number(shadow.blur)
             result[namespace + "shadow.spread"] = .number(shadow.spread)
             set(shadow.color, prefix: namespace + "shadow.color", into: &result)
+            if let enabled = style.shadowEnabled { result[namespace + "shadow.enabled"] = .boolean(enabled) }
         }
         return result
     }
@@ -309,6 +327,7 @@ struct DesignBoxStyleCommandRegistry: Sendable {
     static func supports(_ edit: DesignBoxStyleEdit, kind: NodeKind) -> Bool {
         switch edit {
         case .padding, .clipsContent: contentBoxKinds.contains(kind)
+        case .shadowEnabled: contentBoxKinds.contains(kind)
         case .border, .cornerRadius, .shadow: applicableKinds.contains(kind)
         }
     }

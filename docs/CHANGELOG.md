@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-056
+
+- Added a reversible enabled state for Frame and Section outer shadows. Turning
+  a shadow off preserves its typed color and geometry for restoration, undo,
+  recovery, and persistence; canvas, Local Preview, and closed static output
+  resolve the same state.
+
 ## In progress — SF-AUTHORING-055
 
 - Added Frame and Section content-padding and content-clipping authoring to

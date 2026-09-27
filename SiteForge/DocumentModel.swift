@@ -1436,6 +1436,7 @@ enum CanonicalBoxStyleNamespaceValidator {
         "shadow.offsetX", "shadow.offsetY", "shadow.blur", "shadow.spread",
         "shadow.color.red", "shadow.color.green", "shadow.color.blue", "shadow.color.alpha",
     ]
+    private static let shadowEnabledKey = "shadow.enabled"
     private static let radiusKey = "radius.uniform"
     private static let paddingKey = "padding.uniform"
     private static let clipKey = "clip.content"
@@ -1447,7 +1448,7 @@ enum CanonicalBoxStyleNamespaceValidator {
         guard supportedKinds.contains(node.kind) else { throw ModelValidationError.invalidBoxStyleState }
         let suffixes = owned.map { String($0.key.rawValue.dropFirst(root.count)) }
         guard Set(suffixes).count == suffixes.count else { throw ModelValidationError.invalidBoxStyleState }
-        let allowed = borderKeys.union(shadowKeys).union([radiusKey, paddingKey, clipKey])
+        let allowed = borderKeys.union(shadowKeys).union([shadowEnabledKey, radiusKey, paddingKey, clipKey])
         guard Set(suffixes).isSubset(of: allowed) else { throw ModelValidationError.invalidBoxStyleState }
         let values = Dictionary(uniqueKeysWithValues: owned.map { (String($0.key.rawValue.dropFirst(root.count)), $0.value) })
         if !borderKeys.isDisjoint(with: suffixes) {
@@ -1466,8 +1467,11 @@ enum CanonicalBoxStyleNamespaceValidator {
         if let value = values[clipKey] {
             guard contentBoxKinds.contains(node.kind), case .boolean = value else { throw ModelValidationError.invalidBoxStyleState }
         }
-        if !shadowKeys.isDisjoint(with: suffixes) {
+        if !shadowKeys.isDisjoint(with: suffixes) || suffixes.contains(shadowEnabledKey) {
             guard shadowKeys.isSubset(of: suffixes) else { throw ModelValidationError.invalidBoxStyleState }
+            if let value = values[shadowEnabledKey] {
+                guard contentBoxKinds.contains(node.kind), case .boolean = value else { throw ModelValidationError.invalidBoxStyleState }
+            }
             for key in ["shadow.offsetX", "shadow.offsetY", "shadow.blur", "shadow.spread"] {
                 guard case .number(let value)? = values[key], value.isFinite else { throw ModelValidationError.invalidBoxStyleState }
             }
