@@ -8,6 +8,16 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-047` Static Image fit/focal output parity foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-0802-003`–`004` and
+    `SF-1204-003`–`004`.
+  - Plan: map only typed canonical Fit/Fill/Stretch and finite normalized
+    focal coordinates into fixed `object-fit`/`object-position` CSS on the
+    existing stable Image selector. Keep resource intent and geometry intact.
+  - Exclusions: image editing/crops/renditions, arbitrary transforms/CSS,
+    responsive source sets, browser loading, generated resource writes,
+    publishing, and release acceptance.
+
 - [ ] `SF-AUTHORING-046` Static Image resource-reference parity foundation (P1).
   - Requirements: bounded compiler evidence for `SF-0801-003`, `SF-0802-003`,
     and `SF-1203-003`–`004`.

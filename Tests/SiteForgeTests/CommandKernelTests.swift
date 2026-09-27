@@ -787,6 +787,10 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertTrue(html.contains("src=\"assets/\(hash).png\""))
         XCTAssertTrue(html.contains("alt=\"A &lt;card&gt;\""))
         XCTAssertTrue(html.contains("data-siteforge-asset=\"\(asset.id.description)\""))
+        let stylesheet = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(stylesheet.contains(CanonicalCSSRule.selector(for: nodeID)))
+        XCTAssertTrue(stylesheet.contains("object-fit: contain;"))
+        XCTAssertTrue(stylesheet.contains("object-position: 50.0% 50.0%;"))
     }
 
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {

@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-047
+
+- Added deterministic static Image presentation rules. Canonical Fit, Fill,
+  Stretch, and normalized focal coordinates emit only fixed `object-fit` and
+  `object-position` declarations on existing Image selectors; no crop or
+  derived image data is created.
+
 ## In progress — SF-AUTHORING-046
 
 - Added static Image resource-reference projection using only verified

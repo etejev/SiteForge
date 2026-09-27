@@ -168,6 +168,16 @@ publishing, and release acceptance remain deferred. Evidence is in
 `docs/evidence/SF-AUTHORING-046-STATIC-IMAGE-REFERENCES.md`; local test
 execution is paused by owner instruction.
 
+SF-AUTHORING-047 has begun static Image fit/focal output parity. The static
+stylesheet maps only canonical Fit/Fill/Stretch and finite normalized focal
+coordinates to fixed `object-fit`/`object-position` declarations using the
+existing stable Image selector. It preserves the original resource and
+canonical geometry; image crops/renditions, transforms, responsive sources,
+browser loading, generated resource writes, publishing, and release acceptance
+remain deferred. Evidence is in
+`docs/evidence/SF-AUTHORING-047-STATIC-IMAGE-PRESENTATION.md`; local test
+execution is paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

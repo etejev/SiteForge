@@ -1,5 +1,18 @@
 # Codex Continuation Handoff
 
+## Current static-image presentation checkpoint
+
+SF-AUTHORING-047 adds `StaticImageStyleOutputEmitter`. It maps only the typed
+canonical Fit/Fill/Stretch enum and bounded focal point to a fixed
+`object-fit`/`object-position` rule on the existing NodeID selector. The
+projection is static plan metadata: it preserves the referenced original
+resource and creates no crop, rendition, transform, browser path, or generated
+resource write.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedImageReference`.
+
 ## Current static-image reference checkpoint
 
 SF-AUTHORING-046 carries canonical Image metadata into the static tree through

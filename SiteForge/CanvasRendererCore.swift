@@ -457,6 +457,9 @@ struct InternalStaticImage: Equatable, Sendable {
     let outputPath: String?
     let altText: String
     let isDecorative: Bool
+    let fitMode: ImageFitMode
+    let focalX: Double
+    let focalY: Double
 }
 
 struct InternalFormField: Equatable, Sendable {
@@ -544,7 +547,10 @@ enum InternalDocumentRenderTreeCompiler {
             assetID: style.assetID,
             outputPath: outputPaths[style.assetID],
             altText: style.altText,
-            isDecorative: style.isDecorative
+            isDecorative: style.isDecorative,
+            fitMode: style.fitMode,
+            focalX: style.focalX,
+            focalY: style.focalY
         )
     }
 
@@ -707,6 +713,43 @@ enum StaticTypographyOutputEmitter {
     }
 }
 
+/// Static image presentation maps only the closed canonical fit/focal model to
+/// fixed CSS. It does not create a crop, rendition, transform, or image-edit
+/// surface; the original verified resource reference remains unchanged.
+enum StaticImageStyleOutputEmitter {
+    static func emit(nodes: [InternalRenderTreeNode]) -> String {
+        nodes.filter { $0.image != nil }
+            .sorted { $0.id.description < $1.id.description }
+            .compactMap(rule(for:))
+            .joined(separator: "\n")
+    }
+
+    private static func rule(for node: InternalRenderTreeNode) -> String? {
+        guard node.id == node.sourceNodeID,
+              node.cssSelector == CanonicalCSSRule.selector(for: node.id),
+              let image = node.image,
+              image.focalX.isFinite, image.focalY.isFinite,
+              (0...1).contains(image.focalX), (0...1).contains(image.focalY) else {
+            return nil
+        }
+        let fit: String = switch image.fitMode {
+        case .fit: "contain"
+        case .fill: "cover"
+        case .stretch: "fill"
+        }
+        let focal = "\(number(image.focalX * 100))% \(number(image.focalY * 100))%"
+        return "\(node.cssSelector) { object-fit: \(fit); object-position: \(focal); }"
+    }
+
+    private static func number(_ value: Double) -> String {
+        let rounded = (value * 1_000).rounded() / 1_000
+        var output = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), rounded)
+        while output.contains(".") && output.last == "0" { output.removeLast() }
+        if output.last == "." { output.append("0") }
+        return output == "-0.0" ? "0.0" : output
+    }
+}
+
 // SF-1206 foundation: build plans are deterministic and side-effect free.
 struct LocalStaticBuildPlan: Equatable, Sendable {
     struct File: Equatable, Sendable { let path: String; let contents: String }
@@ -797,7 +840,8 @@ enum MultiPageStaticBuildPlanner {
             nodes: pages.flatMap(\.canonicalDepthFirstNodes)
         )
         let typography = StaticTypographyOutputEmitter.emit(nodes: staticNodes)
-        let stylesheet = [layout.css, typography].filter { !$0.isEmpty }.joined(separator: "\n")
+        let images = StaticImageStyleOutputEmitter.emit(nodes: staticNodes)
+        let stylesheet = [layout.css, typography, images].filter { !$0.isEmpty }.joined(separator: "\n")
         if !stylesheet.isEmpty {
             guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
             files.append(.init(path: "styles.css", contents: stylesheet))
