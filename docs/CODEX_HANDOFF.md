@@ -1,5 +1,16 @@
 # Codex Continuation Handoff
 
+## Current static authored-box checkpoint
+
+SF-AUTHORING-053 adds only the fixed `box-sizing: border-box` declaration to
+valid typed static geometry. This retains canonical width/height as the outer
+output box without adding authored CSS, a layout mode, browser work, file
+generation, or publishing.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CanvasRendererTests.testStaticLayoutOutputUsesStableRoundingAndExplicitVisibilityOverrides`.
+
 ## Current static plan-integrity checkpoint
 
 SF-AUTHORING-052 adds a deterministic SHA-256 digest to each immutable static

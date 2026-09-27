@@ -1,5 +1,10 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-053
+
+- Added a fixed static border-box default so typed canonical dimensions remain
+  the output outer box as later bounded presentation rules add decoration.
+
 ## In progress — SF-AUTHORING-052
 
 - Added deterministic integrity provenance to immutable static build plans.

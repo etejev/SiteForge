@@ -218,6 +218,13 @@ file, changing canonical state, or invoking a writer. Evidence is in
 `docs/evidence/SF-AUTHORING-052-STATIC-PLAN-INTEGRITY.md`; local test
 execution is paused by owner instruction.
 
+SF-AUTHORING-053 has begun static authored-box parity. Valid typed static
+geometry now includes a fixed `border-box` declaration, retaining canonical
+width/height as the outer output box without adding an authorable CSS or
+browser-layout path. Evidence is in
+`docs/evidence/SF-AUTHORING-053-STATIC-BOX-MODEL.md`; local test execution is
+paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

@@ -8,6 +8,13 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-053` Static authored-box parity foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-1204-003`–`004`.
+  - Plan: retain canonical typed width/height as the static outer box through
+    one fixed nonauthorable box-model declaration.
+  - Exclusions: authorable CSS, layout modes, browser rendering, generated
+    output files, publishing, and release acceptance.
+
 - [ ] `SF-AUTHORING-052` Static plan-integrity foundation (P1).
   - Requirements: bounded compiler evidence for `SF-1206-003`–`004`.
   - Plan: derive a deterministic content-free digest from the exact immutable

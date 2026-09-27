@@ -242,6 +242,10 @@ enum StaticLayoutOutputEmitter {
 
     private static func geometryDeclarations(_ geometry: InsertionGeometry) -> [String] {
         [
+            // Static dimensions are the canonical authored box, not a CSS
+            // content box that expands later when bounded presentation rules
+            // add borders or padding.
+            "box-sizing: border-box;",
             "height: \(number(geometry.size.height))px;",
             "left: \(number(geometry.origin.x))px;",
             "position: absolute;",

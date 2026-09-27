@@ -163,6 +163,7 @@ final class CanvasRendererTests: XCTestCase {
             .init(key: .init(rawValue: ResponsiveVisibilityResolver.key(.mobile)), value: .boolean(true), origin: .authored),
         ])
         let output = StaticLayoutOutputEmitter.emit(nodes: [node])
+        XCTAssertTrue(output.css.contains("box-sizing: border-box;"))
         XCTAssertTrue(output.css.contains("left: 0.0px;"))
         XCTAssertTrue(output.css.contains("display: none;"))
         XCTAssertTrue(output.css.contains("left: 48.235px;"))
