@@ -412,11 +412,16 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     /// Canonical typography intent is immutable metadata here; output maps
     /// only its closed allowlist and never consults installed fonts.
     let typography: CanonicalTypography?
+    /// Image resource intent is canonical and path-independent. A verified
+    /// content-addressed output path is optional because planning must retain
+    /// a missing resource reference without manufacturing a URL.
+    let image: InternalStaticImage?
 
     init(id: NodeID, sourceNodeID: NodeID, paintOrder: Int, frame: WorldRect,
          semanticElement: String, cssSelector: String, formField: InternalFormField?,
          control: InternalStaticControl? = nil, anchorID: String? = nil,
-         textContent: String? = nil, typography: CanonicalTypography? = nil) {
+         textContent: String? = nil, typography: CanonicalTypography? = nil,
+         image: InternalStaticImage? = nil) {
         self.id = id
         self.sourceNodeID = sourceNodeID
         self.paintOrder = paintOrder
@@ -428,6 +433,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
         self.anchorID = anchorID
         self.textContent = textContent
         self.typography = typography
+        self.image = image
     }
 }
 
@@ -441,6 +447,16 @@ struct InternalStaticControl: Equatable, Sendable {
     /// below; it never creates an editor-side browser or navigation runtime.
     let opensNewContext: Bool
     let disabled: Bool
+}
+
+/// A safe static Image projection. `outputPath` can only originate from the
+/// verified content-addressed asset planner; it is never a Finder path or a
+/// user-authored URL.
+struct InternalStaticImage: Equatable, Sendable {
+    let assetID: AssetID
+    let outputPath: String?
+    let altText: String
+    let isDecorative: Bool
 }
 
 struct InternalFormField: Equatable, Sendable {
@@ -497,7 +513,8 @@ enum InternalDocumentRenderTreeCompiler {
         documentID: DocumentID,
         revision: UInt64,
         staticRoutes: [PageID: String] = [:],
-        sectionIDs: [PageID: Set<NodeID>] = [:]
+        sectionIDs: [PageID: Set<NodeID>] = [:],
+        imageOutputPaths: [AssetID: String] = [:]
     ) throws -> InternalRenderTreeSnapshot {
         let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
         let nodes = try page.canonicalDepthFirstNodes().enumerated().map { paintOrder, node in
@@ -511,10 +528,24 @@ enum InternalDocumentRenderTreeCompiler {
                 control: control,
                 anchorID: sectionIDs[page.id]?.contains(node.id) == true ? anchorID(for: node.id) : nil,
                 textContent: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
-                typography: node.kind == .text ? CanonicalTypography.resolved(for: node) : nil
+                typography: node.kind == .text ? CanonicalTypography.resolved(for: node) : nil,
+                image: staticImage(for: node, outputPaths: imageOutputPaths)
             )
         }
         return .init(documentID: documentID, revision: revision, nodes: nodes)
+    }
+
+    private static func staticImage(
+        for node: DocumentNode,
+        outputPaths: [AssetID: String]
+    ) -> InternalStaticImage? {
+        guard let style = CanonicalImageStyle.resolve(node) else { return nil }
+        return .init(
+            assetID: style.assetID,
+            outputPath: outputPaths[style.assetID],
+            altText: style.altText,
+            isDecorative: style.isDecorative
+        )
     }
 
     /// SF-0806/SF-1102/SF-1203 v1: resolve only typed, prevalidated targets
@@ -720,8 +751,15 @@ enum LocalStaticBuildWriter {
 enum MultiPageStaticBuildError: Error, Equatable, Sendable { case invalidRoute, collision, invalidDocument }
 
 enum MultiPageStaticBuildPlanner {
-    static func plan(document: CanonicalDocument) throws -> LocalStaticBuildPlan {
+    static func plan(
+        document: CanonicalDocument,
+        imageOutputEntries: [StaticAssetExportEntry] = []
+    ) throws -> LocalStaticBuildPlan {
         let pages = document.pages.filter { $0.role != .componentDefinition }
+        let imageOutputPaths = staticImagePaths(
+            assets: document.imageAssets,
+            entries: imageOutputEntries
+        )
         var staticRoutes: [PageID: String] = [:]
         var sectionIDs: [PageID: Set<NodeID>] = [:]
         for page in pages {
@@ -745,7 +783,8 @@ enum MultiPageStaticBuildPlanner {
             )
             let tree = try InternalDocumentRenderTreeCompiler.compile(
                 page: page, documentID: document.id, revision: document.revision,
-                staticRoutes: staticRoutes, sectionIDs: sectionIDs
+                staticRoutes: staticRoutes, sectionIDs: sectionIDs,
+                imageOutputPaths: imageOutputPaths
             )
             staticNodes += tree.nodes
             let body = try SafeHTMLEmitter.emit(tree)
@@ -765,6 +804,20 @@ enum MultiPageStaticBuildPlanner {
         }
         files.append(.init(path: "manifest.txt", contents: files.map(\.path).sorted().joined(separator: "\n")))
         return .init(revision: document.revision, files: files)
+    }
+
+    /// Missing/corrupt output entries are represented by an in-bounds missing
+    /// resource state in the static tree; the canonical AssetID remains intact.
+    private static func staticImagePaths(
+        assets: [ImageAsset],
+        entries: [StaticAssetExportEntry]
+    ) -> [AssetID: String] {
+        Dictionary(uniqueKeysWithValues: assets.compactMap { asset -> (AssetID, String)? in
+            guard let path = try? StaticImageOutputReferencePlanner.path(for: asset, entries: entries) else {
+                return nil
+            }
+            return (asset.id, path)
+        })
     }
     static func outputPath(for page: DocumentPage) throws -> String {
         let route = page.route.rawValue
@@ -971,7 +1024,9 @@ enum SafeHTMLEmitter {
             }
             return "<button\(attributes) type=\"button\"\(control.disabled ? " disabled aria-disabled=\"true\"" : "")>\(label)</button>"
         }
-        if node.semanticElement == "img" { return "<img\(attributes)>" }
+        if node.semanticElement == "img" {
+            return try emitImage(node, attributes: attributes)
+        }
         // Text is canonical plain content, not a markup fragment. Invalid
         // historical content is safely omitted from static output rather than
         // becoming executable or malformed HTML.
@@ -1018,6 +1073,22 @@ enum SafeHTMLEmitter {
             return "<label for=\"\(controlID)\">\(escape(field.label))</label>\(control)\(help)"
     }
 
+    private static func emitImage(_ node: InternalRenderTreeNode, attributes: String) throws -> String {
+        guard let image = node.image else { return "<img\(attributes) data-siteforge-asset-state=\"missing\">" }
+        let resource = " data-siteforge-asset=\"\(escape(image.assetID.description))\""
+        let source: String
+        if let path = image.outputPath, isVerifiedAssetPath(path) {
+            source = " src=\"\(escape(path))\""
+        } else {
+            source = " data-siteforge-asset-state=\"missing\""
+        }
+        if image.isDecorative {
+            return "<img\(attributes)\(resource)\(source) alt=\"\" role=\"presentation\">"
+        }
+        let alt = safeTextContent(image.altText) ?? ""
+        return "<img\(attributes)\(resource)\(source) alt=\"\(escape(alt))\">"
+    }
+
     private static func validatedIdentifier(_ node: InternalRenderTreeNode) throws -> String {
         let identifier = node.id.rawValue.uuidString.lowercased()
         guard identifier == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeHTMLEmissionError.invalidIdentity }
@@ -1039,6 +1110,10 @@ enum SafeHTMLEmitter {
             return nil
         }
         return value
+    }
+
+    private static func isVerifiedAssetPath(_ value: String) -> Bool {
+        value.range(of: "^assets/[a-f0-9]{64}\\.(png|jpg)$", options: .regularExpression) != nil
     }
 
     private static func validOptions(_ options: [InternalFormOption]) -> Bool {

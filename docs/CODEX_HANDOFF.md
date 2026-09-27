@@ -1,5 +1,19 @@
 # Codex Continuation Handoff
 
+## Current static-image reference checkpoint
+
+SF-AUTHORING-046 carries canonical Image metadata into the static tree through
+`InternalStaticImage`. `MultiPageStaticBuildPlanner` accepts only existing
+verified content-addressed export entries, mapping them to a safe `src`; a
+missing or corrupt entry instead leaves an explicit missing-resource marker
+while retaining the stable AssetID and escaped alt/decorative semantics. This
+does not export bytes, use filesystem paths or remote URLs, or start a browser
+image-loading path.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedImageReference`.
+
 ## Current static-typography checkpoint
 
 SF-AUTHORING-045 makes canonical plain Text content visible in the immutable

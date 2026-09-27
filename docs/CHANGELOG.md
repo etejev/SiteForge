@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-046
+
+- Added static Image resource-reference projection using only verified
+  content-addressed paths. Image alt/decorative semantics are escaped from
+  canonical metadata; unavailable output resources retain an explicit missing
+  state without changing the AssetID or inventing a URL.
+
 ## In progress — SF-AUTHORING-045
 
 - Added safe static Text content and typography projection. Canonical plain

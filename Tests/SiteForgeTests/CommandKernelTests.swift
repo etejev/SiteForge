@@ -762,6 +762,33 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertEqual(plan.files.last?.path, "manifest.txt")
     }
 
+    // SF-0801-003, SF-0802-003, SF-1203-003 — only verified
+    // content-addressed image references enter a static multi-page plan.
+    func testMultiPageStaticBuildPlanIncludesVerifiedImageReference() throws {
+        let pageID = PageID(), nodeID = NodeID(), resourceID = ResourceID()
+        let hash = String(repeating: "a", count: 64)
+        let asset = ImageAsset(resourceID: resourceID, displayName: "Card", originalFilename: "card.png",
+                               format: .png, pixelWidth: 1, pixelHeight: 1, byteCount: 1, contentHash: hash)
+        let node = DocumentNode(id: nodeID, kind: .image, name: "Card", parent: .page(pageID), properties: [
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "assetID"), value: .string(asset.id.description), origin: .authored),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "fit"), value: .string(ImageFitMode.fit.rawValue), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.x"), value: .number(0.5), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.y"), value: .number(0.5), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "alt"), value: .string("A <card>"), origin: .authored),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "decorative"), value: .boolean(false), origin: .defaulted),
+        ])
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [nodeID], nodes: [node])
+        let entry = StaticAssetExportEntry(resourceID: resourceID, outputPath: "assets/\(hash).png", sha256: hash)
+        let plan = try MultiPageStaticBuildPlanner.plan(
+            document: .init(pages: [page], imageAssets: [asset]), imageOutputEntries: [entry]
+        )
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        XCTAssertTrue(html.contains("src=\"assets/\(hash).png\""))
+        XCTAssertTrue(html.contains("alt=\"A &lt;card&gt;\""))
+        XCTAssertTrue(html.contains("data-siteforge-asset=\"\(asset.id.description)\""))
+    }
+
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {
         let document = BlankProjectDefaults.document()
         let registry = PageCommandRegistry()

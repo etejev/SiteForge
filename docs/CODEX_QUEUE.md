@@ -8,6 +8,17 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-046` Static Image resource-reference parity foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-0801-003`, `SF-0802-003`,
+    and `SF-1203-003`–`004`.
+  - Plan: carry canonical Image AssetID/alt/decorative intent through the
+    immutable static tree, resolve only a verified content-addressed path from
+    the existing resource planner, and retain a safe missing-resource state
+    when no entry is available.
+  - Exclusions: resource byte export/writes, image transforms or editing,
+    remote URLs/providers, raw HTML attributes, browser image loading,
+    responsive source sets, publishing, and release acceptance.
+
 - [ ] `SF-AUTHORING-045` Static typography-output parity foundation (P1).
   - Requirements: bounded compiler evidence for `SF-0507-003`–`004`,
     `SF-1203-003`, and `SF-1204-003`–`004`.

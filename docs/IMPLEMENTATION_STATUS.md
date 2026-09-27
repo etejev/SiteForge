@@ -158,6 +158,16 @@ and release acceptance remain deferred. Evidence is in
 `docs/evidence/SF-AUTHORING-045-STATIC-TYPOGRAPHY.md`; local test execution is
 paused by owner instruction.
 
+SF-AUTHORING-046 has begun static Image resource-reference parity. The
+immutable static tree carries canonical AssetID, alt/decorative intent, and an
+optional verified content-addressed path from the existing resource planner.
+Missing/corrupt plan entries remain an explicit safe missing-resource state;
+they never become a Finder path, raw URL, or canonical mutation. Resource-byte
+export/writes, browser loading, remote assets, responsive source sets,
+publishing, and release acceptance remain deferred. Evidence is in
+`docs/evidence/SF-AUTHORING-046-STATIC-IMAGE-REFERENCES.md`; local test
+execution is paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions
