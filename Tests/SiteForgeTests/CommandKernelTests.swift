@@ -803,6 +803,10 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertTrue(stylesheet.contains("display: none;"))
         XCTAssertTrue(stylesheet.contains("object-fit: contain;"))
         XCTAssertTrue(stylesheet.contains("object-position: 50.0% 50.0%;"))
+        let assetManifest = try XCTUnwrap(plan.files.first { $0.path == "assets.manifest.txt" }?.contents)
+        XCTAssertTrue(assetManifest.contains(asset.id.description))
+        XCTAssertTrue(assetManifest.contains("assets/\(hash).png\t640x480"))
+        XCTAssertFalse(assetManifest.contains(asset.originalFilename))
     }
 
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {

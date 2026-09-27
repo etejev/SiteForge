@@ -8,6 +8,16 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-049` Static asset-manifest integrity foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-0801-003`–`004` and
+    `SF-1206-003`–`004`.
+  - Plan: add an immutable, deterministic Image reference manifest to the
+    existing static plan using only stable AssetID, verified content-addressed
+    path, and validated dimensions.
+  - Exclusions: resource-byte writes, generated-site packaging, browser
+    loading, remote providers, source sets, transforms, publishing, and
+    release acceptance.
+
 - [ ] `SF-AUTHORING-048` Static Image dimension and responsive-layout parity foundation (P1).
   - Requirements: bounded compiler evidence for `SF-0802-003`–`004`,
     `SF-0601-003`, `SF-0603-003`, and `SF-1203-003`/`SF-1204-003`–`004`.

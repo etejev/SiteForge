@@ -860,6 +860,17 @@ enum MultiPageStaticBuildPlanner {
             guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
             files.append(.init(path: "styles.css", contents: stylesheet))
         }
+        // The manifest is a plan-side integrity projection only. It names
+        // verified content-addressed references but never carries resource
+        // bytes or invokes the static writer.
+        let assetManifest = StaticAssetManifestEmitter.emit(
+            assets: document.imageAssets,
+            entries: imageOutputEntries
+        )
+        if !assetManifest.isEmpty {
+            guard paths.insert("assets.manifest.txt").inserted else { throw MultiPageStaticBuildError.collision }
+            files.append(.init(path: "assets.manifest.txt", contents: assetManifest))
+        }
         files.append(.init(path: "manifest.txt", contents: files.map(\.path).sorted().joined(separator: "\n")))
         return .init(revision: document.revision, files: files)
     }

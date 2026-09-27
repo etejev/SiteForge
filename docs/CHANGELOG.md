@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-049
+
+- Added a deterministic, content-free static Image asset manifest to the
+  in-memory multi-page plan. It contains only stable AssetID, verified
+  content-addressed path, and validated dimensions; bytes, filenames, local
+  paths, browser loading, and generated resource writes remain excluded.
+
 ## In progress — SF-AUTHORING-048
 
 - Added static Image dimension and responsive-layout parity. Verified asset

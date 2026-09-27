@@ -1,5 +1,18 @@
 # Codex Continuation Handoff
 
+## Current static asset-manifest checkpoint
+
+SF-AUTHORING-049 adds a deterministic `assets.manifest.txt` planning artifact
+only when an Image has a verified content-addressed reference. It exposes only
+AssetID, safe output path, and validated dimensions; it never carries bytes,
+original filenames, Finder paths, EXIF, a resource write, or browser work.
+Invalid/missing entries are safely absent from the manifest and retain the
+existing missing-resource markup state.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`.
+
 ## Current static-image responsive-layout checkpoint
 
 SF-AUTHORING-048 carries only validated `ImageAsset` dimensions into

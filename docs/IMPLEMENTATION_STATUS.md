@@ -187,6 +187,15 @@ remote-loading, browser, generated-resource, publishing, or release path.
 Evidence is in `docs/evidence/SF-AUTHORING-048-STATIC-IMAGE-RESPONSIVE-LAYOUT.md`;
 local test execution is paused by owner instruction.
 
+SF-AUTHORING-049 has begun static asset-manifest integrity projection. The
+multi-page plan emits a deterministic content-free Image manifest only for
+verified content-addressed references, retaining AssetID/path/dimension
+provenance while omitting filenames, local paths, bytes, and metadata.
+Missing/corrupt entries remain omitted from this optional plan artifact and
+continue through the existing safe missing-resource markup state. Evidence is
+in `docs/evidence/SF-AUTHORING-049-STATIC-ASSET-MANIFEST.md`; local test
+execution is paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

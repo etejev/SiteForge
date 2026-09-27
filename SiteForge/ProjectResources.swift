@@ -276,6 +276,24 @@ enum StaticImageOutputReferencePlanner {
     }
 }
 
+/// SF-1206 static-output v1: an immutable, content-free manifest makes the
+/// verified resource references in a build plan inspectable without carrying
+/// bytes, filenames, Finder paths, or an output write operation.
+enum StaticAssetManifestEmitter {
+    static func emit(assets: [ImageAsset], entries: [StaticAssetExportEntry]) -> String {
+        assets.sorted { $0.id.description < $1.id.description }
+            .compactMap { asset -> String? in
+                guard let path = try? StaticImageOutputReferencePlanner.path(for: asset, entries: entries),
+                      (1...ImageAsset.maximumPixelDimension).contains(asset.pixelWidth),
+                      (1...ImageAsset.maximumPixelDimension).contains(asset.pixelHeight) else {
+                    return nil
+                }
+                return "\(asset.id.description)\t\(path)\t\(asset.pixelWidth)x\(asset.pixelHeight)"
+            }
+            .joined(separator: "\n")
+    }
+}
+
 enum ProjectResourceError: Error, Equatable, LocalizedError, Sendable {
     case unsupportedIndexVersion(Int)
     case duplicateResource
