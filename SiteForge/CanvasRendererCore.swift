@@ -668,13 +668,20 @@ enum MultiPageStaticBuildPlanner {
         for page in pages.sorted(by: { $0.route.rawValue < $1.route.rawValue }) {
             let output = try outputPath(for: page)
             guard paths.insert(output).inserted else { throw MultiPageStaticBuildError.collision }
+            let navigation = StaticNavigationEmitter.emit(
+                StaticNavigationEmitter.entries(
+                    pages: document.pages,
+                    staticRoutes: staticRoutes,
+                    currentPageID: page.id
+                )
+            )
             let body = try SafeHTMLEmitter.emit(
                 InternalDocumentRenderTreeCompiler.compile(
                     page: page, documentID: document.id, revision: document.revision,
                     staticRoutes: staticRoutes, sectionIDs: sectionIDs
                 )
             )
-            files.append(.init(path: output, contents: body))
+            files.append(.init(path: output, contents: [navigation, body].filter { !$0.isEmpty }.joined(separator: "\n")))
         }
         files.append(.init(path: "manifest.txt", contents: files.map(\.path).sorted().joined(separator: "\n")))
         return .init(revision: document.revision, files: files)
@@ -701,6 +708,63 @@ enum MultiPageStaticBuildPlanner {
             return .init(pageID: page.id, formNodeIDs: forms, disabledSubmitControlCount: submitCount)
         }
         return .init(documentID: document.id, revision: document.revision, entries: entries)
+    }
+}
+
+/// SF-0202/SF-0303/SF-1102 v1: navigation is a pure output projection of the
+/// ordered persisted website pages. It cannot add pages, alter routes, or
+/// expose component/error implementation pages as public destinations.
+struct StaticNavigationEntry: Equatable, Sendable {
+    let pageID: PageID
+    let route: PageRoute
+    let label: String
+    let href: String
+    let isCurrent: Bool
+}
+
+enum StaticNavigationEmitter {
+    static func entries(
+        pages: [DocumentPage],
+        staticRoutes: [PageID: String],
+        currentPageID: PageID
+    ) -> [StaticNavigationEntry] {
+        pages.compactMap { page in
+            // Preserve canonical navigator order. Not Found is a recovery
+            // destination, and component definitions are authoring-only, so
+            // neither is silently advertised as a public navigation item.
+            guard page.role == .home || page.role == .standard,
+                  let href = staticRoutes[page.id],
+                  isSafeLabel(page.name) else { return nil }
+            return .init(
+                pageID: page.id,
+                route: page.route,
+                label: page.name,
+                href: href,
+                isCurrent: page.id == currentPageID
+            )
+        }
+    }
+
+    static func emit(_ entries: [StaticNavigationEntry]) -> String {
+        guard !entries.isEmpty else { return "" }
+        let items = entries.map { entry in
+            let current = entry.isCurrent ? " aria-current=\"page\"" : ""
+            return "<li><a data-siteforge-page=\"\(entry.pageID.rawValue.uuidString.lowercased())\" href=\"\(escape(entry.href))\"\(current)>\(escape(entry.label))</a></li>"
+        }.joined()
+        return "<nav aria-label=\"Site\"><ul>\(items)</ul></nav>"
+    }
+
+    private static func isSafeLabel(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        value.utf8.count <= 256 &&
+        !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+
+    private static func escape(_ value: String) -> String {
+        value.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
     }
 }
 

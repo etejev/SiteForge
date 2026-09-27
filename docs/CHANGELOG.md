@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-042
+
+- Added deterministic accessible static navigation projection from persisted
+  Home and standard pages. It preserves canonical page order and route
+  provenance, omits Not Found/component/unavailable pages, and marks only the
+  current generated page with `aria-current=page`.
+
 ## In progress — SF-AUTHORING-041
 
 - Added safe immutable static-output projection for canonical Button and Link

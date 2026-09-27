@@ -2,6 +2,29 @@ import XCTest
 @testable import SiteForge
 
 final class CanvasRendererTests: XCTestCase {
+    // SF-0202-003, SF-0303-003, SF-1102-003 — static navigation retains
+    // canonical order, omits non-public roles, and reports the current page.
+    func testStaticNavigationProjectionPreservesPageOrderAndAccessibleCurrentState() {
+        let home = DocumentPage(name: "Home", route: .init(rawValue: "/"), role: .home)
+        let standard = DocumentPage(name: "Guides & Help", route: .init(rawValue: "/guides"), role: .standard)
+        let notFound = DocumentPage(name: "Not Found", route: .init(rawValue: "/404"), role: .notFound)
+        let component = DocumentPage(name: "Card", route: .init(rawValue: ""), role: .componentDefinition)
+        let entries = StaticNavigationEmitter.entries(
+            pages: [home, standard, notFound, component],
+            staticRoutes: [home.id: "index.html", standard.id: "guides.html", notFound.id: "404.html"],
+            currentPageID: standard.id
+        )
+
+        XCTAssertEqual(entries.map(\.pageID), [home.id, standard.id])
+        XCTAssertEqual(entries.map(\.route), [home.route, standard.route])
+        XCTAssertEqual(entries.map(\.isCurrent), [false, true])
+        let output = StaticNavigationEmitter.emit(entries)
+        XCTAssertTrue(output.hasPrefix("<nav aria-label=\"Site\"><ul>"))
+        XCTAssertTrue(output.contains("href=\"index.html\">Home</a>"))
+        XCTAssertTrue(output.contains("href=\"guides.html\" aria-current=\"page\">Guides &amp; Help</a>"))
+        XCTAssertFalse(output.contains("404.html") || output.contains("Card"))
+    }
+
     // SF-0806-003, SF-1102-003, SF-1203-003 — static output accepts only a
     // typed route projection. This remains independent of browser runtime.
     func testStaticControlCompilerEscapesTypedRoutesAndKeepsMissingTargetsInert() throws {

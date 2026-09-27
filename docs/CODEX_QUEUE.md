@@ -8,6 +8,17 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-042` Static navigation-output foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-0202-001`–`006`,
+    `SF-0303-001`–`006`, and `SF-1102-001`–`006`.
+  - Plan: derive deterministic accessible navigation only from ordered persisted
+    Home/standard pages and validated static route mappings. Preserve PageID/
+    route provenance and current-page semantics; omit Not Found, component, or
+    unavailable routes without writing canonical state.
+  - Exclusions: authored navigation templates, redirects, dynamic routes,
+    scripts, browser runtime, publishing, static-file export, and release
+    acceptance.
+
 - [ ] `SF-AUTHORING-041` Static Button and Link output parity foundation (P1).
   - Requirements: bounded compiler evidence for `SF-0806-001`–`005`,
     `SF-1102-001`–`005`, and `SF-1203-001`–`005`.

@@ -1,5 +1,19 @@
 # Codex Continuation Handoff
 
+## Current static-navigation checkpoint
+
+SF-AUTHORING-042 adds `StaticNavigationEmitter`, an immutable static-output
+projection from the canonical navigator order. It includes only Home and
+standard pages with an existing validated static route, derives a stable
+PageID-backed link for each, emits escaped labels/hrefs, and applies
+`aria-current=page` only to the output page being built. Not Found and
+component-definition pages are intentionally absent. It is not a navigation
+template, redirect, dynamic-routing, browser-runtime, static-file-export, or
+publishing feature.
+
+No tests were run under the owner-directed pause. The next allowed focused
+selector is `CanvasRendererTests.testStaticNavigationProjectionPreservesPageOrderAndAccessibleCurrentState`.
+
 ## Current static-control checkpoint
 
 SF-AUTHORING-041 adds immutable static-tree projection for existing canonical
