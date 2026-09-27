@@ -8,6 +8,26 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-037` Local form-validation and preview-state foundation v1 (P1).
+  - Requirements: bounded noncanonical evidence for `SF-1006-001`–`004`,
+    `008`; `SF-1006` remains Partial.
+  - Plan: resolve canonical Form field configuration against an explicit,
+    caller-owned visitor-value snapshot. Bind results to document/page/form/
+    revision/scene/renderer identity; return only stable result identities and
+    failure categories. No document, history, package, autosave, recovery,
+    server, browser, destination, or submission write path.
+  - Delivered checkpoint: required/text/email/select/checkbox validation,
+    deterministic field/form identities, cancellation/stale/schema rejection,
+    static-output compatibility indicator, package-reopen input proof and
+    strict value redaction. Focused non-UI validation evidence is 2/2
+    (2026-09-26).
+  - Next bounded task: decide whether an existing local Preview surface can
+    display this ephemeral state without adding visitor persistence; otherwise
+    retain this pure foundation and continue Form actual-app authoring evidence.
+  - Exclusions: network/server/browser runtime, real submission/destinations,
+    anti-abuse, analytics, visitor-value persistence, UI automation, generated
+    runtime success/error UI, performance/release acceptance.
+
 - [ ] `SF-AUTHORING-036` Accessible form authoring v1 (P1).
   - Requirements: bounded implementation evidence for `SF-1006-001`–`006`,
     `008`; `SF-1006` remains Partial pending visitor/runtime behavior and a
@@ -24,7 +44,8 @@ None.
     document command. Drafts remain local; cancellation/stale/invalid input is
     nonmutating. Focused non-UI evidence is 4/4 (2026-09-26).
   - Next bounded task: actual-app accessibility/pointer/keyboard evidence for
-    Form and field editing. Visitor values, submission routing, validation/
+    Form and field editing. SF-AUTHORING-037 separately owns ephemeral local
+    validation. Visitor values, submission routing, validation/
     anti-abuse, runtime success/error behavior, performance and release
     acceptance remain excluded.
 

@@ -2,6 +2,15 @@
 
 Last updated: 2026-09-26.
 
+SF-AUTHORING-037 is IN PROGRESS. A pure local validation engine resolves the
+canonical Form field schema against a caller-owned ephemeral visitor snapshot:
+required/text/email/select/checkbox checks, stable form/field result identity,
+revision/scene/renderer rejection, and redacted failure categories. It has no
+document, history, package, autosave, recovery, or submission write path; its
+static-output indicator explicitly reports that submission is unavailable.
+Focused non-UI coverage is green (2/2). See
+`docs/evidence/SF-AUTHORING-037-LOCAL-VALIDATION.md`.
+
 SF-AUTHORING-036 remains IN PROGRESS. Form is now an enabled canonical Elements
 and Insert action; its empty 320×180 container uses the shared insertion,
 selection, Layers, renderer, and package path. Content presents a truthful
@@ -9,8 +18,9 @@ unavailable Form summary, while Text children of Form receive native field
 kind, label, machine name, help, required, and Select-options controls. One
 identity-gated `FormInspectorCommandRegistry` compiles validated edits into
 atomic generic history with exact undo/redo and package/recovery preservation.
-Focused non-UI coverage is green; actual-app UI evidence, visitor/runtime
-submission behavior, validation, and release acceptance remain deferred. See
+Focused non-UI coverage is green; actual-app UI evidence and visitor/runtime
+submission behavior remain deferred. Ephemeral local validation is tracked in
+SF-AUTHORING-037; release acceptance remains deferred. See
 `docs/evidence/SF-AUTHORING-036-FORM-FOUNDATION.md`.
 
 SF-AUTHORING-026 is IN PROGRESS: current authored node kinds resolve a typed,

@@ -1,5 +1,14 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-037
+
+- Added a pure, noncanonical Form validation resolver for required text,
+  bounded text length, local email syntax, checkbox consent, and Select
+  membership. Results retain only stable form/field identities and failure
+  categories, reject cancelled/stale/invalid schemas, and never serialize,
+  log, or mutate visitor values. Static output remains explicitly
+  submission-unavailable.
+
 ## In progress — SF-AUTHORING-036
 
 - Extended bounded canonical form-field validation with checkbox, select and

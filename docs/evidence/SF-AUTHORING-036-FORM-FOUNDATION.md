@@ -43,6 +43,7 @@ Focused evidence passed 9/9 on 2026-09-26:
 - `ProjectPackageTests.testFormInspectorTransactionPersistsThroughPackageAndRecovery`
 
 Deferred: native actual-app UI automation and visual evidence; visitor-entered
-values, validation rules, submission destinations, success/error surfaces,
-anti-abuse controls, runtime behavior, scale evidence, and release acceptance.
-No completion claim is made for SF-AUTHORING-036.
+value persistence, submission destinations, success/error surfaces, anti-abuse
+controls, runtime behavior, scale evidence, and release acceptance. Pure local
+visitor validation is now tracked separately by SF-AUTHORING-037. No completion
+claim is made for SF-AUTHORING-036.

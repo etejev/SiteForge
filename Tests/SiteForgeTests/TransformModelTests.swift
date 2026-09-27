@@ -2099,6 +2099,126 @@ final class TransformModelTests: XCTestCase {
         }
         XCTAssertEqual(document.pages[0].nodes.first { $0.id == fieldID }?.properties, [])
     }
+
+    // SF-1006-001/003/004/008 — visitor input has one local, noncanonical
+    // resolver. Required, email, select membership, checkbox and text bounds
+    // return only stable identities and categories, never entered values.
+    func testLocalFormValidationResolvesValidInvalidControlsAndRedactsValues() throws {
+        let formID = NodeID(), textID = NodeID(), emailID = NodeID(), checkboxID = NodeID(), selectID = NodeID()
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let rootID = document.pages[0].rootNodeIDs[0]
+        document.pages[0].nodes[0].childIDs = [formID]
+        document.pages[0].nodes += [
+            .init(id: formID, kind: .form, name: "Form", parent: .node(rootID), childIDs: [textID, emailID, checkboxID, selectID]),
+            .init(id: textID, kind: .text, name: "Text", parent: .node(formID)),
+            .init(id: emailID, kind: .text, name: "Email", parent: .node(formID)),
+            .init(id: checkboxID, kind: .text, name: "Consent", parent: .node(formID)),
+            .init(id: selectID, kind: .text, name: "Plan", parent: .node(formID)),
+        ]
+        let sceneID = CanvasViewportSceneID()
+        func context(_ current: CanonicalDocument, selected: [NodeID] = [textID]) -> TransformValidationContext {
+            .init(activePageID: pageID, currentSceneID: sceneID, rendererGeneration: 4,
+                  selectedNodeIDs: selected, availableNodeIDs: Set(current.pages[0].nodes.map(\.id)),
+                  isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        }
+        let session = DocumentSession(document: document)
+        let registry = FormInspectorCommandRegistry()
+        for (id, configuration) in [
+            (textID, FormFieldConfiguration(kind: .text, label: "Name", name: "name", help: nil, required: true, options: [])),
+            (emailID, FormFieldConfiguration(kind: .email, label: "Email", name: "email", help: nil, required: true, options: [])),
+            (checkboxID, FormFieldConfiguration(kind: .checkbox, label: "Consent", name: "consent", help: nil, required: true, options: [])),
+            (selectID, FormFieldConfiguration(kind: .select, label: "Plan", name: "plan", help: nil, required: true,
+                options: [.init(label: "Basic", value: "basic"), .init(label: "Pro", value: "pro")])),
+        ] {
+            let command = FormInspectorCommand(identity: .init(documentID: session.document.id, pageID: pageID,
+                revision: session.document.revision, sceneID: sceneID, rendererGeneration: 4, selectedNodeIDs: [id]),
+                edit: .configure(configuration), cancelled: false)
+            try session.execute(registry.prepare(command, in: session.document, context: context(session.document, selected: [id])).command)
+        }
+        let before = session.document
+        let engine = LocalFormValidationEngine()
+        let valid = try engine.validate(.init(documentID: before.id, pageID: pageID, formID: formID,
+            revision: before.revision, sceneID: sceneID, rendererGeneration: 4,
+            values: [textID: .text("Ada"), emailID: .text("ada@example.test"), checkboxID: .checkbox(true), selectID: .select("pro")]),
+            in: before, context: context(before))
+        XCTAssertTrue(valid.isValid)
+        XCTAssertEqual(valid.staticOutputCompatibility, .unavailableSubmission)
+        XCTAssertEqual(valid.fields.map(\.identity.fieldID), [textID, emailID, checkboxID, selectID])
+
+        let invalid = try engine.validate(.init(documentID: before.id, pageID: pageID, formID: formID,
+            revision: before.revision, sceneID: sceneID, rendererGeneration: 4,
+            values: [textID: .text(""), emailID: .text("visitor-secret"), checkboxID: .checkbox(false), selectID: .select("unknown")]),
+            in: before, context: context(before))
+        XCTAssertEqual(invalid.fields.map(\.failures), [[.required], [.invalidEmail], [.required], [.invalidSelection]])
+        XCTAssertFalse(String(describing: invalid).contains("visitor-secret"))
+        let malformedValues = try engine.validate(.init(documentID: before.id, pageID: pageID, formID: formID,
+            revision: before.revision, sceneID: sceneID, rendererGeneration: 4,
+            values: [textID: .text(String(repeating: "x", count: LocalFormValidationEngine.maximumTextLength + 1)),
+                     emailID: .checkbox(true), checkboxID: .text("yes"), selectID: .checkbox(true)]),
+            in: before, context: context(before))
+        XCTAssertEqual(malformedValues.fields.map(\.failures), [[.textTooLong], [.invalidValueType], [.invalidValueType], [.invalidValueType]])
+        XCTAssertEqual(session.document, before, "Validation must not mutate canonical state.")
+    }
+
+    // SF-1006-001/004/005/008 — cancellation, stale scene/revision and an
+    // invalid schema are neutral; recovery/reopen can validate the same local
+    // input without serializing any visitor value.
+    func testLocalFormValidationRejectsCancelledStaleAndInvalidSchemasWithoutMutation() throws {
+        let formID = NodeID(), fieldID = NodeID()
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let rootID = document.pages[0].rootNodeIDs[0]
+        document.pages[0].nodes[0].childIDs = [formID]
+        document.pages[0].nodes += [
+            .init(id: formID, kind: .form, name: "Form", parent: .node(rootID), childIDs: [fieldID]),
+            .init(id: fieldID, kind: .text, name: "Email", parent: .node(formID)),
+        ]
+        let sceneID = CanvasViewportSceneID()
+        let formRegistry = FormInspectorCommandRegistry()
+        func context(_ current: CanonicalDocument) -> TransformValidationContext {
+            .init(activePageID: pageID, currentSceneID: sceneID, rendererGeneration: 8,
+                  selectedNodeIDs: [fieldID], availableNodeIDs: Set(current.pages[0].nodes.map(\.id)),
+                  isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        }
+        let session = DocumentSession(document: document)
+        let configure = FormInspectorCommand(identity: .init(documentID: document.id, pageID: pageID,
+            revision: document.revision, sceneID: sceneID, rendererGeneration: 8, selectedNodeIDs: [fieldID]),
+            edit: .configure(.init(kind: .email, label: "Email", name: "email", help: nil, required: true, options: [])), cancelled: false)
+        try session.execute(formRegistry.prepare(configure, in: document, context: context(document)).command)
+        let persisted = try DocumentSerializer.decode(try DocumentSerializer.encode(session.document))
+        let before = persisted
+        let input = FormVisitorValueSnapshot(documentID: persisted.id, pageID: pageID, formID: formID,
+            revision: persisted.revision, sceneID: sceneID, rendererGeneration: 8, values: [fieldID: .text("visitor@example.test")])
+        let engine = LocalFormValidationEngine()
+        XCTAssertTrue(try engine.validate(input, in: persisted, context: context(persisted)).isValid)
+        XCTAssertThrowsError(try engine.validate(input, in: persisted, context: context(persisted), cancelled: true)) {
+            XCTAssertEqual($0 as? FormValidationError, .cancelled)
+        }
+        var stale = input
+        stale = .init(documentID: stale.documentID, pageID: stale.pageID, formID: stale.formID,
+            revision: stale.revision + 1, sceneID: stale.sceneID, rendererGeneration: stale.rendererGeneration, values: stale.values)
+        XCTAssertThrowsError(try engine.validate(stale, in: persisted, context: context(persisted))) {
+            XCTAssertEqual($0 as? FormValidationError, .stale)
+        }
+        var malformed = persisted
+        let index = try XCTUnwrap(malformed.pages[0].nodes.firstIndex { $0.id == fieldID })
+        malformed.pages[0].nodes[index].properties.removeAll { $0.key.rawValue == CanonicalFormField.requiredKey }
+        XCTAssertThrowsError(try engine.validate(input, in: malformed, context: context(malformed))) {
+            XCTAssertEqual($0 as? FormValidationError, .invalidSchema)
+        }
+        let emptyFormID = NodeID()
+        var empty = persisted
+        empty.pages[0].nodes[0].childIDs.append(emptyFormID)
+        empty.pages[0].nodes.append(.init(id: emptyFormID, kind: .form, name: "Empty", parent: .node(rootID)))
+        let emptyInput = FormVisitorValueSnapshot(documentID: empty.id, pageID: pageID, formID: emptyFormID,
+            revision: empty.revision, sceneID: sceneID, rendererGeneration: 8, values: [:])
+        XCTAssertThrowsError(try engine.validate(emptyInput, in: empty, context: context(empty))) {
+            XCTAssertEqual($0 as? FormValidationError, .invalidSchema)
+        }
+        XCTAssertEqual(persisted, before)
+        XCTAssertFalse(try DocumentSerializer.encode(persisted).contains(Data("visitor@example.test".utf8)))
+    }
 }
 
 private struct TransformFixture {

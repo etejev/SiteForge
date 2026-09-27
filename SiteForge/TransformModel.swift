@@ -3074,6 +3074,176 @@ struct FormInspectorCommandRegistry: Sendable {
     }
 }
 
+// SF-1006 v1 local validation is deliberately a pure, ephemeral resolver.
+// Visitor-entered values do not conform to Codable and never cross a command,
+// history, package, autosave, or recovery boundary. The identity below binds a
+// result to the adopted document scene without retaining private field values.
+enum FormVisitorValue: Equatable, Sendable {
+    case text(String)
+    case checkbox(Bool)
+    case select(String)
+}
+
+struct FormVisitorValueSnapshot: Equatable, Sendable {
+    let documentID: DocumentID
+    let pageID: PageID
+    let formID: NodeID
+    let revision: UInt64
+    let sceneID: CanvasViewportSceneID
+    let rendererGeneration: UInt64
+    let values: [NodeID: FormVisitorValue]
+
+    init(documentID: DocumentID, pageID: PageID, formID: NodeID, revision: UInt64,
+         sceneID: CanvasViewportSceneID, rendererGeneration: UInt64,
+         values: [NodeID: FormVisitorValue]) {
+        self.documentID = documentID
+        self.pageID = pageID
+        self.formID = formID
+        self.revision = revision
+        self.sceneID = sceneID
+        self.rendererGeneration = rendererGeneration
+        self.values = values
+    }
+}
+
+/// Stable, deterministic result identity. It identifies a field result, not a
+/// visitor value, so logs and UI announcements can correlate validation safely.
+struct FormValidationResultIdentity: Equatable, Hashable, Sendable, Identifiable {
+    let documentID: DocumentID
+    let revision: UInt64
+    let formID: NodeID
+    let fieldID: NodeID?
+
+    var id: String {
+        [documentID.description, String(revision), formID.description, fieldID?.description ?? "form"]
+            .joined(separator: ":")
+    }
+}
+
+enum FormValidationFailure: String, Equatable, Sendable {
+    case required, invalidEmail, invalidSelection, invalidValueType, textTooLong, unsupportedField
+}
+
+struct FormFieldValidationResult: Equatable, Sendable, Identifiable {
+    let identity: FormValidationResultIdentity
+    let failures: [FormValidationFailure]
+
+    var id: FormValidationResultIdentity { identity }
+    var isValid: Bool { failures.isEmpty }
+}
+
+enum FormStaticOutputCompatibility: String, Equatable, Sendable {
+    case compatibleStaticControl
+    case unavailableSubmission
+    case invalidSchema
+}
+
+struct FormValidationSnapshot: Equatable, Sendable {
+    let identity: FormValidationResultIdentity
+    let fields: [FormFieldValidationResult]
+    let staticOutputCompatibility: FormStaticOutputCompatibility
+
+    var isValid: Bool { fields.allSatisfy(\.isValid) }
+}
+
+enum FormValidationError: Error, Equatable, LocalizedError, Sendable {
+    case cancelled, stale, unavailableForm, invalidSchema
+
+    var errorDescription: String? {
+        switch self {
+        case .cancelled: "Form validation was cancelled; visitor values were not retained."
+        case .stale: "Form validation is no longer current; review the live form and try again."
+        case .unavailableForm: "This form is no longer available for local validation."
+        case .invalidSchema: "This form has invalid field configuration; correct the field settings first."
+        }
+    }
+}
+
+/// Headless local form validation. This consumes only a caller-owned visitor
+/// snapshot and canonical field configuration. It returns categories and stable
+/// identities exclusively; raw values, labels, names, and options never appear
+/// in errors or diagnostics.
+struct LocalFormValidationEngine: Sendable {
+    static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-1006-%03d", $0) })
+    static let maximumTextLength = 4_096
+
+    func validate(_ input: FormVisitorValueSnapshot, in document: CanonicalDocument,
+                  context: TransformValidationContext, cancelled: Bool = false) throws -> FormValidationSnapshot {
+        guard !cancelled else { throw FormValidationError.cancelled }
+        guard input.documentID == document.id, input.revision == document.revision,
+              input.pageID == context.activePageID, input.sceneID == context.currentSceneID,
+              input.rendererGeneration == context.rendererGeneration,
+              context.isLifecycleAvailable else { throw FormValidationError.stale }
+        guard let page = document.pages.first(where: { $0.id == input.pageID }),
+              let form = page.nodes.first(where: { $0.id == input.formID }), form.kind == .form,
+              context.availableNodeIDs.contains(form.id) else { throw FormValidationError.unavailableForm }
+        guard !form.childIDs.isEmpty else { throw FormValidationError.invalidSchema }
+
+        let nodes = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        let fields = try form.childIDs.map { fieldID -> FormFieldValidationResult in
+            guard let node = nodes[fieldID], node.kind == .text, case .node(let parent) = node.parent,
+                  parent == form.id else { throw FormValidationError.invalidSchema }
+            do { try CanonicalFormFieldValidator.validate(node) }
+            catch { throw FormValidationError.invalidSchema }
+            guard let kind = node.insertionStringProperty(CanonicalFormField.kindKey),
+                  let required = node.insertionProperty(CanonicalFormField.requiredKey).flatMap({ property -> Bool? in
+                      if case .boolean(let value) = property.value { return value }; return nil
+                  }) else { throw FormValidationError.invalidSchema }
+            let options: [CanonicalFormSelectOption]
+            if kind == FormFieldKind.select.rawValue {
+                guard let encoded = node.insertionStringProperty(CanonicalFormField.optionsKey) else {
+                    throw FormValidationError.invalidSchema
+                }
+                do { options = try CanonicalFormSelectOptions.decode(encoded) }
+                catch { throw FormValidationError.invalidSchema }
+            } else { options = [] }
+            return .init(
+                identity: .init(documentID: document.id, revision: document.revision, formID: form.id, fieldID: fieldID),
+                failures: failures(kind: kind, required: required, options: options, value: input.values[fieldID])
+            )
+        }
+        return .init(
+            identity: .init(documentID: document.id, revision: document.revision, formID: form.id, fieldID: nil),
+            fields: fields,
+            staticOutputCompatibility: .unavailableSubmission
+        )
+    }
+
+    private func failures(kind: String, required: Bool, options: [CanonicalFormSelectOption],
+                          value: FormVisitorValue?) -> [FormValidationFailure] {
+        switch kind {
+        case FormFieldKind.text.rawValue, FormFieldKind.textarea.rawValue, FormFieldKind.email.rawValue:
+            guard let value else { return required ? [.required] : [] }
+            guard case .text(let text) = value else { return [.invalidValueType] }
+            if text.count > Self.maximumTextLength { return [.textTooLong] }
+            if required && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [.required] }
+            if kind == FormFieldKind.email.rawValue, !text.isEmpty, !Self.isValidEmail(text) { return [.invalidEmail] }
+            return []
+        case FormFieldKind.checkbox.rawValue:
+            guard let value else { return required ? [.required] : [] }
+            guard case .checkbox(let checked) = value else { return [.invalidValueType] }
+            return required && !checked ? [.required] : []
+        case FormFieldKind.select.rawValue:
+            guard let value else { return required ? [.required] : [] }
+            guard case .select(let selected) = value else { return [.invalidValueType] }
+            if selected.isEmpty { return required ? [.required] : [] }
+            return options.contains(where: { $0.value == selected }) ? [] : [.invalidSelection]
+        case FormFieldKind.submit.rawValue:
+            return []
+        default:
+            return [.unsupportedField]
+        }
+    }
+
+    private static func isValidEmail(_ value: String) -> Bool {
+        // Bounded local syntax check only; this intentionally does not perform
+        // DNS, delivery, remote validation, normalization, or value logging.
+        guard value.utf8.count <= 254,
+              value.range(of: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", options: .regularExpression) != nil else { return false }
+        return true
+    }
+}
+
 enum LinkInspectorEdit: Equatable, Sendable {
     case label(String?)
     case target(CanonicalLinkTarget?)

@@ -2,6 +2,16 @@
 
 ## Current checkpoint
 
+SF-AUTHORING-037 Local form-validation and preview-state foundation v1 is IN
+PROGRESS. `LocalFormValidationEngine` resolves only caller-owned,
+non-Codable `FormVisitorValueSnapshot` input against canonical Form metadata.
+Its results contain stable document/revision/form/field identities and failure
+categories only; it has no command, history, package, autosave, recovery,
+network, browser, or submission path. Focused model coverage is 2/2. Do not
+make visitor values canonical. A future local Preview surface may consume the
+same snapshot only if it stays ephemeral and clearly says submission is
+unavailable.
+
 SF-AUTHORING-036 Accessible form authoring v1 remains IN PROGRESS. Form is now
 an enabled Elements/Insert container and its Text children have native bounded
 Content Inspector field controls. `FormInspectorCommandRegistry` is the sole
