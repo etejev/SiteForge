@@ -8,6 +8,16 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-048` Static Image dimension and responsive-layout parity foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-0802-003`–`004`,
+    `SF-0601-003`, `SF-0603-003`, and `SF-1203-003`/`SF-1204-003`–`004`.
+  - Plan: retain verified Image intrinsic dimensions as safe HTML sizing hints,
+    while reusing the existing typed NodeID-scoped geometry and visibility
+    cascade as the only responsive Image layout source.
+  - Exclusions: responsive source sets, remote loading, image transforms,
+    arbitrary CSS, browser execution, generated resource writes, publishing,
+    and release acceptance.
+
 - [ ] `SF-AUTHORING-047` Static Image fit/focal output parity foundation (P1).
   - Requirements: bounded compiler evidence for `SF-0802-003`–`004` and
     `SF-1204-003`–`004`.

@@ -24,6 +24,6 @@ deferred.
 
 ## Focused regression
 
-`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedImageReference`
+`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`
 now also asserts default Fit and centered focal presentation in `styles.css`.
 It has not run under the owner-directed test pause.

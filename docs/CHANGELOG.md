@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-048
+
+- Added static Image dimension and responsive-layout parity. Verified asset
+  dimensions become safe integer markup hints while the existing typed
+  geometry/visibility cascade remains the sole source of authored base and
+  breakpoint layout; no source-set, remote, transform, or browser path exists.
+
 ## In progress — SF-AUTHORING-047
 
 - Added deterministic static Image presentation rules. Canonical Fit, Fill,

@@ -762,14 +762,21 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertEqual(plan.files.last?.path, "manifest.txt")
     }
 
-    // SF-0801-003, SF-0802-003, SF-1203-003 — only verified
-    // content-addressed image references enter a static multi-page plan.
-    func testMultiPageStaticBuildPlanIncludesVerifiedImageReference() throws {
+    // SF-0801-003, SF-0802-003, SF-0601-003, SF-0603-003, SF-1203-003 —
+    // verified Image identity, intrinsic metadata, and typed responsive
+    // layout share the same immutable static plan without a source-set path.
+    func testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference() throws {
         let pageID = PageID(), nodeID = NodeID(), resourceID = ResourceID()
         let hash = String(repeating: "a", count: 64)
         let asset = ImageAsset(resourceID: resourceID, displayName: "Card", originalFilename: "card.png",
-                               format: .png, pixelWidth: 1, pixelHeight: 1, byteCount: 1, contentHash: hash)
+                               format: .png, pixelWidth: 640, pixelHeight: 480, byteCount: 1, contentHash: hash)
         let node = DocumentNode(id: nodeID, kind: .image, name: "Card", parent: .page(pageID), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(32), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.y"), value: .number(48), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.width"), value: .number(320), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.height"), value: .number(240), origin: .defaulted),
+            .init(key: .init(rawValue: ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)), value: .number(200), origin: .authored),
+            .init(key: .init(rawValue: ResponsiveVisibilityResolver.key(.mobile)), value: .boolean(false), origin: .authored),
             .init(key: .init(rawValue: CanonicalImageStyle.namespace + "assetID"), value: .string(asset.id.description), origin: .authored),
             .init(key: .init(rawValue: CanonicalImageStyle.namespace + "fit"), value: .string(ImageFitMode.fit.rawValue), origin: .defaulted),
             .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.x"), value: .number(0.5), origin: .defaulted),
@@ -787,8 +794,13 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertTrue(html.contains("src=\"assets/\(hash).png\""))
         XCTAssertTrue(html.contains("alt=\"A &lt;card&gt;\""))
         XCTAssertTrue(html.contains("data-siteforge-asset=\"\(asset.id.description)\""))
+        XCTAssertTrue(html.contains("width=\"640\" height=\"480\""))
         let stylesheet = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
         XCTAssertTrue(stylesheet.contains(CanonicalCSSRule.selector(for: nodeID)))
+        XCTAssertTrue(stylesheet.contains("width: 320.0px;"))
+        XCTAssertTrue(stylesheet.contains("@media (max-width: 599px)"))
+        XCTAssertTrue(stylesheet.contains("width: 200.0px;"))
+        XCTAssertTrue(stylesheet.contains("display: none;"))
         XCTAssertTrue(stylesheet.contains("object-fit: contain;"))
         XCTAssertTrue(stylesheet.contains("object-position: 50.0% 50.0%;"))
     }

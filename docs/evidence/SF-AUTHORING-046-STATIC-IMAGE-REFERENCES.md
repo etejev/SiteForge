@@ -27,7 +27,7 @@ parity, publishing, and release acceptance are deferred.
 
 ## Focused regression
 
-`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedImageReference`
+`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`
 checks that only a verified content-addressed entry supplies `src`, while
 canonical alt and stable asset provenance are retained. It is added but not
 run under the owner-directed test pause.

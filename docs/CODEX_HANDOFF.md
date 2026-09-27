@@ -1,5 +1,17 @@
 # Codex Continuation Handoff
 
+## Current static-image responsive-layout checkpoint
+
+SF-AUTHORING-048 carries only validated `ImageAsset` dimensions into
+`InternalStaticImage` and emits them as integer HTML sizing hints. The actual
+Image frame and Tablet/Mobile visibility stay wholly within the existing typed
+`StaticLayoutOutputEmitter` cascade; no intrinsic aspect-ratio rule, source
+set, remote URL, resource write, transform, or browser execution is added.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`.
+
 ## Current static-image presentation checkpoint
 
 SF-AUTHORING-047 adds `StaticImageStyleOutputEmitter`. It maps only the typed
@@ -11,7 +23,7 @@ resource write.
 
 No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
-`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedImageReference`.
+`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`.
 
 ## Current static-image reference checkpoint
 
@@ -25,7 +37,7 @@ image-loading path.
 
 No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
-`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedImageReference`.
+`CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`.
 
 ## Current static-typography checkpoint
 

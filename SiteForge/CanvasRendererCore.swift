@@ -455,6 +455,10 @@ struct InternalStaticControl: Equatable, Sendable {
 struct InternalStaticImage: Equatable, Sendable {
     let assetID: AssetID
     let outputPath: String?
+    /// Verified resource metadata is a sizing hint only. Canonical layout and
+    /// responsive overrides remain the sole source for the authored box.
+    let intrinsicWidth: Int?
+    let intrinsicHeight: Int?
     let altText: String
     let isDecorative: Bool
     let fitMode: ImageFitMode
@@ -517,7 +521,8 @@ enum InternalDocumentRenderTreeCompiler {
         revision: UInt64,
         staticRoutes: [PageID: String] = [:],
         sectionIDs: [PageID: Set<NodeID>] = [:],
-        imageOutputPaths: [AssetID: String] = [:]
+        imageOutputPaths: [AssetID: String] = [:],
+        imageAssets: [AssetID: ImageAsset] = [:]
     ) throws -> InternalRenderTreeSnapshot {
         let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
         let nodes = try page.canonicalDepthFirstNodes().enumerated().map { paintOrder, node in
@@ -532,7 +537,7 @@ enum InternalDocumentRenderTreeCompiler {
                 anchorID: sectionIDs[page.id]?.contains(node.id) == true ? anchorID(for: node.id) : nil,
                 textContent: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
                 typography: node.kind == .text ? CanonicalTypography.resolved(for: node) : nil,
-                image: staticImage(for: node, outputPaths: imageOutputPaths)
+                image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets)
             )
         }
         return .init(documentID: documentID, revision: revision, nodes: nodes)
@@ -540,12 +545,20 @@ enum InternalDocumentRenderTreeCompiler {
 
     private static func staticImage(
         for node: DocumentNode,
-        outputPaths: [AssetID: String]
+        outputPaths: [AssetID: String],
+        assets: [AssetID: ImageAsset]
     ) -> InternalStaticImage? {
         guard let style = CanonicalImageStyle.resolve(node) else { return nil }
+        let asset = assets[style.assetID]
+        let hasSafeDimensions = asset.map {
+            (1...ImageAsset.maximumPixelDimension).contains($0.pixelWidth) &&
+            (1...ImageAsset.maximumPixelDimension).contains($0.pixelHeight)
+        } == true
         return .init(
             assetID: style.assetID,
             outputPath: outputPaths[style.assetID],
+            intrinsicWidth: hasSafeDimensions ? asset?.pixelWidth : nil,
+            intrinsicHeight: hasSafeDimensions ? asset?.pixelHeight : nil,
             altText: style.altText,
             isDecorative: style.isDecorative,
             fitMode: style.fitMode,
@@ -803,6 +816,7 @@ enum MultiPageStaticBuildPlanner {
             assets: document.imageAssets,
             entries: imageOutputEntries
         )
+        let imageAssets = Dictionary(uniqueKeysWithValues: document.imageAssets.map { ($0.id, $0) })
         var staticRoutes: [PageID: String] = [:]
         var sectionIDs: [PageID: Set<NodeID>] = [:]
         for page in pages {
@@ -827,7 +841,7 @@ enum MultiPageStaticBuildPlanner {
             let tree = try InternalDocumentRenderTreeCompiler.compile(
                 page: page, documentID: document.id, revision: document.revision,
                 staticRoutes: staticRoutes, sectionIDs: sectionIDs,
-                imageOutputPaths: imageOutputPaths
+                imageOutputPaths: imageOutputPaths, imageAssets: imageAssets
             )
             staticNodes += tree.nodes
             let body = try SafeHTMLEmitter.emit(tree)
@@ -1120,6 +1134,15 @@ enum SafeHTMLEmitter {
     private static func emitImage(_ node: InternalRenderTreeNode, attributes: String) throws -> String {
         guard let image = node.image else { return "<img\(attributes) data-siteforge-asset-state=\"missing\">" }
         let resource = " data-siteforge-asset=\"\(escape(image.assetID.description))\""
+        let dimensions: String
+        if let width = image.intrinsicWidth,
+           let height = image.intrinsicHeight,
+           (1...ImageAsset.maximumPixelDimension).contains(width),
+           (1...ImageAsset.maximumPixelDimension).contains(height) {
+            dimensions = " width=\"\(width)\" height=\"\(height)\""
+        } else {
+            dimensions = ""
+        }
         let source: String
         if let path = image.outputPath, isVerifiedAssetPath(path) {
             source = " src=\"\(escape(path))\""
@@ -1127,10 +1150,10 @@ enum SafeHTMLEmitter {
             source = " data-siteforge-asset-state=\"missing\""
         }
         if image.isDecorative {
-            return "<img\(attributes)\(resource)\(source) alt=\"\" role=\"presentation\">"
+            return "<img\(attributes)\(resource)\(source)\(dimensions) alt=\"\" role=\"presentation\">"
         }
         let alt = safeTextContent(image.altText) ?? ""
-        return "<img\(attributes)\(resource)\(source) alt=\"\(escape(alt))\">"
+        return "<img\(attributes)\(resource)\(source)\(dimensions) alt=\"\(escape(alt))\">"
     }
 
     private static func validatedIdentifier(_ node: InternalRenderTreeNode) throws -> String {

@@ -178,6 +178,15 @@ remain deferred. Evidence is in
 `docs/evidence/SF-AUTHORING-047-STATIC-IMAGE-PRESENTATION.md`; local test
 execution is paused by owner instruction.
 
+SF-AUTHORING-048 has begun static Image dimension and responsive-layout
+parity. Verified ImageAsset pixel dimensions are retained only as safe integer
+HTML sizing hints; canonical layout and explicit Tablet/Mobile geometry and
+visibility continue to flow exclusively through `StaticLayoutOutputEmitter`.
+This does not infer an aspect-ratio constraint or add a responsive source-set,
+remote-loading, browser, generated-resource, publishing, or release path.
+Evidence is in `docs/evidence/SF-AUTHORING-048-STATIC-IMAGE-RESPONSIVE-LAYOUT.md`;
+local test execution is paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions
