@@ -106,6 +106,14 @@ and 52 UI tests (451 total), zero failures. Actions `34000476753` passed
 the same hosted totals for `85615b9`. SF-0806 and SF-1102 remain Partial. See
 `docs/evidence/SF-AUTHORING-020-BUTTON-LINK.md` for exact scope and evidence.
 
+SF-AUTHORING-041 has begun a bounded static-control compiler foundation. Only
+typed canonical Link routes are projected into immutable markup; generated
+Button markup is intentionally inert, and unresolved internal targets remain
+accessible but do not become raw URLs. This does not enable browser runtime,
+actions, submission, static file export, or release acceptance. Evidence is in
+`docs/evidence/SF-AUTHORING-041-STATIC-CONTROLS.md`; local test execution is
+paused by owner instruction for this checkpoint.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

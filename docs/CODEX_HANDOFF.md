@@ -1,5 +1,20 @@
 # Codex Continuation Handoff
 
+## Current static-control checkpoint
+
+SF-AUTHORING-041 adds immutable static-tree projection for existing canonical
+Button and Link controls. `InternalDocumentRenderTreeCompiler` is the sole
+output boundary: it accepts only `CanonicalLinkTarget` values that already pass
+canonical validation, resolves internal Page/Section references only against
+the current package route map, escapes output, and leaves missing targets
+inert. Static Buttons are deliberately emitted as disabled `type=button`
+controls: no browser action or submission behavior exists.
+
+No local test execution was performed for this checkpoint under the current
+owner-directed test pause. The next dependency-safe work is focused compiler
+coverage for external, page, section, missing-target, escaping, and inert
+button output before any runtime or export work.
+
 ## Current checkpoint
 
 SF-AUTHORING-038 adds fixed-breakpoint static CSS emission for canonical

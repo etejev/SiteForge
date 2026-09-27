@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-041
+
+- Added safe immutable static-output projection for canonical Button and Link
+  controls. The compiler emits escaped, typed external and document routes only;
+  unresolved targets stay inert, and Button output cannot submit or execute a
+  browser action. Runtime navigation and static export remain deferred.
+
 ## In progress — SF-AUTHORING-038
 
 - Added fixed-breakpoint static CSS emission for typed Tablet/Mobile geometry

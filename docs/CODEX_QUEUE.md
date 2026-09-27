@@ -8,6 +8,20 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-041` Static Button and Link output parity foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-0806-001`–`005`,
+    `SF-1102-001`–`005`, and `SF-1203-001`–`005`.
+  - Delivered foundation: immutable static-tree projection now resolves only
+    typed canonical Link targets. Valid external and package-owned page/section
+    targets become escaped static hrefs; missing targets stay inert and
+    accessible. Button output is explicitly `type=button` and disabled because
+    browser runtime/action semantics are not part of this slice.
+  - Evidence: `docs/evidence/SF-AUTHORING-041-STATIC-CONTROLS.md`. No local
+    tests were run in this checkpoint under the owner-directed test pause.
+  - Deferred: browser runtime/navigation, actions, submission, arbitrary HTML
+    attributes, generated-site accessibility, static file export, and release
+    acceptance.
+
 - [ ] `SF-AUTHORING-038` Responsive static-output parity foundation v1 (P1).
   - Requirements: bounded compiler evidence for `SF-0601-001`–`005`,
     `SF-0602-001`–`005`, and `SF-0603-001`–`005`.

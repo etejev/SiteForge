@@ -404,6 +404,31 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     let semanticElement: String
     let cssSelector: String
     let formField: InternalFormField?
+    let control: InternalStaticControl?
+    let anchorID: String?
+
+    init(id: NodeID, sourceNodeID: NodeID, paintOrder: Int, frame: WorldRect,
+         semanticElement: String, cssSelector: String, formField: InternalFormField?,
+         control: InternalStaticControl? = nil, anchorID: String? = nil) {
+        self.id = id
+        self.sourceNodeID = sourceNodeID
+        self.paintOrder = paintOrder
+        self.frame = frame
+        self.semanticElement = semanticElement
+        self.cssSelector = cssSelector
+        self.formField = formField
+        self.control = control
+        self.anchorID = anchorID
+    }
+}
+
+/// Immutable, render-only control projection. It contains only a validated
+/// static route; buttons intentionally have no browser runtime behavior.
+struct InternalStaticControl: Equatable, Sendable {
+    let label: String
+    let href: String?
+    let isLink: Bool
+    let disabled: Bool
 }
 
 struct InternalFormField: Equatable, Sendable {
@@ -455,18 +480,68 @@ enum InternalRenderTreeCompiler {
 /// than a live canvas scene. It projects only typed form metadata; visitor
 /// values and submission destinations never enter the build snapshot.
 enum InternalDocumentRenderTreeCompiler {
-    static func compile(page: DocumentPage, documentID: DocumentID, revision: UInt64) throws -> InternalRenderTreeSnapshot {
+    static func compile(
+        page: DocumentPage,
+        documentID: DocumentID,
+        revision: UInt64,
+        staticRoutes: [PageID: String] = [:],
+        sectionIDs: [PageID: Set<NodeID>] = [:]
+    ) throws -> InternalRenderTreeSnapshot {
         let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
         let nodes = try page.canonicalDepthFirstNodes().enumerated().map { paintOrder, node in
             let formField = try field(for: node, nodesByID: nodesByID)
+            let control = try control(for: node, staticRoutes: staticRoutes, sectionIDs: sectionIDs)
             return InternalRenderTreeNode(
                 id: node.id, sourceNodeID: node.id, paintOrder: paintOrder,
                 frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 0, height: 0)),
                 semanticElement: CanonicalSemanticElement.defaultElement(for: node.kind)?.rawValue ?? "div",
-                cssSelector: CanonicalCSSRule.selector(for: node.id), formField: formField
+                cssSelector: CanonicalCSSRule.selector(for: node.id), formField: formField,
+                control: control,
+                anchorID: sectionIDs[page.id]?.contains(node.id) == true ? anchorID(for: node.id) : nil
             )
         }
         return .init(documentID: documentID, revision: revision, nodes: nodes)
+    }
+
+    /// SF-0806/SF-1102/SF-1203 v1: resolve only typed, prevalidated targets
+    /// into static routes. A missing internal target remains an accessible,
+    /// inert control instead of becoming a permissive raw URL or script path.
+    private static func control(
+        for node: DocumentNode,
+        staticRoutes: [PageID: String],
+        sectionIDs: [PageID: Set<NodeID>]
+    ) throws -> InternalStaticControl? {
+        guard node.kind.isLinkControl else { return nil }
+        do {
+            try CanonicalLinkTarget.validate(node)
+        } catch {
+            throw SafeHTMLEmissionError.invalidControl
+        }
+        let target = try CanonicalLinkTarget.resolve(node)
+        let href: String?
+        switch target {
+        case .none:
+            href = nil
+        case .external(let url):
+            href = url
+        case .page(let pageID):
+            href = staticRoutes[pageID]
+        case .section(let pageID, let nodeID):
+            guard let route = staticRoutes[pageID], sectionIDs[pageID]?.contains(nodeID) == true else {
+                href = nil
+                break
+            }
+            href = route + "#" + anchorID(for: nodeID)
+        }
+        let isLink = node.kind == .link
+        // Static Button authoring has no scripted action or submission path in
+        // this bounded slice, so it remains visible but deliberately inert.
+        return .init(label: node.controlLabel, href: isLink ? href : nil,
+                     isLink: isLink, disabled: !isLink || href == nil)
+    }
+
+    private static func anchorID(for nodeID: NodeID) -> String {
+        "sf-node-" + nodeID.rawValue.uuidString.lowercased()
     }
 
     private static func field(for node: DocumentNode, nodesByID: [NodeID: DocumentNode]) throws -> InternalFormField? {
@@ -568,18 +643,28 @@ enum LocalStaticBuildWriter {
     }
 }
 
-enum MultiPageStaticBuildError: Error, Equatable, Sendable { case invalidRoute, collision }
+enum MultiPageStaticBuildError: Error, Equatable, Sendable { case invalidRoute, collision, invalidDocument }
 
 enum MultiPageStaticBuildPlanner {
     static func plan(document: CanonicalDocument) throws -> LocalStaticBuildPlan {
         let pages = document.pages.filter { $0.role != .componentDefinition }
+        var staticRoutes: [PageID: String] = [:]
+        var sectionIDs: [PageID: Set<NodeID>] = [:]
+        for page in pages {
+            guard staticRoutes[page.id] == nil else { throw MultiPageStaticBuildError.invalidDocument }
+            staticRoutes[page.id] = try outputPath(for: page)
+            sectionIDs[page.id] = Set(page.canonicalDepthFirstNodes().filter { $0.kind == .section }.map(\.id))
+        }
         var files: [LocalStaticBuildPlan.File] = []
         var paths = Set<String>()
         for page in pages.sorted(by: { $0.route.rawValue < $1.route.rawValue }) {
             let output = try outputPath(for: page)
             guard paths.insert(output).inserted else { throw MultiPageStaticBuildError.collision }
             let body = try SafeHTMLEmitter.emit(
-                InternalDocumentRenderTreeCompiler.compile(page: page, documentID: document.id, revision: document.revision)
+                InternalDocumentRenderTreeCompiler.compile(
+                    page: page, documentID: document.id, revision: document.revision,
+                    staticRoutes: staticRoutes, sectionIDs: sectionIDs
+                )
             )
             files.append(.init(path: output, contents: body))
         }
@@ -663,7 +748,7 @@ enum LocalBuildProfileCompiler {
 
 // SF-1203 v1 output is intentionally in-memory only. The fixed vocabulary and
 // allowlist prevent authored content from becoming executable markup.
-enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity, invalidFormField }
+enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity, invalidFormField, invalidControl }
 
 enum SafeHTMLEmitter {
     static func emit(_ tree: InternalRenderTreeSnapshot) throws -> String {
@@ -691,7 +776,18 @@ enum SafeHTMLEmitter {
         if node.formField != nil {
             return try emitField(node, formIDs: formIDs)
         }
-        let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\""
+        let anchor = node.anchorID.map { " id=\"\(escape($0))\"" } ?? ""
+        let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\"\(anchor)"
+        if let control = node.control {
+            let label = escape(control.label)
+            if control.isLink {
+                if let href = control.href {
+                    return "<a\(attributes) href=\"\(escape(href))\">\(label)</a>"
+                }
+                return "<a\(attributes) role=\"link\" aria-disabled=\"true\">\(label)</a>"
+            }
+            return "<button\(attributes) type=\"button\"\(control.disabled ? " disabled aria-disabled=\"true\"" : "")>\(label)</button>"
+        }
         return node.semanticElement == "img" ? "<img\(attributes)>" : "<\(node.semanticElement)\(attributes)></\(node.semanticElement)>"
     }
 
