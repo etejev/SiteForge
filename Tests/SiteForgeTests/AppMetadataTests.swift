@@ -42,7 +42,7 @@ final class AppMetadataTests: XCTestCase {
         let state = WorkspaceShellState()
         let canonicalDocument = state.documentSession.document
 
-        XCTAssertEqual(CanvasTool.allCases.map(\.title), ["Select", "Section", "Stack", "Grid", "Frame", "Text", "Image", "Button", "Link", "Component"])
+        XCTAssertEqual(CanvasTool.allCases.map(\.title), ["Select", "Section", "Stack", "Grid", "Frame", "Text", "Image", "Button", "Link", "Form", "Component"])
         XCTAssertEqual(state.selectedTool, .select)
         XCTAssertFalse(state.canUndo)
         XCTAssertFalse(state.canRedo)
@@ -112,7 +112,7 @@ final class AppMetadataTests: XCTestCase {
     @MainActor
     func testElementsCatalogIsOrderedTruthfulAndDoesNotCreateCanonicalState() {
         XCTAssertEqual(ElementCatalogItem.allCases.map(\.rawValue), [
-            "section", "stack", "grid", "frame", "text", "image", "button", "link", "divider", "navbar", "footer"
+            "section", "stack", "grid", "frame", "text", "image", "button", "link", "form", "divider", "navbar", "footer"
         ])
         XCTAssertEqual(ElementCatalogItem.section.availability, .available(.section))
         XCTAssertEqual(ElementCatalogItem.stack.availability, .available(.stack))
@@ -122,9 +122,10 @@ final class AppMetadataTests: XCTestCase {
         XCTAssertEqual(ElementCatalogItem.image.availability, .available(.image))
         XCTAssertEqual(ElementCatalogItem.button.availability, .available(.button))
         XCTAssertEqual(ElementCatalogItem.link.availability, .available(.link))
+        XCTAssertEqual(ElementCatalogItem.form.availability, .available(.form))
         XCTAssertTrue(ElementCatalogItem.frame.capabilityContract.contains("transactional Frame"))
         XCTAssertTrue(ElementCatalogItem.text.capabilityContract.contains("plain-Text"))
-        for item in ElementCatalogItem.allCases where ![.section, .stack, .grid, .frame, .text, .image, .button, .link].contains(item) {
+        for item in ElementCatalogItem.allCases where ![.section, .stack, .grid, .frame, .text, .image, .button, .link, .form].contains(item) {
             guard case .unavailable(let reason) = item.availability else {
                 return XCTFail("\(item) must not expose an unimplemented authoring command")
             }
