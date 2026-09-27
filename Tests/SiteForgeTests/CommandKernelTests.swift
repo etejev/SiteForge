@@ -877,6 +877,44 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertEqual(LocalColorTokenResolver.resolvedLayers(for: frame, in: document).first?.solidColor, resolved)
     }
 
+    func testClosedStaticSizingProjectsOnlyValidatedFrameAndImageConstraints() throws {
+        let pageID = PageID(), frameID = NodeID(), imageID = NodeID()
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Card", originalFilename: "card.png",
+            format: .png, pixelWidth: 64, pixelHeight: 64, byteCount: 1,
+            contentHash: String(repeating: "a", count: 64))
+        func property(_ suffix: String, _ value: PropertyValue) -> NodeProperty {
+            .init(key: .init(rawValue: CanonicalSizingConstraints.prefix + suffix),
+                value: value, origin: .authored)
+        }
+        let frame = DocumentNode(id: frameID, kind: .frame, name: "Frame", parent: .page(pageID),
+            properties: [.init(key: .init(rawValue: "layout.x"), value: .number(0), origin: .authored),
+                         .init(key: .init(rawValue: "layout.y"), value: .number(0), origin: .authored),
+                         .init(key: .init(rawValue: "layout.width"), value: .number(150), origin: .authored),
+                         .init(key: .init(rawValue: "layout.height"), value: .number(100), origin: .authored),
+                         property("minWidth", .number(100)), property("maxWidth", .number(500)),
+                         property("aspectRatio", .number(1.5)), property("aspectEnabled", .boolean(true))])
+        let image = DocumentNode(id: imageID, kind: .image, name: "Image", parent: .page(pageID),
+            properties: [.init(key: .init(rawValue: "layout.x"), value: .number(180), origin: .authored),
+                .init(key: .init(rawValue: "layout.y"), value: .number(0), origin: .authored),
+                .init(key: .init(rawValue: "layout.width"), value: .number(64), origin: .authored),
+                .init(key: .init(rawValue: "layout.height"), value: .number(64), origin: .authored),
+                property("minHeight", .number(40)),
+                .init(key: .init(rawValue: CanonicalImageStyle.namespace + "assetID"),
+                    value: .string(asset.id.description), origin: .authored)])
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+            rootNodeIDs: [frameID, imageID], nodes: [frame, image])
+        let document = CanonicalDocument(pages: [page], imageAssets: [asset])
+        let output = try MultiPageStaticBuildPlanner.plan(document: document,
+            imageOutputEntries: [.init(resourceID: asset.resourceID,
+                outputPath: "assets/\(asset.contentHash).png", sha256: asset.contentHash)])
+        let css = try XCTUnwrap(output.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("min-width: 100.0px;"), css)
+        XCTAssertTrue(css.contains("max-width: 500.0px;"), css)
+        XCTAssertTrue(css.contains("aspect-ratio: 1.5;"), css)
+        XCTAssertTrue(css.contains("min-height: 40.0px;"), css)
+        XCTAssertFalse(css.contains("var("), css)
+    }
+
     // SF-0506-001...005, SF-1204-003 — only typed Frame/Section box values
     // enter the closed static declaration vocabulary.
     func testMultiPageStaticBuildPlanProjectsClosedFrameBoxStyle() throws {

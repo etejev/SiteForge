@@ -170,6 +170,74 @@ enum LocalColorTokenBinding {
     }
 }
 
+/// Base-only fixed sizing policy. Omitted properties mean unconstrained;
+/// authored values retain their NodeProperty identity and origin.
+struct CanonicalSizingConstraints: Equatable, Sendable {
+    static let prefix = "layout.sizing.v1."
+    static let maximum = 100_000.0
+    static let minimumRatio = 0.01
+    static let maximumRatio = 100.0
+    var minWidth: Double?
+    var minHeight: Double?
+    var maxWidth: Double?
+    var maxHeight: Double?
+    var aspectRatio: Double?
+    var aspectEnabled: Bool
+
+    static let unconstrained = Self(minWidth: nil, minHeight: nil,
+        maxWidth: nil, maxHeight: nil, aspectRatio: nil, aspectEnabled: false)
+
+    static func resolved(for node: DocumentNode) -> Self {
+        let number: (String) -> Double? = { node.insertionNumberProperty(prefix + $0) }
+        return .init(minWidth: number("minWidth"), minHeight: number("minHeight"),
+            maxWidth: number("maxWidth"), maxHeight: number("maxHeight"),
+            aspectRatio: number("aspectRatio"),
+            aspectEnabled: node.insertionBooleanProperty(prefix + "aspectEnabled"))
+    }
+
+    var isValid: Bool {
+        let bounds = [minWidth, minHeight, maxWidth, maxHeight].compactMap { $0 }
+        guard bounds.allSatisfy({ $0.isFinite && (0...Self.maximum).contains($0) }),
+              maxWidth.map({ $0 >= 1 }) ?? true,
+              maxHeight.map({ $0 >= 1 }) ?? true,
+              minWidth.map({ $0 <= (maxWidth ?? Self.maximum) }) ?? true,
+              minHeight.map({ $0 <= (maxHeight ?? Self.maximum) }) ?? true else { return false }
+        if let aspectRatio {
+            guard aspectRatio.isFinite,
+                  (Self.minimumRatio...Self.maximumRatio).contains(aspectRatio) else { return false }
+        }
+        guard !aspectEnabled || aspectRatio != nil else { return false }
+        if aspectEnabled, let ratio = aspectRatio {
+            let lowerWidth = max(max(1, minWidth ?? 1), max(1, minHeight ?? 1) * ratio)
+            let upperWidth = min(min(Self.maximum, maxWidth ?? Self.maximum),
+                (maxHeight ?? Self.maximum) * ratio)
+            return lowerWidth <= upperWidth
+        }
+        return true
+    }
+}
+
+enum CanonicalSizingNamespaceValidator {
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix(CanonicalSizingConstraints.prefix) }
+        guard !owned.isEmpty else { return }
+        guard [.frame, .image].contains(node.kind) else { throw ModelValidationError.invalidSizingConstraints }
+        let keys = owned.map { String($0.key.rawValue.dropFirst(CanonicalSizingConstraints.prefix.count)) }
+        guard Set(keys).count == keys.count,
+              Set(keys).isSubset(of: ["minWidth", "minHeight", "maxWidth", "maxHeight", "aspectRatio", "aspectEnabled"]) else {
+            throw ModelValidationError.invalidSizingConstraints
+        }
+        for property in owned {
+            if property.key.rawValue == CanonicalSizingConstraints.prefix + "aspectEnabled" {
+                guard case .boolean = property.value else { throw ModelValidationError.invalidSizingConstraints }
+            } else {
+                guard case .number = property.value else { throw ModelValidationError.invalidSizingConstraints }
+            }
+        }
+        guard CanonicalSizingConstraints.resolved(for: node).isValid else { throw ModelValidationError.invalidSizingConstraints }
+    }
+}
+
 enum ImageAssetFormat: String, Codable, CaseIterable, Sendable {
     case png, jpeg, gif, tiff, heic
 
@@ -1365,6 +1433,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case invalidImageAsset
     case invalidImageReference
     case invalidColorToken
+    case invalidSizingConstraints
     case invalidComponentReference
 
     var errorDescription: String? {
@@ -1409,6 +1478,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .invalidImageAsset: "The document contains invalid image asset metadata."
         case .invalidImageReference: "An Image node must reference an existing canonical image asset."
         case .invalidColorToken: "The project contains invalid local color token state."
+        case .invalidSizingConstraints: "The project contains invalid fixed sizing constraints."
         }
     }
 }
@@ -2026,6 +2096,7 @@ private extension DocumentPage {
             try CanonicalComponentReference.validate(node)
             try CanonicalComponentText.validate(node, inDefinition: role == .componentDefinition)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
+            try CanonicalSizingNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
             try CanonicalSemanticElementValidator.validate(node)
             try CanonicalCSSRuleValidator.validate(node)

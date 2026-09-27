@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-058
+
+- Added native Layout Inspector min/max width and height plus aspect-lock
+  controls for fixed Frame/Image sizing. Edits clamp Desktop numeric and
+  pointer geometry through one typed transaction, preserve exact undo/redo,
+  and project validated base constraints into closed static output. Responsive
+  sizing modes and release acceptance remain deferred.
+
 ## In progress — SF-AUTHORING-057
 
 - Added project-local solid RGBA color tokens to the Design Inspector. Tokens

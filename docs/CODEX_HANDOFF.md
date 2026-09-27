@@ -5,11 +5,22 @@
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-057` is Development Prompt 4 of 10; Prompt 10
+its local commit. `SF-AUTHORING-058` is Development Prompt 5 of 10; Prompt 10
 triggers the next full verification and hosted checkpoint. Until then do not
 push or run broad gates. Normative modules remain Partial unless fully proven.
 
-## Current local color-token checkpoint
+## Current sizing checkpoint
+
+SF-AUTHORING-058 adds strict base-only Frame/Image min/max and aspect
+properties under `layout.sizing.v1.*`. Its central command adjusts fixed
+geometry atomically and the Layout Inspector retains drafts locally. Desktop
+numeric and pointer resize use the same clamp policy; closed static output
+projects validated declarations. Four focused selectors passed, with three
+native window captures reviewed; see
+`docs/evidence/SF-AUTHORING-058-SIZING-CONSTRAINTS.md`. Do not claim
+responsive/intrinsic sizing or full SF-0505 acceptance from this slice.
+
+## Prior local color-token checkpoint
 
 SF-AUTHORING-057 adds schema-9 project-local solid RGBA tokens and a stable
 solid-fill binding property. The token registry and existing DocumentSession

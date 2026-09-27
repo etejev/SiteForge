@@ -513,6 +513,38 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
     }
 
+    // SF-0505-001...006/008 — native base sizing edits share the geometry
+    // transaction and never replace the selected Frame with an editor proxy.
+    func testNativeSizingConstraintsClampResetAndAccessibilityJourney() throws {
+        let application = launchWorkspace()
+        application.buttons["canvas.empty.insert.frame"].click()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["inspector.tab.layout"].click()
+        let minimum = application.textFields["inspector.sizing.minWidth"]
+        XCTAssertTrue(minimum.waitForExistence(timeout: 5))
+        XCTAssertEqual(minimum.label, "Min width")
+        XCTAssertTrue((minimum.value as? String)?.contains("Default") == true)
+        let geometry = application.descendants(matching: .any)["inspector.transform.geometry"]
+        let original = try XCTUnwrap(geometry.value as? String)
+        replaceStructuralLayoutField(minimum, with: "300", in: application)
+        XCTAssertTrue(waitForValue(minimum, containing: "300"))
+        XCTAssertTrue(waitForValueToChange(geometry, from: original))
+        XCTAssertTrue(application.buttons["toolbar.undo"].isEnabled)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-058 minimum width authored")
+        let lock = application.descendants(matching: .any)["inspector.sizing.aspectLock"]
+        XCTAssertTrue(lock.waitForExistence(timeout: 3))
+        XCTAssertTrue(lock.isEnabled)
+        lock.click()
+        XCTAssertTrue(application.textFields["inspector.sizing.aspectRatio"].exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-058 aspect locked")
+        let reset = application.buttons["inspector.sizing.reset"]
+        XCTAssertTrue(reset.isHittable)
+        reset.click()
+        XCTAssertTrue(waitForValue(minimum, containing: "Default"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-058 reset")
+    }
+
     // SF-0601-001...006/008; SF-0602-001...006/008
     func testResponsiveBreakpointGeometryAuthoringUndoResetAndAccessibilityJourney() throws {
         let application = launchWorkspace()

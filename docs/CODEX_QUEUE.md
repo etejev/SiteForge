@@ -12,7 +12,7 @@ persistence/history/accessibility/cancellation, focused evidence, and factual
 documentation. Run focused affected tests before each local commit; do not run
 the full gate or hosted CI per slice.
 
-`SF-AUTHORING-057` is Development Prompt **4 of 10** once its focused slice is committed. After Prompt 10, run one
+`SF-AUTHORING-058` is Development Prompt **5 of 10** once its focused slice is committed. After Prompt 10, run one
 authoritative `./sf verify`, repair failures, commit, push main, and monitor
 hosted CI until green. Debug-only owner add-ons do not increment this cadence.
 Until that checkpoint, commits stay local and no external GitHub/release action
@@ -24,6 +24,12 @@ actually evidenced.
 None.
 
 ## IN PROGRESS
+
+- [ ] `SF-AUTHORING-058` Native sizing constraints and aspect-ratio foundation v1 (P1; Development Prompt 5 of 10).
+  - Requirements: bounded `SF-0505-001`–`008`, with fixed-geometry `SF-0403`, responsive base/cascade `SF-0601`/`SF-0602`, renderer `SF-0701`/`SF-0702`, and closed static `SF-1204` integration.
+  - Plan: add a strictly validated canonical base-only min/max/aspect property group; resolve fixed geometry edits and pointer resize through the existing identity-gated command paths; expose scene-local native Layout Inspector drafts/reset; project safe closed static sizing declarations; add focused model, renderer/static, and actual-app tests.
+  - Focused checkpoint: Frame/Image base bounds and aspect lock, native Layout controls, clamped numeric/pointer geometry, and closed static declarations are implemented. Four exact focused selectors passed; three original-resolution native window captures were reviewed. The tenth-prompt full gate has not run. Evidence: `docs/evidence/SF-AUTHORING-058-SIZING-CONSTRAINTS.md`.
+  - Exclusions: responsive constraint overrides, hug/fill/intrinsic/percentage/viewport-unit sizing, container constraints, rotation/skew, arbitrary CSS, browser runtime, publishing, and release acceptance.
 
 - [ ] `SF-AUTHORING-057` Local solid color tokens (P1; Development Prompt 4 of 10).
   - Requirements: bounded `SF-0509-001`–`008`, `SF-0302-001`–`008`, `SF-0305-001`–`008`, `SF-0306-001`–`008`, with applicable Inspector and static output requirements.

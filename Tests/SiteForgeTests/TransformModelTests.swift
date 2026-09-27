@@ -4,6 +4,122 @@ import XCTest
 
 @MainActor
 final class TransformModelTests: XCTestCase {
+    func testSizingNamespaceRejectsMalformedUnsupportedAndContradictoryProperties() throws {
+        let fixture = makeFixture()
+        func expectInvalid(_ properties: [NodeProperty], kind: NodeKind = .frame,
+                           expected: ModelValidationError = .invalidSizingConstraints) {
+            var document = fixture.document
+            document.pages[0].nodes[1].kind = kind
+            document.pages[0].nodes[1].properties.append(contentsOf: properties)
+            XCTAssertThrowsError(try document.validate()) { error in
+                XCTAssertEqual(error as? ModelValidationError, expected)
+            }
+        }
+        func property(_ suffix: String, _ value: PropertyValue) -> NodeProperty {
+            .init(key: .init(rawValue: CanonicalSizingConstraints.prefix + suffix),
+                value: value, origin: .authored)
+        }
+        expectInvalid([property("minWidth", .number(.nan))])
+        expectInvalid([property("minWidth", .string("10"))])
+        expectInvalid([property("minWidth", .number(300)), property("maxWidth", .number(100))])
+        expectInvalid([property("maxWidth", .number(0))])
+        expectInvalid([property("aspectEnabled", .boolean(true))])
+        expectInvalid([property("aspectRatio", .number(0))])
+        expectInvalid([property("minWidth", .number(100)), property("maxHeight", .number(2)),
+            property("aspectRatio", .number(1)), property("aspectEnabled", .boolean(true))])
+        expectInvalid([property("minWidth", .number(100)), property("minWidth", .number(100))],
+            expected: .duplicatePropertyKey)
+        expectInvalid([property("minWidth", .number(10))], kind: .text)
+    }
+
+    func testSizingConstraintsSetClampAspectResetAndExactHistory() throws {
+        let fixture = makeFixture()
+        let session = DocumentSession(document: fixture.document)
+        let registry = SizingConstraintCommandRegistry()
+        func node() -> DocumentNode { session.document.pages[0].nodes[1] }
+        func command(_ edit: SizingConstraintEdit, cancelled: Bool = false,
+                     revision: UInt64? = nil) -> SizingConstraintCommand {
+            .init(identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                pageID: fixture.pageID, revision: revision ?? session.document.revision,
+                sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: [fixture.nodeID], edit: edit, cancelled: cancelled)
+        }
+        func execute(_ edit: SizingConstraintEdit) throws {
+            let prepared = try registry.prepare(command(edit), in: session.document,
+                context: fixture.context(selectedIDs: [fixture.nodeID]))
+            XCTAssertEqual(prepared.applicableNodeIDs, [fixture.nodeID])
+            try session.execute(prepared.documentCommand)
+        }
+        try execute(.set(.minWidth, 150))
+        XCTAssertEqual(node().insertionGeometry?.frame.size.width, 150)
+        let minID = try XCTUnwrap(node().insertionProperty(CanonicalSizingConstraints.prefix + "minWidth")?.id)
+        try execute(.setAspectEnabled(true))
+        XCTAssertEqual(CanonicalSizingConstraints.resolved(for: node()).aspectRatio, 150.0 / 80.0)
+        let geometry = GeometryInspectorCommand(identity: .init(editID: GeometryInspectorEditID(),
+            documentID: session.document.id, pageID: fixture.pageID, revision: session.document.revision,
+            sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], field: .width, value: 200, provenance: .automation)
+        let numeric = try GeometryInspectorCommandRegistry().prepare(geometry, in: session.document,
+            context: fixture.context(selectedIDs: [fixture.nodeID]))
+        try session.execute(numeric.documentCommand)
+        XCTAssertEqual(node().insertionGeometry?.frame.size.width, 200)
+        XCTAssertEqual(node().insertionGeometry?.frame.size.height ?? 0, 200 / (150.0 / 80.0), accuracy: 0.0001)
+        try execute(.set(.maxWidth, 160))
+        XCTAssertEqual(node().insertionGeometry?.frame.size.width, 160)
+        let resize = GeometryTransformCommand(identity: .init(sessionID: TransformSessionID(),
+            documentID: session.document.id, pageID: fixture.pageID,
+            revision: session.document.revision, sceneID: fixture.sceneID,
+            rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: [fixture.nodeID],
+            operation: .resize(handle: .left, delta: .init(dx: 40, dy: 0), constraint: .none),
+            provenance: .automation)
+        let resized = try TransformCommandRegistry().prepare(resize, in: session.document,
+            context: fixture.context(selectedIDs: [fixture.nodeID]))
+        XCTAssertEqual(resized.geometries[0].preview.size.width, 150)
+        XCTAssertEqual(resized.geometries[0].preview.origin.x, 20)
+        try session.execute(resized.documentCommand)
+        XCTAssertEqual(node().insertionGeometry?.frame.size.width, 150)
+        XCTAssertThrowsError(try registry.prepare(command(.set(.minWidth, 500)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        XCTAssertThrowsError(try registry.prepare(command(.set(.minHeight, .nan)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        XCTAssertThrowsError(try registry.prepare(command(.reset, cancelled: true),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        XCTAssertThrowsError(try registry.prepare(command(.reset, revision: 0),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        let beforeReset = session.document
+        try execute(.reset)
+        XCTAssertEqual(CanonicalSizingConstraints.resolved(for: node()), .unconstrained)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, beforeReset.pages)
+        XCTAssertEqual(node().insertionProperty(CanonicalSizingConstraints.prefix + "minWidth")?.id, minID)
+        try session.redo()
+        XCTAssertEqual(CanonicalSizingConstraints.resolved(for: node()), .unconstrained)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    func testSizingConstraintMixedSelectionSkipsTextAndPreservesIdentity() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[2].kind = .text
+        let originalText = fixture.document.pages[0].nodes[2]
+        let session = DocumentSession(document: fixture.document)
+        let selected = [fixture.nodeID, originalText.id]
+        let context = fixture.context(selectedIDs: selected)
+        let command = SizingConstraintCommand(identity: .init(editID: GeometryInspectorEditID(),
+            documentID: session.document.id, pageID: fixture.pageID,
+            revision: session.document.revision, sceneID: fixture.sceneID,
+            rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: selected,
+            edit: .set(.maxWidth, 180), cancelled: false)
+        let prepared = try SizingConstraintCommandRegistry().prepare(command,
+            in: session.document, context: context)
+        XCTAssertEqual(prepared.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(prepared.skippedNodeIDs, [originalText.id])
+        try session.execute(prepared.documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[2], originalText)
+        XCTAssertEqual(session.document.pages[0].nodes[1].id, fixture.nodeID)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, fixture.document.pages)
+    }
+
     // SF-0509-001...005 — one stable local token propagates to bound solid
     // fills while exact history and the literal fallback remain intact.
     func testLocalColorTokenCreateBindRecolorUnbindHistoryAndPersistence() throws {

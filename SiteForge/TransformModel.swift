@@ -1898,8 +1898,27 @@ struct GeometryInspectorCommandRegistry: Sendable {
             if command.breakpoint == .desktop {
                 guard !command.removesOverride,
                       let property = node.insertionProperty(command.field.propertyKey) else { skipped.append(id); continue }
-                commands.append(.setProperty(.init(pageID: page.id, nodeID: id,
-                    property: .init(id: property.id, key: property.key, value: .number(command.value), origin: .authored))))
+                if [.frame, .image].contains(node.kind),
+                   command.field == .width || command.field == .height,
+                   let frame = node.insertionGeometry?.frame {
+                    let sizing = CanonicalSizingConstraints.resolved(for: node)
+                    let adjusted: (width: Double, height: Double)
+                    do {
+                        adjusted = try SizingConstraintPolicy.adjusted(
+                            width: command.field == .width ? command.value : frame.size.width,
+                            height: command.field == .height ? command.value : frame.size.height,
+                            constraints: sizing, driver: command.field == .width ? .width : .height)
+                    } catch { throw GeometryInspectorError.invalidValue }
+                    for (field, value) in [(GeometryInspectorField.width, adjusted.width), (.height, adjusted.height)] {
+                        guard let dimension = node.insertionProperty(field.propertyKey) else { throw GeometryInspectorError.invalidValue }
+                        commands.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                            property: .init(id: dimension.id, key: dimension.key,
+                                value: .number(value), origin: .authored))))
+                    }
+                } else {
+                    commands.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                        property: .init(id: property.id, key: property.key, value: .number(command.value), origin: .authored))))
+                }
             } else {
                 let key = ResponsiveGeometryResolver.key(command.field, breakpoint: command.breakpoint)
                 if let property = node.insertionProperty(key) {
@@ -1970,6 +1989,183 @@ enum GeometryInspectorNumberParser {
         formatter.maximumFractionDigits = 3
         formatter.minimumFractionDigits = 0
         return formatter.string(from: value as NSNumber) ?? String(format: "%.3f", value)
+    }
+}
+
+enum SizingConstraintField: String, CaseIterable, Sendable {
+    case minWidth, minHeight, maxWidth, maxHeight, aspectRatio
+    var title: String {
+        switch self {
+        case .minWidth: "Min width"
+        case .minHeight: "Min height"
+        case .maxWidth: "Max width"
+        case .maxHeight: "Max height"
+        case .aspectRatio: "Aspect ratio"
+        }
+    }
+}
+
+enum SizingConstraintPresentation: Equatable, Sendable {
+    case unavailable(String)
+    case mixed
+    case single(Double?, PropertyOrigin)
+}
+
+enum SizingConstraintEdit: Sendable {
+    case set(SizingConstraintField, Double?)
+    case setAspectEnabled(Bool)
+    case reset
+}
+
+struct SizingConstraintCommand: Sendable {
+    let identity: GeometryInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let edit: SizingConstraintEdit
+    let cancelled: Bool
+}
+
+enum SizingConstraintError: Error, LocalizedError {
+    case stale, cancelled, invalid, unavailable, unchanged
+    var errorDescription: String? {
+        switch self {
+        case .stale: "Sizing changed before the edit could commit. Try again."
+        case .cancelled: "Sizing draft cancelled; geometry is unchanged."
+        case .invalid: "Use finite bounds with minimum no greater than maximum and a ratio from 0.01 through 100."
+        case .unavailable: "Select an unlocked, visible Frame or Image with fixed geometry."
+        case .unchanged: "Sizing is already at the requested value."
+        }
+    }
+}
+
+enum SizingConstraintPolicy {
+    enum Driver { case width, height }
+    static func adjusted(width: Double, height: Double, constraints: CanonicalSizingConstraints,
+                         driver: Driver) throws -> (width: Double, height: Double) {
+        guard constraints.isValid, width.isFinite, height.isFinite else { throw SizingConstraintError.invalid }
+        let minimum = TransformPolicy.minimumDimension
+        let lowW = max(minimum, constraints.minWidth ?? minimum)
+        let lowH = max(minimum, constraints.minHeight ?? minimum)
+        let highW = min(LayoutPolicy.maximumDimension, constraints.maxWidth ?? LayoutPolicy.maximumDimension)
+        let highH = min(LayoutPolicy.maximumDimension, constraints.maxHeight ?? LayoutPolicy.maximumDimension)
+        guard lowW <= highW, lowH <= highH else { throw SizingConstraintError.invalid }
+        if constraints.aspectEnabled, let ratio = constraints.aspectRatio {
+            let lowerWidth = max(lowW, lowH * ratio)
+            let upperWidth = min(highW, highH * ratio)
+            guard lowerWidth <= upperWidth else { throw SizingConstraintError.invalid }
+            let requestedWidth = driver == .width ? width : height * ratio
+            let clampedWidth = min(upperWidth, max(lowerWidth, requestedWidth))
+            return (clampedWidth, clampedWidth / ratio)
+        }
+        return (min(highW, max(lowW, width)), min(highH, max(lowH, height)))
+    }
+}
+
+struct SizingConstraintCommandRegistry {
+    struct Prepared: Sendable {
+        let documentCommand: DocumentCommand
+        let applicableNodeIDs: [NodeID]
+        let skippedNodeIDs: [NodeID]
+    }
+
+    func prepare(_ command: SizingConstraintCommand, in document: CanonicalDocument,
+                 context: TransformValidationContext) throws -> Prepared {
+        guard !command.cancelled else { throw SizingConstraintError.cancelled }
+        guard context.isLifecycleAvailable,
+              command.identity.documentID == document.id,
+              command.identity.revision == document.revision,
+              command.identity.pageID == context.activePageID,
+              command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration,
+              command.orderedNodeIDs == context.selectedNodeIDs,
+              Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count,
+              document.revision < UInt64.max,
+              let page = document.pages.first(where: { $0.id == context.activePageID }) else {
+            throw SizingConstraintError.stale
+        }
+        var changes: [DocumentCommand] = [], applicable: [NodeID] = [], skipped: [NodeID] = []
+        for id in command.orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw SizingConstraintError.stale }
+            guard [.frame, .image].contains(node.kind) else { skipped.append(id); continue }
+            guard !node.insertionBooleanProperty("locked"), !node.insertionBooleanProperty("hidden"),
+                  context.availableNodeIDs.contains(id), let frame = node.insertionGeometry?.frame else {
+                throw SizingConstraintError.unavailable
+            }
+            applicable.append(id)
+            var next = CanonicalSizingConstraints.resolved(for: node)
+            var updates: [(String, PropertyValue?)] = []
+            let driver: SizingConstraintPolicy.Driver
+            switch command.edit {
+            case .set(let field, let value):
+                if let value {
+                    guard value.isFinite, value >= 0, value <= CanonicalSizingConstraints.maximum else {
+                        throw SizingConstraintError.invalid
+                    }
+                }
+                switch field {
+                case .minWidth: next.minWidth = value; driver = .width
+                case .minHeight: next.minHeight = value; driver = .height
+                case .maxWidth: next.maxWidth = value; driver = .width
+                case .maxHeight: next.maxHeight = value; driver = .height
+                case .aspectRatio:
+                    if let value {
+                        guard (CanonicalSizingConstraints.minimumRatio...CanonicalSizingConstraints.maximumRatio).contains(value) else {
+                            throw SizingConstraintError.invalid
+                        }
+                        next.aspectRatio = value; next.aspectEnabled = true
+                        updates.append(("aspectEnabled", .boolean(true)))
+                    } else {
+                        next.aspectRatio = nil; next.aspectEnabled = false
+                        updates.append(("aspectEnabled", nil))
+                    }
+                    driver = .width
+                }
+                updates.append((field.rawValue, value.map(PropertyValue.number)))
+            case .setAspectEnabled(let enabled):
+                next.aspectEnabled = enabled
+                if enabled {
+                    let ratio = frame.size.width / frame.size.height
+                    guard ratio.isFinite,
+                          (CanonicalSizingConstraints.minimumRatio...CanonicalSizingConstraints.maximumRatio).contains(ratio) else {
+                        throw SizingConstraintError.invalid
+                    }
+                    next.aspectRatio = ratio
+                    updates.append(("aspectRatio", .number(ratio)))
+                }
+                updates.append(("aspectEnabled", .boolean(enabled)))
+                driver = .width
+            case .reset:
+                next = .unconstrained
+                updates = ["minWidth", "minHeight", "maxWidth", "maxHeight", "aspectRatio", "aspectEnabled"].map { ($0, nil) }
+                driver = .width
+            }
+            guard next.isValid else { throw SizingConstraintError.invalid }
+            let adjusted = try SizingConstraintPolicy.adjusted(width: frame.size.width,
+                height: frame.size.height, constraints: next, driver: driver)
+            for (suffix, value) in updates {
+                let key = CanonicalSizingConstraints.prefix + suffix
+                let old = node.insertionProperty(key)
+                if let value {
+                    if old?.value == value, old?.origin == .authored { continue }
+                    changes.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                        property: .init(id: old?.id ?? PropertyID(), key: .init(rawValue: key),
+                            value: value, origin: .authored))))
+                } else if let old {
+                    changes.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: old.id)))
+                }
+            }
+            for (key, value) in [("layout.width", adjusted.width), ("layout.height", adjusted.height)] {
+                guard let old = node.insertionProperty(key), old.value != .number(value) else { continue }
+                changes.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                    property: .init(id: old.id, key: old.key, value: .number(value), origin: .authored))))
+            }
+        }
+        guard !applicable.isEmpty else { throw SizingConstraintError.unavailable }
+        guard !changes.isEmpty else { throw SizingConstraintError.unchanged }
+        let documentCommand = DocumentCommand.batch(changes)
+        guard CommandRegistry().availability(for: documentCommand, in: document).isEnabled else {
+            throw SizingConstraintError.invalid
+        }
+        return .init(documentCommand: documentCommand, applicableNodeIDs: applicable, skippedNodeIDs: skipped)
     }
 }
 
@@ -2049,7 +2245,9 @@ struct TransformCommandRegistry: Sendable {
             guard let original = node.insertionGeometry?.frame else {
                 throw TransformError.incompatibleGeometry
             }
-            let preview = try Self.resolve(original, operation: command.operation)
+            let sizing: CanonicalSizingConstraints? = [.frame, .image].contains(node.kind)
+                ? CanonicalSizingConstraints.resolved(for: node) : nil
+            let preview = try Self.resolve(original, operation: command.operation, sizing: sizing)
             geometries.append(TransformGeometry(nodeID: id, original: original, preview: preview))
             mutations.append(contentsOf: try propertyCommands(
                 pageID: page.id, node: node, frame: preview, operation: command.operation
@@ -2068,7 +2266,8 @@ struct TransformCommandRegistry: Sendable {
         )
     }
 
-    static func resolve(_ frame: WorldRect, operation: TransformOperation) throws -> WorldRect {
+    static func resolve(_ frame: WorldRect, operation: TransformOperation,
+                        sizing: CanonicalSizingConstraints? = nil) throws -> WorldRect {
         guard frame.isValid else { throw TransformError.incompatibleGeometry }
         switch operation {
         case .move(let rawDelta, let constraint):
@@ -2097,10 +2296,22 @@ struct TransformCommandRegistry: Sendable {
             if [.bottomLeft, .bottom, .bottomRight].contains(handle) {
                 height += delta.dy
             }
-            return try validated(WorldRect(
-                origin: WorldPoint(x: x, y: y),
-                size: WorldSize(width: width, height: height)
-            ))
+            if let sizing {
+                let horizontal = [.left, .right].contains(handle)
+                let vertical = [.top, .bottom].contains(handle)
+                let driver: SizingConstraintPolicy.Driver = horizontal ? .width : vertical ? .height
+                    : abs(delta.dx / frame.size.width) >= abs(delta.dy / frame.size.height) ? .width : .height
+                let adjusted: (width: Double, height: Double)
+                do {
+                    adjusted = try SizingConstraintPolicy.adjusted(width: width, height: height,
+                        constraints: sizing, driver: driver)
+                } catch { throw TransformError.invalidResult }
+                width = adjusted.width; height = adjusted.height
+                if [.topLeft, .left, .bottomLeft].contains(handle) { x = frame.origin.x + frame.size.width - width }
+                if [.topLeft, .top, .topRight].contains(handle) { y = frame.origin.y + frame.size.height - height }
+            }
+            return try validated(WorldRect(origin: WorldPoint(x: x, y: y),
+                size: WorldSize(width: width, height: height)))
         }
     }
 

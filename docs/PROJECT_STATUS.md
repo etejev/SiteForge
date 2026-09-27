@@ -2,15 +2,15 @@
 
 Last updated: 2026-09-27.
 
-Current local development prompt: SF-AUTHORING-057 (4 of 10), project-local
-solid RGBA color tokens. The bounded canonical, Inspector, renderer/Preview,
-static-output, and focused test evidence is recorded in
-`docs/evidence/SF-AUTHORING-057-LOCAL-COLOR-TOKENS.md`. The full gate and hosted
-checkpoint are reserved for prompt 10; SF-0509 remains Partial. Earlier
+Current local development prompt: SF-AUTHORING-058 (5 of 10), base-only
+Frame/Image min/max and aspect sizing. Canonical, Inspector, geometry, static
+output and focused evidence are recorded in
+`docs/evidence/SF-AUTHORING-058-SIZING-CONSTRAINTS.md`. The full gate and hosted
+checkpoint are reserved for prompt 10; SF-0505 remains Partial. Earlier
 historical status entries below are retained for their original evidence and
 are not the current work queue.
 
-Current work is SF-AUTHORING-026 Semantic HTML element authoring v1. Its
+At that checkpoint, work was SF-AUTHORING-026 Semantic HTML element authoring v1. Its
 canonical semantic element state and native Inspector controls are in progress;
 raw markup, browser runtime and publishing remain deferred.
 
@@ -22,7 +22,7 @@ component reveal regressions pass. The authoritative local gate passed 430
 unit/integration + 63 UI = 493 tests with zero failures. SF-1201/SF-1202 stay
 Partial: browser runtime, HTML/CSS/JS, export/publishing and SF-1204
 remain deferred. Actions `36166584811` passed at `1ab912e` with 493 tests and
-zero failures. Current work is SF-AUTHORING-026 Semantic HTML element authoring v1.
+zero failures. The next work at that checkpoint was SF-AUTHORING-026 Semantic HTML element authoring v1.
 
 SF-AUTHORING-023 application Appearance Settings is locally verified and DONE.
 Six model tests, one actual-app journey and five reviewed Settings captures

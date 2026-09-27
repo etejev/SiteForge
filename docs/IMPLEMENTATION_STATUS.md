@@ -2,6 +2,17 @@
 
 Last updated: 2026-09-27.
 
+SF-AUTHORING-058 has a focused base-only fixed-sizing foundation for Frame and
+Image (`SF-0505-001`–`008`, Partial). Versioned typed min/max and aspect
+properties preserve NodeProperty IDs and provenance; strict document validation
+rejects malformed or contradictory values. The central sizing command clamps
+base numeric and pointer geometry, provides exact history, and feeds a native
+Layout Inspector with scene-local drafts and Reset. The immutable static tree
+projects only closed validated sizing declarations. Four focused model/static/UI
+selectors passed; three native window captures were visually reviewed. No
+full gate was run under the prompt-5 reset policy. See
+`docs/evidence/SF-AUTHORING-058-SIZING-CONSTRAINTS.md`.
+
 SF-AUTHORING-057 has a focused local color-token foundation: versioned stable
 RGBA token records, reversible solid-fill binding and safe unbinding, native
 Design Inspector controls, and shared canvas/Preview/closed-static resolution.

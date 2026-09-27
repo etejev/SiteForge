@@ -2628,11 +2628,13 @@ private struct InspectorView: View {
                 .accessibilityLabel("Selection geometry")
                 .accessibilityValue(state.transformGeometrySummary)
                 .accessibilityIdentifier("inspector.transform.geometry")
-            Text("Fixed geometry edits are authored values. Sizing modes, constraints, and automatic sizing remain unavailable.")
+            Text("Fixed geometry remains authored. Base min/max and aspect sizing applies to Frame and Image; automatic sizing is not yet available.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             GeometryInspectorFieldsView(state: state)
                 .id(state.geometryInspectorSelectionKey)
+            SizingInspectorFieldsView(state: state)
+                .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ","))
             if state.hasContainerLayoutSelection {
                 Divider()
                 ContainerLayoutInspectorView(state: state)
@@ -3734,6 +3736,120 @@ private final class AccessibleDesignOpacityStepper: NSStepper {
         _ = sendAction(action, to: target)
         NSAccessibility.post(element: self, notification: .valueChanged)
         return true
+    }
+}
+
+/// Incomplete sizing input lives only in this scene. The model receives one
+/// validated identity-gated transaction after Return or native focus loss.
+private struct SizingInspectorFieldsView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @FocusState private var focusedField: SizingConstraintField?
+    @State private var drafts: [SizingConstraintField: String] = [:]
+    @State private var message: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            HStack {
+                Text("Sizing").font(.headline)
+                Spacer()
+                Button("Reset") {
+                    if state.commitSizingConstraint(.reset) { drafts.removeAll(); message = nil }
+                    else { message = state.lastSizingConstraintAnnouncement }
+                }
+                .disabled(!state.sizingConstraintAvailability.isEnabled)
+                .accessibilityLabel("Reset sizing constraints")
+                .accessibilityIdentifier("inspector.sizing.reset")
+            }
+            if let reason = state.sizingConstraintAvailability.disabledReason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.sizing.availability")
+            }
+            ForEach(SizingConstraintField.allCases, id: \.self) { field in
+                let value = state.sizingConstraintValue(for: field)
+                HStack(spacing: 6) {
+                    Text(field.title).frame(width: 82, alignment: .leading).lineLimit(1)
+                    TextField(field.title, text: Binding(
+                        get: { drafts[field] ?? display(value) },
+                        set: { drafts[field] = $0; message = nil }
+                    ))
+                    .textFieldStyle(.roundedBorder).monospacedDigit()
+                    .focused($focusedField, equals: field)
+                    .onSubmit { commit(field) }
+                    .onChange(of: focusedField) { previous, current in
+                        if previous == field, current != field, drafts[field] != nil {
+                            DispatchQueue.main.async { guard focusedField != field else { return }; commit(field) }
+                        }
+                    }
+                    .disabled(!state.sizingConstraintAvailability.isEnabled)
+                    .accessibilityLabel(field.title)
+                    .accessibilityValue(accessibilityValue(value))
+                    .accessibilityHint("Enter a finite value and press Return. Empty removes this bound; Escape cancels the draft.")
+                    .accessibilityIdentifier("inspector.sizing.\(field.rawValue)")
+                    Text(provenance(value)).font(.caption2).foregroundStyle(.secondary)
+                        .frame(width: 66, alignment: .trailing).lineLimit(1)
+                }
+            }
+            Toggle("Lock aspect ratio", isOn: Binding(
+                get: { state.sizingAspectEnabled ?? false },
+                set: { enabled in
+                    if !state.commitSizingConstraint(.setAspectEnabled(enabled)) {
+                        message = state.lastSizingConstraintAnnouncement
+                    } else { drafts.removeAll(); message = nil }
+                }
+            ))
+            .disabled(!state.sizingConstraintAvailability.isEnabled)
+            .accessibilityValue(state.sizingAspectEnabled.map { $0 ? "Locked" : "Unlocked" } ?? "Mixed or unavailable")
+            .accessibilityIdentifier("inspector.sizing.aspectLock")
+            if state.sizingAspectEnabled == nil, state.sizingConstraintAvailability.isEnabled {
+                Text("Mixed aspect-lock values").font(.caption2).foregroundStyle(.secondary)
+            }
+            if let message { Text(message).font(.caption).foregroundStyle(.red)
+                .accessibilityIdentifier("inspector.sizing.validation") }
+            Text(state.lastSizingConstraintAnnouncement).font(.caption2).foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.sizing.announcement")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Sizing constraints")
+        .accessibilityIdentifier("inspector.sizing.fields")
+        .onExitCommand { drafts.removeAll(); focusedField = nil; message = nil }
+    }
+
+    private func display(_ value: SizingConstraintPresentation) -> String {
+        if case .single(let number?, _) = value { return GeometryInspectorNumberParser.format(number) }
+        return ""
+    }
+    private func provenance(_ value: SizingConstraintPresentation) -> String {
+        switch value {
+        case .single(nil, _): "Default"
+        case .single(_, let origin): origin == .authored ? "Authored" : "Default"
+        case .mixed: "Mixed"
+        case .unavailable: "Unavailable"
+        }
+    }
+    private func accessibilityValue(_ value: SizingConstraintPresentation) -> String {
+        switch value {
+        case .single(nil, _): "Default, no constraint"
+        case .single(let number?, let origin): "\(GeometryInspectorNumberParser.format(number)); \(origin == .authored ? "authored" : "defaulted")"
+        case .mixed: "Mixed values"
+        case .unavailable(let reason): reason
+        }
+    }
+    private func commit(_ field: SizingConstraintField) {
+        let source = drafts[field] ?? display(state.sizingConstraintValue(for: field))
+        let value: Double?
+        if source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { value = nil }
+        else {
+            switch GeometryInspectorNumberParser.parse(source) {
+            case .success(let parsed): value = parsed
+            case .failure: message = "\(field.title) needs a finite numeric value."; return
+            }
+        }
+        guard state.commitSizingConstraint(.set(field, value)) else {
+            message = state.lastSizingConstraintAnnouncement; return
+        }
+        drafts.removeValue(forKey: field)
+        message = nil
     }
 }
 

@@ -426,13 +426,17 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     /// Closed box appearance reaches static output only through this typed
     /// immutable projection; no presentation string becomes CSS input.
     let boxStyle: CanonicalBoxStyle?
+    /// Base-only fixed sizing metadata. Static output uses only closed,
+    /// validated declarations; responsive constraint overrides are absent.
+    let sizingConstraints: CanonicalSizingConstraints?
 
     init(id: NodeID, sourceNodeID: NodeID, parentNodeID: NodeID? = nil, paintOrder: Int, frame: WorldRect,
          semanticElement: String, cssSelector: String, formField: InternalFormField?,
          control: InternalStaticControl? = nil, anchorID: String? = nil,
          textContent: String? = nil, typography: CanonicalTypography? = nil,
          image: InternalStaticImage? = nil, fillLayers: [CanonicalFillLayer] = [],
-         opacity: Double? = nil, boxStyle: CanonicalBoxStyle? = nil) {
+         opacity: Double? = nil, boxStyle: CanonicalBoxStyle? = nil,
+         sizingConstraints: CanonicalSizingConstraints? = nil) {
         self.id = id
         self.sourceNodeID = sourceNodeID
         self.parentNodeID = parentNodeID
@@ -449,6 +453,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
         self.fillLayers = fillLayers
         self.opacity = opacity
         self.boxStyle = boxStyle
+        self.sizingConstraints = sizingConstraints
     }
 }
 
@@ -566,7 +571,9 @@ enum InternalDocumentRenderTreeCompiler {
                 image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets),
                 fillLayers: staticFillLayers(for: node, colorTokens: colorTokens),
                 opacity: staticOpacity(for: node),
-                boxStyle: staticBoxStyle(for: node)
+                boxStyle: staticBoxStyle(for: node),
+                sizingConstraints: [.frame, .image].contains(node.kind)
+                    ? CanonicalSizingConstraints.resolved(for: node) : nil
             )
         }
         return .init(documentID: documentID, revision: revision, pageID: page.id, nodes: nodes)
@@ -712,7 +719,18 @@ enum SafeCSSEmitter {
                   f.size.width >= 0, f.size.height >= 0 else { throw SafeCSSEmissionError.invalidGeometry }
             let id = node.id.rawValue.uuidString.lowercased()
             guard id == node.sourceNodeID.rawValue.uuidString.lowercased() else { throw SafeCSSEmissionError.invalidIdentity }
-            return "[data-siteforge-node=\"\(id)\"] { height: \(f.size.height)px; left: \(f.origin.x)px; position: absolute; top: \(f.origin.y)px; width: \(f.size.width)px; }"
+            var declarations = "height: \(f.size.height)px; left: \(f.origin.x)px; position: absolute; top: \(f.origin.y)px; width: \(f.size.width)px;"
+            if let sizing = node.sizingConstraints {
+                guard sizing.isValid else { throw SafeCSSEmissionError.invalidGeometry }
+                for (name, value) in [("min-width", sizing.minWidth), ("min-height", sizing.minHeight),
+                                      ("max-width", sizing.maxWidth), ("max-height", sizing.maxHeight)] {
+                    if let value { declarations += " \(name): \(value)px;" }
+                }
+                if sizing.aspectEnabled, let ratio = sizing.aspectRatio {
+                    declarations += " aspect-ratio: \(ratio);"
+                }
+            }
+            return "[data-siteforge-node=\"\(id)\"] { \(declarations) }"
         }.joined(separator: "\n")
         // Fixed output-only control baseline. It neither exposes authored
         // values nor creates a submission path; per-control styling remains
@@ -908,6 +926,28 @@ enum StaticBoxStyleOutputEmitter {
     }
 }
 
+/// Closed base-sizing projection shared with the typed internal render tree.
+/// No project-authored CSS fragments enter this declaration vocabulary.
+enum StaticSizingOutputEmitter {
+    static func emit(nodes: [InternalRenderTreeNode]) -> String {
+        nodes.sorted { $0.id.description < $1.id.description }.compactMap { node in
+            guard node.id == node.sourceNodeID,
+                  node.cssSelector == CanonicalCSSRule.selector(for: node.id),
+                  let sizing = node.sizingConstraints, sizing.isValid else { return nil }
+            var declarations: [String] = []
+            for (name, value) in [("min-width", sizing.minWidth), ("min-height", sizing.minHeight),
+                                  ("max-width", sizing.maxWidth), ("max-height", sizing.maxHeight)] {
+                if let value { declarations.append("\(name): \(value)px;") }
+            }
+            if sizing.aspectEnabled, let ratio = sizing.aspectRatio {
+                declarations.append("aspect-ratio: \(ratio);")
+            }
+            guard !declarations.isEmpty else { return nil }
+            return "\(node.cssSelector) { \(declarations.joined(separator: " ")) }"
+        }.joined(separator: "\n")
+    }
+}
+
 /// SF-1203 static-output v1: a content-free semantic outline gives a static
 /// plan deterministic hierarchy provenance without changing markup structure,
 /// introducing arbitrary HTML, or creating a browser/runtime path.
@@ -1040,7 +1080,8 @@ enum MultiPageStaticBuildPlanner {
         let images = StaticImageStyleOutputEmitter.emit(nodes: staticNodes)
         let fills = StaticFillLayerStyleOutputEmitter.emit(nodes: staticNodes)
         let boxStyles = StaticBoxStyleOutputEmitter.emit(nodes: staticNodes)
-        let stylesheet = [layout.css, typography, images, fills, boxStyles].filter { !$0.isEmpty }.joined(separator: "\n")
+        let sizing = StaticSizingOutputEmitter.emit(nodes: staticNodes)
+        let stylesheet = [layout.css, typography, images, fills, boxStyles, sizing].filter { !$0.isEmpty }.joined(separator: "\n")
         if !stylesheet.isEmpty {
             guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
             files.append(.init(path: "styles.css", contents: stylesheet))

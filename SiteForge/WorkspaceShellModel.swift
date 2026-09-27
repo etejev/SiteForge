@@ -1122,6 +1122,7 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var lastTransformAnnouncement = "Transform inactive"
     @Published private(set) var geometryInspectorFailure: GeometryInspectorError?
     @Published private(set) var lastGeometryInspectorAnnouncement = "Layout Inspector inactive"
+    @Published private(set) var lastSizingConstraintAnnouncement = "Sizing constraints inactive"
     @Published private(set) var containerLayoutFailure: ContainerLayoutError?
     @Published private(set) var lastContainerLayoutAnnouncement = "Container layout inactive"
     @Published private(set) var responsiveVisibilityFailure: ResponsiveVisibilityError?
@@ -1183,6 +1184,7 @@ final class WorkspaceShellState: ObservableObject {
     private let textEditingRegistry = InlineTextCommandRegistry()
     private let transformRegistry = TransformCommandRegistry()
     private let geometryInspectorRegistry = GeometryInspectorCommandRegistry()
+    private let sizingConstraintRegistry = SizingConstraintCommandRegistry()
     private let containerLayoutRegistry = ContainerLayoutCommandRegistry()
     private let responsiveVisibilityRegistry = ResponsiveVisibilityCommandRegistry()
     private let designInspectorRegistry = DesignInspectorCommandRegistry()
@@ -2183,6 +2185,76 @@ final class WorkspaceShellState: ObservableObject {
             context: transformValidationContext,
             breakpoint: viewportPreset.responsiveBreakpoint
         )
+    }
+
+    func sizingConstraintValue(for field: SizingConstraintField) -> SizingConstraintPresentation {
+        let nodes = selectedCanonicalNodes.filter { [.frame, .image].contains($0.kind) }
+        guard let first = nodes.first else { return .unavailable("Select a Frame or Image to edit fixed sizing.") }
+        func resolved(_ node: DocumentNode) -> (Double?, PropertyOrigin) {
+            let property = node.insertionProperty(CanonicalSizingConstraints.prefix + field.rawValue)
+            let sizing = CanonicalSizingConstraints.resolved(for: node)
+            let number: Double? = switch field {
+            case .minWidth: sizing.minWidth
+            case .minHeight: sizing.minHeight
+            case .maxWidth: sizing.maxWidth
+            case .maxHeight: sizing.maxHeight
+            case .aspectRatio: sizing.aspectRatio
+            }
+            return (number, property?.origin ?? .defaulted)
+        }
+        let initial = resolved(first)
+        return nodes.dropFirst().allSatisfy {
+            let other = resolved($0)
+            return other.0 == initial.0 && other.1 == initial.1
+        }
+            ? .single(initial.0, initial.1) : .mixed
+    }
+
+    var sizingAspectEnabled: Bool? {
+        let values = selectedCanonicalNodes.filter { [.frame, .image].contains($0.kind) }
+            .map { CanonicalSizingConstraints.resolved(for: $0).aspectEnabled }
+        guard let first = values.first, values.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+
+    var sizingConstraintAvailability: TransformAvailability {
+        guard viewportPreset == .desktop else { return .disabled("Base sizing is edited at Desktop; breakpoint sizing overrides are not available in this slice.") }
+        let applicable = selectedCanonicalNodes.filter { node in
+            [.frame, .image].contains(node.kind) && !node.insertionBooleanProperty("locked")
+                && !node.insertionBooleanProperty("hidden") && node.insertionGeometry != nil
+        }
+        guard !applicable.isEmpty else {
+            return .disabled("Select a Frame or Image with fixed geometry.")
+        }
+        return .enabled
+    }
+
+    @discardableResult
+    func commitSizingConstraint(_ edit: SizingConstraintEdit) -> Bool {
+        guard sizingConstraintAvailability.isEnabled,
+              let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else {
+            lastSizingConstraintAnnouncement = sizingConstraintAvailability.disabledReason ?? "Sizing is unavailable until the canvas is ready."
+            return false
+        }
+        let command = SizingConstraintCommand(identity: .init(editID: GeometryInspectorEditID(),
+            documentID: documentSession.document.id, pageID: pageID,
+            revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration),
+            orderedNodeIDs: selectionState.orderedIDs, edit: edit, cancelled: false)
+        do {
+            let prepared = try sizingConstraintRegistry.prepare(command,
+                in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.documentCommand)
+            lastSizingConstraintAnnouncement = "Sizing committed for \(prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s")"
+                + (prepared.skippedNodeIDs.isEmpty ? "" : "; skipped \(prepared.skippedNodeIDs.count) incompatible object\(prepared.skippedNodeIDs.count == 1 ? "" : "s")")
+            announcementPoster.post(lastSizingConstraintAnnouncement)
+            return true
+        } catch {
+            lastSizingConstraintAnnouncement = (error as? SizingConstraintError)?.localizedDescription
+                ?? "Sizing edit could not commit; geometry is unchanged."
+            announcementPoster.post(lastSizingConstraintAnnouncement)
+            return false
+        }
     }
 
     func geometryInspectorResponsiveSource(for field: GeometryInspectorField) -> String? {
