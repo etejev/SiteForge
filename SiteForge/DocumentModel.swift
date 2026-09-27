@@ -436,6 +436,11 @@ enum CanonicalFormField {
     static let helpKey = "form.field.v1.help"
     static let kindKey = "form.field.v1.kind"
     static let optionsKey = "form.field.v1.options"
+    /// Optional authored input bound. Omission deliberately retains the
+    /// documented local-validation default rather than serializing a copy.
+    static let maximumLengthKey = "form.field.v1.maximumLength"
+    static let minimumMaximumLength = 1
+    static let maximumMaximumLength = 4_096
 }
 
 /// Ordered select options are canonical typed data encoded through the
@@ -1514,12 +1519,13 @@ enum CanonicalCSSRuleValidator {
 
 enum CanonicalFormFieldValidator {
     static func validate(_ node: DocumentNode) throws {
-        let owned = node.properties.filter { [CanonicalFormField.labelKey, CanonicalFormField.nameKey, CanonicalFormField.requiredKey, CanonicalFormField.helpKey, CanonicalFormField.kindKey, CanonicalFormField.optionsKey].contains($0.key.rawValue) }
+        let owned = node.properties.filter { [CanonicalFormField.labelKey, CanonicalFormField.nameKey, CanonicalFormField.requiredKey, CanonicalFormField.helpKey, CanonicalFormField.kindKey, CanonicalFormField.optionsKey, CanonicalFormField.maximumLengthKey].contains($0.key.rawValue) }
         guard owned.count == Set(owned.map(\.key)).count else { throw ModelValidationError.invalidSemanticElementState }
         guard !owned.isEmpty else { return }
         guard node.kind == .text else { throw ModelValidationError.invalidSemanticElementState }
         var fieldKind: String?
         var encodedOptions: String?
+        var maximumLength: Int?
         for property in owned {
             switch property.key.rawValue {
             case CanonicalFormField.labelKey:
@@ -1536,6 +1542,13 @@ enum CanonicalFormFieldValidator {
             case CanonicalFormField.optionsKey:
                 guard case .string(let value) = property.value else { throw ModelValidationError.invalidSemanticElementState }
                 encodedOptions = value
+            case CanonicalFormField.maximumLengthKey:
+                guard case .number(let value) = property.value, value.isFinite,
+                      value.rounded() == value,
+                      (Double(CanonicalFormField.minimumMaximumLength)...Double(CanonicalFormField.maximumMaximumLength)).contains(value) else {
+                    throw ModelValidationError.invalidSemanticElementState
+                }
+                maximumLength = Int(value)
             default: break
             }
         }
@@ -1544,6 +1557,9 @@ enum CanonicalFormFieldValidator {
             guard let encodedOptions else { throw ModelValidationError.invalidSemanticElementState }
             _ = try CanonicalFormSelectOptions.decode(encodedOptions)
         } else if encodedOptions != nil {
+            throw ModelValidationError.invalidSemanticElementState
+        }
+        if maximumLength != nil && !["text", "email", "textarea"].contains(fieldKind) {
             throw ModelValidationError.invalidSemanticElementState
         }
     }

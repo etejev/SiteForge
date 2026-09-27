@@ -9,22 +9,22 @@ None.
 ## IN PROGRESS
 
 - [ ] `SF-AUTHORING-037` Local form-validation and preview-state foundation v1 (P1).
-  - Requirements: bounded noncanonical evidence for `SF-1006-001`–`004`,
+  - Requirements: bounded noncanonical evidence for `SF-1006-001`–`005`,
     `008`; `SF-1006` remains Partial.
   - Plan: resolve canonical Form field configuration against an explicit,
     caller-owned visitor-value snapshot. Bind results to document/page/form/
     revision/scene/renderer identity; return only stable result identities and
     failure categories. No document, history, package, autosave, recovery,
     server, browser, destination, or submission write path.
-  - Delivered checkpoint: required/text/email/select/checkbox validation,
+  - Delivered checkpoint: required/text/email/select/checkbox validation and
+    an optional authored 1…4,096 maximum-length rule for text-like fields,
     deterministic field/form identities, cancellation/stale/schema rejection,
     static-output compatibility indicator, package-reopen input proof,
     Inspector-facing scene-local result adoption, and strict value redaction.
     Focused non-UI validation evidence is 3/3
     (2026-09-26).
-  - Next bounded task: add explicit authored validation-rule configuration
-    through the existing Form Inspector registry; retain this result surface as
-    scene-local and continue Form actual-app authoring evidence separately.
+  - Next bounded task: retain this result surface as scene-local and continue
+    Form actual-app authoring evidence separately.
   - Exclusions: network/server/browser runtime, real submission/destinations,
     anti-abuse, analytics, visitor-value persistence, UI automation, generated
     runtime success/error UI, performance/release acceptance.

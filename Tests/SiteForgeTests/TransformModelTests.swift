@@ -2100,6 +2100,38 @@ final class TransformModelTests: XCTestCase {
         XCTAssertEqual(document.pages[0].nodes.first { $0.id == fieldID }?.properties, [])
     }
 
+    // SF-1006-001/002/003/004/005/008 — authored bounded validation remains
+    // an optional canonical rule, is transactional, and never accepts an
+    // inapplicable kind or out-of-range draft.
+    func testFormInspectorValidationBoundCommitsAndRejectsInvalidKinds() throws {
+        let formID = NodeID(), fieldID = NodeID()
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id, rootID = document.pages[0].rootNodeIDs[0]
+        document.pages[0].nodes[0].childIDs = [formID]
+        document.pages[0].nodes += [.init(id: formID, kind: .form, name: "Form", parent: .node(rootID), childIDs: [fieldID]),
+                                   .init(id: fieldID, kind: .text, name: "Email", parent: .node(formID))]
+        try document.validate()
+        let sceneID = CanvasViewportSceneID()
+        func context(_ current: CanonicalDocument) -> TransformValidationContext {
+            .init(activePageID: pageID, currentSceneID: sceneID, rendererGeneration: 3, selectedNodeIDs: [fieldID], availableNodeIDs: Set(current.pages[0].nodes.map(\.id)), isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        }
+        func input(_ current: CanonicalDocument, _ configuration: FormFieldConfiguration) -> FormInspectorCommand {
+            .init(identity: .init(documentID: current.id, pageID: pageID, revision: current.revision, sceneID: sceneID, rendererGeneration: 3, selectedNodeIDs: [fieldID]), edit: .configure(configuration), cancelled: false)
+        }
+        let registry = FormInspectorCommandRegistry()
+        let bounded = FormFieldConfiguration(kind: .email, label: "Email", name: "email", help: nil, required: true, options: [], maximumLength: 128)
+        let prepared = try registry.prepare(input(document, bounded), in: document, context: context(document))
+        let session = DocumentSession(document: document)
+        try session.execute(prepared.command)
+        let field = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fieldID })
+        XCTAssertEqual(field.insertionNumberProperty(CanonicalFormField.maximumLengthKey), 128)
+        let propertyID = try XCTUnwrap(field.insertionProperty(CanonicalFormField.maximumLengthKey)).id
+        try session.undo(); XCTAssertNil(try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fieldID }).insertionProperty(CanonicalFormField.maximumLengthKey))
+        try session.redo(); XCTAssertEqual(try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fieldID }).insertionProperty(CanonicalFormField.maximumLengthKey)?.id, propertyID)
+        let invalid = FormFieldConfiguration(kind: .checkbox, label: "Consent", name: "consent", help: nil, required: true, options: [], maximumLength: 2)
+        XCTAssertThrowsError(try registry.prepare(input(session.document, invalid), in: session.document, context: context(session.document))) { XCTAssertEqual($0 as? FormInspectorError, .invalidConfiguration) }
+    }
+
     // SF-1006-001/003/004/008 — visitor input has one local, noncanonical
     // resolver. Required, email, select membership, checkbox and text bounds
     // return only stable identities and categories, never entered values.

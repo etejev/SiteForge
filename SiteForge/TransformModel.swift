@@ -2922,6 +2922,13 @@ struct FormFieldConfiguration: Equatable, Sendable {
     let help: String?
     let required: Bool
     let options: [CanonicalFormSelectOption]
+    let maximumLength: Int?
+
+    init(kind: FormFieldKind, label: String, name: String, help: String?, required: Bool,
+         options: [CanonicalFormSelectOption], maximumLength: Int? = nil) {
+        self.kind = kind; self.label = label; self.name = name; self.help = help
+        self.required = required; self.options = options; self.maximumLength = maximumLength
+    }
 }
 
 /// A Form edit is intentionally scoped independently from Image Inspector
@@ -2984,6 +2991,7 @@ struct FormInspectorCommandRegistry: Sendable {
         CanonicalFormField.kindKey, CanonicalFormField.labelKey,
         CanonicalFormField.nameKey, CanonicalFormField.helpKey,
         CanonicalFormField.requiredKey, CanonicalFormField.optionsKey,
+        CanonicalFormField.maximumLengthKey,
     ]
 
     func prepare(_ input: FormInspectorCommand, in document: CanonicalDocument,
@@ -3038,6 +3046,9 @@ struct FormInspectorCommandRegistry: Sendable {
                     values.append((CanonicalFormField.optionsKey,
                                    .string(try CanonicalFormSelectOptions.encode(value.options)), .authored))
                 }
+                if let maximumLength = value.maximumLength {
+                    values.append((CanonicalFormField.maximumLengthKey, .number(Double(maximumLength)), .authored))
+                }
                 desired = values
             }
             let desiredKeys = Set(desired.map(\.0))
@@ -3070,6 +3081,12 @@ struct FormInspectorCommandRegistry: Sendable {
             catch { throw FormInspectorError.invalidConfiguration }
         } else if !value.options.isEmpty {
             throw FormInspectorError.invalidConfiguration
+        }
+        if let maximumLength = value.maximumLength {
+            guard [FormFieldKind.text, .email, .textarea].contains(value.kind),
+                  (CanonicalFormField.minimumMaximumLength...CanonicalFormField.maximumMaximumLength).contains(maximumLength) else {
+                throw FormInspectorError.invalidConfiguration
+            }
         }
     }
 }
@@ -3199,7 +3216,9 @@ struct LocalFormValidationEngine: Sendable {
             } else { options = [] }
             return .init(
                 identity: .init(documentID: document.id, revision: document.revision, formID: form.id, fieldID: fieldID),
-                failures: failures(kind: kind, required: required, options: options, value: input.values[fieldID])
+                failures: failures(kind: kind, required: required, options: options,
+                                   maximumLength: node.insertionNumberProperty(CanonicalFormField.maximumLengthKey).map { Int($0) },
+                                   value: input.values[fieldID])
             )
         }
         return .init(
@@ -3209,13 +3228,14 @@ struct LocalFormValidationEngine: Sendable {
         )
     }
 
-    private func failures(kind: String, required: Bool, options: [CanonicalFormSelectOption],
+    private func failures(kind: String, required: Bool, options: [CanonicalFormSelectOption], maximumLength: Int?,
                           value: FormVisitorValue?) -> [FormValidationFailure] {
         switch kind {
         case FormFieldKind.text.rawValue, FormFieldKind.textarea.rawValue, FormFieldKind.email.rawValue:
             guard let value else { return required ? [.required] : [] }
             guard case .text(let text) = value else { return [.invalidValueType] }
-            if text.count > Self.maximumTextLength { return [.textTooLong] }
+            let maximum = maximumLength ?? Self.maximumTextLength
+            if text.count > maximum { return [.textTooLong] }
             if required && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [.required] }
             if kind == FormFieldKind.email.rawValue, !text.isEmpty, !Self.isValidEmail(text) { return [.invalidEmail] }
             return []

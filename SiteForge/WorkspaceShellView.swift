@@ -2219,6 +2219,7 @@ private struct FormInspectorFieldsView: View {
     @State private var help = ""
     @State private var required = false
     @State private var options = "Option=option"
+    @State private var maximumLength = ""
     @State private var identity: FormInspectorOperationIdentity?
     @State private var status = ""
 
@@ -2270,6 +2271,11 @@ private struct FormInspectorFieldsView: View {
                     .accessibilityIdentifier("inspector.form.help")
                 Toggle("Required", isOn: $required)
                     .accessibilityIdentifier("inspector.form.required")
+                if [.text, .email, .textarea].contains(kind) {
+                    TextField("Maximum length (optional)", text: $maximumLength)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("inspector.form.maximumLength")
+                }
                 if kind == .select {
                     TextField("Options: Label=value, one per line", text: $options, axis: .vertical)
                         .lineLimit(2...5).textFieldStyle(.roundedBorder)
@@ -2308,6 +2314,7 @@ private struct FormInspectorFieldsView: View {
         name = field.insertionStringProperty(CanonicalFormField.nameKey) ?? "field"
         help = field.insertionStringProperty(CanonicalFormField.helpKey) ?? ""
         required = field.insertionBooleanProperty(CanonicalFormField.requiredKey)
+        maximumLength = field.insertionNumberProperty(CanonicalFormField.maximumLengthKey).map { String(Int($0)) } ?? ""
         if let encoded = field.insertionStringProperty(CanonicalFormField.optionsKey),
            let values = try? CanonicalFormSelectOptions.decode(encoded) {
             options = values.map { "\($0.label)=\($0.value)" }.joined(separator: "\n")
@@ -2341,8 +2348,11 @@ private struct FormInspectorFieldsView: View {
         } else {
             parsed = []
         }
+        let limit: Int?
+        if maximumLength.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { limit = nil }
+        else { limit = Int(maximumLength) }
         let configuration = FormFieldConfiguration(kind: kind, label: label, name: name,
-            help: help.isEmpty ? nil : help, required: required, options: parsed)
+            help: help.isEmpty ? nil : help, required: required, options: parsed, maximumLength: limit)
         if state.commitFormInspectorEdit(.configure(configuration), identity: identity) { refresh() }
         status = state.lastFormInspectorAnnouncement
     }
