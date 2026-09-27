@@ -373,7 +373,7 @@ final class InsertionModelTests: XCTestCase {
             try session.execute(try prepare(kind, fixture: current, nodeID: id).documentCommand)
         }
         let bytes = try DocumentSerializer.encode(session.document)
-        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":8"))
+        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":9"))
         let reopened = try DocumentSerializer.decode(bytes)
         XCTAssertEqual(reopened, session.document)
         XCTAssertEqual(reopened.pages[0].nodes.first { $0.id == sectionID }?.kind, .section)

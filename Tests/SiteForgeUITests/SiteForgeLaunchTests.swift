@@ -870,6 +870,63 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-014 undo redo")
     }
 
+    // SF-0509-002/003/006 — native token drafts and solid-fill binding use
+    // the visible Inspector; no fixture or automation mutation path is used.
+    func testLocalColorTokenInspectorCreateBindAndUnbindJourney() throws {
+        let application = launchWorkspace()
+        let insert = application.buttons["canvas.empty.insert.frame"]
+        XCTAssertTrue(waitForHittable(insert, in: application)); insert.click()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["inspector.tab.design"].click()
+        let inspector = application.scrollViews["inspector.selection.scroll"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 5))
+        func reveal(_ identifier: String) -> XCUIElement {
+            let element = application.descendants(matching: .any)[identifier].firstMatch
+            for _ in 0..<14 where !element.isHittable {
+                let controlFrame = element.frame
+                let viewportFrame = inspector.frame
+                if controlFrame.maxY > viewportFrame.maxY {
+                    inspector.scroll(byDeltaX: 0, deltaY: -100)
+                } else if controlFrame.minY < viewportFrame.minY {
+                    inspector.scroll(byDeltaX: 0, deltaY: 100)
+                } else {
+                    break
+                }
+            }
+            return element
+        }
+        let create = reveal("inspector.tokens.new")
+        XCTAssertTrue(create.isHittable); create.click()
+        let name = reveal("inspector.tokens.name")
+        XCTAssertTrue(name.isHittable)
+        name.click(); name.typeKey("a", modifierFlags: .command); name.typeText("Brand")
+        let color = reveal("inspector.tokens.color")
+        color.click(); color.typeKey("a", modifierFlags: .command); color.typeText("#204060FF")
+        let apply = reveal("inspector.tokens.apply")
+        XCTAssertTrue(apply.isHittable); apply.click()
+        let row = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "inspector.tokens.row."
+        )).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.label.contains("Brand"))
+        XCTAssertTrue(reveal(row.identifier).isHittable)
+        row.click()
+        XCTAssertTrue(reveal("inspector.tokens.bind").isHittable, application.debugDescription)
+        reveal("inspector.tokens.bind").click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.tokens.bindingStatus"], containing: "Brand"))
+        let fillHex = application.textFields["inspector.design.fillHex"]
+        XCTAssertTrue(waitForValue(fillHex, containing: "#204060FF"))
+        XCTAssertFalse(fillHex.isEnabled, "Bound solid color must not offer a misleading literal edit")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-057 bound local color token")
+        let unbind = reveal("inspector.tokens.unbind")
+        XCTAssertTrue(unbind.isHittable); unbind.click()
+        XCTAssertFalse(application.descendants(matching: .any)["inspector.tokens.bindingStatus"].waitForExistence(timeout: 2))
+        XCTAssertTrue(waitForValue(fillHex, containing: "#204060FF"))
+        XCTAssertTrue(fillHex.isEnabled)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-057 unbound literal fill")
+    }
+
     // SF-0506-006/008 — the shipping Design controls remain readable and
     // scroll-reachable at the supported practical minimum; no hidden test
     // control substitutes for the native Inspector.

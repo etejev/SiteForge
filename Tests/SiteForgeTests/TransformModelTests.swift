@@ -4,6 +4,128 @@ import XCTest
 
 @MainActor
 final class TransformModelTests: XCTestCase {
+    // SF-0509-001...005 — one stable local token propagates to bound solid
+    // fills while exact history and the literal fallback remain intact.
+    func testLocalColorTokenCreateBindRecolorUnbindHistoryAndPersistence() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[1].properties.append(.init(
+            key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted))
+        let session = DocumentSession(document: fixture.document)
+        let registry = LocalColorTokenCommandRegistry.self
+        let blue = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#204060FF"))
+        func prepare(_ edit: LocalColorTokenEdit, ids: [NodeID] = []) throws -> DocumentCommand {
+            try registry.prepare(edit, in: session.document, expectedDocumentID: session.document.id,
+                expectedRevision: session.document.revision, pageID: fixture.pageID, selectedNodeIDs: ids)
+        }
+        try session.execute(prepare(.create(name: "Brand", color: blue)))
+        let token = try XCTUnwrap(session.document.colorTokens.first)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        XCTAssertThrowsError(try prepare(.create(name: "brand", color: blue)))
+        XCTAssertThrowsError(try prepare(.create(name: " ", color: blue)))
+        try session.execute(prepare(.bind(token.id), ids: [fixture.nodeID]))
+        func node() -> DocumentNode { session.document.pages[0].nodes[1] }
+        XCTAssertEqual(LocalColorTokenResolver.resolvedLayers(for: node(), in: session.document).last?.solidColor, blue)
+        XCTAssertEqual(LocalColorTokenResolver.fillValue(nodes: [node()], in: session.document), .single(blue, .authored))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: node()).last?.solidColor, .legacySurface)
+        let literalEdit = DesignFillLayerCommand(
+            identity: .init(documentID: session.document.id, pageID: fixture.pageID,
+                revision: session.document.revision, sceneID: fixture.sceneID,
+                rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .replaceSolid(blue),
+            provenance: .automation, cancelled: false)
+        XCTAssertThrowsError(try DesignInspectorCommandRegistry().prepare(literalEdit,
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        XCTAssertThrowsError(try prepare(.delete(token.id)))
+        let red = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#C02030E0"))
+        try session.execute(prepare(.update(token.id, name: "Accent", color: red)))
+        XCTAssertEqual(LocalColorTokenResolver.resolvedLayers(for: node(), in: session.document).last?.solidColor, red)
+        XCTAssertTrue(LocalColorTokenResolver.status(for: node(), in: session.document)?.contains("Accent") == true)
+        try session.undo()
+        XCTAssertEqual(LocalColorTokenResolver.resolvedLayers(for: node(), in: session.document).last?.solidColor, blue)
+        try session.redo()
+        XCTAssertEqual(LocalColorTokenResolver.resolvedLayers(for: node(), in: session.document).last?.solidColor, red)
+        try session.execute(prepare(.unbind, ids: [fixture.nodeID]))
+        XCTAssertNil(LocalColorTokenBinding.id(for: node()))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: node()).last?.solidColor, red)
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(session.document))
+        XCTAssertEqual(reopened, session.document)
+        try session.undo()
+        XCTAssertEqual(LocalColorTokenBinding.id(for: node()), token.id)
+        try session.redo()
+        try session.execute(prepare(.delete(token.id)))
+        XCTAssertTrue(session.document.colorTokens.isEmpty)
+    }
+
+    func testLocalColorTokenSchemaEightMigrationAndStrictCurrentDecode() throws {
+        let fixture = makeFixture()
+        let encoded = try DocumentSerializer.encode(fixture.document)
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var document = try XCTUnwrap(envelope["document"] as? [String: Any])
+        document.removeValue(forKey: "colorTokens")
+        envelope["schemaVersion"] = 8
+        envelope["document"] = document
+        let historical = try JSONSerialization.data(withJSONObject: envelope)
+        let migrated = try DocumentSerializer.decode(historical)
+        XCTAssertEqual(migrated.id, fixture.document.id)
+        XCTAssertEqual(migrated.pages, fixture.document.pages)
+        XCTAssertTrue(migrated.colorTokens.isEmpty)
+        let color = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#204060FF"))
+        let session = DocumentSession(document: migrated)
+        try session.execute(LocalColorTokenCommandRegistry.prepare(.create(name: "Brand", color: color),
+            in: session.document, expectedDocumentID: session.document.id,
+            expectedRevision: session.document.revision, pageID: fixture.pageID))
+        let roundTrip = try DocumentSerializer.decode(DocumentSerializer.encode(session.document))
+        XCTAssertEqual(roundTrip, session.document)
+        XCTAssertEqual(roundTrip.colorTokens.first?.name, "Brand")
+        var current = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(session.document)) as? [String: Any])
+        var currentDocument = try XCTUnwrap(current["document"] as? [String: Any])
+        var tokens = try XCTUnwrap(currentDocument["colorTokens"] as? [[String: Any]])
+        tokens[0]["unexpected"] = true
+        currentDocument["colorTokens"] = tokens
+        current["document"] = currentDocument
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: current)))
+    }
+
+    func testLocalColorTokenRegistryRejectsStaleCancelledAndInapplicableEditsWithoutMutation() throws {
+        let fixture = makeFixture()
+        let document = fixture.document
+        let color = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#204060FF"))
+        let registry = LocalColorTokenCommandRegistry.self
+        let original = try DocumentSerializer.encode(document)
+        XCTAssertThrowsError(try registry.prepare(.create(name: "Brand", color: color), in: document,
+            expectedDocumentID: DocumentID(), expectedRevision: document.revision, pageID: fixture.pageID))
+        XCTAssertThrowsError(try registry.prepare(.create(name: "Brand", color: color), in: document,
+            expectedDocumentID: document.id, expectedRevision: document.revision + 1, pageID: fixture.pageID))
+        XCTAssertThrowsError(try registry.prepare(.create(name: "Brand", color: color), in: document,
+            expectedDocumentID: document.id, expectedRevision: document.revision,
+            pageID: fixture.pageID, cancelled: true))
+        XCTAssertThrowsError(try registry.prepare(.bind(ColorTokenID()), in: document,
+            expectedDocumentID: document.id, expectedRevision: document.revision,
+            pageID: fixture.pageID, selectedNodeIDs: [fixture.nodeID]))
+        XCTAssertThrowsError(try registry.prepare(.unbind, in: document,
+            expectedDocumentID: document.id, expectedRevision: document.revision,
+            pageID: fixture.pageID, selectedNodeIDs: [fixture.nodeID, fixture.nodeID]))
+        XCTAssertEqual(try DocumentSerializer.encode(document), original)
+    }
+
+    func testLocalColorTokenResolvesAllSupportedStructuralKindsAndMissingFallback() throws {
+        let fixture = makeFixture()
+        let color = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#204060FF"))
+        let token = LocalColorToken(name: "Brand", color: color)
+        var document = fixture.document
+        document.colorTokens = [token]
+        for kind in [NodeKind.frame, .section, .stack, .grid] {
+            let node = DocumentNode(kind: kind, name: "Structure", parent: .page(fixture.pageID), properties: [
+                .init(key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted),
+                .init(key: .init(rawValue: LocalColorTokenBinding.key), value: .string(token.id.description), origin: .authored),
+            ])
+            XCTAssertEqual(LocalColorTokenResolver.resolvedLayers(for: node, in: document).last?.solidColor, color)
+            document.colorTokens = []
+            XCTAssertEqual(LocalColorTokenResolver.resolvedLayers(for: node, in: document).last?.solidColor, .legacySurface)
+            XCTAssertTrue(LocalColorTokenResolver.status(for: node, in: document)?.contains("Missing") == true)
+            document.colorTokens = [token]
+        }
+    }
     // SF-0403-001, SF-0403-002, SF-0403-003
     func testMoveResolutionIsExactAndAxisConstrained() throws {
         let frame = WorldRect(

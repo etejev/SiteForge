@@ -7,40 +7,6 @@ import Foundation
 // deliberately stored as four finite canonical numeric properties rather than
 // a presentation string, so locale/display color notation never becomes part
 // of the document format.
-struct CanonicalSolidColor: Equatable, Sendable {
-    let red: Double
-    let green: Double
-    let blue: Double
-    let alpha: Double
-
-    static let legacySurface = CanonicalSolidColor(red: 0.94, green: 0.95, blue: 0.97, alpha: 1)
-
-    init(red: Double, green: Double, blue: Double, alpha: Double) {
-        self.red = red; self.green = green; self.blue = blue; self.alpha = alpha
-    }
-
-    var isValid: Bool { [red, green, blue, alpha].allSatisfy { $0.isFinite && (0...1).contains($0) } }
-    var hexadecimalRGBA: String {
-        func channel(_ value: Double) -> String { String(format: "%02X", Int((value * 255).rounded())) }
-        return "#\(channel(red))\(channel(green))\(channel(blue))\(channel(alpha))"
-    }
-
-    static func parse(hexadecimal: String) -> CanonicalSolidColor? {
-        let source = hexadecimal.trimmingCharacters(in: .whitespacesAndNewlines)
-        let digits = source.hasPrefix("#") ? String(source.dropFirst()) : source
-        let hex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
-        guard digits.count == 6 || digits.count == 8,
-              digits.unicodeScalars.allSatisfy({ hex.contains($0) }) else { return nil }
-        var value: UInt64 = 0
-        guard Scanner(string: digits).scanHexInt64(&value) else { return nil }
-        let divisor = 255.0
-        if digits.count == 6 {
-            return CanonicalSolidColor(red: Double((value >> 16) & 0xff) / divisor, green: Double((value >> 8) & 0xff) / divisor, blue: Double(value & 0xff) / divisor, alpha: 1)
-        }
-        return CanonicalSolidColor(red: Double((value >> 24) & 0xff) / divisor, green: Double((value >> 16) & 0xff) / divisor, blue: Double((value >> 8) & 0xff) / divisor, alpha: Double(value & 0xff) / divisor)
-    }
-}
-
 // SF-0506-001...008 — bounded canonical border, uniform radius, and one
 // production shadow. Presentation drafts never enter this representation.
 enum CanonicalBorderStyle: String, CaseIterable, Sendable { case solid, dashed, dotted }
@@ -1385,6 +1351,11 @@ struct DesignInspectorCommandRegistry: Sendable {
                 skippedReasons[id] = "This object kind does not support background fill layers."
                 continue
             }
+            guard LocalColorTokenBinding.id(for: node) == nil else {
+                skipped.append(id)
+                skippedReasons[id] = "Unbind the color token before editing literal fill layers."
+                continue
+            }
 
             let before = Self.resolvedLayers(for: node)
             let after: [CanonicalFillLayer]
@@ -1433,6 +1404,177 @@ struct DesignInspectorCommandRegistry: Sendable {
             skippedReasons: skippedReasons,
             documentCommand: documentCommand
         )
+    }
+}
+
+/// SF-0509: a token reference decorates the existing solid layer. The layer
+/// remains the explicit literal fallback, so a missing token never destroys
+/// authored color intent and unbinding can preserve the resolved appearance.
+enum LocalColorTokenResolver {
+    static func fillValue(nodes: [DocumentNode], in document: CanonicalDocument) -> DesignInspectorValue {
+        let values = nodes.map { node -> (CanonicalSolidColor?, PropertyOrigin) in
+            let literal = DesignInspectorCommandRegistry.resolvedFill(for: node)
+            guard literal.0 != nil,
+                  let tokenID = LocalColorTokenBinding.id(for: node),
+                  let token = document.colorTokens.first(where: { $0.id == tokenID }) else { return literal }
+            return (token.color, .authored)
+        }
+        guard let first = values.first, values.contains(where: { $0.0 != nil }) else {
+            return .unavailable("Select a Frame, Section, Stack, or Grid to edit its fill.")
+        }
+        guard values.allSatisfy({ $0.0 == first.0 }) else { return .mixed }
+        guard let color = first.0 else { return .unavailable("No solid fill is applied.") }
+        return .single(color, first.1)
+    }
+
+    static func resolvedLayers(for node: DocumentNode, in document: CanonicalDocument) -> [CanonicalFillLayer] {
+        resolvedLayers(for: node, tokens: document.colorTokens)
+    }
+
+    static func resolvedLayers(for node: DocumentNode, tokens: [LocalColorToken]) -> [CanonicalFillLayer] {
+        let layers = DesignInspectorCommandRegistry.resolvedLayers(for: node)
+        guard let tokenID = LocalColorTokenBinding.id(for: node),
+              let token = tokens.first(where: { $0.id == tokenID }),
+              let index = layers.lastIndex(where: { $0.kind == .solid && $0.isEnabled }) else { return layers }
+        var result = layers
+        result[index] = .solid(id: result[index].id, color: token.color, isEnabled: true)
+        return result
+    }
+
+    static func status(for node: DocumentNode, in document: CanonicalDocument) -> String? {
+        guard let id = LocalColorTokenBinding.id(for: node) else { return nil }
+        guard let token = document.colorTokens.first(where: { $0.id == id }) else {
+            return "Missing color token · literal fallback retained"
+        }
+        return "Token: \(token.name) / \(token.color.hexadecimalRGBA)"
+    }
+}
+
+enum LocalColorTokenEdit: Sendable {
+    case create(name: String, color: CanonicalSolidColor)
+    case update(ColorTokenID, name: String, color: CanonicalSolidColor)
+    case rename(ColorTokenID, String)
+    case recolor(ColorTokenID, CanonicalSolidColor)
+    case delete(ColorTokenID)
+    case bind(ColorTokenID)
+    case unbind
+}
+
+enum LocalColorTokenCommandError: Error, LocalizedError {
+    case stale, cancelled, invalid, conflict, inUse(Int), unavailable(String), unchanged
+    var errorDescription: String? {
+        switch self {
+        case .stale: "The color-token edit is stale; project colors are unchanged."
+        case .cancelled: "The color-token draft was cancelled."
+        case .invalid: "Enter a unique token name and a complete #RRGGBB or #RRGGBBAA color."
+        case .conflict: "A color token already uses that name."
+        case .inUse(let count): "This token is used by \(count) object\(count == 1 ? "" : "s"). Unbind those objects before deleting it."
+        case .unavailable(let reason): reason
+        case .unchanged: "The color-token value is unchanged."
+        }
+    }
+}
+
+struct LocalColorTokenCommandRegistry {
+    static func prepare(
+        _ edit: LocalColorTokenEdit, in document: CanonicalDocument,
+        expectedDocumentID: DocumentID, expectedRevision: UInt64,
+        pageID: PageID?, selectedNodeIDs: [NodeID] = [],
+        cancelled: Bool = false
+    ) throws -> DocumentCommand {
+        guard !cancelled else { throw LocalColorTokenCommandError.cancelled }
+        guard document.id == expectedDocumentID, document.revision == expectedRevision,
+              document.revision < UInt64.max else { throw LocalColorTokenCommandError.stale }
+        var tokens = document.colorTokens
+        switch edit {
+        case .create(let name, let color):
+            guard valid(name, color: color) else { throw LocalColorTokenCommandError.invalid }
+            guard !tokens.contains(where: { equalNames($0.name, name) }) else { throw LocalColorTokenCommandError.conflict }
+            tokens.append(.init(name: name, color: color))
+        case .update(let id, let name, let color):
+            guard let index = tokens.firstIndex(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
+            guard valid(name, color: color) else { throw LocalColorTokenCommandError.invalid }
+            guard !tokens.contains(where: { $0.id != id && equalNames($0.name, name) }) else { throw LocalColorTokenCommandError.conflict }
+            tokens[index].name = name; tokens[index].color = color
+        case .rename(let id, let name):
+            guard let index = tokens.firstIndex(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
+            guard valid(name, color: tokens[index].color) else { throw LocalColorTokenCommandError.invalid }
+            guard !tokens.contains(where: { $0.id != id && equalNames($0.name, name) }) else { throw LocalColorTokenCommandError.conflict }
+            tokens[index].name = name
+        case .recolor(let id, let color):
+            guard let index = tokens.firstIndex(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
+            guard color.isValid else { throw LocalColorTokenCommandError.invalid }
+            tokens[index].color = color
+        case .delete(let id):
+            guard tokens.contains(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
+            let uses = document.pages.flatMap(\.nodes).filter { LocalColorTokenBinding.id(for: $0) == id }.count
+            guard uses == 0 else { throw LocalColorTokenCommandError.inUse(uses) }
+            tokens.removeAll { $0.id == id }
+        case .bind(let id):
+            guard tokens.contains(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
+            return try bindingCommands(document: document, pageID: pageID, ids: selectedNodeIDs, tokenID: id)
+        case .unbind:
+            return try bindingCommands(document: document, pageID: pageID, ids: selectedNodeIDs, tokenID: nil)
+        }
+        guard tokens != document.colorTokens else { throw LocalColorTokenCommandError.unchanged }
+        return .setColorTokens(.init(tokens: tokens))
+    }
+
+    private static func bindingCommands(document: CanonicalDocument, pageID: PageID?, ids: [NodeID], tokenID: ColorTokenID?) throws -> DocumentCommand {
+        guard let pageID, let page = document.pages.first(where: { $0.id == pageID }),
+              !ids.isEmpty, Set(ids).count == ids.count else { throw LocalColorTokenCommandError.stale }
+        var commands: [DocumentCommand] = []
+        for id in ids {
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
+            guard [.frame, .section, .stack, .grid].contains(node.kind),
+                  !node.selectionBooleanProperty("hidden"), !node.selectionBooleanProperty("locked"),
+                  DesignInspectorCommandRegistry.resolvedLayers(for: node).contains(where: { $0.kind == .solid && $0.isEnabled }) else {
+                throw LocalColorTokenCommandError.unavailable("Select an unlocked visible object with a solid fill.")
+            }
+            let old = node.insertionProperty(LocalColorTokenBinding.key)
+            if let tokenID {
+                guard LocalColorTokenBinding.id(for: node) != tokenID else { continue }
+                commands.append(.setProperty(.init(pageID: pageID, nodeID: id, property: .init(
+                    id: old?.id ?? PropertyID(), key: .init(rawValue: LocalColorTokenBinding.key),
+                    value: .string(tokenID.description), origin: .authored))))
+            } else if let old {
+                if let resolved = LocalColorTokenResolver.resolvedLayers(for: node, in: document).last(where: { $0.kind == .solid && $0.isEnabled }),
+                   let color = resolved.solidColor,
+                   let original = DesignInspectorCommandRegistry.resolvedLayers(for: node).last(where: { $0.kind == .solid && $0.isEnabled }),
+                   original.solidColor != color {
+                    if CanonicalFillLayerCodec.layers(for: node) != nil {
+                        let prefix = "style.fill.layers.v1.\(original.id.description)."
+                        for (channel, number) in [("red", color.red), ("green", color.green), ("blue", color.blue), ("alpha", color.alpha)] {
+                            let key = prefix + channel
+                            let previous = node.insertionProperty(key)
+                            commands.append(.setProperty(.init(pageID: pageID, nodeID: id, property: .init(
+                                id: previous?.id ?? PropertyID(), key: .init(rawValue: key), value: .number(number), origin: .authored))))
+                        }
+                    } else {
+                        let next = DesignInspectorCommandRegistry.resolvedLayers(for: node).map { layer in
+                            layer.id == original.id ? CanonicalFillLayer.solid(id: layer.id, color: color, isEnabled: layer.isEnabled) : layer
+                        }
+                        for (key, value) in CanonicalFillLayerCodec.propertyValues(for: next).sorted(by: { $0.key < $1.key }) {
+                            commands.append(.setProperty(.init(pageID: pageID, nodeID: id, property: .init(
+                                key: .init(rawValue: key), value: value, origin: .authored))))
+                        }
+                        for property in node.properties where ["style.fill", "style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"].contains(property.key.rawValue) {
+                            commands.append(.removeProperty(.init(pageID: pageID, nodeID: id, propertyID: property.id)))
+                        }
+                    }
+                }
+                commands.append(.removeProperty(.init(pageID: pageID, nodeID: id, propertyID: old.id)))
+            }
+        }
+        guard !commands.isEmpty else { throw LocalColorTokenCommandError.unchanged }
+        return .batch(commands)
+    }
+
+    private static func valid(_ name: String, color: CanonicalSolidColor) -> Bool {
+        LocalColorToken(name: name, color: color).isValid
+    }
+    private static func equalNames(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX")) == rhs.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
     }
 }
 

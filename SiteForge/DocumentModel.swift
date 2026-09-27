@@ -80,6 +80,10 @@ enum AssetIdentifierDomain: StableIdentifierDomain {
     static let diagnosticNamespace = "asset"
 }
 
+enum ColorTokenIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "color-token"
+}
+
 enum FormOptionIdentifierDomain: StableIdentifierDomain {
     static let diagnosticNamespace = "form-option"
 }
@@ -92,7 +96,79 @@ typealias TemplateID = StableIdentifier<TemplateIdentifierDomain>
 typealias GuideID = StableIdentifier<GuideIdentifierDomain>
 typealias ResourceID = StableIdentifier<ResourceIdentifierDomain>
 typealias AssetID = StableIdentifier<AssetIdentifierDomain>
+typealias ColorTokenID = StableIdentifier<ColorTokenIdentifierDomain>
 typealias FormOptionID = StableIdentifier<FormOptionIdentifierDomain>
+
+/// Shared canonical RGBA value: document serialization and headless project
+/// validation must not depend on the editor's transform/Inspector module.
+struct CanonicalSolidColor: Codable, Equatable, Sendable {
+    let red: Double
+    let green: Double
+    let blue: Double
+    let alpha: Double
+
+    static let legacySurface = CanonicalSolidColor(red: 0.94, green: 0.95, blue: 0.97, alpha: 1)
+
+    init(red: Double, green: Double, blue: Double, alpha: Double) {
+        self.red = red; self.green = green; self.blue = blue; self.alpha = alpha
+    }
+
+    var isValid: Bool { [red, green, blue, alpha].allSatisfy { $0.isFinite && (0...1).contains($0) } }
+    var hexadecimalRGBA: String {
+        func channel(_ value: Double) -> String { String(format: "%02X", Int((value * 255).rounded())) }
+        return "#\(channel(red))\(channel(green))\(channel(blue))\(channel(alpha))"
+    }
+
+    static func parse(hexadecimal: String) -> CanonicalSolidColor? {
+        let source = hexadecimal.trimmingCharacters(in: .whitespacesAndNewlines)
+        let digits = source.hasPrefix("#") ? String(source.dropFirst()) : source
+        let hex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        guard digits.count == 6 || digits.count == 8,
+              digits.unicodeScalars.allSatisfy({ hex.contains($0) }) else { return nil }
+        var value: UInt64 = 0
+        guard Scanner(string: digits).scanHexInt64(&value) else { return nil }
+        let divisor = 255.0
+        if digits.count == 6 {
+            return CanonicalSolidColor(red: Double((value >> 16) & 0xff) / divisor, green: Double((value >> 8) & 0xff) / divisor, blue: Double(value & 0xff) / divisor, alpha: 1)
+        }
+        return CanonicalSolidColor(red: Double((value >> 24) & 0xff) / divisor, green: Double((value >> 16) & 0xff) / divisor, blue: Double((value >> 8) & 0xff) / divisor, alpha: Double(value & 0xff) / divisor)
+    }
+}
+
+/// A single project-local collection. Its array order and stable IDs are
+/// canonical; presentation drafts and color-panel state are not.
+struct LocalColorToken: Codable, Equatable, Identifiable, Sendable {
+    let id: ColorTokenID
+    var name: String
+    var color: CanonicalSolidColor
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, name, color }
+
+    init(id: ColorTokenID = ColorTokenID(), name: String, color: CanonicalSolidColor) {
+        self.id = id; self.name = name; self.color = color
+    }
+
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(ColorTokenID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        color = try values.decode(CanonicalSolidColor.self, forKey: .color)
+    }
+
+    var isValid: Bool {
+        !name.isEmpty && name == name.trimmingCharacters(in: .whitespacesAndNewlines)
+            && name.utf8.count <= 128 && !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+            && color.isValid
+    }
+}
+
+enum LocalColorTokenBinding {
+    static let key = "style.fill.token.v1.id"
+    static func id(for node: DocumentNode) -> ColorTokenID? {
+        node.insertionStringProperty(key).flatMap(ColorTokenID.init(uuidString:))
+    }
+}
 
 enum ImageAssetFormat: String, Codable, CaseIterable, Sendable {
     case png, jpeg, gif, tiff, heic
@@ -981,6 +1057,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
     var pages: [DocumentPage]
     var guides: [AuthoredGuide]
     var imageAssets: [ImageAsset]
+    var colorTokens: [LocalColorToken]
 
     init(
         id: DocumentID = DocumentID(),
@@ -989,7 +1066,8 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         templateID: TemplateID? = nil,
         pages: [DocumentPage]? = nil,
         guides: [AuthoredGuide] = [],
-        imageAssets: [ImageAsset] = []
+        imageAssets: [ImageAsset] = [],
+        colorTokens: [LocalColorToken] = []
     ) {
         self.id = id
         self.revision = revision
@@ -998,11 +1076,12 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         self.pages = pages ?? BlankProjectDefaults.pages()
         self.guides = guides
         self.imageAssets = imageAssets
+        self.colorTokens = colorTokens
     }
 
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case id, revision, creationKind, templateID, pages, guides, imageAssets
+        case id, revision, creationKind, templateID, pages, guides, imageAssets, colorTokens
     }
 
     init(from decoder: Decoder) throws {
@@ -1024,6 +1103,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         pages = try container.decode([DocumentPage].self, forKey: .pages)
         guides = try container.decode([AuthoredGuide].self, forKey: .guides)
         imageAssets = try container.decode([ImageAsset].self, forKey: .imageAssets)
+        colorTokens = try container.decode([LocalColorToken].self, forKey: .colorTokens)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1039,6 +1119,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         try container.encode(pages, forKey: .pages)
         try container.encode(guides, forKey: .guides)
         try container.encode(imageAssets, forKey: .imageAssets)
+        try container.encode(colorTokens, forKey: .colorTokens)
     }
 }
 
@@ -1283,6 +1364,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case duplicateAssetContent
     case invalidImageAsset
     case invalidImageReference
+    case invalidColorToken
     case invalidComponentReference
 
     var errorDescription: String? {
@@ -1326,6 +1408,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .duplicateAssetContent: "Duplicate image bytes must resolve to the existing asset identity."
         case .invalidImageAsset: "The document contains invalid image asset metadata."
         case .invalidImageReference: "An Image node must reference an existing canonical image asset."
+        case .invalidColorToken: "The project contains invalid local color token state."
         }
     }
 }
@@ -1775,6 +1858,11 @@ extension CanonicalDocument {
             guard templateID == nil else { throw ModelValidationError.invalidCreationProvenance }
         }
 
+        guard colorTokens.count <= 1_000,
+              Set(colorTokens.map(\.id)).count == colorTokens.count,
+              Set(colorTokens.map { $0.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX")) }).count == colorTokens.count,
+              colorTokens.allSatisfy(\.isValid) else { throw ModelValidationError.invalidColorToken }
+
         guard imageAssets.count <= ImageAsset.maximumAssetCount else {
             throw ModelValidationError.invalidImageAsset
         }
@@ -1803,6 +1891,12 @@ extension CanonicalDocument {
                 assetIDs: assetIDs,
                 checkpoint: checkpoint
             )
+            for node in page.nodes where node.properties.contains(where: { $0.key.rawValue == LocalColorTokenBinding.key }) {
+                guard [.frame, .section, .stack, .grid].contains(node.kind),
+                      node.properties.filter({ $0.key.rawValue == LocalColorTokenBinding.key }).count == 1,
+                      LocalColorTokenBinding.id(for: node) != nil else { throw ModelValidationError.invalidColorToken }
+                // Missing references remain valid so repair can preserve intent.
+            }
         }
         guard guides.count <= 10_000 else { throw ModelValidationError.guideLimitExceeded }
         guard Set(guides.map(\.id)).count == guides.count else {
@@ -2042,9 +2136,9 @@ enum DocumentSerializationError: Error, Equatable, LocalizedError {
 }
 
 enum DocumentSerializer {
-    // Schema 8 adds exposed component text bindings and instance overrides.
+    // Schema 9 adds the project-local color-token collection.
     // Historical schemas cannot acquire newer closed namespaces by permissive decoding.
-    static let currentSchemaVersion = 8
+    static let currentSchemaVersion = 9
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -2067,6 +2161,47 @@ enum DocumentSerializer {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
             document = try container.decode(CanonicalDocument.self, forKey: .document)
+        }
+    }
+
+    private struct SchemaEightEnvelope: Decodable {
+        let schemaVersion: Int
+        let document: SchemaEightDocument
+        private enum CodingKeys: String, CodingKey, CaseIterable { case schemaVersion, document }
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+            document = try values.decode(SchemaEightDocument.self, forKey: .document)
+        }
+    }
+
+    private struct SchemaEightDocument: Decodable {
+        let id: DocumentID
+        let revision: UInt64
+        let creationKind: ProjectCreationKind
+        let templateID: TemplateID?
+        let pages: [DocumentPage]
+        let guides: [AuthoredGuide]
+        let imageAssets: [ImageAsset]
+        private enum CodingKeys: String, CodingKey, CaseIterable {
+            case id, revision, creationKind, templateID, pages, guides, imageAssets
+        }
+        init(from decoder: Decoder) throws {
+            try requireExactKeys(CodingKeys.self, in: decoder)
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(DocumentID.self, forKey: .id)
+            revision = try values.decode(UInt64.self, forKey: .revision)
+            creationKind = try values.decode(ProjectCreationKind.self, forKey: .creationKind)
+            templateID = try values.decodeIfPresent(TemplateID.self, forKey: .templateID)
+            pages = try values.decode([DocumentPage].self, forKey: .pages)
+            guides = try values.decode([AuthoredGuide].self, forKey: .guides)
+            imageAssets = try values.decode([ImageAsset].self, forKey: .imageAssets)
+        }
+        func migrated() -> CanonicalDocument {
+            .init(id: id, revision: revision, creationKind: creationKind,
+                  templateID: templateID, pages: pages, guides: guides,
+                  imageAssets: imageAssets)
         }
     }
 
@@ -2339,15 +2474,21 @@ enum DocumentSerializer {
             } catch {
                 throw DocumentSerializationError.malformedInput
             }
-        case 5, 6, 7, currentSchemaVersion:
+        case 5, 6, 7, 8:
             do {
                 let strictDecoder = JSONDecoder()
                 strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
-                document = try strictDecoder.decode(CurrentEnvelope.self, from: data).document
+                document = try strictDecoder.decode(SchemaEightEnvelope.self, from: data).document.migrated()
                 if header.schemaVersion == 5,
                    document.pages.contains(where: { $0.nodes.contains { [.button, .link].contains($0.kind) } }) {
                     throw DocumentSerializationError.malformedInput
                 }
+            } catch { throw DocumentSerializationError.malformedInput }
+        case currentSchemaVersion:
+            do {
+                let strictDecoder = JSONDecoder()
+                strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                document = try strictDecoder.decode(CurrentEnvelope.self, from: data).document
             } catch {
                 throw DocumentSerializationError.malformedInput
             }

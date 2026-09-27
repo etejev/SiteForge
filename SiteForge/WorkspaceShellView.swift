@@ -2620,7 +2620,7 @@ private struct InspectorView: View {
                 }
             } else {
                 DesignInspectorFieldsView(state: state)
-                    .id(state.geometryInspectorSelectionKey)
+                    .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ","))
             }
         case .layout:
             Text(state.transformGeometrySummary)
@@ -2734,6 +2734,11 @@ private struct DesignInspectorFieldsView: View {
     @State private var imageFocalXDraft = ""
     @State private var imageFocalYDraft = ""
     @State private var imageAltDraft = ""
+    @State private var tokenNameDraft = ""
+    @State private var tokenColorDraft = ""
+    @State private var editingTokenID: ColorTokenID?
+    @State private var creatingToken = false
+    @State private var tokenDraftRevision: UInt64 = 0
 
     /// Includes the current revision and is used to reject a command queued
     /// from a control update after another transaction or selection has won.
@@ -2751,12 +2756,15 @@ private struct DesignInspectorFieldsView: View {
             Text("Appearance").font(.headline)
             let fill = state.designInspectorFillValue()
             let fillIsApplicable = !isUnavailable(fill)
+            let fillIsEditable = fillIsApplicable && !state.hasBoundColorTokenSelection
             HStack(spacing: 8) {
                 NativeDesignColorWell(
                     color: resolvedColor(fill),
-                    isEnabled: fillIsApplicable,
+                    isEnabled: fillIsEditable,
                     accessibilityValue: fillAccessibility(fill),
-                    accessibilityHint: fillIsApplicable
+                    accessibilityHint: state.hasBoundColorTokenSelection
+                        ? "Unbind the color token before editing a literal fill."
+                        : fillIsApplicable
                         ? "Open the native color panel to commit a solid fill."
                         : unavailableHint(fill),
                     onCommit: { color in scheduleFillCommit(color, provenance: .picker) }
@@ -2764,7 +2772,7 @@ private struct DesignInspectorFieldsView: View {
                 .frame(width: 48, height: 26)
                 TextField("Hexadecimal fill", text: $hexDraft)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(!fillIsApplicable)
+                    .disabled(!fillIsEditable)
                     .focused($hexFocused)
                     .onSubmit { commitHex() }
                     .onChange(of: hexFocused) { old, current in
@@ -2772,19 +2780,20 @@ private struct DesignInspectorFieldsView: View {
                     }
                     .accessibilityLabel("Solid fill hexadecimal RGBA")
                     .accessibilityValue(fillAccessibility(fill))
-                    .accessibilityHint(fillIsApplicable ? "Enter #RRGGBB or #RRGGBBAA and press Return to commit." : unavailableHint(fill))
+                    .accessibilityHint(state.hasBoundColorTokenSelection ? "Unbind the color token before editing a literal fill." : fillIsApplicable ? "Enter #RRGGBB or #RRGGBBAA and press Return to commit." : unavailableHint(fill))
                     .accessibilityIdentifier("inspector.design.fillHex")
                 Button("Remove") {
                     scheduleFillCommit(nil, provenance: .picker)
                 }
-                    .disabled(!fillIsApplicable)
+                    .disabled(!fillIsEditable)
                     .accessibilityLabel("Remove solid fill")
-                    .accessibilityHint(fillIsApplicable ? "Remove the authored fill without restoring a legacy default." : unavailableHint(fill))
+                    .accessibilityHint(state.hasBoundColorTokenSelection ? "Unbind the color token before removing the literal fill." : fillIsApplicable ? "Remove the authored fill without restoring a legacy default." : unavailableHint(fill))
                     .accessibilityIdentifier("inspector.design.fillRemove")
             }
             Text(provenanceText(fill))
                 .font(.caption2).foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.design.fillProvenance")
+            colorTokenControls
             let opacity = state.designInspectorOpacityValue()
             let opacityIsApplicable = !isUnavailable(opacity)
             HStack(spacing: 8) {
@@ -2814,7 +2823,12 @@ private struct DesignInspectorFieldsView: View {
             }
             if let message { Text(message).font(.caption).foregroundStyle(.red).accessibilityIdentifier("inspector.design.validation") }
             Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("inspector.design.announcement")
+            if state.hasBoundColorTokenSelection {
+                Text("Unbind the color token to edit fill layers.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             FillLayerListInspectorView(state: state)
+                .disabled(state.hasBoundColorTokenSelection)
             typographyControls
             semanticElementControls
             boxStyleControls
@@ -2830,7 +2844,108 @@ private struct DesignInspectorFieldsView: View {
             // publishing view state during that reconciliation.
             scheduleDraftRefresh(for: selectionIdentityKey)
         }
-        .onExitCommand { resetDrafts(); state.cancelDesignInspectorDraft() }
+        .onExitCommand { resetDrafts(); cancelTokenDraft(); state.cancelDesignInspectorDraft() }
+    }
+
+    @ViewBuilder private var colorTokenControls: some View {
+        Divider()
+        HStack {
+            Text("Color Tokens").font(.headline)
+            Spacer()
+            Button("New Color Token") {
+                editingTokenID = nil; creatingToken = true
+                tokenNameDraft = "New Color"; tokenColorDraft = "#4060A0FF"
+                tokenDraftRevision = state.localColorTokenRevision
+            }
+            .accessibilityIdentifier("inspector.tokens.new")
+        }
+        if state.localColorTokens.isEmpty {
+            Text("No project color tokens. Create one to reuse a solid fill.")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.tokens.empty")
+        }
+        ForEach(state.localColorTokens) { token in
+            Button {
+                editingTokenID = token.id; creatingToken = false
+                tokenNameDraft = token.name; tokenColorDraft = token.color.hexadecimalRGBA
+                tokenDraftRevision = state.localColorTokenRevision
+            } label: {
+                HStack {
+                    Circle().fill(Color(red: token.color.red, green: token.color.green, blue: token.color.blue, opacity: token.color.alpha))
+                        .frame(width: 14, height: 14)
+                    Text(token.name).lineLimit(1)
+                    Spacer()
+                    Text(token.color.hexadecimalRGBA).monospacedDigit().font(.caption2)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Color token \(token.name)")
+            .accessibilityValue(token.color.hexadecimalRGBA)
+            .accessibilityIdentifier("inspector.tokens.row.\(token.id.description)")
+        }
+        if creatingToken || editingTokenID != nil {
+            HStack {
+                TextField("Token name", text: $tokenNameDraft)
+                    .accessibilityIdentifier("inspector.tokens.name")
+                TextField("RGBA", text: $tokenColorDraft)
+                    .accessibilityIdentifier("inspector.tokens.color")
+            }
+            HStack {
+                Button("Apply") { applyTokenDraft() }
+                    .accessibilityIdentifier("inspector.tokens.apply")
+                Button("Cancel") { cancelTokenDraft() }
+                    .accessibilityIdentifier("inspector.tokens.cancel")
+                if let id = editingTokenID {
+                    Button("Delete") {
+                        if state.commitLocalColorToken(.delete(id), expectedRevision: state.localColorTokenRevision) {
+                            cancelTokenDraft()
+                        }
+                    }.accessibilityIdentifier("inspector.tokens.delete")
+                }
+            }
+        }
+        if let id = editingTokenID {
+            HStack {
+                Button("Apply to Solid Fill") {
+                    _ = state.commitLocalColorToken(.bind(id), expectedRevision: state.localColorTokenRevision)
+                }
+                .disabled(isUnavailable(state.designInspectorFillValue()))
+                .accessibilityIdentifier("inspector.tokens.bind")
+                Button("Unbind") {
+                    _ = state.commitLocalColorToken(.unbind, expectedRevision: state.localColorTokenRevision)
+                }
+                .disabled(state.selectedColorTokenStatus() == nil)
+                .accessibilityIdentifier("inspector.tokens.unbind")
+            }
+        }
+        if let status = state.selectedColorTokenStatus() {
+            Text(status).font(.caption2).foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.tokens.bindingStatus")
+        }
+    }
+
+    private func applyTokenDraft() {
+        guard let color = CanonicalSolidColor.parse(hexadecimal: tokenColorDraft),
+              tokenColorDraft.hasPrefix("#") else {
+            message = LocalColorTokenCommandError.invalid.localizedDescription
+            return
+        }
+        let edit: LocalColorTokenEdit = if let id = editingTokenID {
+            .update(id, name: tokenNameDraft, color: color)
+        } else { .create(name: tokenNameDraft, color: color) }
+        guard state.commitLocalColorToken(edit, expectedRevision: tokenDraftRevision) else {
+            message = state.lastDesignInspectorAnnouncement
+            return
+        }
+        tokenDraftRevision = state.localColorTokenRevision
+        if creatingToken { editingTokenID = state.localColorTokens.last?.id; creatingToken = false }
+        message = nil
+    }
+
+    private func cancelTokenDraft() {
+        editingTokenID = nil; creatingToken = false
+        tokenNameDraft = ""; tokenColorDraft = ""
+        message = nil
     }
 
     private func resolvedColor(_ value: DesignInspectorValue) -> CanonicalSolidColor {

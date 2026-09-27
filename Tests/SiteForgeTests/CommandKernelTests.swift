@@ -35,7 +35,7 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertEqual(document.websitePages, legacy.websitePages)
         let encoded = try DocumentSerializer.encode(document)
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(String(decoding: encoded, as: UTF8.self)
-            .replacingOccurrences(of: "\"schemaVersion\":8", with: "\"schemaVersion\":7").utf8)))
+            .replacingOccurrences(of: "\"schemaVersion\":9", with: "\"schemaVersion\":7").utf8)))
         for (suffix, value) in [("id", "not-an-id"), ("type", "media"), ("label", " "), ("label", "Title\n")] {
             var invalid = document
             let index = invalid.pages[2].nodes[1].properties.firstIndex { $0.key.rawValue == CanonicalComponentText.namespace + suffix }!
@@ -348,11 +348,11 @@ final class CommandKernelTests: XCTestCase {
         document.pages[0].nodes.append(instance)
         let bytes = try DocumentSerializer.encode(document)
         XCTAssertEqual(try DocumentSerializer.decode(bytes), document)
-        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":8", with: "\"schemaVersion\":6")
+        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":9", with: "\"schemaVersion\":6")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(old.utf8)))
-        let future = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":8", with: "\"schemaVersion\":9")
+        let future = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":9", with: "\"schemaVersion\":10")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(future.utf8))) {
-            XCTAssertEqual($0 as? DocumentSerializationError, .unsupportedSchema(9))
+            XCTAssertEqual($0 as? DocumentSerializationError, .unsupportedSchema(10))
         }
         var invalid = document
         invalid.pages[0].nodes[1].properties[0].value = .string("invalid")
@@ -856,6 +856,27 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertTrue(stylesheet.contains("\(CanonicalCSSRule.selector(for: sectionID)) { background-image: linear-gradient(90.0deg, rgba(255.0, 0.0, 0.0, 1.0) 0.0%, rgba(0.0, 0.0, 255.0, 0.5) 100.0%); }"))
     }
 
+    func testStaticSolidFillResolvesLocalColorTokenWithoutChangingLiteralFallback() throws {
+        let pageID = PageID(), nodeID = NodeID()
+        let fallback = CanonicalSolidColor(red: 1, green: 0, blue: 0, alpha: 1)
+        let resolved = CanonicalSolidColor(red: 0, green: 0.5, blue: 1, alpha: 1)
+        let token = LocalColorToken(name: "Brand", color: resolved)
+        let layer = CanonicalFillLayer.solid(color: fallback)
+        let properties = CanonicalFillLayerCodec.propertyValues(for: [layer]).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value, origin: .authored)
+        } + [NodeProperty(key: .init(rawValue: LocalColorTokenBinding.key), value: .string(token.id.description), origin: .authored)]
+        let frame = DocumentNode(id: nodeID, kind: .frame, name: "Frame", parent: .page(pageID), properties: properties)
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [nodeID], nodes: [frame])
+        let document = CanonicalDocument(pages: [page], colorTokens: [token])
+        let plan = try MultiPageStaticBuildPlanner.plan(document: document)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("rgba(0.0, 127.5, 255.0, 1.0)"), css)
+        XCTAssertFalse(css.contains("rgba(255.0, 0.0, 0.0, 1.0)"), css)
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: frame).first?.solidColor, fallback)
+        XCTAssertEqual(LocalColorTokenResolver.resolvedLayers(for: frame, in: document).first?.solidColor, resolved)
+    }
+
     // SF-0506-001...005, SF-1204-003 — only typed Frame/Section box values
     // enter the closed static declaration vocabulary.
     func testMultiPageStaticBuildPlanProjectsClosedFrameBoxStyle() throws {
@@ -1301,7 +1322,7 @@ final class CommandKernelTests: XCTestCase {
 
         XCTAssertEqual(first, second)
         let json = String(decoding: first, as: UTF8.self)
-        XCTAssertTrue(json.contains("\"schemaVersion\":8"))
+        XCTAssertTrue(json.contains("\"schemaVersion\":9"))
         XCTAssertTrue(json.contains("\"origin\":\"authored\""))
     }
 
@@ -1315,7 +1336,7 @@ final class CommandKernelTests: XCTestCase {
     // SF-0302-004, SF-1702-004, SF-1702-008
     func testUnknownMalformedAndInvalidSchemaInputsAreRejected() throws {
         let valid = String(decoding: try DocumentSerializer.encode(populatedDocument()), as: UTF8.self)
-        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":8", with: "\"schemaVersion\":99").utf8)
+        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":9", with: "\"schemaVersion\":99").utf8)
         XCTAssertThrowsError(try DocumentSerializer.decode(unknown)) { error in
             XCTAssertEqual(error as? DocumentSerializationError, .unsupportedSchema(99))
         }

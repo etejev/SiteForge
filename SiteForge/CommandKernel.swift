@@ -201,6 +201,7 @@ enum CommandName: String, CaseIterable, Codable, Sendable {
     case insertImageAsset = "document.asset.image.insert"
     case updateImageAsset = "document.asset.image.update"
     case removeImageAsset = "document.asset.image.remove"
+    case setColorTokens = "document.colorTokens.set"
     case batch = "document.batch"
     case undo = "history.undo"
     case redo = "history.redo"
@@ -323,6 +324,10 @@ struct RemoveImageAssetCommand: Codable, Equatable, Sendable {
     let assetID: AssetID
 }
 
+struct SetColorTokensCommand: Codable, Equatable, Sendable {
+    let tokens: [LocalColorToken]
+}
+
 indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case insertPage(InsertPageCommand)
     case removePage(RemovePageCommand)
@@ -340,6 +345,7 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case insertImageAsset(InsertImageAssetCommand)
     case updateImageAsset(UpdateImageAssetCommand)
     case removeImageAsset(RemoveImageAssetCommand)
+    case setColorTokens(SetColorTokensCommand)
     case batch([DocumentCommand])
 
     var name: CommandName {
@@ -360,6 +366,7 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
         case .insertImageAsset: .insertImageAsset
         case .updateImageAsset: .updateImageAsset
         case .removeImageAsset: .removeImageAsset
+        case .setColorTokens: .setColorTokens
         case .batch: .batch
         }
     }
@@ -409,6 +416,8 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
             [command.asset.id.commandTarget]
         case .removeImageAsset(let command):
             [command.assetID.commandTarget]
+        case .setColorTokens(let command):
+            command.tokens.map { CommandTarget(namespace: "color-token", rawValue: $0.id.rawValue) }
         case .batch(let commands):
             commands.flatMap(\.targets)
         }
@@ -473,6 +482,7 @@ struct CommandRegistry {
             CommandDescriptor(name: .insertImageAsset, title: "Import Image", mutatesDocument: true),
             CommandDescriptor(name: .updateImageAsset, title: "Edit Image Asset", mutatesDocument: true),
             CommandDescriptor(name: .removeImageAsset, title: "Delete Image Asset", mutatesDocument: true),
+            CommandDescriptor(name: .setColorTokens, title: "Edit Color Tokens", mutatesDocument: true),
             CommandDescriptor(name: .batch, title: "Grouped Edit", mutatesDocument: true),
             CommandDescriptor(name: .undo, title: "Undo", mutatesDocument: true),
             CommandDescriptor(name: .redo, title: "Redo", mutatesDocument: true),
@@ -671,6 +681,10 @@ struct CommandRegistry {
             }) else {
                 return .disabled(reason: "Detach or remove every Image using this asset before deleting it.")
             }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .setColorTokens(let value):
+            guard value.tokens != document.colorTokens else { return .disabled(reason: "Color tokens are unchanged.") }
             return validationAvailability(afterApplying: command, to: document)
 
         case .batch(let commands):
@@ -949,6 +963,11 @@ struct CommandRegistry {
             }
             let asset = document.imageAssets.remove(at: index)
             return CommandMutation(inverse: .insertImageAsset(.init(asset: asset, index: index)))
+
+        case .setColorTokens(let value):
+            let previous = document.colorTokens
+            document.colorTokens = value.tokens
+            return CommandMutation(inverse: .setColorTokens(.init(tokens: previous)))
 
         case .batch(let commands):
             var inverses: [DocumentCommand] = []

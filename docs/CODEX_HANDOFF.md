@@ -5,9 +5,20 @@
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-056` is Development Prompt 3 of 10; Prompt 10
+its local commit. `SF-AUTHORING-057` is Development Prompt 4 of 10; Prompt 10
 triggers the next full verification and hosted checkpoint. Until then do not
 push or run broad gates. Normative modules remain Partial unless fully proven.
+
+## Current local color-token checkpoint
+
+SF-AUTHORING-057 adds schema-9 project-local solid RGBA tokens and a stable
+solid-fill binding property. The token registry and existing DocumentSession
+are the only canonical write path. A missing token preserves its literal fill;
+unbind freezes the resolved color, and in-use deletion is rejected. Canvas,
+Preview, and closed static Frame/Section output share token resolution. The
+focused model/migration/static/UI selectors and limitations are recorded in
+`docs/evidence/SF-AUTHORING-057-LOCAL-COLOR-TOKENS.md`. Do not claim full
+SF-0509 theme/mode, alias, broad scale, or release acceptance from this slice.
 
 ## Current native outer-shadow checkpoint
 

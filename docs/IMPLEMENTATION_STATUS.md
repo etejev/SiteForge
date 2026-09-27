@@ -1,6 +1,13 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-26.
+Last updated: 2026-09-27.
+
+SF-AUTHORING-057 has a focused local color-token foundation: versioned stable
+RGBA token records, reversible solid-fill binding and safe unbinding, native
+Design Inspector controls, and shared canvas/Preview/closed-static resolution.
+The bounded model, migration, static-output, and actual-app focused tests pass;
+the full SF-0509 module and the tenth-prompt verification gate remain Partial.
+See `docs/evidence/SF-AUTHORING-057-LOCAL-COLOR-TOKENS.md`.
 
 SF-AUTHORING-037 is IN PROGRESS. A pure local validation engine resolves the
 canonical Form field schema against a caller-owned ephemeral visitor snapshot:

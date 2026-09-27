@@ -1,6 +1,14 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-25.
+Last updated: 2026-09-27.
+
+Current local development prompt: SF-AUTHORING-057 (4 of 10), project-local
+solid RGBA color tokens. The bounded canonical, Inspector, renderer/Preview,
+static-output, and focused test evidence is recorded in
+`docs/evidence/SF-AUTHORING-057-LOCAL-COLOR-TOKENS.md`. The full gate and hosted
+checkpoint are reserved for prompt 10; SF-0509 remains Partial. Earlier
+historical status entries below are retained for their original evidence and
+are not the current work queue.
 
 Current work is SF-AUTHORING-026 Semantic HTML element authoring v1. Its
 canonical semantic element state and native Inspector controls are in progress;

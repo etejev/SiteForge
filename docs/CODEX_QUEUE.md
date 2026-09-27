@@ -12,7 +12,7 @@ persistence/history/accessibility/cancellation, focused evidence, and factual
 documentation. Run focused affected tests before each local commit; do not run
 the full gate or hosted CI per slice.
 
-`SF-AUTHORING-056` is Development Prompt **3 of 10**. After Prompt 10, run one
+`SF-AUTHORING-057` is Development Prompt **4 of 10** once its focused slice is committed. After Prompt 10, run one
 authoritative `./sf verify`, repair failures, commit, push main, and monitor
 hosted CI until green. Debug-only owner add-ons do not increment this cadence.
 Until that checkpoint, commits stay local and no external GitHub/release action
@@ -24,6 +24,12 @@ actually evidenced.
 None.
 
 ## IN PROGRESS
+
+- [ ] `SF-AUTHORING-057` Local solid color tokens (P1; Development Prompt 4 of 10).
+  - Requirements: bounded `SF-0509-001`–`008`, `SF-0302-001`–`008`, `SF-0305-001`–`008`, `SF-0306-001`–`008`, with applicable Inspector and static output requirements.
+  - Plan: add stable project-local RGBA token records and strict validation to the canonical document; compile create/edit/rename/delete and solid fill binding through existing history and identity gates; resolve bound colors into the shared canvas, Preview, and static snapshots; expose a compact accessible native token and binding surface.
+  - Focused checkpoint: schema-9 token records, reversible bind/unbind, native Inspector controls, and shared render/static resolution are implemented. Focused model, migration, static-output, and actual-app selectors passed; retained bound/unbound screenshots were visually inspected. The tenth-prompt full gate has not run. Evidence: `docs/evidence/SF-AUTHORING-057-LOCAL-COLOR-TOKENS.md`.
+  - Exclusions: aliases, themes/modes, other token types, remote libraries, arbitrary CSS variables, browser runtime, and release acceptance.
 
 - [ ] `SF-AUTHORING-056` Native bounded outer-shadow authoring foundation (P1; Development Prompt 3 of 10).
   - Requirements: bounded implementation/evidence for `SF-0506-001`–`008`,

@@ -864,7 +864,7 @@ actor WorkspaceScenePreparationWorker {
             case .form: .container
             case .component: .container
             }
-            let fillLayers = DesignInspectorCommandRegistry.resolvedLayers(for: node).map { layer in
+            let fillLayers = LocalColorTokenResolver.resolvedLayers(for: node, in: request.document).map { layer in
                 switch layer.kind {
                 case .solid:
                     return CanvasAuthoredFillLayer(
@@ -2490,7 +2490,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func designInspectorFillValue() -> DesignInspectorValue {
-        DesignInspectorCommandRegistry.fillValue(nodes: selectedCanonicalNodes)
+        LocalColorTokenResolver.fillValue(nodes: selectedCanonicalNodes, in: documentSession.document)
     }
 
     func designInspectorOpacityValue() -> DesignInspectorOpacityValue {
@@ -2725,6 +2725,51 @@ final class WorkspaceShellState: ObservableObject {
         // v1 layer registry as well. That atomically adapts legacy fill data
         // on first edit and never leaves v4 channels as a competing source.
         commitDesignFillLayer(.replaceSolid(color), operation: "solid-fill", provenance: provenance)
+    }
+
+    var localColorTokens: [LocalColorToken] { documentSession.document.colorTokens }
+    var localColorTokenRevision: UInt64 { documentSession.document.revision }
+
+    func selectedColorTokenStatus() -> String? {
+        guard let pageID = effectiveSelectedPageID,
+              let page = documentSession.document.pages.first(where: { $0.id == pageID }),
+              let id = selectionState.orderedIDs.first,
+              let node = page.nodes.first(where: { $0.id == id }) else { return nil }
+        return LocalColorTokenResolver.status(for: node, in: documentSession.document)
+    }
+
+    var hasBoundColorTokenSelection: Bool {
+        selectedCanonicalNodes.contains { LocalColorTokenBinding.id(for: $0) != nil }
+    }
+
+    @discardableResult
+    func commitLocalColorToken(_ edit: LocalColorTokenEdit, expectedRevision: UInt64) -> Bool {
+        let document = documentSession.document
+        guard let plan = canvasRenderPlan,
+              plan.identity.documentID == document.id,
+              plan.identity.revision == document.revision else {
+            lastDesignInspectorAnnouncement = LocalColorTokenCommandError.stale.localizedDescription
+            return false
+        }
+        do {
+            let command = try LocalColorTokenCommandRegistry.prepare(
+                edit, in: document, expectedDocumentID: document.id,
+                expectedRevision: expectedRevision, pageID: effectiveSelectedPageID,
+                selectedNodeIDs: selectionState.orderedIDs
+            )
+            _ = try documentSession.execute(command)
+            lastDesignInspectorAnnouncement = "Color token edit committed"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
+        } catch let error as LocalColorTokenCommandError {
+            lastDesignInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        } catch {
+            lastDesignInspectorAnnouncement = "Color token edit could not commit; project colors are unchanged"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        }
     }
 
     @discardableResult

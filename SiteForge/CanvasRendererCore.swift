@@ -545,7 +545,8 @@ enum InternalDocumentRenderTreeCompiler {
         staticRoutes: [PageID: String] = [:],
         sectionIDs: [PageID: Set<NodeID>] = [:],
         imageOutputPaths: [AssetID: String] = [:],
-        imageAssets: [AssetID: ImageAsset] = [:]
+        imageAssets: [AssetID: ImageAsset] = [:],
+        colorTokens: [LocalColorToken] = []
     ) throws -> InternalRenderTreeSnapshot {
         let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
         let nodes = try page.canonicalDepthFirstNodes().enumerated().map { paintOrder, node in
@@ -563,7 +564,7 @@ enum InternalDocumentRenderTreeCompiler {
                 textContent: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
                 typography: node.kind == .text ? CanonicalTypography.resolved(for: node) : nil,
                 image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets),
-                fillLayers: staticFillLayers(for: node),
+                fillLayers: staticFillLayers(for: node, colorTokens: colorTokens),
                 opacity: staticOpacity(for: node),
                 boxStyle: staticBoxStyle(for: node)
             )
@@ -599,11 +600,9 @@ enum InternalDocumentRenderTreeCompiler {
     /// to Frame and Section. The renderer remains authoritative for the wider
     /// editor-supported layer model until those node kinds have explicit
     /// static-output acceptance.
-    private static func staticFillLayers(for node: DocumentNode) -> [CanonicalFillLayer] {
+    private static func staticFillLayers(for node: DocumentNode, colorTokens: [LocalColorToken]) -> [CanonicalFillLayer] {
         guard [.frame, .section].contains(node.kind) else { return [] }
-        return CanonicalFillLayerCodec.layers(for: node)
-            ?? CanonicalFillLayerCodec.legacySolidLayer(for: node).map { [$0] }
-            ?? []
+        return LocalColorTokenResolver.resolvedLayers(for: node, tokens: colorTokens)
     }
 
     private static func staticOpacity(for node: DocumentNode) -> Double? {
@@ -1023,7 +1022,8 @@ enum MultiPageStaticBuildPlanner {
             let tree = try InternalDocumentRenderTreeCompiler.compile(
                 page: page, documentID: document.id, revision: document.revision,
                 staticRoutes: staticRoutes, sectionIDs: sectionIDs,
-                imageOutputPaths: imageOutputPaths, imageAssets: imageAssets
+                imageOutputPaths: imageOutputPaths, imageAssets: imageAssets,
+                colorTokens: document.colorTokens
             )
             staticNodes += tree.nodes
             staticTrees.append(tree)

@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-057
+
+- Added project-local solid RGBA color tokens to the Design Inspector. Tokens
+  can be created and edited, bound to supported solid fills, and safely unbound
+  to a retained literal color. Canvas, Preview, and closed static output use
+  the same resolved color; in-use token deletion is refused. Schema-8 projects
+  migrate without changing their previous appearance.
+
 ## In progress — SF-AUTHORING-056
 
 - Added a reversible enabled state for Frame and Section outer shadows. Turning
