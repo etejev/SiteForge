@@ -1,5 +1,16 @@
 # Codex Continuation Handoff
 
+## Current static plan-integrity checkpoint
+
+SF-AUTHORING-052 adds a deterministic SHA-256 digest to each immutable static
+plan. Its input is a path-sorted, length-delimited in-memory file list, so no
+source content is surfaced and no integrity file, writer call, canonical
+mutation, browser mechanism, or publishing protocol is added.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CommandKernelTests.testFormFieldsPreserveAtomicHistoryAndRemapSelectOptionsOnPageDuplicate`.
+
 ## Current static semantic-outline checkpoint
 
 SF-AUTHORING-051 adds parent NodeID provenance to immutable static tree nodes

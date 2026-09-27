@@ -211,6 +211,13 @@ canonical state, browser behavior, or file writes. Evidence is in
 `docs/evidence/SF-AUTHORING-051-STATIC-SEMANTIC-OUTLINE.md`; local test
 execution is paused by owner instruction.
 
+SF-AUTHORING-052 has begun static plan-integrity parity. Every immutable
+static build plan now carries a deterministic SHA-256 digest of its
+path-sorted, length-delimited in-memory files, without creating an integrity
+file, changing canonical state, or invoking a writer. Evidence is in
+`docs/evidence/SF-AUTHORING-052-STATIC-PLAN-INTEGRITY.md`; local test
+execution is paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

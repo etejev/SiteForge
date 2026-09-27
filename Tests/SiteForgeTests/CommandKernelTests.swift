@@ -715,6 +715,8 @@ final class CommandKernelTests: XCTestCase {
 
         let firstBuild = try MultiPageStaticBuildPlanner.plan(document: session.document)
         XCTAssertEqual(firstBuild, try MultiPageStaticBuildPlanner.plan(document: session.document))
+        XCTAssertEqual(firstBuild.integrityDigest.count, 64)
+        XCTAssertEqual(firstBuild.integrityDigest, try MultiPageStaticBuildPlanner.plan(document: session.document).integrityDigest)
         let html = try XCTUnwrap(firstBuild.files.first { $0.path == "index.html" }?.contents)
         XCTAssertTrue(html.contains("<form data-siteforge-node="))
         XCTAssertTrue(html.contains("<select"))

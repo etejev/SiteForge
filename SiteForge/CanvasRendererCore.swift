@@ -804,6 +804,19 @@ struct LocalStaticBuildPlan: Equatable, Sendable {
     struct File: Equatable, Sendable { let path: String; let contents: String }
     let revision: UInt64
     let files: [File]
+
+    /// Deterministic in-memory integrity provenance. It detects a changed plan
+    /// without creating a generated output file or exposing source content.
+    let integrityDigest: String
+
+    init(revision: UInt64, files: [File]) {
+        self.revision = revision
+        self.files = files
+        let material = files.sorted { $0.path < $1.path }
+            .map { "\($0.path.utf8.count):\($0.path)\u{0}\($0.contents.utf8.count):\($0.contents)" }
+            .joined(separator: "\u{0}")
+        integrityDigest = ProjectResourceStore.digest(Data(material.utf8))
+    }
 }
 
 enum LocalStaticBuildPlanner {

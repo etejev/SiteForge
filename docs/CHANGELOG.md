@@ -1,5 +1,11 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-052
+
+- Added deterministic integrity provenance to immutable static build plans.
+  The SHA-256 digest describes the exact planned files without writing an
+  artifact, exposing source content, or creating a browser/publishing path.
+
 ## In progress — SF-AUTHORING-051
 
 - Added a deterministic, content-free semantic outline to static multi-page

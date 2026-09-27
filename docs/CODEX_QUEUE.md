@@ -8,6 +8,13 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-052` Static plan-integrity foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-1206-003`–`004`.
+  - Plan: derive a deterministic content-free digest from the exact immutable
+    in-memory static plan with no additional output file or writer call.
+  - Exclusions: generated integrity files, signatures, browser verification,
+    resource-byte export, publishing, and release acceptance.
+
 - [ ] `SF-AUTHORING-051` Static semantic-outline foundation (P1).
   - Requirements: bounded compiler evidence for `SF-1203-003`–`004` and
     `SF-1206-003`–`004`.
