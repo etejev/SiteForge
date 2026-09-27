@@ -18,12 +18,13 @@ None.
     server, browser, destination, or submission write path.
   - Delivered checkpoint: required/text/email/select/checkbox validation,
     deterministic field/form identities, cancellation/stale/schema rejection,
-    static-output compatibility indicator, package-reopen input proof and
-    strict value redaction. Focused non-UI validation evidence is 2/2
+    static-output compatibility indicator, package-reopen input proof,
+    Inspector-facing scene-local result adoption, and strict value redaction.
+    Focused non-UI validation evidence is 3/3
     (2026-09-26).
-  - Next bounded task: decide whether an existing local Preview surface can
-    display this ephemeral state without adding visitor persistence; otherwise
-    retain this pure foundation and continue Form actual-app authoring evidence.
+  - Next bounded task: add explicit authored validation-rule configuration
+    through the existing Form Inspector registry; retain this result surface as
+    scene-local and continue Form actual-app authoring evidence separately.
   - Exclusions: network/server/browser runtime, real submission/destinations,
     anti-abuse, analytics, visitor-value persistence, UI automation, generated
     runtime success/error UI, performance/release acceptance.

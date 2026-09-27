@@ -8,6 +8,9 @@
   categories, reject cancelled/stale/invalid schemas, and never serialize,
   log, or mutate visitor values. Static output remains explicitly
   submission-unavailable.
+- The existing Form Inspector now adopts an identity-checked, scene-local
+  empty-draft result surface. It displays only field issue counts and retains
+  neither visitor inputs nor submission state.
 
 ## In progress — SF-AUTHORING-036
 

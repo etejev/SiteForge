@@ -1031,6 +1031,30 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(preview.status, "Preview closed")
     }
 
+    // SF-1006-001/003/004/008 — Inspector-facing local validation adopts only
+    // a current identity-tagged category snapshot; it retains no visitor value
+    // and self-invalidates on a later canonical revision.
+    func testLocalFormValidationPreviewStateAdoptsOnlyCurrentCategorySnapshot() {
+        let documentID = DocumentID()
+        let formID = NodeID()
+        let fieldID = NodeID()
+        let identity = FormValidationResultIdentity(documentID: documentID, revision: 7, formID: formID, fieldID: fieldID)
+        let result = FormValidationSnapshot(
+            identity: .init(documentID: documentID, revision: 7, formID: formID, fieldID: nil),
+            fields: [.init(identity: identity, failures: [.required])], staticOutputCompatibility: .unavailableSubmission
+        )
+        var state = LocalFormValidationPreviewState()
+        state.adopt(result, expectedDocumentID: documentID, revision: 7, formID: formID)
+        XCTAssertEqual(state.snapshot, result)
+        XCTAssertFalse(state.status.contains("visitor-secret"))
+
+        var document = ProjectCreation.blank()
+        document.revision = 8
+        state.invalidate(for: document)
+        XCTAssertNil(state.snapshot)
+        XCTAssertEqual(state.status, "Local validation is stale. Review the live form and validate again.")
+    }
+
     private struct Fixture {
         let scene: CanvasRenderSceneSnapshot
         let overlays: CanvasEditorOverlaySnapshot

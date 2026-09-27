@@ -48,6 +48,37 @@ struct LocalPreviewState: Equatable, Sendable {
     }
 }
 
+/// Scene-local Form validation presentation. It retains result categories and
+/// stable IDs only; visitor values remain caller-owned and cannot be persisted.
+struct LocalFormValidationPreviewState: Equatable, Sendable {
+    private(set) var snapshot: FormValidationSnapshot?
+    private(set) var status = "Local validation is ready. Submission is unavailable."
+
+    mutating func adopt(_ result: FormValidationSnapshot, expectedDocumentID: DocumentID,
+                        revision: UInt64, formID: NodeID) {
+        guard result.identity.documentID == expectedDocumentID,
+              result.identity.revision == revision, result.identity.formID == formID else {
+            status = "Local validation is stale. Review the live form and validate again."
+            return
+        }
+        snapshot = result
+        status = result.isValid
+            ? "Local form validation passed. Submission is unavailable."
+            : "Local validation found \(result.fields.filter { !$0.isValid }.count) field issue\(result.fields.filter { !$0.isValid }.count == 1 ? "" : "s"). Submission is unavailable."
+    }
+
+    mutating func reject(_ error: FormValidationError) {
+        snapshot = nil
+        status = error.localizedDescription
+    }
+
+    mutating func invalidate(for document: CanonicalDocument) {
+        guard let snapshot, (snapshot.identity.documentID != document.id || snapshot.identity.revision != document.revision) else { return }
+        self.snapshot = nil
+        status = "Local validation is stale. Review the live form and validate again."
+    }
+}
+
 private enum CanvasRendererSignposts {
     static let log = OSLog(subsystem: "app.siteforge.SiteForge", category: "canvas-renderer")
 }
@@ -1095,6 +1126,7 @@ final class WorkspaceShellState: ObservableObject {
         }
     }
     @Published private(set) var previewState = LocalPreviewState()
+    @Published private(set) var formValidationPreviewState = LocalFormValidationPreviewState()
     let documentSession: DocumentSession
     let lifecycle: DocumentLifecycleController
     private var documentSessionObservation: AnyCancellable?
@@ -1180,6 +1212,7 @@ final class WorkspaceShellState: ObservableObject {
                       self.documentSession.document.revision == document.revision else {
                     return
                 }
+                self.formValidationPreviewState.invalidate(for: document)
                 self.synchronizeViewportDocumentBoundary(document)
             }
         }
@@ -1203,6 +1236,37 @@ final class WorkspaceShellState: ObservableObject {
         isPreviewPresented = false
         previewState.close()
         announcementPoster.post(previewState.status)
+    }
+
+    /// Runs local validation without creating a command. Values are accepted
+    /// only for this call and are neither copied into shell state nor logged.
+    @discardableResult
+    func validateSelectedFormLocally(values: [NodeID: FormVisitorValue] = [:], cancelled: Bool = false) -> Bool {
+        guard let form = selectedFormContainer, let pageID = effectiveSelectedPageID,
+              let plan = canvasRenderPlan else {
+            formValidationPreviewState.reject(.unavailableForm)
+            announcementPoster.post(formValidationPreviewState.status)
+            return false
+        }
+        let input = FormVisitorValueSnapshot(
+            documentID: documentSession.document.id, pageID: pageID, formID: form.id,
+            revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration, values: values
+        )
+        do {
+            let result = try LocalFormValidationEngine().validate(input, in: documentSession.document,
+                context: transformValidationContext, cancelled: cancelled)
+            formValidationPreviewState.adopt(result, expectedDocumentID: documentSession.document.id,
+                                              revision: documentSession.document.revision, formID: form.id)
+            announcementPoster.post(formValidationPreviewState.status)
+            return result.isValid
+        } catch let error as FormValidationError {
+            formValidationPreviewState.reject(error)
+        } catch {
+            formValidationPreviewState.reject(.stale)
+        }
+        announcementPoster.post(formValidationPreviewState.status)
+        return false
     }
 
     var canUndo: Bool { documentSession.canUndo }

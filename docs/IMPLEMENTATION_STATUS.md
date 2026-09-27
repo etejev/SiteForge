@@ -6,9 +6,10 @@ SF-AUTHORING-037 is IN PROGRESS. A pure local validation engine resolves the
 canonical Form field schema against a caller-owned ephemeral visitor snapshot:
 required/text/email/select/checkbox checks, stable form/field result identity,
 revision/scene/renderer rejection, and redacted failure categories. It has no
-document, history, package, autosave, recovery, or submission write path; its
-static-output indicator explicitly reports that submission is unavailable.
-Focused non-UI coverage is green (2/2). See
+document, history, package, autosave, recovery, or submission write path. The
+Form Inspector can adopt the current category-only result for an empty local
+draft; its static-output indicator explicitly reports that submission is
+unavailable. Focused non-UI coverage is green (3/3). See
 `docs/evidence/SF-AUTHORING-037-LOCAL-VALIDATION.md`.
 
 SF-AUTHORING-036 remains IN PROGRESS. Form is now an enabled canonical Elements

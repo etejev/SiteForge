@@ -2229,11 +2229,24 @@ private struct FormInspectorFieldsView: View {
         VStack(alignment: .leading, spacing: 9) {
             if let form {
                 Text("Form").font(.headline)
-                Text("Submission, destinations, validation rules, and visitor data are unavailable in this bounded editor slice.")
+                Text("Submission, destinations, and visitor data are unavailable in this bounded editor slice.")
                     .font(.caption).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("inspector.form.submission.unavailable")
                 Text("\(form.childIDs.count) child object\(form.childIDs.count == 1 ? "" : "s"). Add a Text child, then select it to configure a field.")
                     .font(.caption).foregroundStyle(.secondary)
+                Divider()
+                Text("Local validation").font(.subheadline.weight(.semibold))
+                Text(state.formValidationPreviewState.status)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.form.validation.status")
+                Button("Validate Empty Local Draft") { _ = state.validateSelectedFormLocally() }
+                    .accessibilityIdentifier("inspector.form.validation.empty")
+                if let result = state.formValidationPreviewState.snapshot,
+                   result.identity.formID == form.id {
+                    Text(result.isValid ? "All configured fields are valid." : "\(result.fields.filter { !$0.isValid }.count) configured field issue\(result.fields.filter { !$0.isValid }.count == 1 ? "" : "s").")
+                        .font(.caption).foregroundStyle(result.isValid ? Color.secondary : Color.orange)
+                        .accessibilityIdentifier("inspector.form.validation.result")
+                }
             } else if fields.isEmpty {
                 ContentUnavailableView("Select a Form Field", systemImage: "list.bullet.rectangle",
                     description: Text("Select a Text child of a Form to configure its field metadata."))
