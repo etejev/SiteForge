@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-055
+
+- Added Frame and Section content-padding and content-clipping authoring to
+  the existing native Design Inspector. Values remain typed, transactional,
+  undoable, persistent, and shared by structural layout, canvas clipping, and
+  closed static output. Malformed persisted content-box properties now fail
+  safely instead of becoming silent defaults.
+
 ## In progress — SF-AUTHORING-054
 
 - Connected the established native solid/linear-gradient authoring workflow to

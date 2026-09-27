@@ -843,6 +843,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(radiusToggle.isHittable); radiusToggle.click()
         let radius = reveal("inspector.design.cornerRadius")
         replaceStructuralLayoutField(radius, with: "18", in: application)
+        let padding = reveal("inspector.design.contentPadding")
+        XCTAssertTrue(padding.isEnabled)
+        replaceStructuralLayoutField(padding, with: "24", in: application)
+        let clipContent = reveal("inspector.design.clipContent")
+        XCTAssertTrue(clipContent.isHittable)
+        XCTAssertFalse(clipContent.label.isEmpty)
+        clipContent.click()
         attachWindowScreenshot(application, named: "SF-AUTHORING-014 border radius")
         let shadowToggle = reveal("inspector.design.shadowToggle")
         XCTAssertTrue(shadowToggle.isHittable); shadowToggle.click()
@@ -899,6 +906,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         for identifier in [
             "inspector.design.borderToggle",
             "inspector.design.cornerRadiusToggle",
+            "inspector.design.contentPaddingToggle",
+            "inspector.design.clipContent",
             "inspector.design.shadowToggle",
         ] {
             let control = reveal(identifier)

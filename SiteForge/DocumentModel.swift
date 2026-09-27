@@ -1437,6 +1437,9 @@ enum CanonicalBoxStyleNamespaceValidator {
         "shadow.color.red", "shadow.color.green", "shadow.color.blue", "shadow.color.alpha",
     ]
     private static let radiusKey = "radius.uniform"
+    private static let paddingKey = "padding.uniform"
+    private static let clipKey = "clip.content"
+    private static let contentBoxKinds: Set<NodeKind> = [.frame, .section]
 
     static func validate(_ node: DocumentNode) throws {
         let owned = node.properties.filter { $0.key.rawValue.hasPrefix(root) }
@@ -1444,7 +1447,7 @@ enum CanonicalBoxStyleNamespaceValidator {
         guard supportedKinds.contains(node.kind) else { throw ModelValidationError.invalidBoxStyleState }
         let suffixes = owned.map { String($0.key.rawValue.dropFirst(root.count)) }
         guard Set(suffixes).count == suffixes.count else { throw ModelValidationError.invalidBoxStyleState }
-        let allowed = borderKeys.union(shadowKeys).union([radiusKey])
+        let allowed = borderKeys.union(shadowKeys).union([radiusKey, paddingKey, clipKey])
         guard Set(suffixes).isSubset(of: allowed) else { throw ModelValidationError.invalidBoxStyleState }
         let values = Dictionary(uniqueKeysWithValues: owned.map { (String($0.key.rawValue.dropFirst(root.count)), $0.value) })
         if !borderKeys.isDisjoint(with: suffixes) {
@@ -1455,6 +1458,13 @@ enum CanonicalBoxStyleNamespaceValidator {
         }
         if let value = values[radiusKey] {
             guard case .number(let radius) = value, radius.isFinite, (0...10_000).contains(radius) else { throw ModelValidationError.invalidBoxStyleState }
+        }
+        if let value = values[paddingKey] {
+            guard contentBoxKinds.contains(node.kind), case .number(let padding) = value,
+                  padding.isFinite, (0...10_000).contains(padding) else { throw ModelValidationError.invalidBoxStyleState }
+        }
+        if let value = values[clipKey] {
+            guard contentBoxKinds.contains(node.kind), case .boolean = value else { throw ModelValidationError.invalidBoxStyleState }
         }
         if !shadowKeys.isDisjoint(with: suffixes) {
             guard shadowKeys.isSubset(of: suffixes) else { throw ModelValidationError.invalidBoxStyleState }

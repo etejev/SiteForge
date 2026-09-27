@@ -423,13 +423,16 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     /// present only for the supported static-output node kinds.
     let fillLayers: [CanonicalFillLayer]
     let opacity: Double?
+    /// Closed box appearance reaches static output only through this typed
+    /// immutable projection; no presentation string becomes CSS input.
+    let boxStyle: CanonicalBoxStyle?
 
     init(id: NodeID, sourceNodeID: NodeID, parentNodeID: NodeID? = nil, paintOrder: Int, frame: WorldRect,
          semanticElement: String, cssSelector: String, formField: InternalFormField?,
          control: InternalStaticControl? = nil, anchorID: String? = nil,
          textContent: String? = nil, typography: CanonicalTypography? = nil,
          image: InternalStaticImage? = nil, fillLayers: [CanonicalFillLayer] = [],
-         opacity: Double? = nil) {
+         opacity: Double? = nil, boxStyle: CanonicalBoxStyle? = nil) {
         self.id = id
         self.sourceNodeID = sourceNodeID
         self.parentNodeID = parentNodeID
@@ -445,6 +448,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
         self.image = image
         self.fillLayers = fillLayers
         self.opacity = opacity
+        self.boxStyle = boxStyle
     }
 }
 
@@ -560,7 +564,8 @@ enum InternalDocumentRenderTreeCompiler {
                 typography: node.kind == .text ? CanonicalTypography.resolved(for: node) : nil,
                 image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets),
                 fillLayers: staticFillLayers(for: node),
-                opacity: staticOpacity(for: node)
+                opacity: staticOpacity(for: node),
+                boxStyle: staticBoxStyle(for: node)
             )
         }
         return .init(documentID: documentID, revision: revision, pageID: page.id, nodes: nodes)
@@ -606,6 +611,12 @@ enum InternalDocumentRenderTreeCompiler {
               let value = node.insertionNumberProperty("style.opacity"),
               value.isFinite, (0...1).contains(value) else { return nil }
         return value
+    }
+
+    private static func staticBoxStyle(for node: DocumentNode) -> CanonicalBoxStyle? {
+        guard [.frame, .section].contains(node.kind),
+              DesignBoxStyleCommandRegistry.hasWellFormedContentBoxProperties(node) else { return nil }
+        return DesignBoxStyleCommandRegistry.resolvedStyle(for: node)
     }
 
     /// SF-0806/SF-1102/SF-1203 v1: resolve only typed, prevalidated targets
@@ -862,6 +873,39 @@ enum StaticFillLayerStyleOutputEmitter {
     }
 }
 
+/// SF-0506/SF-1204 bounded output projection. The declaration vocabulary is
+/// closed and values originate exclusively in the typed Frame/Section model.
+enum StaticBoxStyleOutputEmitter {
+    static func emit(nodes: [InternalRenderTreeNode]) -> String {
+        nodes.sorted { $0.id.description < $1.id.description }.compactMap { node in
+            guard node.id == node.sourceNodeID,
+                  node.cssSelector == CanonicalCSSRule.selector(for: node.id),
+                  let style = node.boxStyle, style.isValid else { return nil }
+            var declarations: [String] = []
+            if let border = style.border {
+                declarations.append("border: \(number(border.width))px \(border.style.rawValue) \(rgba(border.color));")
+            }
+            if let radius = style.cornerRadius { declarations.append("border-radius: \(number(radius))px;") }
+            if let padding = style.padding { declarations.append("padding: \(number(padding))px;") }
+            if style.clipsContent == true { declarations.append("overflow: hidden;") }
+            guard !declarations.isEmpty else { return nil }
+            return "\(node.cssSelector) { \(declarations.joined(separator: " ")) }"
+        }.joined(separator: "\n")
+    }
+
+    private static func rgba(_ color: CanonicalSolidColor) -> String {
+        "rgba(\(number(color.red * 255)), \(number(color.green * 255)), \(number(color.blue * 255)), \(number(color.alpha)))"
+    }
+
+    private static func number(_ value: Double) -> String {
+        let rounded = (value * 1_000).rounded() / 1_000
+        var output = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), rounded)
+        while output.contains(".") && output.last == "0" { output.removeLast() }
+        if output.last == "." { output.append("0") }
+        return output == "-0.0" ? "0.0" : output
+    }
+}
+
 /// SF-1203 static-output v1: a content-free semantic outline gives a static
 /// plan deterministic hierarchy provenance without changing markup structure,
 /// introducing arbitrary HTML, or creating a browser/runtime path.
@@ -992,7 +1036,8 @@ enum MultiPageStaticBuildPlanner {
         let typography = StaticTypographyOutputEmitter.emit(nodes: staticNodes)
         let images = StaticImageStyleOutputEmitter.emit(nodes: staticNodes)
         let fills = StaticFillLayerStyleOutputEmitter.emit(nodes: staticNodes)
-        let stylesheet = [layout.css, typography, images, fills].filter { !$0.isEmpty }.joined(separator: "\n")
+        let boxStyles = StaticBoxStyleOutputEmitter.emit(nodes: staticNodes)
+        let stylesheet = [layout.css, typography, images, fills, boxStyles].filter { !$0.isEmpty }.joined(separator: "\n")
         if !stylesheet.isEmpty {
             guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
             files.append(.init(path: "styles.css", contents: stylesheet))

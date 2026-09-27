@@ -71,10 +71,33 @@ struct CanonicalBoxStyle: Equatable, Sendable {
     let border: CanonicalBorder?
     let cornerRadius: Double?
     let shadow: CanonicalShadow?
+    /// Content padding is intentionally uniform in this bounded slice. `nil`
+    /// means the explicit default (zero), retaining omitted/defaulted/authored
+    /// provenance without introducing per-edge state.
+    let padding: Double?
+    /// `nil` resolves to visible overflow; explicit false remains authored so
+    /// reset can faithfully restore default behavior.
+    let clipsContent: Bool?
+
+    init(
+        border: CanonicalBorder?,
+        cornerRadius: Double?,
+        shadow: CanonicalShadow?,
+        padding: Double? = nil,
+        clipsContent: Bool? = nil
+    ) {
+        self.border = border
+        self.cornerRadius = cornerRadius
+        self.shadow = shadow
+        self.padding = padding
+        self.clipsContent = clipsContent
+    }
+
     var isValid: Bool {
         (border?.isValid ?? true)
             && (cornerRadius.map { $0.isFinite && (0...10_000).contains($0) } ?? true)
             && (shadow?.isValid ?? true)
+            && (padding.map { $0.isFinite && (0...10_000).contains($0) } ?? true)
     }
 }
 
@@ -88,6 +111,8 @@ enum DesignBoxStyleEdit: Sendable {
     case border(CanonicalBorder?)
     case cornerRadius(Double?)
     case shadow(CanonicalShadow?)
+    case padding(Double?)
+    case clipsContent(Bool?)
 }
 
 struct DesignBoxStyleCommand: Sendable {
@@ -104,7 +129,7 @@ enum DesignBoxStyleError: Error, LocalizedError, Equatable, Sendable {
         switch self {
         case .stale: "The border, radius, or shadow edit is stale; committed appearance is unchanged."
         case .cancelled: "The appearance draft was cancelled; committed appearance is unchanged."
-        case .invalidValue: "Enter a finite border, radius, or shadow value within the supported range."
+        case .invalidValue: "Enter a finite border, radius, padding, or shadow value within the supported range."
         case .unavailable(let reason): reason
         case .noApplicableTargets: "The selection has no object that supports border, radius, or shadow."
         case .noChanges: "The appearance already has that value."
@@ -115,6 +140,7 @@ enum DesignBoxStyleError: Error, LocalizedError, Equatable, Sendable {
 struct DesignBoxStyleCommandRegistry: Sendable {
     static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-0506-%03d", $0) })
     static let applicableKinds: Set<NodeKind> = [.frame, .section, .stack, .grid, .button]
+    static let contentBoxKinds: Set<NodeKind> = [.frame, .section]
     static let namespace = "style.box.v1."
 
     static func resolvedStyle(for node: DocumentNode) -> CanonicalBoxStyle? {
@@ -142,13 +168,42 @@ struct DesignBoxStyleCommandRegistry: Sendable {
             let result = CanonicalShadow(color: value, offsetX: x, offsetY: y, blur: blur, spread: spread)
             return result.isValid ? result : nil
         }()
-        return CanonicalBoxStyle(border: border, cornerRadius: radius, shadow: shadow)
+        let padding = number("padding.uniform").flatMap { $0.isFinite && (0...10_000).contains($0) ? $0 : nil }
+        let clipsContent: Bool? = node.insertionProperty(namespace + "clip.content").flatMap {
+            if case .boolean(let value) = $0.value { return value }
+            return nil
+        }
+        return CanonicalBoxStyle(border: border, cornerRadius: radius, shadow: shadow,
+                                 padding: padding, clipsContent: clipsContent)
+    }
+
+    /// Property decoding is intentionally strict at the mutation/output
+    /// boundary.  A malformed persisted content-box value is not quietly
+    /// treated as an omitted default, which would make a later edit destroy
+    /// the evidence needed for recovery.
+    static func hasWellFormedContentBoxProperties(_ node: DocumentNode) -> Bool {
+        guard contentBoxKinds.contains(node.kind) else { return true }
+        let contentKeys = [namespace + "padding.uniform", namespace + "clip.content"]
+        guard contentKeys.allSatisfy({ key in node.properties.filter { $0.key.rawValue == key }.count <= 1 }) else {
+            return false
+        }
+        if let property = node.insertionProperty(namespace + "padding.uniform") {
+            guard case .number(let value) = property.value,
+                  value.isFinite, (0...10_000).contains(value) else { return false }
+        }
+        if let property = node.insertionProperty(namespace + "clip.content") {
+            guard case .boolean = property.value else { return false }
+        }
+        return true
     }
 
     static func selectionValue(nodes: [DocumentNode]) -> DesignBoxStyleValue {
         guard !nodes.isEmpty else { return .unavailable("Select a Frame, Section, Stack, or Grid to edit border, radius, and shadow.") }
         let applicable = nodes.filter { applicableKinds.contains($0.kind) }
         guard !applicable.isEmpty else { return .unavailable("The selected objects do not support box appearance.") }
+        guard applicable.allSatisfy(hasWellFormedContentBoxProperties) else {
+            return .unavailable("A selected object has invalid persisted content-box data and cannot be edited safely.")
+        }
         let values = applicable.compactMap(resolvedStyle)
         guard let first = values.first, values.dropFirst().allSatisfy({ $0 == first }) else {
             return .mixed(applicableCount: applicable.count, skippedCount: nodes.count - applicable.count)
@@ -175,16 +230,30 @@ struct DesignBoxStyleCommandRegistry: Sendable {
             guard Self.applicableKinds.contains(node.kind), var style = Self.resolvedStyle(for: node) else {
                 skipped.append(id); reasons[id] = "This object kind does not support box appearance."; continue
             }
+            guard Self.hasWellFormedContentBoxProperties(node) else { throw DesignBoxStyleError.invalidValue }
+            guard Self.supports(command.edit, kind: node.kind) else {
+                skipped.append(id); reasons[id] = "This object kind does not support the selected box control."; continue
+            }
             switch command.edit {
             case .border(let value):
                 if let value, !value.isValid { throw DesignBoxStyleError.invalidValue }
-                style = .init(border: value, cornerRadius: style.cornerRadius, shadow: style.shadow)
+                style = .init(border: value, cornerRadius: style.cornerRadius, shadow: style.shadow,
+                              padding: style.padding, clipsContent: style.clipsContent)
             case .cornerRadius(let value):
                 if let value, (!value.isFinite || !(0...10_000).contains(value)) { throw DesignBoxStyleError.invalidValue }
-                style = .init(border: style.border, cornerRadius: value, shadow: style.shadow)
+                style = .init(border: style.border, cornerRadius: value, shadow: style.shadow,
+                              padding: style.padding, clipsContent: style.clipsContent)
             case .shadow(let value):
                 if let value, !value.isValid { throw DesignBoxStyleError.invalidValue }
-                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: value)
+                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: value,
+                              padding: style.padding, clipsContent: style.clipsContent)
+            case .padding(let value):
+                if let value, (!value.isFinite || !(0...10_000).contains(value)) { throw DesignBoxStyleError.invalidValue }
+                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: style.shadow,
+                              padding: value, clipsContent: style.clipsContent)
+            case .clipsContent(let value):
+                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: style.shadow,
+                              padding: style.padding, clipsContent: value)
             }
             guard style.isValid else { throw DesignBoxStyleError.invalidValue }
             applicable.append(id)
@@ -205,7 +274,10 @@ struct DesignBoxStyleCommandRegistry: Sendable {
         guard !applicable.isEmpty else { throw DesignBoxStyleError.noApplicableTargets }
         guard !changes.isEmpty else { throw DesignBoxStyleError.noChanges }
         let batch: DocumentCommand = .batch(changes)
-        guard CommandRegistry().availability(for: batch, in: document).isEnabled else { throw DesignBoxStyleError.stale }
+        let availability = CommandRegistry().availability(for: batch, in: document)
+        guard availability.isEnabled else {
+            throw DesignBoxStyleError.unavailable(availability.disabledReason ?? "The document no longer accepts this appearance change.")
+        }
         return .init(applicableNodeIDs: applicable, skippedNodeIDs: skipped, skippedReasons: reasons, documentCommand: batch)
     }
 
@@ -217,6 +289,8 @@ struct DesignBoxStyleCommandRegistry: Sendable {
             set(border.color, prefix: namespace + "border.color", into: &result)
         }
         if let radius = style.cornerRadius { result[namespace + "radius.uniform"] = .number(radius) }
+        if let padding = style.padding { result[namespace + "padding.uniform"] = .number(padding) }
+        if let clipsContent = style.clipsContent { result[namespace + "clip.content"] = .boolean(clipsContent) }
         if let shadow = style.shadow {
             result[namespace + "shadow.offsetX"] = .number(shadow.offsetX)
             result[namespace + "shadow.offsetY"] = .number(shadow.offsetY)
@@ -230,6 +304,13 @@ struct DesignBoxStyleCommandRegistry: Sendable {
     private static func set(_ color: CanonicalSolidColor, prefix: String, into values: inout [String: PropertyValue]) {
         values[prefix + ".red"] = .number(color.red); values[prefix + ".green"] = .number(color.green)
         values[prefix + ".blue"] = .number(color.blue); values[prefix + ".alpha"] = .number(color.alpha)
+    }
+
+    static func supports(_ edit: DesignBoxStyleEdit, kind: NodeKind) -> Bool {
+        switch edit {
+        case .padding, .clipsContent: contentBoxKinds.contains(kind)
+        case .border, .cornerRadius, .shadow: applicableKinds.contains(kind)
+        }
     }
 }
 

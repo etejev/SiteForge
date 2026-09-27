@@ -1098,22 +1098,28 @@ extension DocumentPage {
             guard let parentGeometry = result[parent.id] else { continue }
             let children = parent.childIDs.filter(visibleNodeIDs.contains).compactMap { nodesByID[$0] }
             switch parent.kind {
-            case .section, .stack, .form:
-                let padding = ResponsiveContainerLayoutResolver.value(for: .padding, node: parent, breakpoint: breakpoint)
+            case .section, .stack, .form, .frame:
+                // SF-0506 v1 adds a content inset to Frame and Section only.
+                // It is an authored override of the existing Section layout
+                // padding; other structural containers retain their own typed
+                // layout resolver and an unstyled Frame remains absolute.
+                let boxPadding = DesignBoxStyleCommandRegistry.resolvedStyle(for: parent)?.padding
+                guard parent.kind != .frame || boxPadding != nil else { continue }
+                let padding = boxPadding ?? ResponsiveContainerLayoutResolver.value(for: .padding, node: parent, breakpoint: breakpoint)
                     .flatMap { if case .number(let value) = $0.0 { value } else { nil } }
                     ?? (parent.kind == .section ? 48 : 24)
                 let gap: Double
-                if parent.kind == .section || parent.kind == .form {
+                if parent.kind == .section || parent.kind == .form || parent.kind == .frame {
                     gap = 0
                 } else {
                     gap = ResponsiveContainerLayoutResolver.value(for: .gap, node: parent, breakpoint: breakpoint)
                         .flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 24
                 }
-                let axis = parent.kind == .section || parent.kind == .form
+                let axis = parent.kind == .section || parent.kind == .form || parent.kind == .frame
                     ? ContainerLayoutAxis.vertical
                     : (ResponsiveContainerLayoutResolver.value(for: .axis, node: parent, breakpoint: breakpoint)
                         .flatMap { if case .axis(let value) = $0.0 { value } else { nil } } ?? .vertical)
-                let alignment = parent.kind == .section || parent.kind == .form
+                let alignment = parent.kind == .section || parent.kind == .form || parent.kind == .frame
                     ? ContainerLayoutAlignment.start
                     : (ResponsiveContainerLayoutResolver.value(for: .alignment, node: parent, breakpoint: breakpoint)
                         .flatMap { if case .alignment(let value) = $0.0 { value } else { nil } } ?? .start)
@@ -1195,7 +1201,7 @@ extension DocumentPage {
                     )
                     result[child.id] = geometry
                 }
-            case .frame, .text, .image, .button, .link, .component: break
+            case .text, .image, .button, .link, .component: break
             }
         }
         return result

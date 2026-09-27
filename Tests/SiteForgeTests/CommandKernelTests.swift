@@ -856,6 +856,29 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertTrue(stylesheet.contains("\(CanonicalCSSRule.selector(for: sectionID)) { background-image: linear-gradient(90.0deg, rgba(255.0, 0.0, 0.0, 1.0) 0.0%, rgba(0.0, 0.0, 255.0, 0.5) 100.0%); }"))
     }
 
+    // SF-0506-001...005, SF-1204-003 — only typed Frame/Section box values
+    // enter the closed static declaration vocabulary.
+    func testMultiPageStaticBuildPlanProjectsClosedFrameBoxStyle() throws {
+        let pageID = PageID(), frameID = NodeID()
+        let properties: [NodeProperty] = [
+            .init(key: .init(rawValue: "style.box.v1.border.width"), value: .number(2), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.border.style"), value: .string("dashed"), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.border.color.red"), value: .number(0.1), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.border.color.green"), value: .number(0.2), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.border.color.blue"), value: .number(0.3), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.border.color.alpha"), value: .number(1), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.radius.uniform"), value: .number(12), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.padding.uniform"), value: .number(24), origin: .authored),
+            .init(key: .init(rawValue: "style.box.v1.clip.content"), value: .boolean(true), origin: .authored),
+        ]
+        let frame = DocumentNode(id: frameID, kind: .frame, name: "Frame", parent: .page(pageID), properties: properties)
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [frameID], nodes: [frame])
+        let plan = try MultiPageStaticBuildPlanner.plan(document: .init(pages: [page]))
+        let stylesheet = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(stylesheet.contains("\(CanonicalCSSRule.selector(for: frameID)) { border: 2.0px dashed rgba(25.5, 51.0, 76.5, 1.0); border-radius: 12.0px; padding: 24.0px; overflow: hidden; }"), stylesheet)
+    }
+
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {
         let document = BlankProjectDefaults.document()
         let registry = PageCommandRegistry()

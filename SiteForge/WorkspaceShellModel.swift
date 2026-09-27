@@ -809,6 +809,31 @@ actor WorkspaceScenePreparationWorker {
         let orderedActiveNodes = activePage?.canonicalDepthFirstNodes() ?? []
         let resolvedGeometry = activePage?.resolvedStructuralGeometry(breakpoint: request.breakpoint) ?? [:]
         let effectivelyVisible = activePage?.effectiveVisibleNodeIDs(breakpoint: request.breakpoint) ?? []
+        let activeNodesByID = Dictionary(uniqueKeysWithValues: (activePage?.nodes ?? []).map { ($0.id, $0) })
+        func intersection(_ lhs: WorldRect, _ rhs: WorldRect) -> WorldRect? {
+            let minX = max(lhs.minX, rhs.minX), minY = max(lhs.minY, rhs.minY)
+            let maxX = min(lhs.maxX, rhs.maxX), maxY = min(lhs.maxY, rhs.maxY)
+            guard maxX > minX, maxY > minY else { return nil }
+            return .init(origin: .init(x: minX, y: minY), size: .init(width: maxX - minX, height: maxY - minY))
+        }
+        // A content clip belongs to the eligible ancestor, never to its own
+        // border/shadow. Every descendant receives the same resolved clip for
+        // raster, hit testing, accessibility and selection projection.
+        func inheritedContentClip(for node: DocumentNode) -> WorldRect? {
+            var clip = request.viewport.contentBounds
+            var current = node.parent
+            while case .node(let parentID) = current {
+                guard let parent = activeNodesByID[parentID] else { return nil }
+                if DesignBoxStyleCommandRegistry.contentBoxKinds.contains(parent.kind),
+                   DesignBoxStyleCommandRegistry.resolvedStyle(for: parent)?.clipsContent == true,
+                   let parentFrame = resolvedGeometry[parentID]?.frame {
+                    guard let next = intersection(clip, parentFrame) else { return nil }
+                    clip = next
+                }
+                current = parent.parent
+            }
+            return clip
+        }
         var renderObjects: [CanvasRenderObject] = []
         renderObjects.reserveCapacity(orderedActiveNodes.count)
 
@@ -818,6 +843,7 @@ actor WorkspaceScenePreparationWorker {
             // Structural roots intentionally have no authored geometry and
             // never receive a fabricated fallback rectangle.
             guard let authoredGeometry = node.insertionGeometry else { continue }
+            guard let inheritedClip = inheritedContentClip(for: node) else { continue }
             let frame = (resolvedGeometry[node.id] ?? authoredGeometry).frame
             let style: CanvasPaintStyle = switch node.kind {
             case .frame:
@@ -924,7 +950,7 @@ actor WorkspaceScenePreparationWorker {
             renderObjects.append(CanvasRenderObject(
                 id: node.id,
                 frame: frame,
-                clipRect: request.viewport.contentBounds,
+                clipRect: inheritedClip,
                 paintOrder: renderObjects.count,
                 style: style,
                 isVisible: !node.selectionBooleanProperty("hidden"),
@@ -978,9 +1004,9 @@ actor WorkspaceScenePreparationWorker {
                     kind: node.kind,
                     parentName: canonicalParentID.flatMap { names[$0] },
                     frame: object?.frame ?? resolvedGeometry[node.id]?.frame ?? request.viewport.contentBounds,
-                    clipRect: nil,
+                    clipRect: object?.clipRect,
                     paintOrder: object?.paintOrder ?? fallbackOrder,
-                    isVisible: effectivelyVisible.contains(node.id),
+                    isVisible: effectivelyVisible.contains(node.id) && object != nil,
                     isLocked: node.selectionBooleanProperty("locked"),
                     isAvailable: object != nil || page.nodes.count > 1,
                     participatesInCanvasTraversal: object != nil
@@ -2471,6 +2497,13 @@ final class WorkspaceShellState: ObservableObject {
 
     func designInspectorBoxStyleValue() -> DesignBoxStyleValue {
         DesignBoxStyleCommandRegistry.selectionValue(nodes: selectedCanonicalNodes)
+    }
+
+    /// Padding and content clipping are a deliberately bounded Frame/Section
+    /// contract. Existing Stack/Grid/Button box appearance remains available
+    /// through the same registry without being silently reclassified.
+    var hasContentBoxSelection: Bool {
+        selectedCanonicalNodes.contains { DesignBoxStyleCommandRegistry.contentBoxKinds.contains($0.kind) }
     }
 
     func typographyInspectorValue() -> TypographyInspectorValue {

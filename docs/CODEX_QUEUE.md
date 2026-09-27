@@ -12,7 +12,7 @@ persistence/history/accessibility/cancellation, focused evidence, and factual
 documentation. Run focused affected tests before each local commit; do not run
 the full gate or hosted CI per slice.
 
-`SF-AUTHORING-054` is Development Prompt **1 of 10**. After Prompt 10, run one
+`SF-AUTHORING-055` is Development Prompt **2 of 10**. After Prompt 10, run one
 authoritative `./sf verify`, repair failures, commit, push main, and monitor
 hosted CI until green. Debug-only owner add-ons do not increment this cadence.
 Until that checkpoint, commits stay local and no external GitHub/release action
@@ -24,6 +24,21 @@ actually evidenced.
 None.
 
 ## IN PROGRESS
+
+- [ ] `SF-AUTHORING-055` Native spacing, border, corner-radius, and content-clipping authoring foundation (P1; Development Prompt 2 of 10).
+  - Requirements: bounded implementation/evidence for `SF-0506-001`–`008`,
+    `SF-0701-001`–`005`, `SF-0702-001`–`005`, `SF-0305-001`–`005`,
+    `SF-0306-001`–`005`, `SF-0407-003`–`005`, and `SF-1204-003`–`004`.
+  - Plan: extend the existing typed `style.box.v1` transaction and strict
+    document validator with uniform Frame/Section content padding and content
+    clipping; share it with resolved structural geometry, immutable canvas
+    clipping, native Design controls, and closed static output projection.
+  - Exclusions: independent/logical sides, margin, per-corner radius,
+    corner smoothing, layered/inner shadows, arbitrary raw CSS, browser
+    runtime, and release acceptance.
+  - Evidence: focused model, static-output, and actual native Inspector
+    selectors passed 3/3 on 2026-09-27; see
+    `docs/evidence/SF-AUTHORING-055-BOX-STYLE-FOUNDATION.md`.
 
 - [ ] `SF-AUTHORING-054` Native solid-fill and bounded linear-gradient authoring foundation (P1; Development Prompt 1 of 10).
   - Requirements: bounded implementation/evidence for `SF-0508-001`–`005`,

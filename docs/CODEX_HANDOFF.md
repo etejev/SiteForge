@@ -5,11 +5,30 @@
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-054` is Development Prompt 1 of 10; Prompt 10
+its local commit. `SF-AUTHORING-055` is Development Prompt 2 of 10; Prompt 10
 triggers the next full verification and hosted checkpoint. Until then do not
 push or run broad gates. Normative modules remain Partial unless fully proven.
 
 ## Current native fill-authoring checkpoint
+
+## Current native box-style checkpoint
+
+SF-AUTHORING-055 extends the existing `style.box.v1` model only for Frame and
+Section with uniform content padding and explicit content clipping. The central
+registry remains the sole canonical write path; the document validator rejects
+invalid or duplicate content-box keys. Structural child geometry uses authored
+padding, the canvas applies ancestor clips consistently, and the static
+projection emits only typed `padding` and `overflow: hidden` declarations.
+
+Focused evidence passed on 2026-09-27:
+
+- `TransformModelTests.testDesignBoxStyleContentPaddingAndClipAreTypedReversibleAndScoped`
+- `CommandKernelTests.testMultiPageStaticBuildPlanProjectsClosedFrameBoxStyle`
+- `SiteForgeLaunchTests.testDesignInspectorBorderRadiusShadowUndoRedoAccessibilityJourney`
+
+The next dependency-ready slice is the earliest queue item after this local
+checkpoint. Do not add per-edge padding, margin, per-corner radius, or raw CSS
+without a separately bounded requirement and evidence.
 
 SF-AUTHORING-054 reuses the existing versioned fill-layer model, native Design
 Inspector, transactional registry, renderer compositor, package/recovery

@@ -2717,12 +2717,14 @@ private struct DesignInspectorFieldsView: View {
     @FocusState private var opacityFocused: Bool
     @FocusState private var borderWidthFocused: Bool
     @FocusState private var radiusFocused: Bool
+    @FocusState private var paddingFocused: Bool
     @FocusState private var shadowFocused: Bool
     @FocusState private var typographyFocusedField: TypographyDraftField?
     @State private var hexDraft = ""
     @State private var opacityDraft = ""
     @State private var borderWidthDraft = ""
     @State private var radiusDraft = ""
+    @State private var paddingDraft = ""
     @State private var shadowDraft = ""
     @State private var fontFamilyDraft = ""
     @State private var fontSizeDraft = ""
@@ -2862,11 +2864,12 @@ private struct DesignInspectorFieldsView: View {
         case .single(let style, _):
             borderWidthDraft = style.border.map { String(format: "%.1f", $0.width) } ?? ""
             radiusDraft = style.cornerRadius.map { String(format: "%.1f", $0) } ?? ""
+            paddingDraft = style.padding.map { String(format: "%.1f", $0) } ?? ""
             if let shadow = style.shadow {
                 shadowDraft = String(format: "%.0f, %.0f, %.0f, %.0f", shadow.offsetX, shadow.offsetY, shadow.blur, shadow.spread)
             } else { shadowDraft = "" }
         case .mixed, .unavailable:
-            borderWidthDraft = ""; radiusDraft = ""; shadowDraft = ""
+            borderWidthDraft = ""; radiusDraft = ""; paddingDraft = ""; shadowDraft = ""
         }
         switch state.typographyInspectorValue() {
         case .single(let typography, _):
@@ -3308,6 +3311,29 @@ private struct DesignInspectorFieldsView: View {
                 resetDrafts()
             }.disabled(!enabled).accessibilityIdentifier("inspector.design.cornerRadiusToggle")
         }
+        if state.hasContentBoxSelection {
+            HStack(spacing: 7) {
+                Text("Padding").frame(width: 52, alignment: .leading)
+                TextField("Uniform padding", text: $paddingDraft)
+                    .textFieldStyle(.roundedBorder).focused($paddingFocused).disabled(!enabled)
+                    .onSubmit { commitPadding() }
+                    .onChange(of: paddingFocused) { old, current in if old && !current { commitPadding(provenance: .focusLoss) } }
+                    .accessibilityLabel("Uniform content padding in points")
+                    .accessibilityIdentifier("inspector.design.contentPadding")
+                Button(style?.padding == nil ? "Add" : "Reset") {
+                    _ = state.commitDesignBoxStyle(.padding(style?.padding == nil ? 24 : nil), operation: "content padding", provenance: .picker)
+                    resetDrafts()
+                }.disabled(!enabled).accessibilityIdentifier("inspector.design.contentPaddingToggle")
+            }
+            Toggle("Clip content", isOn: Binding(
+                get: { style?.clipsContent ?? false },
+                set: { _ = state.commitDesignBoxStyle(.clipsContent($0), operation: "clip content", provenance: .accessibility) }
+            ))
+            .toggleStyle(.checkbox)
+            .disabled(!enabled)
+            .accessibilityHint("Clip child content to the selected Frame or Section bounds.")
+            .accessibilityIdentifier("inspector.design.clipContent")
+        }
         HStack(spacing: 7) {
             NativeDesignColorWell(
                 color: style?.shadow?.color ?? CanonicalSolidColor(red: 0, green: 0, blue: 0, alpha: 0.25),
@@ -3350,6 +3376,16 @@ private struct DesignInspectorFieldsView: View {
     private func commitRadius(provenance: DesignInspectorProvenance = .keyboard) {
         guard let radius = Double(radiusDraft), radius.isFinite, (0...10_000).contains(radius) else { message = DesignBoxStyleError.invalidValue.localizedDescription; return }
         guard state.commitDesignBoxStyle(.cornerRadius(radius), operation: "corner radius", provenance: provenance) else { message = state.lastDesignInspectorAnnouncement; return }
+        resetDrafts()
+    }
+
+    private func commitPadding(provenance: DesignInspectorProvenance = .keyboard) {
+        guard let padding = Double(paddingDraft), padding.isFinite, (0...10_000).contains(padding) else {
+            message = DesignBoxStyleError.invalidValue.localizedDescription; return
+        }
+        guard state.commitDesignBoxStyle(.padding(padding), operation: "content padding", provenance: provenance) else {
+            message = state.lastDesignInspectorAnnouncement; return
+        }
         resetDrafts()
     }
 
@@ -4303,9 +4339,29 @@ private struct LocalPreviewObject: View {
             }
         }
         .opacity(object.opacity)
-        .overlay(RoundedRectangle(cornerRadius: object.cornerRadius).stroke(Color.black.opacity(0.12), lineWidth: 1))
+        .overlay {
+            if let border = object.border, border.rgba.count == 4 {
+                RoundedRectangle(cornerRadius: object.cornerRadius).stroke(
+                    Color(red: border.rgba[0], green: border.rgba[1], blue: border.rgba[2], opacity: border.rgba[3]),
+                    style: StrokeStyle(
+                        lineWidth: border.width,
+                        dash: previewBorderDash(border.style)
+                    )
+                )
+            } else {
+                RoundedRectangle(cornerRadius: object.cornerRadius).stroke(Color.black.opacity(0.12), lineWidth: 1)
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(object.accessibilityLabel)
+    }
+
+    private func previewBorderDash(_ style: CanvasBorderStyle) -> [CGFloat] {
+        switch style {
+        case .solid: []
+        case .dashed: [6, 4]
+        case .dotted: [1, 3]
+        }
     }
 
     @ViewBuilder private var previewFill: some View {

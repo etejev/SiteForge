@@ -225,7 +225,17 @@ browser-layout path. Evidence is in
 `docs/evidence/SF-AUTHORING-053-STATIC-BOX-MODEL.md`; local test execution is
 paused by owner instruction.
 
-SF-AUTHORING-054 is Development Prompt 1 of the restored ten-prompt cadence.
+SF-AUTHORING-055 is Development Prompt 2 of the restored ten-prompt cadence.
+It extends the existing validated `style.box.v1` representation for Frame and
+Section only: uniform content padding and explicit content clipping. The
+identity-gated atomic box-style registry, native Design Inspector controls,
+resolved structural/canvas geometry, and closed static output projection share
+the same typed values. Invalid persisted content-box values are unavailable
+rather than silently treated as defaults. Focused model, static-output, and
+native Inspector selectors passed 3/3 on 2026-09-27; see
+`docs/evidence/SF-AUTHORING-055-BOX-STYLE-FOUNDATION.md`. Per-side/logical
+controls, margin, per-corner radius, corner smoothing, layered shadows,
+browser output, and release acceptance remain deferred.
 It reuses the verified native canonical fill-layer, Inspector, transaction,
 renderer, persistence, recovery, and accessibility path while adding a closed
 static Frame/Section projection for solid and linear-gradient layers plus

@@ -1444,6 +1444,65 @@ final class TransformModelTests: XCTestCase {
         }
     }
 
+    // SF-0506-001...005/008 — Frame/Section content padding and clipping
+    // share the existing box-style transaction; unsupported structural kinds
+    // cannot inherit a primary Frame's content-box value.
+    func testDesignBoxStyleContentPaddingAndClipAreTypedReversibleAndScoped() throws {
+        var fixture = makeFixture(selectedIDs: [NodeID]())
+        let frameIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.nodeID })
+        fixture.document.pages[0].nodes[frameIndex].kind = .frame
+        let registry = DesignBoxStyleCommandRegistry()
+        func command(_ document: CanonicalDocument, ids: [NodeID], edit: DesignBoxStyleEdit, cancelled: Bool = false) -> DesignBoxStyleCommand {
+            .init(identity: .init(documentID: document.id, pageID: fixture.pageID, revision: document.revision,
+                                  sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                  orderedNodeIDs: ids, edit: edit, provenance: .automation, cancelled: cancelled)
+        }
+        let session = DocumentSession(document: fixture.document)
+        let padding = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .padding(32)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )
+        XCTAssertEqual(padding.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertTrue(padding.skippedNodeIDs.isEmpty)
+        XCTAssertFalse(DesignBoxStyleCommandRegistry.supports(.padding(12), kind: .stack))
+        XCTAssertFalse(DesignBoxStyleCommandRegistry.supports(.clipsContent(true), kind: .grid))
+        _ = try session.execute(padding.documentCommand)
+        let clipped = try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .clipsContent(true)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )
+        _ = try session.execute(clipped.documentCommand)
+        let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.padding, 32)
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.clipsContent, true)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.undo()
+        let afterUndo = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+        XCTAssertNil(DesignBoxStyleCommandRegistry.resolvedStyle(for: afterUndo)?.clipsContent)
+        try session.redo()
+        let afterRedo = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: afterRedo)?.clipsContent, true)
+        XCTAssertThrowsError(try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .padding(.infinity)),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
+        XCTAssertThrowsError(try registry.prepare(
+            command(session.document, ids: [fixture.nodeID], edit: .clipsContent(false), cancelled: true),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
+        )) { XCTAssertEqual($0 as? DesignBoxStyleError, .cancelled) }
+        var malformed = session.document
+        let propertyIndex = try XCTUnwrap(malformed.pages[0].nodes[frameIndex].properties.firstIndex {
+            $0.key.rawValue == "style.box.v1.padding.uniform"
+        })
+        malformed.pages[0].nodes[frameIndex].properties[propertyIndex].value = .string("not-a-number")
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.selectionValue(nodes: [malformed.pages[0].nodes[frameIndex]]),
+                       .unavailable("A selected object has invalid persisted content-box data and cannot be edited safely."))
+        XCTAssertThrowsError(try registry.prepare(
+            command(malformed, ids: [fixture.nodeID], edit: .padding(12)), in: malformed,
+            context: fixture.context(selectedIDs: [fixture.nodeID])
+        )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
+    }
+
     func testTypographyRegistryValidatesMixesResetsPersistsAndUndoRedo() throws {
         var fixture = makeFixture(selectedIDs: [NodeID]())
         fixture.document.pages[0].nodes[1].kind = .text

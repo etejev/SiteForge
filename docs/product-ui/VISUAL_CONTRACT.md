@@ -223,6 +223,8 @@ the document unchanged.
   repositioned into the visible intersection, then switches to a compact
   readable form only when necessary. Its complete NodeID-derived context is
   still available through the real accessibility label and help. Editor Frame
+  and Section content clips apply only to descendant authored content; their
+  own border, radius, and selection geometry remain truthful and unobscured.
   names choose contrasting foregrounds against their resolved surface; none
   of this chrome is authored or preview/export-facing content.
 - **Initial pasteboard policy:** a fresh or newly adopted document centers its
@@ -305,7 +307,8 @@ Form, and plain Text enabled), a bounded canvas/renderer/overlay system, selecti
 insertion, transforms, guides,
 bounded plain-text editing, local drag/reorder, bounded editable Design
 solid/linear-gradient fill controls, bounded editable Layout fixed-geometry
-controls, bounded uniform border/radius/single-shadow Design controls, the
+controls, bounded uniform border/radius/single-shadow plus Frame/Section
+content-padding and clipping Design controls, the
 read-only Accessibility summary, native unavailable
 Content/Interactions destinations, native materials, and the central
 command/history/persistence boundaries documented in
