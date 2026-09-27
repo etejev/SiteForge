@@ -892,7 +892,8 @@ actor WorkspaceScenePreparationWorker {
                     )
                 }
             }
-            let boxStyle = DesignBoxStyleCommandRegistry.resolvedStyle(for: node)
+            let boxStyle = LocalColorTokenResolver.resolvedBoxStyle(for: node,
+                tokens: request.document.colorTokens)
             let border = boxStyle?.border.map {
                 CanvasAuthoredBorder(
                     rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha],
@@ -2570,7 +2571,21 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func designInspectorBoxStyleValue() -> DesignBoxStyleValue {
-        DesignBoxStyleCommandRegistry.selectionValue(nodes: selectedCanonicalNodes)
+        let nodes = selectedCanonicalNodes
+        let base = DesignBoxStyleCommandRegistry.selectionValue(nodes: nodes)
+        guard !nodes.isEmpty else { return base }
+        let applicable = nodes.filter { DesignBoxStyleCommandRegistry.applicableKinds.contains($0.kind) }
+        let values = applicable.compactMap { LocalColorTokenResolver.resolvedBoxStyle(for: $0,
+            tokens: documentSession.document.colorTokens) }
+        guard let first = values.first else { return base }
+        guard values.dropFirst().allSatisfy({ $0 == first }) else {
+            return .mixed(applicableCount: applicable.count, skippedCount: nodes.count - applicable.count)
+        }
+        let origin: PropertyOrigin = applicable.contains { node in
+            node.properties.contains { $0.key.rawValue.hasPrefix(DesignBoxStyleCommandRegistry.namespace)
+                || $0.key.rawValue.hasPrefix(LocalColorTokenBinding.prefix) }
+        } ? .authored : .defaulted
+        return .single(first, origin)
     }
 
     /// Padding and content clipping are a deliberately bounded Frame/Section
@@ -2802,16 +2817,37 @@ final class WorkspaceShellState: ObservableObject {
     var localColorTokens: [LocalColorToken] { documentSession.document.colorTokens }
     var localColorTokenRevision: UInt64 { documentSession.document.revision }
 
-    func selectedColorTokenStatus() -> String? {
+    func selectedColorTokenStatus(target: LocalColorTarget = .fill) -> String? {
         guard let pageID = effectiveSelectedPageID,
               let page = documentSession.document.pages.first(where: { $0.id == pageID }),
               let id = selectionState.orderedIDs.first,
               let node = page.nodes.first(where: { $0.id == id }) else { return nil }
-        return LocalColorTokenResolver.status(for: node, in: documentSession.document)
+        return LocalColorTokenResolver.status(for: node, in: documentSession.document, target: target)
+    }
+
+    func colorTokenTargetStatus(_ target: LocalColorTarget) -> String {
+        let nodes = selectedCanonicalNodes
+        guard !nodes.isEmpty else { return "Select an object to bind a color token." }
+        let applicable = nodes.filter { node in
+            guard !node.selectionBooleanProperty("locked"), !node.selectionBooleanProperty("hidden") else { return false }
+            switch target {
+            case .fill: return [.frame, .section, .stack, .grid].contains(node.kind)
+                && DesignInspectorCommandRegistry.resolvedLayers(for: node).contains { $0.kind == .solid && $0.isEnabled }
+            case .border: return DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.border != nil
+            case .outerShadow: return DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.shadow != nil
+            }
+        }
+        if applicable.isEmpty { return "No applicable \(target.rawValue) color; add the authored appearance first." }
+        let skipped = nodes.count - applicable.count
+        return "\(applicable.count) applicable" + (skipped == 0 ? "" : "; \(skipped) incompatible or unavailable")
     }
 
     var hasBoundColorTokenSelection: Bool {
         selectedCanonicalNodes.contains { LocalColorTokenBinding.id(for: $0) != nil }
+    }
+
+    func hasBoundColorTokenSelection(target: LocalColorTarget) -> Bool {
+        selectedCanonicalNodes.contains { LocalColorTokenBinding.id(for: $0, target: target) != nil }
     }
 
     @discardableResult

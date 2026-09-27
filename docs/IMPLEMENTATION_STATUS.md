@@ -2,6 +2,17 @@
 
 Last updated: 2026-09-27.
 
+SF-AUTHORING-059 extends the bounded local Color Token path to authored Border
+and Outer Shadow colors (`SF-0509`, `SF-0506`, `SF-0508` Partial). Schema ten
+migrates schema-nine fill-only references to a target-keyed property namespace
+without changing TokenIDs, PropertyIDs, literal fallbacks, or unrelated style.
+The central token registry handles bind/unbind and in-use deletion, and shared
+resolution feeds the native canvas and closed Frame/Section static output.
+The native Design Inspector exposes a target picker and bound/literal state.
+Focused results and remaining limits are in
+`docs/evidence/SF-AUTHORING-059-APPEARANCE-TOKENS.md`; the prompt-six full gate
+has not run.
+
 SF-AUTHORING-058 has a focused base-only fixed-sizing foundation for Frame and
 Image (`SF-0505-001`–`008`, Partial). Versioned typed min/max and aspect
 properties preserve NodeProperty IDs and provenance; strict document validation

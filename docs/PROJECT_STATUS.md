@@ -2,11 +2,11 @@
 
 Last updated: 2026-09-27.
 
-Current local development prompt: SF-AUTHORING-058 (5 of 10), base-only
-Frame/Image min/max and aspect sizing. Canonical, Inspector, geometry, static
-output and focused evidence are recorded in
-`docs/evidence/SF-AUTHORING-058-SIZING-CONSTRAINTS.md`. The full gate and hosted
-checkpoint are reserved for prompt 10; SF-0505 remains Partial. Earlier
+Current local development prompt: SF-AUTHORING-059 (6 of 10), local Color Token
+binding across Fill, Border, and Outer Shadow. Canonical migration, Inspector,
+renderer/static, and focused evidence are recorded in
+`docs/evidence/SF-AUTHORING-059-APPEARANCE-TOKENS.md`. The full gate and hosted
+checkpoint are reserved for prompt 10; SF-0509 remains Partial. Earlier
 historical status entries below are retained for their original evidence and
 are not the current work queue.
 

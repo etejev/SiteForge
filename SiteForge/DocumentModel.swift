@@ -163,10 +163,43 @@ struct LocalColorToken: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+enum LocalColorTarget: String, CaseIterable, Sendable { case fill, border, outerShadow }
+
 enum LocalColorTokenBinding {
-    static let key = "style.fill.token.v1.id"
-    static func id(for node: DocumentNode) -> ColorTokenID? {
-        node.insertionStringProperty(key).flatMap(ColorTokenID.init(uuidString:))
+    static let legacyKey = "style.fill.token.v1.id"
+    // Retain the historical symbol for schema-nine fixtures only.
+    static let key = legacyKey
+    static let prefix = "style.color.token.v2."
+    static func key(for target: LocalColorTarget) -> String { prefix + target.rawValue + ".id" }
+    static func id(for node: DocumentNode, target: LocalColorTarget = .fill) -> ColorTokenID? {
+        let current = node.insertionStringProperty(key(for: target)).flatMap(ColorTokenID.init(uuidString:))
+        return current ?? (target == .fill ? node.insertionStringProperty(legacyKey).flatMap(ColorTokenID.init(uuidString:)) : nil)
+    }
+
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix(prefix) || $0.key.rawValue == legacyKey }
+        guard !owned.isEmpty else { return }
+        guard !owned.contains(where: { $0.key.rawValue == legacyKey }),
+              Set(owned.map(\.key)).count == owned.count,
+              Set(owned.map { $0.key.rawValue }).isSubset(of: Set(LocalColorTarget.allCases.map { key(for: $0) })) else {
+            throw ModelValidationError.invalidColorToken
+        }
+        for property in owned {
+            guard let target = LocalColorTarget.allCases.first(where: { key(for: $0) == property.key.rawValue }),
+                  case .string(let raw) = property.value, ColorTokenID(uuidString: raw) != nil else {
+                throw ModelValidationError.invalidColorToken
+            }
+            switch target {
+            case .fill:
+                guard [.frame, .section, .stack, .grid].contains(node.kind) else { throw ModelValidationError.invalidColorToken }
+            case .border:
+                guard [.frame, .section, .stack, .grid, .button].contains(node.kind),
+                      node.insertionProperty("style.box.v1.border.width") != nil else { throw ModelValidationError.invalidColorToken }
+            case .outerShadow:
+                guard [.frame, .section, .stack, .grid, .button].contains(node.kind),
+                      node.insertionProperty("style.box.v1.shadow.offsetX") != nil else { throw ModelValidationError.invalidColorToken }
+            }
+        }
     }
 }
 
@@ -1961,12 +1994,7 @@ extension CanonicalDocument {
                 assetIDs: assetIDs,
                 checkpoint: checkpoint
             )
-            for node in page.nodes where node.properties.contains(where: { $0.key.rawValue == LocalColorTokenBinding.key }) {
-                guard [.frame, .section, .stack, .grid].contains(node.kind),
-                      node.properties.filter({ $0.key.rawValue == LocalColorTokenBinding.key }).count == 1,
-                      LocalColorTokenBinding.id(for: node) != nil else { throw ModelValidationError.invalidColorToken }
-                // Missing references remain valid so repair can preserve intent.
-            }
+            for node in page.nodes { try LocalColorTokenBinding.validate(node) }
         }
         guard guides.count <= 10_000 else { throw ModelValidationError.guideLimitExceeded }
         guard Set(guides.map(\.id)).count == guides.count else {
@@ -2207,9 +2235,10 @@ enum DocumentSerializationError: Error, Equatable, LocalizedError {
 }
 
 enum DocumentSerializer {
-    // Schema 9 adds the project-local color-token collection.
+    // Schema 10 migrates schema-nine fill-only token references to the
+    // target-keyed binding namespace without changing property identity.
     // Historical schemas cannot acquire newer closed namespaces by permissive decoding.
-    static let currentSchemaVersion = 9
+    static let currentSchemaVersion = 10
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -2511,7 +2540,7 @@ enum DocumentSerializer {
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
 
-        let document: CanonicalDocument
+        var document: CanonicalDocument
         switch header.schemaVersion {
         case 1:
             do {
@@ -2553,6 +2582,29 @@ enum DocumentSerializer {
                 if header.schemaVersion == 5,
                    document.pages.contains(where: { $0.nodes.contains { [.button, .link].contains($0.kind) } }) {
                     throw DocumentSerializationError.malformedInput
+                }
+            } catch { throw DocumentSerializationError.malformedInput }
+        case 9:
+            do {
+                let strictDecoder = JSONDecoder()
+                strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                document = try strictDecoder.decode(CurrentEnvelope.self, from: data).document
+                for pageIndex in document.pages.indices {
+                    for nodeIndex in document.pages[pageIndex].nodes.indices {
+                        let node = document.pages[pageIndex].nodes[nodeIndex]
+                        guard let legacy = node.insertionProperty(LocalColorTokenBinding.legacyKey) else { continue }
+                        guard [.frame, .section, .stack, .grid].contains(node.kind),
+                              case .string(let raw) = legacy.value,
+                              ColorTokenID(uuidString: raw) != nil,
+                              node.properties.filter({ $0.key.rawValue == LocalColorTokenBinding.legacyKey }).count == 1,
+                              node.insertionProperty(LocalColorTokenBinding.key(for: .fill)) == nil else {
+                            throw DocumentSerializationError.malformedInput
+                        }
+                        document.pages[pageIndex].nodes[nodeIndex].properties.removeAll { $0.id == legacy.id }
+                        document.pages[pageIndex].nodes[nodeIndex].properties.append(.init(
+                            id: legacy.id, key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)),
+                            value: legacy.value, origin: legacy.origin))
+                    }
                 }
             } catch { throw DocumentSerializationError.malformedInput }
         case currentSchemaVersion:

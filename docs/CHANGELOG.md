@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-059
+
+- Local project colors can now bind an existing authored Border or Outer Shadow
+  as well as a solid Fill. The native Design Inspector offers a target chooser;
+  token recoloring updates all bound appearances while each target retains its
+  literal fallback. Schema-nine fill bindings migrate to the target-keyed
+  schema-ten representation without changing their property IDs.
+
 ## In progress — SF-AUTHORING-058
 
 - Added native Layout Inspector min/max width and height plus aspect-lock

@@ -4,6 +4,141 @@ import XCTest
 
 @MainActor
 final class TransformModelTests: XCTestCase {
+    func testLocalColorTokenBorderShadowBindingHistoryAndStaticResolution() throws {
+        var fixture = makeFixture()
+        let literalBorder = CanonicalSolidColor(red: 0.2, green: 0.3, blue: 0.4, alpha: 1)
+        let literalShadow = CanonicalSolidColor(red: 0, green: 0, blue: 0, alpha: 0.3)
+        let tokenColor = CanonicalSolidColor(red: 0.8, green: 0.1, blue: 0.2, alpha: 1)
+        let token = LocalColorToken(name: "Accent", color: tokenColor)
+        fixture.document.colorTokens = [token]
+        let box = CanonicalBoxStyle(border: .init(color: literalBorder, width: 2, style: .solid),
+            cornerRadius: 8, shadow: .init(color: literalShadow, offsetX: 2, offsetY: 4,
+                blur: 8, spread: 0))
+        fixture.document.pages[0].nodes[1].properties += DesignBoxStyleCommandRegistry.propertyValues(for: box)
+            .sorted { $0.key < $1.key }.map { .init(key: .init(rawValue: $0.key), value: $0.value, origin: .authored) }
+        let session = DocumentSession(document: fixture.document)
+        func node() -> DocumentNode { session.document.pages[0].nodes[1] }
+        func edit(_ value: LocalColorTokenEdit) throws {
+            let command = try LocalColorTokenCommandRegistry.prepare(value, in: session.document,
+                expectedDocumentID: session.document.id, expectedRevision: session.document.revision,
+                pageID: fixture.pageID, selectedNodeIDs: [fixture.nodeID])
+            try session.execute(command)
+        }
+        try edit(.bindTarget(token.id, .border))
+        try edit(.bindTarget(token.id, .outerShadow))
+        XCTAssertEqual(LocalColorTokenResolver.resolvedBoxStyle(for: node(), tokens: session.document.colorTokens)?.border?.color, tokenColor)
+        XCTAssertEqual(LocalColorTokenResolver.resolvedBoxStyle(for: node(), tokens: session.document.colorTokens)?.shadow?.color, tokenColor)
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: node())?.border?.color, literalBorder)
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: node())?.shadow?.color, literalShadow)
+        let blockedRemoval = DesignBoxStyleCommand(identity: .init(documentID: session.document.id,
+            pageID: fixture.pageID, revision: session.document.revision,
+            sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .border(nil),
+            provenance: .automation, cancelled: false)
+        XCTAssertThrowsError(try DesignBoxStyleCommandRegistry().prepare(blockedRemoval,
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])))
+        let staticPlan = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        let css = try XCTUnwrap(staticPlan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("border: 2.0px solid rgba(204.0, 25.5, 51.0, 1.0)"), css)
+        XCTAssertTrue(css.contains("box-shadow: 2.0px 4.0px 8.0px 0.0px rgba(204.0, 25.5, 51.0, 1.0)"), css)
+        XCTAssertThrowsError(try edit(.delete(token.id)))
+        let borderID = try XCTUnwrap(node().insertionProperty(LocalColorTokenBinding.key(for: .border))?.id)
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(session.document))
+        XCTAssertEqual(reopened, session.document)
+        try edit(.recolor(token.id, .init(red: 0.1, green: 0.7, blue: 0.3, alpha: 0.6)))
+        XCTAssertEqual(LocalColorTokenResolver.resolvedBoxStyle(for: node(), tokens: session.document.colorTokens)?.border?.color.green, 0.7)
+        try session.undo()
+        XCTAssertEqual(LocalColorTokenResolver.resolvedBoxStyle(for: node(), tokens: session.document.colorTokens)?.border?.color, tokenColor)
+        try session.redo()
+        try edit(.unbindTarget(.border))
+        XCTAssertNil(LocalColorTokenBinding.id(for: node(), target: .border))
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: node())?.border?.color.green, 0.7)
+        try session.undo()
+        XCTAssertEqual(node().insertionProperty(LocalColorTokenBinding.key(for: .border))?.id, borderID)
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: node())?.border?.color, literalBorder)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    func testLocalColorTokenSchemaNineFillBindingMigratesToTargetKeyedIdentity() throws {
+        var fixture = makeFixture()
+        let token = LocalColorToken(name: "Accent", color: .legacySurface)
+        fixture.document.colorTokens = [token]
+        fixture.document.pages[0].nodes[1].properties.append(.init(
+            key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted))
+        let binding = NodeProperty(key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)),
+            value: .string(token.id.description), origin: .authored)
+        fixture.document.pages[0].nodes[1].properties.append(binding)
+        let current = try DocumentSerializer.encode(fixture.document)
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: current) as? [String: Any])
+        var body = try XCTUnwrap(envelope["document"] as? [String: Any])
+        var pages = try XCTUnwrap(body["pages"] as? [[String: Any]])
+        var nodes = try XCTUnwrap(pages[0]["nodes"] as? [[String: Any]])
+        let nodeIndex = try XCTUnwrap(nodes.firstIndex { ($0["id"] as? String) == fixture.nodeID.description })
+        var properties = try XCTUnwrap(nodes[nodeIndex]["properties"] as? [[String: Any]])
+        let propertyIndex = try XCTUnwrap(properties.firstIndex { ($0["key"] as? String) == LocalColorTokenBinding.key(for: .fill) })
+        properties[propertyIndex]["key"] = LocalColorTokenBinding.legacyKey
+        nodes[nodeIndex]["properties"] = properties
+        pages[0]["nodes"] = nodes; body["pages"] = pages; envelope["document"] = body
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: envelope)))
+        envelope["schemaVersion"] = 9
+        let migrated = try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: envelope))
+        let migratedNode = try XCTUnwrap(migrated.pages[0].nodes.first { $0.id == fixture.nodeID })
+        XCTAssertEqual(migratedNode.insertionProperty(LocalColorTokenBinding.key(for: .fill))?.id, binding.id)
+        XCTAssertNil(migratedNode.insertionProperty(LocalColorTokenBinding.legacyKey))
+        XCTAssertEqual(LocalColorTokenBinding.id(for: migratedNode), token.id)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(migrated)), migrated)
+    }
+
+    func testLocalColorTokenTargetValidationFallbackMixedAndNeutralFailures() throws {
+        var fixture = makeFixture()
+        let literal = CanonicalSolidColor(red: 0.1, green: 0.2, blue: 0.3, alpha: 1)
+        let token = LocalColorToken(name: "Accent", color: .legacySurface)
+        fixture.document.colorTokens = [token]
+        let box = CanonicalBoxStyle(border: .init(color: literal, width: 2, style: .solid),
+            cornerRadius: nil, shadow: nil)
+        fixture.document.pages[0].nodes[1].properties += DesignBoxStyleCommandRegistry.propertyValues(for: box)
+            .sorted { $0.key < $1.key }.map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        fixture.document.pages[0].nodes[2].kind = .text
+        let selected = [fixture.nodeID, fixture.secondNodeID]
+        let prepared = try LocalColorTokenCommandRegistry.prepare(.bindTarget(token.id, .border),
+            in: fixture.document, expectedDocumentID: fixture.document.id,
+            expectedRevision: fixture.document.revision, pageID: fixture.pageID,
+            selectedNodeIDs: selected)
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(prepared)
+        let bound = session.document.pages[0].nodes[1]
+        XCTAssertEqual(LocalColorTokenBinding.id(for: bound, target: .border), token.id)
+        XCTAssertEqual(session.document.pages[0].nodes[2], fixture.document.pages[0].nodes[2])
+        var missing = session.document
+        missing.colorTokens = []
+        XCTAssertNoThrow(try missing.validate())
+        XCTAssertEqual(LocalColorTokenResolver.resolvedBoxStyle(for: missing.pages[0].nodes[1], tokens: [])?.border?.color, literal)
+        let original = try DocumentSerializer.encode(session.document)
+        XCTAssertThrowsError(try LocalColorTokenCommandRegistry.prepare(.bindTarget(token.id, .outerShadow),
+            in: session.document, expectedDocumentID: session.document.id,
+            expectedRevision: session.document.revision, pageID: fixture.pageID,
+            selectedNodeIDs: [fixture.nodeID]))
+        XCTAssertThrowsError(try LocalColorTokenCommandRegistry.prepare(.unbindTarget(.border),
+            in: session.document, expectedDocumentID: session.document.id,
+            expectedRevision: session.document.revision + 1, pageID: fixture.pageID,
+            selectedNodeIDs: [fixture.nodeID]))
+        XCTAssertThrowsError(try LocalColorTokenCommandRegistry.prepare(.unbindTarget(.border),
+            in: session.document, expectedDocumentID: session.document.id,
+            expectedRevision: session.document.revision, pageID: fixture.pageID,
+            selectedNodeIDs: [fixture.nodeID], cancelled: true))
+        XCTAssertEqual(try DocumentSerializer.encode(session.document), original)
+        var invalid = session.document
+        invalid.pages[0].nodes[1].properties.append(.init(
+            key: .init(rawValue: LocalColorTokenBinding.key(for: .outerShadow)),
+            value: .string(token.id.description)))
+        XCTAssertThrowsError(try invalid.validate())
+        invalid = session.document
+        invalid.pages[0].nodes[2].properties.append(.init(
+            key: .init(rawValue: LocalColorTokenBinding.key(for: .border)),
+            value: .string(token.id.description)))
+        XCTAssertThrowsError(try invalid.validate())
+    }
+
     func testSizingNamespaceRejectsMalformedUnsupportedAndContradictoryProperties() throws {
         let fixture = makeFixture()
         func expectInvalid(_ properties: [NodeProperty], kind: NodeKind = .frame,

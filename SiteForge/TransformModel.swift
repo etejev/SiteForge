@@ -215,7 +215,14 @@ struct DesignBoxStyleCommandRegistry: Sendable {
             switch command.edit {
             case .border(let value):
                 if let value, !value.isValid { throw DesignBoxStyleError.invalidValue }
-                style = .init(border: value, cornerRadius: style.cornerRadius, shadow: style.shadow, shadowEnabled: style.shadowEnabled,
+                let border: CanonicalBorder?
+                if LocalColorTokenBinding.id(for: node, target: .border) != nil {
+                    guard let value, let existing = style.border else {
+                        throw DesignBoxStyleError.unavailable("Unbind the border token before removing its border.")
+                    }
+                    border = .init(color: existing.color, width: value.width, style: value.style)
+                } else { border = value }
+                style = .init(border: border, cornerRadius: style.cornerRadius, shadow: style.shadow, shadowEnabled: style.shadowEnabled,
                               padding: style.padding, clipsContent: style.clipsContent)
             case .cornerRadius(let value):
                 if let value, (!value.isFinite || !(0...10_000).contains(value)) { throw DesignBoxStyleError.invalidValue }
@@ -223,7 +230,15 @@ struct DesignBoxStyleCommandRegistry: Sendable {
                               padding: style.padding, clipsContent: style.clipsContent)
             case .shadow(let value):
                 if let value, !value.isValid { throw DesignBoxStyleError.invalidValue }
-                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: value,
+                let shadow: CanonicalShadow?
+                if LocalColorTokenBinding.id(for: node, target: .outerShadow) != nil {
+                    guard let value, let existing = style.shadow else {
+                        throw DesignBoxStyleError.unavailable("Unbind the outer-shadow token before removing its shadow.")
+                    }
+                    shadow = .init(color: existing.color, offsetX: value.offsetX,
+                        offsetY: value.offsetY, blur: value.blur, spread: value.spread)
+                } else { shadow = value }
+                style = .init(border: style.border, cornerRadius: style.cornerRadius, shadow: shadow,
                               shadowEnabled: value == nil ? nil : style.shadowEnabled,
                               padding: style.padding, clipsContent: style.clipsContent)
             case .shadowEnabled(let value):
@@ -1411,6 +1426,24 @@ struct DesignInspectorCommandRegistry: Sendable {
 /// remains the explicit literal fallback, so a missing token never destroys
 /// authored color intent and unbinding can preserve the resolved appearance.
 enum LocalColorTokenResolver {
+    static func resolvedBoxStyle(for node: DocumentNode, tokens: [LocalColorToken]) -> CanonicalBoxStyle? {
+        guard let style = DesignBoxStyleCommandRegistry.resolvedStyle(for: node) else { return nil }
+        func color(_ target: LocalColorTarget, fallback: CanonicalSolidColor) -> CanonicalSolidColor {
+            guard let id = LocalColorTokenBinding.id(for: node, target: target),
+                  let token = tokens.first(where: { $0.id == id }) else { return fallback }
+            return token.color
+        }
+        let border = style.border.map {
+            CanonicalBorder(color: color(.border, fallback: $0.color), width: $0.width, style: $0.style)
+        }
+        let shadow = style.shadow.map {
+            CanonicalShadow(color: color(.outerShadow, fallback: $0.color), offsetX: $0.offsetX,
+                offsetY: $0.offsetY, blur: $0.blur, spread: $0.spread)
+        }
+        return CanonicalBoxStyle(border: border, cornerRadius: style.cornerRadius, shadow: shadow,
+            shadowEnabled: style.shadowEnabled, padding: style.padding, clipsContent: style.clipsContent)
+    }
+
     static func fillValue(nodes: [DocumentNode], in document: CanonicalDocument) -> DesignInspectorValue {
         let values = nodes.map { node -> (CanonicalSolidColor?, PropertyOrigin) in
             let literal = DesignInspectorCommandRegistry.resolvedFill(for: node)
@@ -1441,12 +1474,13 @@ enum LocalColorTokenResolver {
         return result
     }
 
-    static func status(for node: DocumentNode, in document: CanonicalDocument) -> String? {
-        guard let id = LocalColorTokenBinding.id(for: node) else { return nil }
+    static func status(for node: DocumentNode, in document: CanonicalDocument,
+                       target: LocalColorTarget = .fill) -> String? {
+        guard let id = LocalColorTokenBinding.id(for: node, target: target) else { return nil }
         guard let token = document.colorTokens.first(where: { $0.id == id }) else {
             return "Missing color token · literal fallback retained"
         }
-        return "Token: \(token.name) / \(token.color.hexadecimalRGBA)"
+        return "\(target.rawValue) token: \(token.name) / \(token.color.hexadecimalRGBA)"
     }
 }
 
@@ -1458,6 +1492,8 @@ enum LocalColorTokenEdit: Sendable {
     case delete(ColorTokenID)
     case bind(ColorTokenID)
     case unbind
+    case bindTarget(ColorTokenID, LocalColorTarget)
+    case unbindTarget(LocalColorTarget)
 }
 
 enum LocalColorTokenCommandError: Error, LocalizedError {
@@ -1507,38 +1543,72 @@ struct LocalColorTokenCommandRegistry {
             tokens[index].color = color
         case .delete(let id):
             guard tokens.contains(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
-            let uses = document.pages.flatMap(\.nodes).filter { LocalColorTokenBinding.id(for: $0) == id }.count
+            let uses = document.pages.flatMap(\.nodes).reduce(0) { count, node in
+                count + LocalColorTarget.allCases.filter { LocalColorTokenBinding.id(for: node, target: $0) == id }.count
+            }
             guard uses == 0 else { throw LocalColorTokenCommandError.inUse(uses) }
             tokens.removeAll { $0.id == id }
         case .bind(let id):
             guard tokens.contains(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
-            return try bindingCommands(document: document, pageID: pageID, ids: selectedNodeIDs, tokenID: id)
+            return try bindingCommands(document: document, pageID: pageID, ids: selectedNodeIDs, tokenID: id, target: .fill)
         case .unbind:
-            return try bindingCommands(document: document, pageID: pageID, ids: selectedNodeIDs, tokenID: nil)
+            return try bindingCommands(document: document, pageID: pageID, ids: selectedNodeIDs, tokenID: nil, target: .fill)
+        case .bindTarget(let id, let target):
+            guard tokens.contains(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
+            return try bindingCommands(document: document, pageID: pageID, ids: selectedNodeIDs, tokenID: id, target: target)
+        case .unbindTarget(let target):
+            return try bindingCommands(document: document, pageID: pageID, ids: selectedNodeIDs, tokenID: nil, target: target)
         }
         guard tokens != document.colorTokens else { throw LocalColorTokenCommandError.unchanged }
         return .setColorTokens(.init(tokens: tokens))
     }
 
-    private static func bindingCommands(document: CanonicalDocument, pageID: PageID?, ids: [NodeID], tokenID: ColorTokenID?) throws -> DocumentCommand {
+    private static func bindingCommands(document: CanonicalDocument, pageID: PageID?, ids: [NodeID],
+                                        tokenID: ColorTokenID?, target: LocalColorTarget) throws -> DocumentCommand {
         guard let pageID, let page = document.pages.first(where: { $0.id == pageID }),
               !ids.isEmpty, Set(ids).count == ids.count else { throw LocalColorTokenCommandError.stale }
         var commands: [DocumentCommand] = []
+        var applicableCount = 0
         for id in ids {
             guard let node = page.nodes.first(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
-            guard [.frame, .section, .stack, .grid].contains(node.kind),
-                  !node.selectionBooleanProperty("hidden"), !node.selectionBooleanProperty("locked"),
-                  DesignInspectorCommandRegistry.resolvedLayers(for: node).contains(where: { $0.kind == .solid && $0.isEnabled }) else {
-                throw LocalColorTokenCommandError.unavailable("Select an unlocked visible object with a solid fill.")
+            guard !node.selectionBooleanProperty("hidden"), !node.selectionBooleanProperty("locked") else {
+                throw LocalColorTokenCommandError.unavailable("A selected object is hidden or locked.")
             }
-            let old = node.insertionProperty(LocalColorTokenBinding.key)
+            let style = DesignBoxStyleCommandRegistry.resolvedStyle(for: node)
+            let supported: Bool = switch target {
+            case .fill: [.frame, .section, .stack, .grid].contains(node.kind)
+                && DesignInspectorCommandRegistry.resolvedLayers(for: node).contains(where: { $0.kind == .solid && $0.isEnabled })
+            case .border: style?.border != nil
+            case .outerShadow: style?.shadow != nil
+            }
+            guard supported else { continue }
+            applicableCount += 1
+            let bindingKey = LocalColorTokenBinding.key(for: target)
+            let old = node.insertionProperty(bindingKey)
             if let tokenID {
-                guard LocalColorTokenBinding.id(for: node) != tokenID else { continue }
+                guard LocalColorTokenBinding.id(for: node, target: target) != tokenID else { continue }
                 commands.append(.setProperty(.init(pageID: pageID, nodeID: id, property: .init(
-                    id: old?.id ?? PropertyID(), key: .init(rawValue: LocalColorTokenBinding.key),
+                    id: old?.id ?? PropertyID(), key: .init(rawValue: bindingKey),
                     value: .string(tokenID.description), origin: .authored))))
             } else if let old {
-                if let resolved = LocalColorTokenResolver.resolvedLayers(for: node, in: document).last(where: { $0.kind == .solid && $0.isEnabled }),
+                if target != .fill {
+                    let literal = target == .border ? style?.border?.color : style?.shadow?.color
+                    let resolved = LocalColorTokenResolver.resolvedBoxStyle(for: node, tokens: document.colorTokens)
+                    let color = target == .border ? resolved?.border?.color : resolved?.shadow?.color
+                    if let literal, let color, literal != color {
+                        let prefix = DesignBoxStyleCommandRegistry.namespace
+                            + (target == .border ? "border.color." : "shadow.color.")
+                        for (channel, number) in [("red", color.red), ("green", color.green),
+                                                  ("blue", color.blue), ("alpha", color.alpha)] {
+                            let previous = node.insertionProperty(prefix + channel)
+                            guard let previous else { throw LocalColorTokenCommandError.stale }
+                            commands.append(.setProperty(.init(pageID: pageID, nodeID: id,
+                                property: .init(id: previous.id, key: previous.key,
+                                    value: .number(number), origin: .authored))))
+                        }
+                    }
+                }
+                if target == .fill, let resolved = LocalColorTokenResolver.resolvedLayers(for: node, in: document).last(where: { $0.kind == .solid && $0.isEnabled }),
                    let color = resolved.solidColor,
                    let original = DesignInspectorCommandRegistry.resolvedLayers(for: node).last(where: { $0.kind == .solid && $0.isEnabled }),
                    original.solidColor != color {
@@ -1565,6 +1635,9 @@ struct LocalColorTokenCommandRegistry {
                 }
                 commands.append(.removeProperty(.init(pageID: pageID, nodeID: id, propertyID: old.id)))
             }
+        }
+        guard applicableCount > 0 else {
+            throw LocalColorTokenCommandError.unavailable("The selection has no applicable \(target.rawValue) color.")
         }
         guard !commands.isEmpty else { throw LocalColorTokenCommandError.unchanged }
         return .batch(commands)

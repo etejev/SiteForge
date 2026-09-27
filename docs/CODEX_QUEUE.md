@@ -12,7 +12,7 @@ persistence/history/accessibility/cancellation, focused evidence, and factual
 documentation. Run focused affected tests before each local commit; do not run
 the full gate or hosted CI per slice.
 
-`SF-AUTHORING-058` is Development Prompt **5 of 10** once its focused slice is committed. After Prompt 10, run one
+`SF-AUTHORING-059` is Development Prompt **6 of 10** once its focused slice is committed. After Prompt 10, run one
 authoritative `./sf verify`, repair failures, commit, push main, and monitor
 hosted CI until green. Debug-only owner add-ons do not increment this cadence.
 Until that checkpoint, commits stay local and no external GitHub/release action
@@ -24,6 +24,12 @@ actually evidenced.
 None.
 
 ## IN PROGRESS
+
+- [ ] `SF-AUTHORING-059` Local color-token appearance bindings v1 (P1; Development Prompt 6 of 10).
+  - Requirements: bounded `SF-0509-001`–`008`, `SF-0506-001`–`008`, `SF-0508-001`–`008`, with applicable `SF-0305`/`SF-0306`, `SF-0701`/`SF-0702`, and `SF-1204` integration.
+  - Plan: migrate the existing fill-only binding into one typed target-keyed property namespace; extend the central token transaction and resolver to authored Border and Outer Shadow color while retaining each literal fallback; expose a compact accessible native target chooser and bind/unbind route; verify model/history/migration, renderer/Preview/static parity, and an actual-app Inspector journey.
+  - Focused checkpoint: target-keyed schema-ten bindings, reversible Border/Outer Shadow edits, native target chooser, and shared canvas/Preview/closed-static resolution are implemented. Four exact model selectors (including existing Fill compatibility) and two actual-app selectors passed; three original-resolution Border/Shadow captures were visually reviewed. The tenth-prompt full gate has not run. Evidence: `docs/evidence/SF-AUTHORING-059-APPEARANCE-TOKENS.md`.
+  - Exclusions: text/gradient/image/opacity bindings, token aliases or modes, remote libraries, arbitrary CSS, publishing, and release acceptance.
 
 - [ ] `SF-AUTHORING-058` Native sizing constraints and aspect-ratio foundation v1 (P1; Development Prompt 5 of 10).
   - Requirements: bounded `SF-0505-001`–`008`, with fixed-geometry `SF-0403`, responsive base/cascade `SF-0601`/`SF-0602`, renderer `SF-0701`/`SF-0702`, and closed static `SF-1204` integration.

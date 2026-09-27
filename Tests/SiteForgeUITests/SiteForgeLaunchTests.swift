@@ -959,6 +959,51 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-057 unbound literal fill")
     }
 
+    func testLocalColorTokenBorderAndOuterShadowInspectorJourney() throws {
+        let application = launchWorkspace()
+        application.buttons["canvas.empty.insert.frame"].click()
+        let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
+        application.buttons["inspector.tab.design"].click()
+        let inspector = application.scrollViews["inspector.selection.scroll"]
+        func reveal(_ identifier: String) -> XCUIElement {
+            let element = application.descendants(matching: .any)[identifier].firstMatch
+            for _ in 0..<18 where !element.isHittable {
+                inspector.scroll(byDeltaX: 0, deltaY: element.frame.maxY > inspector.frame.maxY ? -100 : 100)
+            }
+            return element
+        }
+        reveal("inspector.design.borderToggle").click()
+        reveal("inspector.design.shadowToggle").click()
+        reveal("inspector.tokens.new").click()
+        let name = reveal("inspector.tokens.name")
+        name.click(); name.typeKey("a", modifierFlags: .command); name.typeText("Accent")
+        let color = reveal("inspector.tokens.color")
+        color.click(); color.typeKey("a", modifierFlags: .command); color.typeText("#CC1933FF")
+        reveal("inspector.tokens.apply").click()
+        let row = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "inspector.tokens.row.")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); reveal(row.identifier).click()
+        let target = reveal("inspector.tokens.target")
+        XCTAssertTrue(target.isHittable)
+        target.click(); application.menuItems["Border"].click()
+        XCTAssertTrue(waitForValue(reveal("inspector.tokens.targetStatus"), containing: "1 applicable"))
+        reveal("inspector.tokens.bind").click()
+        XCTAssertTrue(waitForValue(reveal("inspector.tokens.bindingStatus"), containing: "Accent"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-059 border token bound")
+        target.click(); application.menuItems["Outer Shadow"].click()
+        reveal("inspector.tokens.bind").click()
+        XCTAssertTrue(waitForValue(reveal("inspector.tokens.bindingStatus"), containing: "Accent"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-059 shadow token bound")
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertFalse(application.descendants(matching: .any)["inspector.tokens.bindingStatus"].exists)
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(reveal("inspector.tokens.bindingStatus"), containing: "Accent"))
+        reveal("inspector.tokens.unbind").click()
+        XCTAssertFalse(application.descendants(matching: .any)["inspector.tokens.bindingStatus"].exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-059 shadow literal retained")
+    }
+
     // SF-0506-006/008 — the shipping Design controls remain readable and
     // scroll-reachable at the supported practical minimum; no hidden test
     // control substitutes for the native Inspector.

@@ -5,11 +5,22 @@
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-058` is Development Prompt 5 of 10; Prompt 10
+its local commit. `SF-AUTHORING-059` is Development Prompt 6 of 10; Prompt 10
 triggers the next full verification and hosted checkpoint. Until then do not
 push or run broad gates. Normative modules remain Partial unless fully proven.
 
-## Current sizing checkpoint
+## Current appearance-token checkpoint
+
+SF-AUTHORING-059 migrates schema-nine fill-only token bindings into a
+target-keyed schema-ten namespace. The same ColorTokenID collection and
+literal-backed transaction path now resolve authored Border and Outer Shadow
+colors for the canvas and closed Frame/Section static output. The native Design
+Inspector target chooser binds and unbinds each target. See
+`docs/evidence/SF-AUTHORING-059-APPEARANCE-TOKENS.md`; no full gate or push is
+permitted before Prompt 10. Do not claim themes, aliases, arbitrary style
+bindings, or full SF-0509 acceptance.
+
+## Prior sizing checkpoint
 
 SF-AUTHORING-058 adds strict base-only Frame/Image min/max and aspect
 properties under `layout.sizing.v1.*`. Its central command adjusts fixed

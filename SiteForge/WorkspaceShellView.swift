@@ -2739,6 +2739,7 @@ private struct DesignInspectorFieldsView: View {
     @State private var tokenNameDraft = ""
     @State private var tokenColorDraft = ""
     @State private var editingTokenID: ColorTokenID?
+    @State private var tokenTarget: LocalColorTarget = .fill
     @State private var creatingToken = false
     @State private var tokenDraftRevision: UInt64 = 0
 
@@ -2861,6 +2862,20 @@ private struct DesignInspectorFieldsView: View {
             }
             .accessibilityIdentifier("inspector.tokens.new")
         }
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Appearance color").font(.caption).foregroundStyle(.secondary)
+            Picker("Appearance color", selection: $tokenTarget) {
+                Text("Fill").tag(LocalColorTarget.fill)
+                Text("Border").tag(LocalColorTarget.border)
+                Text("Outer Shadow").tag(LocalColorTarget.outerShadow)
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("inspector.tokens.target")
+        }
+        Text(state.colorTokenTargetStatus(tokenTarget))
+            .font(.caption2).foregroundStyle(.secondary)
+            .accessibilityIdentifier("inspector.tokens.targetStatus")
         if state.localColorTokens.isEmpty {
             Text("No project color tokens. Create one to reuse a solid fill.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -2908,19 +2923,21 @@ private struct DesignInspectorFieldsView: View {
         }
         if let id = editingTokenID {
             HStack {
-                Button("Apply to Solid Fill") {
-                    _ = state.commitLocalColorToken(.bind(id), expectedRevision: state.localColorTokenRevision)
+                Button("Bind Token") {
+                    _ = state.commitLocalColorToken(.bindTarget(id, tokenTarget), expectedRevision: state.localColorTokenRevision)
                 }
-                .disabled(isUnavailable(state.designInspectorFillValue()))
+                .disabled(state.colorTokenTargetStatus(tokenTarget).hasPrefix("No applicable") || state.selectionState.isEmpty)
+                .accessibilityLabel("Bind token to \(tokenTarget.rawValue) color")
                 .accessibilityIdentifier("inspector.tokens.bind")
                 Button("Unbind") {
-                    _ = state.commitLocalColorToken(.unbind, expectedRevision: state.localColorTokenRevision)
+                    _ = state.commitLocalColorToken(.unbindTarget(tokenTarget), expectedRevision: state.localColorTokenRevision)
                 }
-                .disabled(state.selectedColorTokenStatus() == nil)
+                .disabled(state.selectedColorTokenStatus(target: tokenTarget) == nil)
+                .accessibilityLabel("Unbind \(tokenTarget.rawValue) color token")
                 .accessibilityIdentifier("inspector.tokens.unbind")
             }
         }
-        if let status = state.selectedColorTokenStatus() {
+        if let status = state.selectedColorTokenStatus(target: tokenTarget) {
             Text(status).font(.caption2).foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.tokens.bindingStatus")
         }
@@ -3382,9 +3399,10 @@ private struct DesignInspectorFieldsView: View {
         HStack(spacing: 7) {
             NativeDesignColorWell(
                 color: style?.border?.color ?? CanonicalSolidColor(red: 0.18, green: 0.20, blue: 0.24, alpha: 1),
-                isEnabled: enabled,
+                isEnabled: enabled && !state.hasBoundColorTokenSelection(target: .border),
                 accessibilityValue: style?.border?.color.hexadecimalRGBA ?? "No border",
-                accessibilityHint: "Choose the authored border color.",
+                accessibilityHint: state.hasBoundColorTokenSelection(target: .border)
+                    ? "Unbind the border token before editing the literal color." : "Choose the authored border color.",
                 accessibilityIdentifier: "inspector.design.borderColor",
                 accessibilityLabel: "Border color",
                 onCommit: { color in
@@ -3454,9 +3472,10 @@ private struct DesignInspectorFieldsView: View {
         HStack(spacing: 7) {
             NativeDesignColorWell(
                 color: style?.shadow?.color ?? CanonicalSolidColor(red: 0, green: 0, blue: 0, alpha: 0.25),
-                isEnabled: enabled,
+                isEnabled: enabled && !state.hasBoundColorTokenSelection(target: .outerShadow),
                 accessibilityValue: style?.shadow?.color.hexadecimalRGBA ?? "No shadow",
-                accessibilityHint: "Choose the authored shadow color.",
+                accessibilityHint: state.hasBoundColorTokenSelection(target: .outerShadow)
+                    ? "Unbind the outer-shadow token before editing the literal color." : "Choose the authored shadow color.",
                 accessibilityIdentifier: "inspector.design.shadowColor",
                 accessibilityLabel: "Shadow color",
                 onCommit: { color in

@@ -571,7 +571,7 @@ enum InternalDocumentRenderTreeCompiler {
                 image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets),
                 fillLayers: staticFillLayers(for: node, colorTokens: colorTokens),
                 opacity: staticOpacity(for: node),
-                boxStyle: staticBoxStyle(for: node),
+                boxStyle: staticBoxStyle(for: node, colorTokens: colorTokens),
                 sizingConstraints: [.frame, .image].contains(node.kind)
                     ? CanonicalSizingConstraints.resolved(for: node) : nil
             )
@@ -619,10 +619,11 @@ enum InternalDocumentRenderTreeCompiler {
         return value
     }
 
-    private static func staticBoxStyle(for node: DocumentNode) -> CanonicalBoxStyle? {
+    private static func staticBoxStyle(for node: DocumentNode,
+                                       colorTokens: [LocalColorToken]) -> CanonicalBoxStyle? {
         guard [.frame, .section].contains(node.kind),
               DesignBoxStyleCommandRegistry.hasWellFormedContentBoxProperties(node) else { return nil }
-        return DesignBoxStyleCommandRegistry.resolvedStyle(for: node)
+        return LocalColorTokenResolver.resolvedBoxStyle(for: node, tokens: colorTokens)
     }
 
     /// SF-0806/SF-1102/SF-1203 v1: resolve only typed, prevalidated targets
