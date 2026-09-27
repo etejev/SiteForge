@@ -1,5 +1,16 @@
 # Codex Continuation Handoff
 
+## Current static semantic-resolution checkpoint
+
+SF-AUTHORING-050 makes `CanonicalSemanticElement.resolved(for:)` the shared
+typed semantic boundary for Inspector and immutable static output. It accepts
+only the existing closed semantic vocabulary, preserves omitted/defaulted/
+authored provenance, and never emits raw markup from canonical strings.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CommandKernelTests.testMultiPageStaticBuildPlanUsesAuthoredSemanticElementResolution`.
+
 ## Current static asset-manifest checkpoint
 
 SF-AUTHORING-049 adds a deterministic `assets.manifest.txt` planning artifact

@@ -531,7 +531,7 @@ enum InternalDocumentRenderTreeCompiler {
             return InternalRenderTreeNode(
                 id: node.id, sourceNodeID: node.id, paintOrder: paintOrder,
                 frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 0, height: 0)),
-                semanticElement: CanonicalSemanticElement.defaultElement(for: node.kind)?.rawValue ?? "div",
+                semanticElement: CanonicalSemanticElement.resolved(for: node)?.0.rawValue ?? "div",
                 cssSelector: CanonicalCSSRule.selector(for: node.id), formField: formField,
                 control: control,
                 anchorID: sectionIDs[page.id]?.contains(node.id) == true ? anchorID(for: node.id) : nil,

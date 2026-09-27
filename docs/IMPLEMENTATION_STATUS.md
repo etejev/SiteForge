@@ -196,6 +196,14 @@ continue through the existing safe missing-resource markup state. Evidence is
 in `docs/evidence/SF-AUTHORING-049-STATIC-ASSET-MANIFEST.md`; local test
 execution is paused by owner instruction.
 
+SF-AUTHORING-050 has begun static semantic-element resolution parity. The
+existing typed semantic resolver is now shared by the Inspector and immutable
+static compiler, so supported authored roles retain stable NodeID output while
+omitted metadata uses the node-kind default and invalid historical values are
+safely omitted. Evidence is in
+`docs/evidence/SF-AUTHORING-050-STATIC-SEMANTIC-RESOLUTION.md`; local test
+execution is paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

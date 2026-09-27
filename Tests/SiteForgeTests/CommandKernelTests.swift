@@ -809,6 +809,21 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertFalse(assetManifest.contains(asset.originalFilename))
     }
 
+    // SF-1203-003, SF-1203-004 — immutable static output uses the same typed
+    // authored semantic resolution as the Inspector, never a raw markup key.
+    func testMultiPageStaticBuildPlanUsesAuthoredSemanticElementResolution() throws {
+        let pageID = PageID(), nodeID = NodeID()
+        let node = DocumentNode(id: nodeID, kind: .frame, name: "Article", parent: .page(pageID), properties: [
+            .init(key: .init(rawValue: CanonicalSemanticElement.key), value: .string(SemanticHTMLElement.article.rawValue), origin: .authored),
+        ])
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [nodeID], nodes: [node])
+        let plan = try MultiPageStaticBuildPlanner.plan(document: .init(pages: [page]))
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        XCTAssertTrue(html.contains("<article data-siteforge-node=\"\(nodeID.rawValue.uuidString.lowercased())\""))
+        XCTAssertFalse(html.contains("<div data-siteforge-node=\"\(nodeID.rawValue.uuidString.lowercased())\""))
+    }
+
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {
         let document = BlankProjectDefaults.document()
         let registry = PageCommandRegistry()

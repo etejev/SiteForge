@@ -40,12 +40,7 @@ struct SemanticElementCommandRegistry: Sendable {
     static let requirementIDs = Set((1...8).map { String(format: "SF-1203-%03d", $0) })
 
     static func resolvedElement(for node: DocumentNode) -> (SemanticHTMLElement, PropertyOrigin)? {
-        guard let fallback = CanonicalSemanticElement.defaultElement(for: node.kind) else { return nil }
-        guard let property = node.insertionProperty(CanonicalSemanticElement.key) else { return (fallback, .defaulted) }
-        guard case .string(let raw) = property.value,
-              let element = SemanticHTMLElement(rawValue: raw),
-              CanonicalSemanticElement.supportedElements(for: node.kind).contains(element) else { return nil }
-        return (element, property.origin)
+        CanonicalSemanticElement.resolved(for: node)
     }
 
     static func selectionValue(nodes: [DocumentNode]) -> SemanticElementInspectorValue {

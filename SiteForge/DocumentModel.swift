@@ -414,6 +414,20 @@ enum CanonicalSemanticElement {
         case .component: []
         }
     }
+
+    /// The sole typed semantic resolver shared by Inspector, static planning,
+    /// and any immutable output snapshot. Invalid historical metadata has no
+    /// output effect; absence remains the deterministic kind default.
+    static func resolved(for node: DocumentNode) -> (SemanticHTMLElement, PropertyOrigin)? {
+        guard let fallback = defaultElement(for: node.kind) else { return nil }
+        guard let property = node.insertionProperty(key) else { return (fallback, .defaulted) }
+        guard case .string(let raw) = property.value,
+              let element = SemanticHTMLElement(rawValue: raw),
+              supportedElements(for: node.kind).contains(element) else {
+            return nil
+        }
+        return (element, property.origin)
+    }
 }
 
 // SF-1204 v1 stores typed rule intent, never raw CSS text. The renderer and

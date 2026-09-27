@@ -1,5 +1,11 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-050
+
+- Unified static semantic-element output with the typed Inspector resolver.
+  Supported authored roles now reach the immutable output tree with stable
+  identity; omitted and invalid metadata retain safe deterministic behavior.
+
 ## In progress — SF-AUTHORING-049
 
 - Added a deterministic, content-free static Image asset manifest to the
