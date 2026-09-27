@@ -112,7 +112,8 @@ Button markup is intentionally inert, and unresolved internal targets remain
 accessible but do not become raw URLs. This does not enable browser runtime,
 actions, submission, static file export, or release acceptance. Evidence is in
 `docs/evidence/SF-AUTHORING-041-STATIC-CONTROLS.md`; local test execution is
-paused by owner instruction for this checkpoint.
+paused by owner instruction for this checkpoint. The queued focused regression
+is `CanvasRendererTests.testStaticControlCompilerEscapesTypedRoutesAndKeepsMissingTargetsInert`.
 
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.

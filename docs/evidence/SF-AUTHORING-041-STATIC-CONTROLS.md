@@ -24,8 +24,11 @@ feature.
 ## Verification status
 
 No local tests or UI automation were run for this checkpoint because the owner
-has explicitly paused local test execution. The required focused compiler cases
-are recorded in `docs/CODEX_HANDOFF.md` for the next allowed verification step.
+has explicitly paused local test execution. The focused regression
+`CanvasRendererTests.testStaticControlCompilerEscapesTypedRoutesAndKeepsMissingTargetsInert`
+was added but not executed; it records external/section route escaping, stable
+anchors, missing target fallback, and inert Button output for the next allowed
+verification step.
 
 ## Deferred scope
 

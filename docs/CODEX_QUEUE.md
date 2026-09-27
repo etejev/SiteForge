@@ -18,6 +18,8 @@ None.
     browser runtime/action semantics are not part of this slice.
   - Evidence: `docs/evidence/SF-AUTHORING-041-STATIC-CONTROLS.md`. No local
     tests were run in this checkpoint under the owner-directed test pause.
+    `CanvasRendererTests.testStaticControlCompilerEscapesTypedRoutesAndKeepsMissingTargetsInert`
+    is the queued focused regression for the next permitted test run.
   - Deferred: browser runtime/navigation, actions, submission, arbitrary HTML
     attributes, generated-site accessibility, static file export, and release
     acceptance.

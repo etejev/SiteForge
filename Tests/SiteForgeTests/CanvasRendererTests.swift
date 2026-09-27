@@ -2,6 +2,52 @@ import XCTest
 @testable import SiteForge
 
 final class CanvasRendererTests: XCTestCase {
+    // SF-0806-003, SF-1102-003, SF-1203-003 — static output accepts only a
+    // typed route projection. This remains independent of browser runtime.
+    func testStaticControlCompilerEscapesTypedRoutesAndKeepsMissingTargetsInert() throws {
+        let pageID = PageID()
+        let rootID = NodeID(), sectionID = NodeID(), sectionLinkID = NodeID()
+        let externalLinkID = NodeID(), missingLinkID = NodeID(), buttonID = NodeID()
+        let root = DocumentNode(id: rootID, kind: .frame, name: "Root", parent: .page(pageID),
+                                childIDs: [sectionID, sectionLinkID, externalLinkID, missingLinkID, buttonID])
+        let section = DocumentNode(id: sectionID, kind: .section, name: "Destination", parent: .node(rootID))
+        let sectionLink = DocumentNode(
+            id: sectionLinkID, kind: .link, name: "Section link", parent: .node(rootID),
+            properties: typedControlProperties(
+                .section(pageID: pageID, nodeID: sectionID), label: "Jump <there>"
+            )
+        )
+        let externalLink = DocumentNode(
+            id: externalLinkID, kind: .link, name: "External link", parent: .node(rootID),
+            properties: typedControlProperties(
+                .external("https://example.com/a?b=1&c=2"), label: "External"
+            )
+        )
+        let missingLink = DocumentNode(
+            id: missingLinkID, kind: .link, name: "Missing link", parent: .node(rootID),
+            properties: typedControlProperties(.page(PageID()), label: "Missing"
+            )
+        )
+        let button = DocumentNode(id: buttonID, kind: .button, name: "Button", parent: .node(rootID))
+        let page = DocumentPage(
+            id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+            rootNodeIDs: [rootID], nodes: [root, section, sectionLink, externalLink, missingLink, button]
+        )
+
+        let tree = try InternalDocumentRenderTreeCompiler.compile(
+            page: page, documentID: DocumentID(), revision: 1,
+            staticRoutes: [pageID: "index.html"], sectionIDs: [pageID: [sectionID]]
+        )
+        let output = try SafeHTMLEmitter.emit(tree)
+        let sectionAnchor = "sf-node-\(sectionID.rawValue.uuidString.lowercased())"
+        XCTAssertTrue(output.contains("id=\"\(sectionAnchor)\""))
+        XCTAssertTrue(output.contains("href=\"index.html#\(sectionAnchor)\">Jump &lt;there&gt;</a>"))
+        XCTAssertTrue(output.contains("href=\"https://example.com/a?b=1&amp;c=2\">External</a>"))
+        XCTAssertTrue(output.contains("role=\"link\" aria-disabled=\"true\">Missing</a>"))
+        XCTAssertTrue(output.contains("<button") && output.contains("type=\"button\" disabled aria-disabled=\"true\">Button</button>"))
+        XCTAssertFalse(output.contains("onclick=") || output.contains("<script"))
+    }
+
     func testSafeHTMLEmitterEmitsAccessibleTextField() throws {
         let formID = NodeID()
         let id = NodeID()
@@ -97,6 +143,12 @@ final class CanvasRendererTests: XCTestCase {
     }
 
     private static let frame = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: 1, height: 1))
+
+    private func typedControlProperties(_ target: CanonicalLinkTarget, label: String) -> [NodeProperty] {
+        target.properties.map { .init(key: .init(rawValue: $0.0), value: $0.1) } + [
+            .init(key: .init(rawValue: CanonicalLinkTarget.labelKey), value: .string(label)),
+        ]
+    }
 
     private func formNode(_ id: NodeID) -> InternalRenderTreeNode {
         .init(id: id, sourceNodeID: id, paintOrder: 0, frame: Self.frame, semanticElement: "form", cssSelector: "", formField: nil)

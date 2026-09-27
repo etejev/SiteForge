@@ -11,9 +11,10 @@ inert. Static Buttons are deliberately emitted as disabled `type=button`
 controls: no browser action or submission behavior exists.
 
 No local test execution was performed for this checkpoint under the current
-owner-directed test pause. The next dependency-safe work is focused compiler
-coverage for external, page, section, missing-target, escaping, and inert
-button output before any runtime or export work.
+owner-directed test pause. The focused compiler regression
+`CanvasRendererTests.testStaticControlCompilerEscapesTypedRoutesAndKeepsMissingTargetsInert`
+now covers escaped external/section routes, stable anchors, missing targets,
+and inert button output; it must be run before any runtime or export work.
 
 ## Current checkpoint
 
