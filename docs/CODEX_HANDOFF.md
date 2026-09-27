@@ -1,5 +1,17 @@
 # Codex Continuation Handoff
 
+## Current static-layout plan checkpoint
+
+SF-AUTHORING-044 makes the SF-AUTHORING-043 typed layout projection available
+to `MultiPageStaticBuildPlanner` as a deterministic in-memory `styles.css`
+file. The stylesheet is generated only from canonical document nodes using the
+existing responsive resolver; it has no standalone state, file writer call,
+HTML-shell link, browser runtime, raw CSS input, or publishing path.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CommandKernelTests.testMultiPageStaticBuildPlanIncludesTypedLayoutStylesheet`.
+
 ## Current static-layout checkpoint
 
 SF-AUTHORING-043 adds `StaticLayoutOutputEmitter`, an immutable projection of

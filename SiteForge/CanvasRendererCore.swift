@@ -684,6 +684,16 @@ enum MultiPageStaticBuildPlanner {
             )
             files.append(.init(path: output, contents: [navigation, body].filter { !$0.isEmpty }.joined(separator: "\n")))
         }
+        // The static build plan consumes the same typed responsive cascade as
+        // editor layout. This remains an immutable planning artifact: it does
+        // not create an authored CSS model or write a generated site.
+        let layout = StaticLayoutOutputEmitter.emit(
+            nodes: pages.flatMap(\.canonicalDepthFirstNodes)
+        )
+        if !layout.css.isEmpty {
+            guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
+            files.append(.init(path: "styles.css", contents: layout.css))
+        }
         files.append(.init(path: "manifest.txt", contents: files.map(\.path).sorted().joined(separator: "\n")))
         return .init(revision: document.revision, files: files)
     }

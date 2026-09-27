@@ -137,6 +137,15 @@ deferred. Evidence is in
 `docs/evidence/SF-AUTHORING-043-STATIC-LAYOUT.md`; local test execution is
 paused by owner instruction.
 
+SF-AUTHORING-044 has begun the dependency-safe static multi-page layout-plan
+integration. `MultiPageStaticBuildPlanner` now includes the immutable typed
+layout projection as a deterministic `styles.css` plan artifact whenever
+canonical geometry exists. It shares SF-AUTHORING-043's selectors and
+responsive cascade without creating files, linking a browser document shell,
+or mutating canonical content. Evidence is in
+`docs/evidence/SF-AUTHORING-044-STATIC-LAYOUT-PLAN.md`; local test execution
+is paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

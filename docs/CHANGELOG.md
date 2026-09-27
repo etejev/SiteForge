@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-044
+
+- Added the immutable typed layout projection to deterministic multi-page
+  static build plans as `styles.css`. The planner shares the canonical
+  responsive cascade and NodeID selector identity; it does not write files or
+  introduce an authored CSS/browser runtime path.
+
 ## In progress — SF-AUTHORING-043
 
 - Added a deterministic static layout-output projection from typed canonical

@@ -737,6 +737,31 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertNotEqual(original.pages[0].nodes[1].properties[0].id, copy.nodes[1].properties[0].id)
     }
 
+    // SF-1204-003, SF-1206-003 — multi-page planning adopts the typed
+    // layout projection instead of deriving a second geometry cascade.
+    func testMultiPageStaticBuildPlanIncludesTypedLayoutStylesheet() throws {
+        let pageID = PageID()
+        let nodeID = NodeID()
+        let node = DocumentNode(id: nodeID, kind: .frame, name: "Card", parent: .page(pageID), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(32), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.y"), value: .number(48), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.width"), value: .number(240), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.height"), value: .number(160), origin: .defaulted),
+            .init(key: .init(rawValue: ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)), value: .number(200), origin: .authored),
+        ])
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [nodeID], nodes: [node])
+        let document = CanonicalDocument(pages: [page])
+
+        let plan = try MultiPageStaticBuildPlanner.plan(document: document)
+        let stylesheet = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(stylesheet.contains(CanonicalCSSRule.selector(for: nodeID)))
+        XCTAssertTrue(stylesheet.contains("left: 32.0px;"))
+        XCTAssertTrue(stylesheet.contains("@media (max-width: 599px)"))
+        XCTAssertTrue(stylesheet.contains("width: 200.0px;"))
+        XCTAssertEqual(plan.files.last?.path, "manifest.txt")
+    }
+
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {
         let document = BlankProjectDefaults.document()
         let registry = PageCommandRegistry()
