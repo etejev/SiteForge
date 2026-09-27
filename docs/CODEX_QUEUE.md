@@ -26,6 +26,10 @@ None.
     (2026-09-26).
   - Next bounded task: deterministic static-output compatibility reporting and
     explicitly disabled Form submission across multi-page builds.
+  - Static-output checkpoint: canonical maximum-length metadata now emits a
+    native `maxlength` constraint, and the multi-page planner can derive a
+    stable, content-redacted Form compatibility report. Submit controls remain
+    explicitly disabled with no route or data handling.
   - Exclusions: network/server/browser runtime, real submission/destinations,
     anti-abuse, analytics, visitor-value persistence, UI automation, generated
     runtime success/error UI, performance/release acceptance.

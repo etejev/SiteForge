@@ -7,11 +7,12 @@ final class CanvasRendererTests: XCTestCase {
         let id = NodeID()
         let nodes = [
             formNode(formID),
-            InternalRenderTreeNode(id: id, sourceNodeID: id, paintOrder: 1, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "email", label: "Email", name: "email", help: nil, required: true, formID: formID, options: [])),
+            InternalRenderTreeNode(id: id, sourceNodeID: id, paintOrder: 1, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "email", label: "Email", name: "email", help: nil, required: true, formID: formID, options: [], maximumLength: 128)),
         ]
         let output = try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 1, nodes: nodes))
         XCTAssertTrue(output.contains("<label for=\"sf-field-"))
         XCTAssertTrue(output.contains("name=\"email\" type=\"email\" required"))
+        XCTAssertTrue(output.contains("maxlength=\"128\""))
     }
 
     func testSafeHTMLEmitterSafelyEmitsCheckboxSelectAndUnconfiguredSubmit() throws {

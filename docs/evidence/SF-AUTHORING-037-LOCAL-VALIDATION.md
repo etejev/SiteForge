@@ -28,6 +28,12 @@ strictly bounded to 1…4,096, and compiles through the existing atomic
 Form Inspector transaction with an exact inverse. Required, Select membership,
 and Checkbox consent retain their existing typed rules.
 
+Static output carries this optional bound as `maxlength`. Multi-page planning
+can derive a deterministic report of Form and disabled-submit identities per
+page; it contains no field values, labels, destinations, or browser runtime
+behavior. Every generated submit control remains disabled and marked
+`data-siteforge-submission="unconfigured"`.
+
 Focused evidence passed 3/3 on 2026-09-26:
 
 - `TransformModelTests.testLocalFormValidationResolvesValidInvalidControlsAndRedactsValues`

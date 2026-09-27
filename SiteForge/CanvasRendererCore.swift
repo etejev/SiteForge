@@ -414,6 +414,14 @@ struct InternalFormField: Equatable, Sendable {
     let required: Bool
     let formID: NodeID
     let options: [InternalFormOption]
+    let maximumLength: Int?
+
+    init(kind: String, label: String, name: String, help: String?, required: Bool,
+         formID: NodeID, options: [InternalFormOption], maximumLength: Int? = nil) {
+        self.kind = kind; self.label = label; self.name = name; self.help = help
+        self.required = required; self.formID = formID; self.options = options
+        self.maximumLength = maximumLength
+    }
 }
 
 /// Render-only projection of a canonical select option. The option identity is
@@ -492,7 +500,8 @@ enum InternalDocumentRenderTreeCompiler {
         }
         return .init(kind: kind, label: label, name: name,
                      help: node.insertionStringProperty(CanonicalFormField.helpKey),
-                     required: required, formID: formID, options: options)
+                     required: required, formID: formID, options: options,
+                     maximumLength: node.insertionNumberProperty(CanonicalFormField.maximumLengthKey).map { Int($0) })
     }
 }
 
@@ -581,6 +590,33 @@ enum MultiPageStaticBuildPlanner {
         guard !slug.isEmpty, slug.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "/" }) else { throw MultiPageStaticBuildError.invalidRoute }
         return slug + ".html"
     }
+
+    /// A deterministic, content-redacted statement of static Form behavior.
+    /// It is derived from canonical metadata and never represents a runtime
+    /// destination, submitted value, or browser capability.
+    static func formCompatibilityReport(document: CanonicalDocument) throws -> FormStaticBuildCompatibilityReport {
+        let pages = document.pages.filter { $0.role != .componentDefinition }.sorted { $0.route.rawValue < $1.route.rawValue }
+        let entries = try pages.map { page -> FormStaticBuildCompatibilityReport.Entry in
+            let tree = try InternalDocumentRenderTreeCompiler.compile(page: page, documentID: document.id, revision: document.revision)
+            let forms = tree.nodes.filter { $0.semanticElement == "form" }.map(\.id)
+            let submitCount = tree.nodes.compactMap(\.formField).filter { $0.kind == "submit" }.count
+            return .init(pageID: page.id, formNodeIDs: forms, disabledSubmitControlCount: submitCount)
+        }
+        return .init(documentID: document.id, revision: document.revision, entries: entries)
+    }
+}
+
+struct FormStaticBuildCompatibilityReport: Equatable, Sendable {
+    struct Entry: Equatable, Sendable {
+        let pageID: PageID
+        let formNodeIDs: [NodeID]
+        let disabledSubmitControlCount: Int
+    }
+    let documentID: DocumentID
+    let revision: UInt64
+    let entries: [Entry]
+    /// Stable category, intentionally independent from live validation types.
+    let submissionBehavior = "unavailableSubmission"
 }
 
 // SF-1207 v1 metadata is typed and emitted only from approved route paths.
@@ -675,9 +711,10 @@ enum SafeHTMLEmitter {
             let help = field.help.map { "<span id=\"\(controlID)-help\">\(escape($0))</span>" } ?? ""
             let describedBy = field.help == nil ? "" : " aria-describedby=\"\(controlID)-help\""
             let control: String
+            let maximumLength = field.maximumLength.map { " maxlength=\"\($0)\"" } ?? ""
             switch field.kind {
             case "textarea":
-                control = "<textarea id=\"\(controlID)\" name=\"\(escapedName)\"\(describedBy)\(required)></textarea>"
+                control = "<textarea id=\"\(controlID)\" name=\"\(escapedName)\"\(describedBy)\(required)\(maximumLength)></textarea>"
             case "select":
                 let options = field.options.map { "<option value=\"\(escape($0.value))\">\(escape($0.label))</option>" }.joined()
                 control = "<select id=\"\(controlID)\" name=\"\(escapedName)\"\(describedBy)\(required)>\(options)</select>"
@@ -687,7 +724,7 @@ enum SafeHTMLEmitter {
                 // exfiltrate data without an explicitly configured route.
                 control = "<button id=\"\(controlID)\" type=\"submit\" disabled aria-disabled=\"true\" data-siteforge-submission=\"unconfigured\">\(escape(field.label))</button>"
             default:
-                control = "<input id=\"\(controlID)\" name=\"\(escapedName)\" type=\"\(field.kind)\"\(describedBy)\(required)>"
+                control = "<input id=\"\(controlID)\" name=\"\(escapedName)\" type=\"\(field.kind)\"\(describedBy)\(required)\(maximumLength)>"
             }
             return "<label for=\"\(controlID)\">\(escape(field.label))</label>\(control)\(help)"
     }
