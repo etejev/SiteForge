@@ -280,19 +280,7 @@ struct TypographyCommandRegistry: Sendable {
     static let namespace = CanonicalTypography.namespace
 
     static func resolvedTypography(for node: DocumentNode) -> CanonicalTypography? {
-        guard node.kind.isTextual else { return nil }
-        func string(_ suffix: String) -> String? { node.insertionStringProperty(namespace + suffix) }
-        func number(_ suffix: String) -> Double? { node.insertionNumberProperty(namespace + suffix) }
-        let fallback = CanonicalTypography.defaultValue
-        let value = CanonicalTypography(
-            family: string("family") ?? fallback.family,
-            weight: string("weight").flatMap(CanonicalFontWeight.init(rawValue:)) ?? fallback.weight,
-            size: number("size") ?? fallback.size,
-            lineHeight: number("lineHeight") ?? fallback.lineHeight,
-            tracking: number("tracking") ?? fallback.tracking,
-            alignment: string("alignment").flatMap(CanonicalTextAlignment.init(rawValue:)) ?? (node.kind == .button ? .center : fallback.alignment)
-        )
-        return value.isValid ? value : nil
+        CanonicalTypography.resolved(for: node)
     }
 
     static func selectionValue(nodes: [DocumentNode]) -> TypographyInspectorValue {

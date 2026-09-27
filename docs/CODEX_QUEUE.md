@@ -8,6 +8,18 @@ None.
 
 ## IN PROGRESS
 
+- [ ] `SF-AUTHORING-045` Static typography-output parity foundation (P1).
+  - Requirements: bounded compiler evidence for `SF-0507-003`–`004`,
+    `SF-1203-003`, and `SF-1204-003`–`004`.
+  - Plan: retain canonical Text semantics and escaped plain content in the
+    static tree, then project only closed, validated typography values into a
+    deterministic NodeID-scoped stylesheet. The canonical System family maps
+    to portable `system-ui`; arbitrary installed family names are safely
+    omitted rather than becoming raw CSS.
+  - Exclusions: rich text/spans, raw HTML/CSS, custom/remote font loading,
+    browser rendering, component expansion, responsive typography, generated
+    document shells, export/publishing, and release acceptance.
+
 - [ ] `SF-AUTHORING-044` Static multi-page layout-plan integration (P1).
   - Requirements: bounded compiler evidence for `SF-1204-003`–`004` and
     `SF-1206-003`, reusing the responsive cascade from `SF-0601-003` and

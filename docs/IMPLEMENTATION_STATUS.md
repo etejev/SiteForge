@@ -146,6 +146,18 @@ or mutating canonical content. Evidence is in
 `docs/evidence/SF-AUTHORING-044-STATIC-LAYOUT-PLAN.md`; local test execution
 is paused by owner instruction.
 
+SF-AUTHORING-045 has begun static typography-output parity. The static tree
+now carries canonical plain Text separately from editor state and escapes it
+at the HTML boundary. `StaticTypographyOutputEmitter` projects only resolved,
+validated scalar typography and fixed enum mappings; the canonical System
+family maps to `system-ui`, while arbitrary installed-family names are safely
+omitted. Component overrides/defaults remain canonical and unmodified; this
+slice does not flatten components. Rich text, raw HTML/CSS, custom/remote
+fonts, browser rendering, responsive typography, generated files, publishing,
+and release acceptance remain deferred. Evidence is in
+`docs/evidence/SF-AUTHORING-045-STATIC-TYPOGRAPHY.md`; local test execution is
+paused by owner instruction.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

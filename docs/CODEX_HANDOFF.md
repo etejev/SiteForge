@@ -1,5 +1,19 @@
 # Codex Continuation Handoff
 
+## Current static-typography checkpoint
+
+SF-AUTHORING-045 makes canonical plain Text content visible in the immutable
+static tree and escapes it only at the Safe HTML boundary. Its stylesheet
+projection maps the closed typography model to size, weight, line-height,
+tracking, alignment, and portable `system-ui` for the canonical System family.
+Any other installed-family intent is preserved canonically but omitted from
+static CSS rather than being emitted as an arbitrary CSS string. Component
+text defaults/overrides are not mutated or flattened in this slice.
+
+No local test execution was performed under the owner-directed pause. The
+next allowed focused selector is
+`CanvasRendererTests.testStaticTypographyOutputEscapesTextAndUsesAllowlistedCanonicalValues`.
+
 ## Current static-layout plan checkpoint
 
 SF-AUTHORING-044 makes the SF-AUTHORING-043 typed layout projection available

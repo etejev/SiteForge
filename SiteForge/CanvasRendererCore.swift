@@ -406,10 +406,17 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     let formField: InternalFormField?
     let control: InternalStaticControl?
     let anchorID: String?
+    /// Only canonical plain text enters this static projection. The emitter
+    /// escapes it at the final HTML-context boundary.
+    let textContent: String?
+    /// Canonical typography intent is immutable metadata here; output maps
+    /// only its closed allowlist and never consults installed fonts.
+    let typography: CanonicalTypography?
 
     init(id: NodeID, sourceNodeID: NodeID, paintOrder: Int, frame: WorldRect,
          semanticElement: String, cssSelector: String, formField: InternalFormField?,
-         control: InternalStaticControl? = nil, anchorID: String? = nil) {
+         control: InternalStaticControl? = nil, anchorID: String? = nil,
+         textContent: String? = nil, typography: CanonicalTypography? = nil) {
         self.id = id
         self.sourceNodeID = sourceNodeID
         self.paintOrder = paintOrder
@@ -419,6 +426,8 @@ struct InternalRenderTreeNode: Equatable, Sendable {
         self.formField = formField
         self.control = control
         self.anchorID = anchorID
+        self.textContent = textContent
+        self.typography = typography
     }
 }
 
@@ -500,7 +509,9 @@ enum InternalDocumentRenderTreeCompiler {
                 semanticElement: CanonicalSemanticElement.defaultElement(for: node.kind)?.rawValue ?? "div",
                 cssSelector: CanonicalCSSRule.selector(for: node.id), formField: formField,
                 control: control,
-                anchorID: sectionIDs[page.id]?.contains(node.id) == true ? anchorID(for: node.id) : nil
+                anchorID: sectionIDs[page.id]?.contains(node.id) == true ? anchorID(for: node.id) : nil,
+                textContent: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
+                typography: node.kind == .text ? CanonicalTypography.resolved(for: node) : nil
             )
         }
         return .init(documentID: documentID, revision: revision, nodes: nodes)
@@ -610,6 +621,61 @@ enum SafeCSSEmitter {
     }
 }
 
+/// Static typography is an immutable projection of the closed canonical
+/// plain-text model. It deliberately omits arbitrary installed-family names:
+/// only the canonical System default becomes the portable `system-ui` family.
+/// The remaining declarations are finite, allowlisted scalars/enums.
+enum StaticTypographyOutputEmitter {
+    static func emit(nodes: [InternalRenderTreeNode]) -> String {
+        nodes.filter { $0.typography != nil }
+            .sorted { $0.id.description < $1.id.description }
+            .compactMap(rule(for:))
+            .joined(separator: "\n")
+    }
+
+    private static func rule(for node: InternalRenderTreeNode) -> String? {
+        guard node.id == node.sourceNodeID,
+              node.cssSelector == CanonicalCSSRule.selector(for: node.id),
+              let style = node.typography else { return nil }
+        var declarations = [
+            "font-size: \(number(style.size))px;",
+            "font-weight: \(weight(style.weight));",
+            "letter-spacing: \(number(style.tracking))px;",
+            "line-height: \(number(style.lineHeight))px;",
+            "text-align: \(alignment(style.alignment));",
+        ]
+        if style.family == CanonicalTypography.defaultFamily {
+            declarations.insert("font-family: system-ui;", at: 0)
+        }
+        return "\(CanonicalCSSRule.selector(for: node.id)) { \(declarations.joined(separator: " ")) }"
+    }
+
+    private static func weight(_ value: CanonicalFontWeight) -> Int {
+        switch value {
+        case .regular: 400
+        case .medium: 500
+        case .semibold: 600
+        case .bold: 700
+        }
+    }
+
+    private static func alignment(_ value: CanonicalTextAlignment) -> String {
+        switch value {
+        case .leading: "left"
+        case .center: "center"
+        case .trailing: "right"
+        }
+    }
+
+    private static func number(_ value: Double) -> String {
+        let rounded = (value * 1_000).rounded() / 1_000
+        var output = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), rounded)
+        while output.contains(".") && output.last == "0" { output.removeLast() }
+        if output.last == "." { output.append("0") }
+        return output == "-0.0" ? "0.0" : output
+    }
+}
+
 // SF-1206 foundation: build plans are deterministic and side-effect free.
 struct LocalStaticBuildPlan: Equatable, Sendable {
     struct File: Equatable, Sendable { let path: String; let contents: String }
@@ -665,6 +731,7 @@ enum MultiPageStaticBuildPlanner {
         }
         var files: [LocalStaticBuildPlan.File] = []
         var paths = Set<String>()
+        var staticNodes: [InternalRenderTreeNode] = []
         for page in pages.sorted(by: { $0.route.rawValue < $1.route.rawValue }) {
             let output = try outputPath(for: page)
             guard paths.insert(output).inserted else { throw MultiPageStaticBuildError.collision }
@@ -676,12 +743,12 @@ enum MultiPageStaticBuildPlanner {
                     currentOutputPath: output
                 )
             )
-            let body = try SafeHTMLEmitter.emit(
-                InternalDocumentRenderTreeCompiler.compile(
-                    page: page, documentID: document.id, revision: document.revision,
-                    staticRoutes: staticRoutes, sectionIDs: sectionIDs
-                )
+            let tree = try InternalDocumentRenderTreeCompiler.compile(
+                page: page, documentID: document.id, revision: document.revision,
+                staticRoutes: staticRoutes, sectionIDs: sectionIDs
             )
+            staticNodes += tree.nodes
+            let body = try SafeHTMLEmitter.emit(tree)
             files.append(.init(path: output, contents: [navigation, body].filter { !$0.isEmpty }.joined(separator: "\n")))
         }
         // The static build plan consumes the same typed responsive cascade as
@@ -690,9 +757,11 @@ enum MultiPageStaticBuildPlanner {
         let layout = StaticLayoutOutputEmitter.emit(
             nodes: pages.flatMap(\.canonicalDepthFirstNodes)
         )
-        if !layout.css.isEmpty {
+        let typography = StaticTypographyOutputEmitter.emit(nodes: staticNodes)
+        let stylesheet = [layout.css, typography].filter { !$0.isEmpty }.joined(separator: "\n")
+        if !stylesheet.isEmpty {
             guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
-            files.append(.init(path: "styles.css", contents: layout.css))
+            files.append(.init(path: "styles.css", contents: stylesheet))
         }
         files.append(.init(path: "manifest.txt", contents: files.map(\.path).sorted().joined(separator: "\n")))
         return .init(revision: document.revision, files: files)
@@ -902,7 +971,12 @@ enum SafeHTMLEmitter {
             }
             return "<button\(attributes) type=\"button\"\(control.disabled ? " disabled aria-disabled=\"true\"" : "")>\(label)</button>"
         }
-        return node.semanticElement == "img" ? "<img\(attributes)>" : "<\(node.semanticElement)\(attributes)></\(node.semanticElement)>"
+        if node.semanticElement == "img" { return "<img\(attributes)>" }
+        // Text is canonical plain content, not a markup fragment. Invalid
+        // historical content is safely omitted from static output rather than
+        // becoming executable or malformed HTML.
+        let content = node.textContent.flatMap(safeTextContent).map(escape) ?? ""
+        return "<\(node.semanticElement)\(attributes)>\(content)</\(node.semanticElement)>"
     }
 
     private static func emitField(_ node: InternalRenderTreeNode, formIDs: Set<NodeID>) throws -> String {
@@ -954,6 +1028,17 @@ enum SafeHTMLEmitter {
         !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         value.count <= maximum &&
         !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+
+    private static func safeTextContent(_ value: String) -> String? {
+        guard value.utf8.count <= CanonicalComponentText.maximumTextBytes,
+              !value.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0)
+                      && $0.value != 10 && $0.value != 13 && $0.value != 9
+              }) else {
+            return nil
+        }
+        return value
     }
 
     private static func validOptions(_ options: [InternalFormOption]) -> Bool {

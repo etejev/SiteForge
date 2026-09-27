@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-045
+
+- Added safe static Text content and typography projection. Canonical plain
+  Text is escaped at the HTML boundary, while a fixed CSS allowlist emits only
+  valid size, weight, line-height, tracking, alignment, and the portable
+  System-family fallback. Arbitrary font names and rich text remain omitted.
+
 ## In progress — SF-AUTHORING-044
 
 - Added the immutable typed layout projection to deterministic multi-page

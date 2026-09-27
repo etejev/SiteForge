@@ -172,6 +172,32 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(output.report.breakpoints, [.tablet, .mobile])
     }
 
+    // SF-0507-003, SF-1203-003, SF-1204-003 — static text remains escaped
+    // while only closed canonical typography values reach the stylesheet.
+    func testStaticTypographyOutputEscapesTextAndUsesAllowlistedCanonicalValues() throws {
+        let pageID = PageID(), nodeID = NodeID()
+        let node = DocumentNode(id: nodeID, kind: .text, name: "Heading", parent: .page(pageID), properties: [
+            .init(key: .init(rawValue: "content.text"), value: .string("Hello <SiteForge> & friends"), origin: .authored),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "family"), value: .string(CanonicalTypography.defaultFamily), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "weight"), value: .string("bold"), origin: .authored),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "size"), value: .number(18.5), origin: .authored),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "lineHeight"), value: .number(24), origin: .authored),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "tracking"), value: .number(0.25), origin: .authored),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "alignment"), value: .string("center"), origin: .authored),
+        ])
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [nodeID], nodes: [node])
+        let tree = try InternalDocumentRenderTreeCompiler.compile(page: page, documentID: DocumentID(), revision: 1)
+
+        XCTAssertTrue(try SafeHTMLEmitter.emit(tree).contains("Hello &lt;SiteForge&gt; &amp; friends"))
+        let css = StaticTypographyOutputEmitter.emit(nodes: tree.nodes)
+        XCTAssertTrue(css.contains(CanonicalCSSRule.selector(for: nodeID)))
+        XCTAssertTrue(css.contains("font-family: system-ui;"))
+        XCTAssertTrue(css.contains("font-weight: 700;"))
+        XCTAssertTrue(css.contains("font-size: 18.5px;"))
+        XCTAssertTrue(css.contains("text-align: center;"))
+    }
+
     func testSafeHTMLEmitterRejectsNonFormOrMalformedSelectControls() throws {
         let nodeID = NodeID()
         let orphan = InternalRenderTreeNode(id: nodeID, sourceNodeID: nodeID, paintOrder: 0, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "select", label: "Plan", name: "plan", help: nil, required: false, formID: NodeID(), options: [.init(id: FormOptionID(), label: "One", value: "one")]))

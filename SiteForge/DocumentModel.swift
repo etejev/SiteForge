@@ -524,6 +524,26 @@ struct CanonicalTypography: Equatable, Sendable {
             && lineHeight >= size * 0.5
             && (-100...100).contains(tracking)
     }
+
+    /// The one headless resolution path for canonical text style. Callers
+    /// retain the property-origin separately; this value only supplies the
+    /// deterministic effective style without resolving installed fonts.
+    static func resolved(for node: DocumentNode) -> CanonicalTypography? {
+        guard node.kind.isTextual else { return nil }
+        func string(_ suffix: String) -> String? { node.insertionStringProperty(namespace + suffix) }
+        func number(_ suffix: String) -> Double? { node.insertionNumberProperty(namespace + suffix) }
+        let fallback = defaultValue
+        let value = CanonicalTypography(
+            family: string("family") ?? fallback.family,
+            weight: string("weight").flatMap(CanonicalFontWeight.init(rawValue:)) ?? fallback.weight,
+            size: number("size") ?? fallback.size,
+            lineHeight: number("lineHeight") ?? fallback.lineHeight,
+            tracking: number("tracking") ?? fallback.tracking,
+            alignment: string("alignment").flatMap(CanonicalTextAlignment.init(rawValue:))
+                ?? (node.kind == .button ? .center : fallback.alignment)
+        )
+        return value.isValid ? value : nil
+    }
 }
 
 struct PageRoute: Codable, Equatable, Hashable, RawRepresentable, Sendable {
