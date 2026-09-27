@@ -17,6 +17,8 @@ history, scene, or browser state.
 - Not Found and component-definition pages are intentionally omitted; a page
   without a validated static route or safe label is omitted rather than
   producing a fabricated destination.
+- Nested generated paths produce validated relative hrefs, so the bounded
+  output does not assume a root-routing server.
 
 ## Verification status
 

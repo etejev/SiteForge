@@ -121,7 +121,7 @@ SF-AUTHORING-042 has begun a bounded static-navigation compiler foundation.
 `StaticNavigationEmitter` projects only ordered persisted Home and standard
 pages that have validated static output routes, marks the generated page with
 `aria-current=page`, and omits special/unavailable pages without mutating the
-canonical document. Browser runtime, navigation authoring, static file export,
+canonical document. Nested generated paths use safe relative links. Browser runtime, navigation authoring, static file export,
 and publishing remain deferred; evidence is in
 `docs/evidence/SF-AUTHORING-042-STATIC-NAVIGATION.md`. Local test execution is
 paused by owner instruction.

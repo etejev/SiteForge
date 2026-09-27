@@ -672,7 +672,8 @@ enum MultiPageStaticBuildPlanner {
                 StaticNavigationEmitter.entries(
                     pages: document.pages,
                     staticRoutes: staticRoutes,
-                    currentPageID: page.id
+                    currentPageID: page.id,
+                    currentOutputPath: output
                 )
             )
             let body = try SafeHTMLEmitter.emit(
@@ -726,14 +727,16 @@ enum StaticNavigationEmitter {
     static func entries(
         pages: [DocumentPage],
         staticRoutes: [PageID: String],
-        currentPageID: PageID
+        currentPageID: PageID,
+        currentOutputPath: String
     ) -> [StaticNavigationEntry] {
         pages.compactMap { page in
             // Preserve canonical navigator order. Not Found is a recovery
             // destination, and component definitions are authoring-only, so
             // neither is silently advertised as a public navigation item.
             guard page.role == .home || page.role == .standard,
-                  let href = staticRoutes[page.id],
+                  let outputPath = staticRoutes[page.id],
+                  let href = relativeHref(from: currentOutputPath, to: outputPath),
                   isSafeLabel(page.name) else { return nil }
             return .init(
                 pageID: page.id,
@@ -758,6 +761,34 @@ enum StaticNavigationEmitter {
         !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         value.utf8.count <= 256 &&
         !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+
+    /// Output paths are package-generated, but this remains defensive because
+    /// the emitter is independently callable in compiler tests. A nested page
+    /// must link relatively so the generated plan also works without a server
+    /// that rewrites every route at the site root.
+    private static func relativeHref(from currentOutputPath: String, to targetOutputPath: String) -> String? {
+        guard isSafeOutputPath(currentOutputPath), isSafeOutputPath(targetOutputPath) else { return nil }
+        let currentDirectory = Array(currentOutputPath.split(separator: "/").dropLast())
+        let target = targetOutputPath.split(separator: "/")
+        var common = 0
+        while common < currentDirectory.count, common < target.count,
+              currentDirectory[currentDirectory.index(currentDirectory.startIndex, offsetBy: common)] == target[target.index(target.startIndex, offsetBy: common)] {
+            common += 1
+        }
+        let parentCount = currentDirectory.count - common
+        let targetStart = target.index(target.startIndex, offsetBy: common)
+        let components = Array(repeating: "..", count: parentCount) + target[targetStart...].map(String.init)
+        return components.joined(separator: "/")
+    }
+
+    private static func isSafeOutputPath(_ value: String) -> Bool {
+        guard !value.isEmpty, !value.hasPrefix("/"), !value.contains("\\"), !value.contains("//") else { return false }
+        let components = value.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return false }
+        return components.allSatisfy { component in
+            component.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." }
+        }
     }
 
     private static func escape(_ value: String) -> String {

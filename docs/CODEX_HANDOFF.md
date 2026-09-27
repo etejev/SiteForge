@@ -9,7 +9,8 @@ PageID-backed link for each, emits escaped labels/hrefs, and applies
 `aria-current=page` only to the output page being built. Not Found and
 component-definition pages are intentionally absent. It is not a navigation
 template, redirect, dynamic-routing, browser-runtime, static-file-export, or
-publishing feature.
+publishing feature. Nested generated paths resolve relative links without
+assuming a site-root router.
 
 No tests were run under the owner-directed pause. The next allowed focused
 selector is `CanvasRendererTests.testStaticNavigationProjectionPreservesPageOrderAndAccessibleCurrentState`.

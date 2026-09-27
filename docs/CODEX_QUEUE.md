@@ -14,7 +14,8 @@ None.
   - Plan: derive deterministic accessible navigation only from ordered persisted
     Home/standard pages and validated static route mappings. Preserve PageID/
     route provenance and current-page semantics; omit Not Found, component, or
-    unavailable routes without writing canonical state.
+    unavailable routes without writing canonical state. Nested output paths use
+    validated relative links rather than assuming a root-routing server.
   - Exclusions: authored navigation templates, redirects, dynamic routes,
     scripts, browser runtime, publishing, static-file export, and release
     acceptance.

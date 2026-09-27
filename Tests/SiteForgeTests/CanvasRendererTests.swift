@@ -12,7 +12,8 @@ final class CanvasRendererTests: XCTestCase {
         let entries = StaticNavigationEmitter.entries(
             pages: [home, standard, notFound, component],
             staticRoutes: [home.id: "index.html", standard.id: "guides.html", notFound.id: "404.html"],
-            currentPageID: standard.id
+            currentPageID: standard.id,
+            currentOutputPath: "guides.html"
         )
 
         XCTAssertEqual(entries.map(\.pageID), [home.id, standard.id])
@@ -23,6 +24,15 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(output.contains("href=\"index.html\">Home</a>"))
         XCTAssertTrue(output.contains("href=\"guides.html\" aria-current=\"page\">Guides &amp; Help</a>"))
         XCTAssertFalse(output.contains("404.html") || output.contains("Card"))
+
+        let nested = DocumentPage(name: "Install", route: .init(rawValue: "/guides/install"), role: .standard)
+        let nestedEntries = StaticNavigationEmitter.entries(
+            pages: [home, nested],
+            staticRoutes: [home.id: "index.html", nested.id: "guides/install.html"],
+            currentPageID: nested.id,
+            currentOutputPath: "guides/install.html"
+        )
+        XCTAssertEqual(nestedEntries.map(\.href), ["../index.html", "install.html"])
     }
 
     // SF-0806-003, SF-1102-003, SF-1203-003 — static output accepts only a

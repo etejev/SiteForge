@@ -5,7 +5,8 @@
 - Added deterministic accessible static navigation projection from persisted
   Home and standard pages. It preserves canonical page order and route
   provenance, omits Not Found/component/unavailable pages, and marks only the
-  current generated page with `aria-current=page`.
+  current generated page with `aria-current=page`. Nested output paths use
+  safe relative links.
 
 ## In progress — SF-AUTHORING-041
 
