@@ -225,6 +225,19 @@ browser-layout path. Evidence is in
 `docs/evidence/SF-AUTHORING-053-STATIC-BOX-MODEL.md`; local test execution is
 paused by owner instruction.
 
+SF-AUTHORING-054 is Development Prompt 1 of the restored ten-prompt cadence.
+It reuses the verified native canonical fill-layer, Inspector, transaction,
+renderer, persistence, recovery, and accessibility path while adding a closed
+static Frame/Section projection for solid and linear-gradient layers plus
+single application of canonical opacity. Evidence is in
+`docs/evidence/SF-AUTHORING-054-NATIVE-FILL-AUTHORING.md`; the related
+normative modules remain Partial outside this bounded slice.
+
+Focused compiler, command, and native-raster selectors passed 3/3 on
+2026-09-27. The existing Inspector UI selector was attempted once but XCTest
+timed out while enabling automation before the test body ran, so this records
+no new UI result and leaves the assertion unchanged.
+
 SF-AUTHORING-019 final Save follow-up is verified: native durable Save remains
 available during recovery autosave through the existing cancel/drain boundary.
 Focused lifecycle and typography persistence checks passed (2/2). Actions

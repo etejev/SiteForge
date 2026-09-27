@@ -2,11 +2,46 @@
 
 Codex processes the first READY item whose dependencies are satisfied. Keep items small enough to implement and verify in one focused iteration.
 
+## Execution policy — reset 2026-09-27
+
+The specification, editable publication copy, ADRs, OPEN_DECISIONS,
+IMPLEMENTATION_STATUS, this queue, and AGENTS.md are the authority hierarchy.
+Each development prompt is one bounded user-visible vertical slice with exact
+requirements, canonical model, native macOS UI, renderer/preview/output,
+persistence/history/accessibility/cancellation, focused evidence, and factual
+documentation. Run focused affected tests before each local commit; do not run
+the full gate or hosted CI per slice.
+
+`SF-AUTHORING-054` is Development Prompt **1 of 10**. After Prompt 10, run one
+authoritative `./sf verify`, repair failures, commit, push main, and monitor
+hosted CI until green. Debug-only owner add-ons do not increment this cadence.
+Until that checkpoint, commits stay local and no external GitHub/release action
+is permitted. Normative modules remain Partial unless their full acceptance is
+actually evidenced.
+
 ## READY
 
 None.
 
 ## IN PROGRESS
+
+- [ ] `SF-AUTHORING-054` Native solid-fill and bounded linear-gradient authoring foundation (P1; Development Prompt 1 of 10).
+  - Requirements: bounded implementation/evidence for `SF-0508-001`–`005`,
+    `SF-0701-001`–`005`, `SF-0305-001`–`005`, `SF-0306-001`–`005`, and
+    applicable `SF-1204-003`–`004` output mapping.
+  - Plan: reuse the versioned typed fill-layer model, identity-gated Design
+    registry, native Inspector controls, renderer compositor, persistence and
+    existing UI journey; add the missing closed Frame/Section static-output
+    projection with exact opaque/alpha/gradient ordering. Keep drafts
+    scene-local and preserve cancellation, mixed-state, history, and
+    diagnostic behavior through existing central paths.
+  - Exclusions: raw CSS, arbitrary gradient syntax, image fills, browser
+    runtime, remote assets, publishing, unsupported node-kind static styling,
+    and release acceptance.
+  - Evidence: closed Frame/Section static projection and three focused unit
+    selectors passed 3/3 on 2026-09-27. The existing Inspector UI selector was
+    attempted once but XCTest automation timed out before its body ran; retain
+    the assertion and rerun only with a healthy macOS automation service.
 
 - [ ] `SF-AUTHORING-053` Static authored-box parity foundation (P1).
   - Requirements: bounded compiler evidence for `SF-1204-003`–`004`.

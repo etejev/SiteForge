@@ -1,5 +1,15 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-054
+
+- Connected the established native solid/linear-gradient authoring workflow to
+  a closed static Frame/Section output projection. Stable canonical layers,
+  stop interpolation, RGBA values, and opacity map to fixed deterministic
+  declarations without accepting raw CSS or introducing browser runtime.
+- Focused compiler, transaction, and native-raster checks passed. The existing
+  Inspector UI journey remains unchanged; its one local attempt stopped before
+  the body when macOS XCTest automation could not initialize.
+
 ## In progress — SF-AUTHORING-053
 
 - Added a fixed static border-box default so typed canonical dimensions remain

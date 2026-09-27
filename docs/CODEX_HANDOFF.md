@@ -1,5 +1,31 @@
 # Codex Continuation Handoff
 
+## Execution policy — reset 2026-09-27
+
+Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
+IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
+Every prompt is a bounded user-visible vertical slice with focused tests before
+its local commit. `SF-AUTHORING-054` is Development Prompt 1 of 10; Prompt 10
+triggers the next full verification and hosted checkpoint. Until then do not
+push or run broad gates. Normative modules remain Partial unless fully proven.
+
+## Current native fill-authoring checkpoint
+
+SF-AUTHORING-054 reuses the existing versioned fill-layer model, native Design
+Inspector, transactional registry, renderer compositor, package/recovery
+paths, and accessibility journey. It adds a closed static Frame/Section fill
+projection for solid and linear-gradient layers, including safe opacity and
+stable interpolation ordering; no raw CSS or browser runtime is introduced.
+
+The next focused selectors are
+`CommandKernelTests.testMultiPageStaticBuildPlanProjectsClosedFrameAndSectionFillLayers`,
+`TransformModelTests.testDesignFillLayerRegistryCommitsOrderedLayersWithExactHistoryAndPersistence`,
+`CanvasRendererTests.testAuthoredFillLayerCompositorPreservesOrderDisabledLayersStopsAnglesAndOpacity`,
+and `SiteForgeLaunchTests.testDesignInspectorOrderedFillLayersAccessibilityJourney`.
+The first three passed 3/3 on 2026-09-27. The UI selector was attempted once
+but XCTest timed out while enabling automation before the body ran; rerun it
+only after the macOS automation service is healthy.
+
 ## Current static authored-box checkpoint
 
 SF-AUTHORING-053 adds only the fixed `box-sizing: border-box` declaration to

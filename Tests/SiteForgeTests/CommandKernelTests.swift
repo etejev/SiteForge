@@ -828,6 +828,34 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertTrue(outline.contains("\(pageID.description)\t\(nodeID.description)\t-\tarticle"))
     }
 
+    // SF-0508-003, SF-0701-003, SF-1204-003 — only typed canonical Frame and
+    // Section layers become fixed static CSS; layer order stays immutable.
+    func testMultiPageStaticBuildPlanProjectsClosedFrameAndSectionFillLayers() throws {
+        let pageID = PageID(), frameID = NodeID(), sectionID = NodeID()
+        let red = CanonicalSolidColor(red: 1, green: 0, blue: 0, alpha: 1)
+        let blue = CanonicalSolidColor(red: 0, green: 0, blue: 1, alpha: 0.5)
+        let frameLayers = [CanonicalFillLayer.solid(color: red)]
+        let sectionLayers = [CanonicalFillLayer.linearGradient(angleDegrees: 0, stops: [
+            .init(id: GradientStopID(), position: 0, color: red),
+            .init(id: GradientStopID(), position: 1, color: blue),
+        ])]
+        func properties(_ layers: [CanonicalFillLayer]) -> [NodeProperty] {
+            CanonicalFillLayerCodec.propertyValues(for: layers).map {
+                .init(key: .init(rawValue: $0.key), value: $0.value, origin: .authored)
+            }
+        }
+        var frameProperties = properties(frameLayers)
+        frameProperties.append(.init(key: .init(rawValue: "style.opacity"), value: .number(0.5), origin: .authored))
+        let frame = DocumentNode(id: frameID, kind: .frame, name: "Frame", parent: .page(pageID), properties: frameProperties)
+        let section = DocumentNode(id: sectionID, kind: .section, name: "Section", parent: .page(pageID), properties: properties(sectionLayers))
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [frameID, sectionID], nodes: [frame, section])
+        let plan = try MultiPageStaticBuildPlanner.plan(document: .init(pages: [page]))
+        let stylesheet = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(stylesheet.contains("\(CanonicalCSSRule.selector(for: frameID)) { background-image: linear-gradient(90deg, rgba(255.0, 0.0, 0.0, 1.0) 0%, rgba(255.0, 0.0, 0.0, 1.0) 100%); opacity: 0.5; }"), stylesheet)
+        XCTAssertTrue(stylesheet.contains("\(CanonicalCSSRule.selector(for: sectionID)) { background-image: linear-gradient(90.0deg, rgba(255.0, 0.0, 0.0, 1.0) 0.0%, rgba(0.0, 0.0, 255.0, 0.5) 100.0%); }"))
+    }
+
     func testStaticPageStaleCancelledUnavailableAndNoOpAreNeutral() throws {
         let document = BlankProjectDefaults.document()
         let registry = PageCommandRegistry()

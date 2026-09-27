@@ -419,12 +419,17 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     /// content-addressed output path is optional because planning must retain
     /// a missing resource reference without manufacturing a URL.
     let image: InternalStaticImage?
+    /// Closed canonical fill layers are immutable render metadata. They are
+    /// present only for the supported static-output node kinds.
+    let fillLayers: [CanonicalFillLayer]
+    let opacity: Double?
 
     init(id: NodeID, sourceNodeID: NodeID, parentNodeID: NodeID? = nil, paintOrder: Int, frame: WorldRect,
          semanticElement: String, cssSelector: String, formField: InternalFormField?,
          control: InternalStaticControl? = nil, anchorID: String? = nil,
          textContent: String? = nil, typography: CanonicalTypography? = nil,
-         image: InternalStaticImage? = nil) {
+         image: InternalStaticImage? = nil, fillLayers: [CanonicalFillLayer] = [],
+         opacity: Double? = nil) {
         self.id = id
         self.sourceNodeID = sourceNodeID
         self.parentNodeID = parentNodeID
@@ -438,6 +443,8 @@ struct InternalRenderTreeNode: Equatable, Sendable {
         self.textContent = textContent
         self.typography = typography
         self.image = image
+        self.fillLayers = fillLayers
+        self.opacity = opacity
     }
 }
 
@@ -551,7 +558,9 @@ enum InternalDocumentRenderTreeCompiler {
                 anchorID: sectionIDs[page.id]?.contains(node.id) == true ? anchorID(for: node.id) : nil,
                 textContent: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
                 typography: node.kind == .text ? CanonicalTypography.resolved(for: node) : nil,
-                image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets)
+                image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets),
+                fillLayers: staticFillLayers(for: node),
+                opacity: staticOpacity(for: node)
             )
         }
         return .init(documentID: documentID, revision: revision, pageID: page.id, nodes: nodes)
@@ -579,6 +588,24 @@ enum InternalDocumentRenderTreeCompiler {
             focalX: style.focalX,
             focalY: style.focalY
         )
+    }
+
+    /// The SF-AUTHORING-054 output subset deliberately limits style emission
+    /// to Frame and Section. The renderer remains authoritative for the wider
+    /// editor-supported layer model until those node kinds have explicit
+    /// static-output acceptance.
+    private static func staticFillLayers(for node: DocumentNode) -> [CanonicalFillLayer] {
+        guard [.frame, .section].contains(node.kind) else { return [] }
+        return CanonicalFillLayerCodec.layers(for: node)
+            ?? CanonicalFillLayerCodec.legacySolidLayer(for: node).map { [$0] }
+            ?? []
+    }
+
+    private static func staticOpacity(for node: DocumentNode) -> Double? {
+        guard [.frame, .section].contains(node.kind),
+              let value = node.insertionNumberProperty("style.opacity"),
+              value.isFinite, (0...1).contains(value) else { return nil }
+        return value
     }
 
     /// SF-0806/SF-1102/SF-1203 v1: resolve only typed, prevalidated targets
@@ -777,6 +804,64 @@ enum StaticImageStyleOutputEmitter {
     }
 }
 
+/// SF-0508/SF-0701 bounded static-output adoption. This emitter maps only the
+/// closed canonical Frame/Section fill-layer model into fixed declarations;
+/// it accepts neither raw CSS nor a browser-side gradient description.
+enum StaticFillLayerStyleOutputEmitter {
+    static func emit(nodes: [InternalRenderTreeNode]) -> String {
+        nodes.sorted { $0.id.description < $1.id.description }
+            .compactMap(rule(for:))
+            .joined(separator: "\n")
+    }
+
+    private static func rule(for node: InternalRenderTreeNode) -> String? {
+        guard node.id == node.sourceNodeID,
+              node.cssSelector == CanonicalCSSRule.selector(for: node.id) else { return nil }
+        let enabled = node.fillLayers.filter(\.isEnabled)
+        guard enabled.allSatisfy(\.isValid) else { return nil }
+        var declarations: [String] = []
+        if !enabled.isEmpty {
+            let images = enabled.reversed().compactMap(gradientImage(for:))
+            guard images.count == enabled.count else { return nil }
+            declarations.append("background-image: \(images.joined(separator: ", "));" )
+        }
+        if let opacity = node.opacity {
+            declarations.append("opacity: \(number(opacity));")
+        }
+        guard !declarations.isEmpty else { return nil }
+        return "\(node.cssSelector) { \(declarations.joined(separator: " ")) }"
+    }
+
+    private static func gradientImage(for layer: CanonicalFillLayer) -> String? {
+        switch layer.kind {
+        case .solid:
+            guard let color = layer.solidColor else { return nil }
+            let rgba = cssRGBA(color)
+            return "linear-gradient(90deg, \(rgba) 0%, \(rgba) 100%)"
+        case .linearGradient:
+            guard let angle = layer.normalizedAngleDegrees else { return nil }
+            let cssAngle = (90 + angle).truncatingRemainder(dividingBy: 360)
+            let stops = layer.stops.enumerated().sorted {
+                $0.element.position == $1.element.position ? $0.offset < $1.offset : $0.element.position < $1.element.position
+            }.map { "\(cssRGBA($0.element.color)) \(number($0.element.position * 100))%" }
+            guard stops.count >= 2 else { return nil }
+            return "linear-gradient(\(number(cssAngle))deg, \(stops.joined(separator: ", ")))"
+        }
+    }
+
+    private static func cssRGBA(_ color: CanonicalSolidColor) -> String {
+        "rgba(\(number(color.red * 255)), \(number(color.green * 255)), \(number(color.blue * 255)), \(number(color.alpha)))"
+    }
+
+    private static func number(_ value: Double) -> String {
+        let rounded = (value * 1_000).rounded() / 1_000
+        var output = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), rounded)
+        while output.contains(".") && output.last == "0" { output.removeLast() }
+        if output.last == "." { output.append("0") }
+        return output == "-0.0" ? "0.0" : output
+    }
+}
+
 /// SF-1203 static-output v1: a content-free semantic outline gives a static
 /// plan deterministic hierarchy provenance without changing markup structure,
 /// introducing arbitrary HTML, or creating a browser/runtime path.
@@ -906,7 +991,8 @@ enum MultiPageStaticBuildPlanner {
         )
         let typography = StaticTypographyOutputEmitter.emit(nodes: staticNodes)
         let images = StaticImageStyleOutputEmitter.emit(nodes: staticNodes)
-        let stylesheet = [layout.css, typography, images].filter { !$0.isEmpty }.joined(separator: "\n")
+        let fills = StaticFillLayerStyleOutputEmitter.emit(nodes: staticNodes)
+        let stylesheet = [layout.css, typography, images, fills].filter { !$0.isEmpty }.joined(separator: "\n")
         if !stylesheet.isEmpty {
             guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
             files.append(.init(path: "styles.css", contents: stylesheet))
