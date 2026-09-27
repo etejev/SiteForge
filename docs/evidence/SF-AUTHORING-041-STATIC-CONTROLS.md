@@ -15,6 +15,9 @@ feature.
 - Valid external HTTP(S) targets and known package Page/Section targets are
   escaped and emitted as static Link hrefs. Section targets use a stable NodeID
   fragment only after the target Section is present in the route map.
+- A Link with typed new-context intent emits only the conventional safe static
+  `target=_blank` and `rel=noopener noreferrer` pair; no editor/browser runtime
+  or arbitrary attribute path is introduced.
 - Missing and absent Link targets remain visible, accessible inert anchors.
 - Button output is a disabled `type=button` control. It cannot accidentally
   submit a form or introduce a browser action in this bounded static surface.

@@ -428,6 +428,9 @@ struct InternalStaticControl: Equatable, Sendable {
     let label: String
     let href: String?
     let isLink: Bool
+    /// A canonical `.new` context becomes only the safe static HTML pair
+    /// below; it never creates an editor-side browser or navigation runtime.
+    let opensNewContext: Bool
     let disabled: Bool
 }
 
@@ -536,8 +539,13 @@ enum InternalDocumentRenderTreeCompiler {
         let isLink = node.kind == .link
         // Static Button authoring has no scripted action or submission path in
         // this bounded slice, so it remains visible but deliberately inert.
-        return .init(label: node.controlLabel, href: isLink ? href : nil,
-                     isLink: isLink, disabled: !isLink || href == nil)
+        return .init(
+            label: node.controlLabel,
+            href: isLink ? href : nil,
+            isLink: isLink,
+            opensNewContext: isLink && href != nil && node.controlContext == .new,
+            disabled: !isLink || href == nil
+        )
     }
 
     private static func anchorID(for nodeID: NodeID) -> String {
@@ -782,7 +790,8 @@ enum SafeHTMLEmitter {
             let label = escape(control.label)
             if control.isLink {
                 if let href = control.href {
-                    return "<a\(attributes) href=\"\(escape(href))\">\(label)</a>"
+                    let newContext = control.opensNewContext ? " target=\"_blank\" rel=\"noopener noreferrer\"" : ""
+                    return "<a\(attributes) href=\"\(escape(href))\"\(newContext)>\(label)</a>"
                 }
                 return "<a\(attributes) role=\"link\" aria-disabled=\"true\">\(label)</a>"
             }

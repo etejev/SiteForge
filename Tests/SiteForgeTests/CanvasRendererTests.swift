@@ -20,7 +20,7 @@ final class CanvasRendererTests: XCTestCase {
         let externalLink = DocumentNode(
             id: externalLinkID, kind: .link, name: "External link", parent: .node(rootID),
             properties: typedControlProperties(
-                .external("https://example.com/a?b=1&c=2"), label: "External"
+                .external("https://example.com/a?b=1&c=2"), label: "External", context: .new
             )
         )
         let missingLink = DocumentNode(
@@ -42,7 +42,7 @@ final class CanvasRendererTests: XCTestCase {
         let sectionAnchor = "sf-node-\(sectionID.rawValue.uuidString.lowercased())"
         XCTAssertTrue(output.contains("id=\"\(sectionAnchor)\""))
         XCTAssertTrue(output.contains("href=\"index.html#\(sectionAnchor)\">Jump &lt;there&gt;</a>"))
-        XCTAssertTrue(output.contains("href=\"https://example.com/a?b=1&amp;c=2\">External</a>"))
+        XCTAssertTrue(output.contains("href=\"https://example.com/a?b=1&amp;c=2\" target=\"_blank\" rel=\"noopener noreferrer\">External</a>"))
         XCTAssertTrue(output.contains("role=\"link\" aria-disabled=\"true\">Missing</a>"))
         XCTAssertTrue(output.contains("<button") && output.contains("type=\"button\" disabled aria-disabled=\"true\">Button</button>"))
         XCTAssertFalse(output.contains("onclick=") || output.contains("<script"))
@@ -144,10 +144,16 @@ final class CanvasRendererTests: XCTestCase {
 
     private static let frame = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: 1, height: 1))
 
-    private func typedControlProperties(_ target: CanonicalLinkTarget, label: String) -> [NodeProperty] {
+    private func typedControlProperties(
+        _ target: CanonicalLinkTarget,
+        label: String,
+        context: CanonicalLinkContext = .same
+    ) -> [NodeProperty] {
         target.properties.map { .init(key: .init(rawValue: $0.0), value: $0.1) } + [
             .init(key: .init(rawValue: CanonicalLinkTarget.labelKey), value: .string(label)),
-        ]
+        ] + (context == .new ? [
+            .init(key: .init(rawValue: CanonicalLinkTarget.namespace + "context"), value: .string(context.rawValue)),
+        ] : [])
     }
 
     private func formNode(_ id: NodeID) -> InternalRenderTreeNode {

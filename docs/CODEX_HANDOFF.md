@@ -8,7 +8,8 @@ output boundary: it accepts only `CanonicalLinkTarget` values that already pass
 canonical validation, resolves internal Page/Section references only against
 the current package route map, escapes output, and leaves missing targets
 inert. Static Buttons are deliberately emitted as disabled `type=button`
-controls: no browser action or submission behavior exists.
+controls: no browser action or submission behavior exists. Typed new-context
+Links emit only `target=_blank` with `rel=noopener noreferrer`.
 
 No local test execution was performed for this checkpoint under the current
 owner-directed test pause. The focused compiler regression

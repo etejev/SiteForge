@@ -5,7 +5,9 @@
 - Added safe immutable static-output projection for canonical Button and Link
   controls. The compiler emits escaped, typed external and document routes only;
   unresolved targets stay inert, and Button output cannot submit or execute a
-  browser action. Runtime navigation and static export remain deferred.
+  browser action. New-context Links receive only the safe static
+  `noopener noreferrer` relationship; editor-side navigation and static export
+  remain deferred.
 - Added a focused compiler regression covering escaped external and section
   routes, stable section anchors, unresolved inert Links, and inert Buttons;
   execution is deferred under the owner-directed test pause.

@@ -110,7 +110,9 @@ SF-AUTHORING-041 has begun a bounded static-control compiler foundation. Only
 typed canonical Link routes are projected into immutable markup; generated
 Button markup is intentionally inert, and unresolved internal targets remain
 accessible but do not become raw URLs. This does not enable browser runtime,
-actions, submission, static file export, or release acceptance. Evidence is in
+actions, submission, static file export, or release acceptance. Typed
+new-context Links emit only safe static `noopener noreferrer` attributes.
+Evidence is in
 `docs/evidence/SF-AUTHORING-041-STATIC-CONTROLS.md`; local test execution is
 paused by owner instruction for this checkpoint. The queued focused regression
 is `CanvasRendererTests.testStaticControlCompilerEscapesTypedRoutesAndKeepsMissingTargetsInert`.
