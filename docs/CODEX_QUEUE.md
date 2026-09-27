@@ -12,7 +12,7 @@ persistence/history/accessibility/cancellation, focused evidence, and factual
 documentation. Run focused affected tests before each local commit; do not run
 the full gate or hosted CI per slice.
 
-`SF-AUTHORING-060` is Development Prompt **7 of 10**. After Prompt 10, run one
+`SF-AUTHORING-061` is Development Prompt **8 of 10**. After Prompt 10, run one
 authoritative `./sf verify`, repair failures, commit, push main, and monitor
 hosted CI until green. Debug-only owner add-ons do not increment this cadence.
 Until that checkpoint, commits stay local and no external GitHub/release action
@@ -24,6 +24,12 @@ actually evidenced.
 None.
 
 ## IN PROGRESS
+
+- [x] `SF-AUTHORING-061` Native Frame/Section image-fill foundation v1 (P1; Development Prompt 8 of 10; focused local checkpoint).
+  - Requirements: bounded `SF-0508-001`–`008`, `SF-0801-001`–`008`, `SF-0802-001`–`008`; supporting `SF-0305`/`SF-0306`, `SF-0701`/`SF-0702`, and `SF-1204`.
+  - Plan: represent one optional stable AssetID and Fit/Fill mode in a strictly validated versioned Frame/Section property namespace; compile Inspector mutations through the existing identity-gated transaction and safe asset-deletion boundaries; resolve immutable asset snapshots into native canvas, Preview, and closed static output with documented paint order and missing-resource fallback; add focused model/render/static/actual-app evidence and update factual status.
+  - Exclusions: multi-image layers, masks, blending, filters, crop/focal adjustment, remote resources, responsive sources, browser runtime, publishing, and release acceptance.
+  - Evidence: exact model, 1×/2× pixel, and fresh-process native Inspector/reopen selectors passed 3/3. Four original-resolution screenshots were reviewed; the Frame image stays clipped and aligned across Fill, Fit, and reopen. Existing SwiftUI publication/QoS runtime warnings remain separately observable. See `docs/evidence/SF-AUTHORING-061-FRAME-SECTION-IMAGE-FILL.md`. Full and hosted gates remain reserved for Prompt 10.
 
 - [x] `SF-AUTHORING-060` Native text foreground color foundation v1 (P1; Development Prompt 7 of 10; focused local checkpoint).
   - Requirements: bounded `SF-0507-001`–`008`, `SF-0508-001`–`008`, `SF-0509-001`–`008`, with `SF-0305`/`SF-0306`, `SF-0701`/`SF-0702`, and `SF-1204` integration.

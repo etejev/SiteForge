@@ -3402,6 +3402,90 @@ enum DesignInspectorSelectionPresentation {
 
 // MARK: - Image inspector command boundary
 
+enum ImageFillEdit: Sendable {
+    case setAsset(AssetID)
+    case setMode(ImageFitMode)
+    case remove
+}
+
+enum ImageFillCommandError: Error, LocalizedError, Equatable, Sendable {
+    case stale, cancelled, unavailable, invalidAsset, noApplicableTargets, noChanges
+    var errorDescription: String? {
+        switch self {
+        case .stale: "The document, selection, or renderer changed. Review the image fill and try again."
+        case .cancelled: "Image fill edit cancelled; the document is unchanged."
+        case .unavailable: "Unlock and show the selected object before editing its image fill."
+        case .invalidAsset: "Choose a compatible imported local image asset."
+        case .noApplicableTargets: "Select a Frame or Section to edit its image fill."
+        case .noChanges: "The image fill already has that value."
+        }
+    }
+}
+
+struct ImageFillCommandRegistry: Sendable {
+    func prepare(_ edit: ImageFillEdit, identity: ImageInspectorOperationIdentity,
+                 in document: CanonicalDocument, context: TransformValidationContext,
+                 cancelled: Bool = false) throws -> PreparedImageInspectorEdit {
+        if cancelled { throw ImageFillCommandError.cancelled }
+        guard identity.documentID == document.id, identity.revision == document.revision,
+              identity.sceneID == context.currentSceneID,
+              identity.rendererGeneration == context.rendererGeneration,
+              identity.pageID == context.activePageID,
+              identity.selectedNodeIDs == context.selectedNodeIDs,
+              !identity.selectedNodeIDs.isEmpty,
+              Set(identity.selectedNodeIDs).count == identity.selectedNodeIDs.count,
+              document.revision < UInt64.max - 1,
+              let page = document.pages.first(where: { $0.id == identity.pageID }) else {
+            throw ImageFillCommandError.stale
+        }
+        guard context.isLifecycleAvailable else { throw ImageFillCommandError.unavailable }
+        if case .setAsset(let id) = edit {
+            guard document.imageAssets.contains(where: { $0.id == id }) else { throw ImageFillCommandError.invalidAsset }
+        }
+        var applicable: [NodeID] = [], skipped: [NodeID] = [], changes: [DocumentCommand] = []
+        for id in identity.selectedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw ImageFillCommandError.stale }
+            guard [.frame, .section].contains(node.kind) else { skipped.append(id); continue }
+            guard context.availableNodeIDs.contains(id), !node.selectionBooleanProperty("locked"),
+                  !node.selectionBooleanProperty("hidden") else { throw ImageFillCommandError.unavailable }
+            applicable.append(id)
+            let replacements: [(String, PropertyValue)]
+            let owned: [String]
+            switch edit {
+            case .setAsset(let asset):
+                replacements = [(CanonicalImageFill.assetKey, .string(asset.description))]
+                owned = [CanonicalImageFill.assetKey]
+            case .setMode(let mode):
+                guard CanonicalImageFill.resolve(node) != nil, mode == .fit || mode == .fill else {
+                    throw ImageFillCommandError.invalidAsset
+                }
+                replacements = [(CanonicalImageFill.modeKey, .string(mode.rawValue))]
+                owned = [CanonicalImageFill.modeKey]
+            case .remove:
+                replacements = []
+                owned = [CanonicalImageFill.assetKey, CanonicalImageFill.modeKey]
+            }
+            for key in owned {
+                let old = node.insertionProperty(key)
+                if let value = replacements.first(where: { $0.0 == key })?.1 {
+                    if old?.value != value || old?.origin != .authored {
+                        changes.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                            property: .init(id: old?.id ?? PropertyID(), key: .init(rawValue: key),
+                                            value: value, origin: .authored))))
+                    }
+                } else if let old {
+                    changes.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: old.id)))
+                }
+            }
+        }
+        guard !applicable.isEmpty else { throw ImageFillCommandError.noApplicableTargets }
+        guard !changes.isEmpty else { throw ImageFillCommandError.noChanges }
+        let command: DocumentCommand = changes.count == 1 ? changes[0] : .batch(changes)
+        guard CommandRegistry().availability(for: command, in: document).isEnabled else { throw ImageFillCommandError.stale }
+        return .init(command: command, applicableNodeIDs: applicable, skippedNodeIDs: skipped)
+    }
+}
+
 enum ImageInspectorPresentation: Equatable, Sendable {
     case single(CanonicalImageStyle, ImageAsset)
     case mixed(applicable: Int, skipped: Int)

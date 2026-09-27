@@ -5,11 +5,23 @@
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-060` is Development Prompt 7 of 10; Prompt 10
+its local commit. `SF-AUTHORING-061` is Development Prompt 8 of 10; Prompt 10
 triggers the next full verification and hosted checkpoint. Until then do not
 push or run broad gates. Normative modules remain Partial unless fully proven.
 
-## Current text-foreground checkpoint
+## Current image-fill work
+
+SF-AUTHORING-061 adds one optional local AssetID image fill for Frame/Section
+under `style.fill.image.v1.*`, reusing the existing resource store, typed
+property commands, image decoder and native Design Inspector. The image is
+painted above authored solid/gradient layers, inside the shared corner clip;
+opacity applies to the composite once. Image-node and image-fill references
+both count for safe asset deletion. Exact model, raster, and actual-app
+Inspector/reopen selectors passed 3/3; four retained native screenshots were
+reviewed. See `docs/evidence/SF-AUTHORING-061-FRAME-SECTION-IMAGE-FILL.md`. Do not
+claim broad SF-0508 or SF-0801/0802 completion or push before Prompt 10.
+
+## Prior text-foreground checkpoint
 
 SF-AUTHORING-060 adds optional normalized whole-object foreground channels to
 the existing typography namespace for Text/Button/Link. The existing token

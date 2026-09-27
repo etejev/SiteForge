@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## Focused checkpoint — SF-AUTHORING-061
+
+- Frame and Section can reference one imported local image as a background
+  through native Design Inspector controls, with Fit/Fill mode and an explicit
+  removal action. The image paints above existing color/gradient layers and
+  remains clipped to the object; asset deletion now counts and safely detaches
+  image-fill uses alongside Image nodes.
+
 ## Focused checkpoint — SF-AUTHORING-060
 
 - Text, Button, and Link now support an authored whole-object foreground color

@@ -1523,7 +1523,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         let pathField = application.sheets.textFields["PathTextField"]
         XCTAssertTrue(pathField.waitForExistence(timeout: 3))
         pathField.click()
+        pathField.typeKey("a", modifierFlags: .command)
         pathField.typeText(imageURL.path)
+        XCTAssertEqual(pathField.value as? String, imageURL.path,
+                       "The native Go-to-Folder field must contain the exact fixture path before confirming import.")
         pathField.typeKey(.return, modifierFlags: [])
         // Native OpenPanel variants either accept Return in the path field or
         // expose the real Go action. Do not proceed until that sheet changes.
@@ -1637,6 +1640,58 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValue(application.textFields["inspector.image.focalY"], containing: "75"))
         XCTAssertEqual(application.textFields["inspector.image.alt"].value as? String, "A generated orange and teal test image")
         attachWindowScreenshot(application, named: "SF-AUTHORING-019 Image reopened")
+
+        // SF-AUTHORING-061: the same imported AssetID is a bounded Frame
+        // background reference, edited through the visible native Inspector.
+        application.buttons["toolbar.tool.frame"].click()
+        let liveCanvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
+        liveCanvas.coordinate(withNormalizedOffset: .init(dx: 0.28, dy: 0.32)).click()
+        XCTAssertTrue(waitForValue(liveCanvas, containing: "rendered objects 2"))
+        application.buttons["toolbar.tool.select"].click()
+        application.buttons["inspector.tab.design"].click()
+        let imageFillStatus = application.descendants(matching: .any)["inspector.imageFill.status"].firstMatch
+        XCTAssertTrue(imageFillStatus.waitForExistence(timeout: 5))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-061 Frame image fill empty")
+        XCTAssertTrue(waitForValue(imageFillStatus, containing: "No image fill"))
+        let chooseImage = application.descendants(matching: .any)["inspector.imageFill.choose"].firstMatch
+        XCTAssertTrue(chooseImage.isHittable)
+        chooseImage.click()
+        // The native SwiftUI Menu item exposes its asset name as AX title,
+        // not label. This fixture imports exactly one asset; target its real
+        // visible menu item within this control rather than the app menu bar.
+        let assetMenuItems = chooseImage.menus.menuItems
+        XCTAssertEqual(assetMenuItems.count, 1)
+        assetMenuItems.firstMatch.click()
+        XCTAssertTrue(waitForValue(imageFillStatus, containing: "siteforge-image"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-061 Frame image fill authored")
+        let mode = application.descendants(matching: .any)["inspector.imageFill.mode"].firstMatch
+        XCTAssertTrue(mode.exists)
+        mode.click()
+        application.menuItems["Fit"].click()
+        XCTAssertTrue(waitForValue(imageFillStatus, containing: "Fit"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-061 Frame image fill fit")
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(imageFillStatus, containing: "Fill"))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(imageFillStatus, containing: "Fit"))
+        saveDocumentIfModified(in: application)
+        terminateAndWait(application)
+        application = launchExistingIntegrationProject(
+            project,
+            recoveryDirectory: fixtureRoot.appendingPathComponent("image-fill-reopen-recovery", isDirectory: true),
+            windowAlignment: leadingEdgeAlignmentOnNarrowDisplay
+        )
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 8))
+        application.buttons["navigator.tab.layers"].click()
+        let frameLayer = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame"
+        )).firstMatch
+        XCTAssertTrue(frameLayer.waitForExistence(timeout: 5))
+        frameLayer.click()
+        application.buttons["inspector.tab.design"].click()
+        let reopenedImageFillStatus = application.descendants(matching: .any)["inspector.imageFill.status"].firstMatch
+        XCTAssertTrue(waitForValue(reopenedImageFillStatus, containing: "Fit"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-061 Frame image fill reopened")
     }
 
     // SF-0404-001 through SF-0404-008

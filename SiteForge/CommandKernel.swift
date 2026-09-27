@@ -678,8 +678,9 @@ struct CommandRegistry {
             let reference = value.assetID.description
             guard !document.pages.flatMap(\.nodes).contains(where: {
                 $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
+                    || $0.insertionStringProperty(CanonicalImageFill.assetKey) == reference
             }) else {
-                return .disabled(reason: "Detach or remove every Image using this asset before deleting it.")
+                return .disabled(reason: "Detach every Image or image fill using this asset before deleting it.")
             }
             return validationAvailability(afterApplying: command, to: document)
 

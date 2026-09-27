@@ -2757,6 +2757,7 @@ private struct DesignInspectorFieldsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             imageControls
+            imageFillControls
             Text("Appearance").font(.headline)
             let fill = state.designInspectorFillValue()
             let fillIsApplicable = !isUnavailable(fill)
@@ -3017,6 +3018,48 @@ private struct DesignInspectorFieldsView: View {
             fontFamilyDraft = ""; fontSizeDraft = ""; lineHeightDraft = ""; trackingDraft = ""
         }
         textForegroundDraft = state.textForegroundInspectorColor()?.hexadecimalRGBA ?? ""
+    }
+
+    @ViewBuilder
+    private var imageFillControls: some View {
+        if !state.imageFillSelection.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Image Fill").font(.headline)
+                Text(state.imageFillInspectorStatus())
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.imageFill.status")
+                    .accessibilityValue(state.imageFillInspectorStatus())
+                if state.documentSession.document.imageAssets.isEmpty {
+                    Button("Import Images…") { state.importImages() }
+                        .accessibilityIdentifier("inspector.imageFill.import")
+                } else {
+                    Menu("Choose Image…") {
+                        ForEach(state.documentSession.document.imageAssets) { asset in
+                            Button("\(asset.displayName) · \(asset.pixelWidth) × \(asset.pixelHeight)") {
+                                _ = state.commitImageFillEdit(.setAsset(asset.id))
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("inspector.imageFill.choose")
+                }
+                HStack {
+                    Picker("Mode", selection: Binding(
+                        get: { state.imageFillMode() ?? .fill },
+                        set: { _ = state.commitImageFillEdit(.setMode($0)) }
+                    )) {
+                        Text("Fill").tag(ImageFitMode.fill)
+                        Text("Fit").tag(ImageFitMode.fit)
+                    }
+                    .disabled(state.imageFillMode() == nil)
+                    .accessibilityIdentifier("inspector.imageFill.mode")
+                    Button("Remove") { _ = state.commitImageFillEdit(.remove) }
+                        .disabled(state.imageFillMode() == nil)
+                        .accessibilityIdentifier("inspector.imageFill.remove")
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("inspector.imageFill")
+        }
     }
 
     @ViewBuilder
@@ -4649,8 +4692,14 @@ private struct LocalPreviewObject: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(6)
                     .accessibilityLabel(object.accessibilityLabel)
-            } else if object.style == .imagePlaceholder, let data = object.imageData, let image = NSImage(data: data) {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: object.imageFitMode == .fill ? .fill : .fit)
+            } else if object.imageAssetID != nil {
+                if let data = object.imageData, let image = NSImage(data: data) {
+                    Image(nsImage: image).resizable().aspectRatio(contentMode: object.imageFitMode == .fill ? .fill : .fit)
+                } else {
+                    Text("Missing image resource")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .opacity(object.opacity)
@@ -6734,16 +6783,21 @@ final class CanvasContentTileLayer: CALayer {
             // stack. Individual layer alpha remains part of normal source-over
             // compositing; editor overlays are painted by separate layers.
             context.setAlpha(CGFloat(object.opacity))
+            // When an image sits above canonical solid/gradient layers, the
+            // authored surface is one group. Applying alpha to each source
+            // independently would make a 50% image-over-fill object 75% opaque.
+            let groupsImageWithFill = object.imageAssetID != nil
+            if groupsImageWithFill { context.beginTransparencyLayer(auxiliaryInfo: nil) }
             let renderedSurface: NSColor
             if !object.fillLayers.isEmpty {
                 // Composite the authored stack into one transparency group.
                 // The current alpha is applied when that completed group is
                 // drawn back into the tile, rather than once per layer.
-                context.beginTransparencyLayer(auxiliaryInfo: nil)
+                if !groupsImageWithFill { context.beginTransparencyLayer(auxiliaryInfo: nil) }
                 for layer in object.fillLayers where layer.isEnabled {
                     drawAuthoredFillLayer(layer, in: rect, context: context)
                 }
-                context.endTransparencyLayer()
+                if !groupsImageWithFill { context.endTransparencyLayer() }
                 renderedSurface = CanvasAuthoredFillCompositor.resolvedColor(
                     layers: object.fillLayers,
                     atNormalizedPoint: (x: 0.5, y: 0.5)
@@ -6760,7 +6814,7 @@ final class CanvasContentTileLayer: CALayer {
                 context.fill(rect)
             }
             var didDrawImage = false
-            if object.style == .imagePlaceholder,
+            if object.imageAssetID != nil,
                let data = object.imageData,
                let source = CGImageSourceCreateWithData(data as CFData, nil),
                let image = CGImageSourceCreateImageAtIndex(source, 0, [
@@ -6768,30 +6822,31 @@ final class CanvasContentTileLayer: CALayer {
                    kCGImageSourceShouldAllowFloat: true,
                ] as CFDictionary) {
                 let mode = object.imageFitMode ?? .fit
-                guard let resolvedDestination = CanvasImageLayout.destinationRect(
+                if let resolvedDestination = CanvasImageLayout.destinationRect(
                     source: .init(width: Double(image.width), height: Double(image.height)),
                     bounds: .init(
                         origin: .init(x: rect.origin.x, y: rect.origin.y),
                         size: .init(width: rect.width, height: rect.height)
                     ),
                     mode: mode, focalX: object.imageFocalX, focalY: object.imageFocalY
-                ) else { continue }
-                let destination = CGRect(
-                    x: resolvedDestination.origin.x, y: resolvedDestination.origin.y,
-                    width: resolvedDestination.size.width, height: resolvedDestination.size.height
-                )
-                context.saveGState()
-                context.clip(to: rect)
-                // SiteForge's tile context is top-left/Y-down. CGImage draw is
-                // bottom-left/Y-up, so reflect exactly once around the resolved
-                // destination midpoint. Selection and hit testing keep using
-                // the unchanged authored rect.
-                context.translateBy(x: 0, y: 2 * destination.midY)
-                context.scaleBy(x: 1, y: -1)
-                context.interpolationQuality = .high
-                context.draw(image, in: destination)
-                context.restoreGState()
-                didDrawImage = true
+                ) {
+                    let destination = CGRect(
+                        x: resolvedDestination.origin.x, y: resolvedDestination.origin.y,
+                        width: resolvedDestination.size.width, height: resolvedDestination.size.height
+                    )
+                    context.saveGState()
+                    context.clip(to: rect)
+                    // SiteForge's tile context is top-left/Y-down. CGImage draw is
+                    // bottom-left/Y-up, so reflect exactly once around the resolved
+                    // destination midpoint. Selection and hit testing keep using
+                    // the unchanged authored rect.
+                    context.translateBy(x: 0, y: 2 * destination.midY)
+                    context.scaleBy(x: 1, y: -1)
+                    context.interpolationQuality = .high
+                    context.draw(image, in: destination)
+                    context.restoreGState()
+                    didDrawImage = true
+                }
             }
             if object.style == .imagePlaceholder, !didDrawImage {
                 context.setFillColor(NSColor.systemPurple.withAlphaComponent(0.14).cgColor)
@@ -6809,6 +6864,7 @@ final class CanvasContentTileLayer: CALayer {
                 )
                 drawAppKitText(missing, in: inset, context: context)
             }
+            if groupsImageWithFill { context.endTransparencyLayer() }
             if let border = object.border, let color = nsColor(border.rgba), border.width > 0 {
                 context.saveGState()
                 context.addPath(objectPath)

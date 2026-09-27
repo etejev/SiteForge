@@ -2,7 +2,14 @@
 
 Last updated: 2026-09-27.
 
-Current local development prompt: SF-AUTHORING-060 (7 of 10), bounded native
+Current local development prompt: SF-AUTHORING-061 (8 of 10), bounded
+Frame/Section image fills backed by existing local assets. Its focused model,
+raster, and native Inspector/reopen journey passed 3/3; four original-resolution
+captures were reviewed. Existing runtime warnings remain documented in
+`docs/evidence/SF-AUTHORING-061-FRAME-SECTION-IMAGE-FILL.md`.
+The full gate and hosted checkpoint remain reserved for prompt 10.
+
+Previous local development prompt: SF-AUTHORING-060 (7 of 10), bounded native
 text foreground and local Color Token binding for Text, Button, and Link.
 Focused model/render/actual-app evidence is recorded in
 `docs/evidence/SF-AUTHORING-060-TEXT-FOREGROUND.md`; the full gate and hosted

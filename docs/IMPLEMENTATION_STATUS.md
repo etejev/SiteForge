@@ -2,6 +2,18 @@
 
 Last updated: 2026-09-27.
 
+SF-AUTHORING-061 is a focused local Frame/Section image-fill checkpoint
+(`SF-0508`, `SF-0801`, `SF-0802` Partial). A strictly validated optional
+AssetID plus Fit/Fill mode reuses existing package resources and typed history;
+the image paints above solid/gradient backgrounds inside the same rounded
+object clip, with object opacity applied once. Asset deletion accounts for
+both Image nodes and image fills. Native Inspector selection and the immutable
+canvas/Preview/static projections are wired. Focused model and exact native
+pixel checks and the real-app import/Inspector/undo/reopen journey passed 3/3
+exact selectors. Four original-resolution screenshots were reviewed; see
+`docs/evidence/SF-AUTHORING-061-FRAME-SECTION-IMAGE-FILL.md`. Existing runtime
+warnings are recorded there. No prompt-eight full gate or hosted run occurred.
+
 SF-AUTHORING-060 adds a bounded native whole-object text foreground for
 Text, Button, and Link (`SF-0507`, `SF-0508`, `SF-0509` Partial). Optional
 normalized RGBA channels preserve automatic legacy color when omitted;

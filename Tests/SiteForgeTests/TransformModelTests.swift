@@ -4,6 +4,89 @@ import XCTest
 
 @MainActor
 final class TransformModelTests: XCTestCase {
+    func testFrameSectionImageFillIsAtomicScopedAndMissingSafe() throws {
+        var fixture = makeFixture(selectedIDs: [NodeID]())
+        fixture.document.pages[0].nodes[2].kind = .section
+        applyStructuralDefaults(for: .section, to: &fixture.document.pages[0].nodes[2])
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Card",
+            originalFilename: "card.png", format: .png, pixelWidth: 4, pixelHeight: 3,
+            byteCount: 16, contentHash: String(repeating: "a", count: 64))
+        fixture.document.imageAssets = [asset]
+        let session = DocumentSession(document: fixture.document)
+        let ids = [fixture.nodeID, fixture.secondNodeID]
+        func node(_ id: NodeID) -> DocumentNode {
+            session.document.pages[0].nodes.first { $0.id == id }!
+        }
+        func prepare(_ edit: ImageFillEdit, ids: [NodeID] = []) throws -> PreparedImageInspectorEdit {
+            let selected = ids.isEmpty ? [fixture.nodeID, fixture.secondNodeID] : ids
+            return try ImageFillCommandRegistry().prepare(edit, identity: .init(
+                documentID: session.document.id, pageID: fixture.pageID,
+                revision: session.document.revision, sceneID: fixture.sceneID,
+                rendererGeneration: fixture.rendererGeneration, selectedNodeIDs: selected),
+                in: session.document, context: fixture.context(selectedIDs: selected))
+        }
+        let applied = try prepare(.setAsset(asset.id))
+        XCTAssertEqual(applied.applicableNodeIDs, ids)
+        try session.execute(applied.command)
+        XCTAssertEqual(CanonicalImageFill.resolve(node(fixture.nodeID))?.mode, .fill)
+        let propertyID = try XCTUnwrap(node(fixture.nodeID).insertionProperty(CanonicalImageFill.assetKey)?.id)
+        XCTAssertFalse(CommandRegistry().availability(for: .removeImageAsset(.init(assetID: asset.id)),
+            in: session.document).isEnabled)
+        let mode = try prepare(.setMode(.fit))
+        try session.execute(mode.command)
+        XCTAssertEqual(CanonicalImageFill.resolve(node(fixture.secondNodeID))?.mode, .fit)
+        try session.undo()
+        XCTAssertEqual(CanonicalImageFill.resolve(node(fixture.nodeID))?.mode, .fill)
+        try session.redo()
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        let staticTree = try InternalDocumentRenderTreeCompiler.compile(page: session.document.pages[0],
+            documentID: session.document.id, revision: session.document.revision)
+        XCTAssertEqual(staticTree.nodes.first { $0.id == fixture.nodeID }?.imageFill?.assetID, asset.id)
+        let plannedTree = try InternalDocumentRenderTreeCompiler.compile(page: session.document.pages[0],
+            documentID: session.document.id, revision: session.document.revision,
+            imageOutputPaths: [asset.id: "assets/\(asset.contentHash).png"],
+            imageAssets: [asset.id: asset])
+        let style = StaticFillLayerStyleOutputEmitter.emit(nodes: plannedTree.nodes)
+        XCTAssertTrue(style.contains("url(\"assets/\(asset.contentHash).png\")"), style)
+        XCTAssertTrue(style.contains("background-size: contain;"), style)
+        XCTAssertFalse(style.contains("/Users/"))
+        var missing = session.document
+        missing.imageAssets = []
+        XCTAssertNoThrow(try missing.validate())
+        XCTAssertEqual(CanonicalImageFill.resolve(missing.pages[0].nodes[1])?.assetID, asset.id)
+        XCTAssertThrowsError(try prepare(.setMode(.stretch)))
+        XCTAssertThrowsError(try ImageFillCommandRegistry().prepare(.remove, identity: .init(
+            documentID: session.document.id, pageID: fixture.pageID, revision: session.document.revision,
+            sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration,
+            selectedNodeIDs: ids), in: session.document,
+            context: fixture.context(selectedIDs: ids), cancelled: true))
+        try session.execute(prepare(.remove).command)
+        XCTAssertNil(CanonicalImageFill.resolve(node(fixture.nodeID)))
+        try session.undo()
+        XCTAssertEqual(node(fixture.nodeID).insertionProperty(CanonicalImageFill.assetKey)?.id, propertyID)
+        let detachedProperties: [DocumentCommand] = ids.flatMap { id in
+            [CanonicalImageFill.assetKey, CanonicalImageFill.modeKey].compactMap { key in
+                node(id).insertionProperty(key).map {
+                    .removeProperty(.init(pageID: fixture.pageID, nodeID: id, propertyID: $0.id))
+                }
+            }
+        }
+        try session.execute(.batch(detachedProperties + [.removeImageAsset(.init(assetID: asset.id))]))
+        XCTAssertTrue(session.document.imageAssets.isEmpty)
+        XCTAssertTrue(ids.allSatisfy { CanonicalImageFill.resolve(node($0)) == nil })
+        try session.undo()
+        XCTAssertEqual(node(fixture.nodeID).insertionProperty(CanonicalImageFill.assetKey)?.id, propertyID)
+        XCTAssertEqual(session.document.imageAssets.first?.id, asset.id)
+        var malformed = session.document
+        let malformedIndex = try XCTUnwrap(malformed.pages[0].nodes[1].properties.firstIndex {
+            $0.key.rawValue == CanonicalImageFill.modeKey
+        })
+        malformed.pages[0].nodes[1].properties[malformedIndex].value = .string("stretch")
+        XCTAssertThrowsError(try malformed.validate()) { error in
+            XCTAssertEqual(error as? ModelValidationError, .invalidImageReference)
+        }
+    }
+
     func testTextForegroundLiteralTokenFallbackHistoryAndValidation() throws {
         var fixture = makeFixture()
         fixture.document.pages[0].nodes[1].kind = .text

@@ -422,6 +422,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     /// content-addressed output path is optional because planning must retain
     /// a missing resource reference without manufacturing a URL.
     let image: InternalStaticImage?
+    let imageFill: InternalStaticImage?
     /// Closed canonical fill layers are immutable render metadata. They are
     /// present only for the supported static-output node kinds.
     let fillLayers: [CanonicalFillLayer]
@@ -438,7 +439,8 @@ struct InternalRenderTreeNode: Equatable, Sendable {
          control: InternalStaticControl? = nil, anchorID: String? = nil,
          textContent: String? = nil, typography: CanonicalTypography? = nil,
          textForeground: CanonicalSolidColor? = nil,
-         image: InternalStaticImage? = nil, fillLayers: [CanonicalFillLayer] = [],
+         image: InternalStaticImage? = nil, imageFill: InternalStaticImage? = nil,
+         fillLayers: [CanonicalFillLayer] = [],
          opacity: Double? = nil, boxStyle: CanonicalBoxStyle? = nil,
          sizingConstraints: CanonicalSizingConstraints? = nil) {
         self.id = id
@@ -455,6 +457,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
         self.typography = typography
         self.textForeground = textForeground
         self.image = image
+        self.imageFill = imageFill
         self.fillLayers = fillLayers
         self.opacity = opacity
         self.boxStyle = boxStyle
@@ -575,6 +578,7 @@ enum InternalDocumentRenderTreeCompiler {
                 typography: node.kind.isTextual ? CanonicalTypography.resolved(for: node) : nil,
                 textForeground: LocalColorTokenResolver.textForeground(for: node, tokens: colorTokens),
                 image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets),
+                imageFill: staticImageFill(for: node, outputPaths: imageOutputPaths),
                 fillLayers: staticFillLayers(for: node, colorTokens: colorTokens),
                 opacity: staticOpacity(for: node),
                 boxStyle: staticBoxStyle(for: node, colorTokens: colorTokens),
@@ -607,6 +611,14 @@ enum InternalDocumentRenderTreeCompiler {
             focalX: style.focalX,
             focalY: style.focalY
         )
+    }
+
+    private static func staticImageFill(for node: DocumentNode,
+                                        outputPaths: [AssetID: String]) -> InternalStaticImage? {
+        guard let fill = CanonicalImageFill.resolve(node) else { return nil }
+        return .init(assetID: fill.assetID, outputPath: outputPaths[fill.assetID],
+                     intrinsicWidth: nil, intrinsicHeight: nil, altText: "",
+                     isDecorative: true, fitMode: fill.mode, focalX: 0.5, focalY: 0.5)
     }
 
     /// The SF-AUTHORING-054 output subset deliberately limits style emission
@@ -858,10 +870,21 @@ enum StaticFillLayerStyleOutputEmitter {
         let enabled = node.fillLayers.filter(\.isEnabled)
         guard enabled.allSatisfy(\.isValid) else { return nil }
         var declarations: [String] = []
-        if !enabled.isEmpty {
-            let images = enabled.reversed().compactMap(gradientImage(for:))
+        if !enabled.isEmpty || node.imageFill != nil {
+            var images = enabled.reversed().compactMap(gradientImage(for:))
             guard images.count == enabled.count else { return nil }
-            declarations.append("background-image: \(images.joined(separator: ", "));" )
+            if let fill = node.imageFill {
+                if let path = fill.outputPath,
+                   path.range(of: "^assets/[a-f0-9]{64}\\.(png|jpg)$", options: .regularExpression) != nil {
+                    images.insert("url(\"\(path)\")", at: 0)
+                    declarations.append("background-size: \(fill.fitMode == .fit ? "contain" : "cover");")
+                    declarations.append("background-position: center;")
+                    declarations.append("background-repeat: no-repeat;")
+                } else if images.isEmpty {
+                    declarations.append("background-image: none; /* Missing local image fill */")
+                }
+            }
+            if !images.isEmpty { declarations.append("background-image: \(images.joined(separator: ", "));" ) }
         }
         if let opacity = node.opacity {
             declarations.append("opacity: \(number(opacity));")

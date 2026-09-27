@@ -933,14 +933,16 @@ actor WorkspaceScenePreparationWorker {
                 }
                 return snapshot
             }
+            let authoredImageFill = CanonicalImageFill.resolve(node)
             let imageAssetID = node.kind == .image
                 ? node.insertionStringProperty(CanonicalImageStyle.namespace + "assetID").flatMap(AssetID.init(uuidString:))
-                : nil
+                : authoredImageFill?.assetID
             let imageAsset = imageAssetID.flatMap { id in
                 request.document.imageAssets.first(where: { $0.id == id })
             }
-            let imageFit = node.insertionStringProperty(CanonicalImageStyle.namespace + "fit")
-                .flatMap(CanvasImageFitMode.init(rawValue:))
+            let imageFit = authoredImageFill.map { CanvasImageFitMode(rawValue: $0.mode.rawValue) ?? .fill }
+                ?? node.insertionStringProperty(CanonicalImageStyle.namespace + "fit")
+                    .flatMap(CanvasImageFitMode.init(rawValue:))
             let imageFocalX = node.insertionNumberProperty(CanonicalImageStyle.namespace + "focal.x") ?? 0.5
             let imageFocalY = node.insertionNumberProperty(CanonicalImageStyle.namespace + "focal.y") ?? 0.5
             let imageAlt = node.insertionStringProperty(CanonicalImageStyle.namespace + "alt") ?? ""
@@ -1343,10 +1345,65 @@ final class WorkspaceShellState: ObservableObject {
         }
     }
 
+    var imageFillSelection: [DocumentNode] {
+        selectedCanonicalNodes.filter { [.frame, .section].contains($0.kind) }
+    }
+
+    func imageFillInspectorStatus() -> String {
+        let applicable = imageFillSelection
+        guard !applicable.isEmpty else { return "Select a Frame or Section for an image fill." }
+        let skipped = selectedCanonicalNodes.count - applicable.count
+        let suffix = skipped == 0 ? "" : " · \(skipped) incompatible skipped"
+        let values = applicable.map(CanonicalImageFill.resolve)
+        guard values.dropFirst().allSatisfy({ $0 == values[0] }) else { return "Mixed image fills\(suffix)" }
+        guard let fill = values[0] else { return "No image fill · defaulted\(suffix)" }
+        guard let asset = documentSession.document.imageAssets.first(where: { $0.id == fill.assetID }) else {
+            return "Missing image asset · replace or remove\(suffix)"
+        }
+        let adopted = canvasRenderPlan?.authoredObjects.first { $0.id == applicable[0].id }
+        let availability = adopted?.imageAssetID == asset.id && adopted?.imageData == nil
+            ? " · resource unavailable" : ""
+        return "\(asset.displayName) · \(asset.pixelWidth) × \(asset.pixelHeight) · \(fill.mode.rawValue.capitalized) · authored\(availability)\(suffix)"
+    }
+
+    func imageFillMode() -> ImageFitMode? {
+        let values = imageFillSelection.compactMap(CanonicalImageFill.resolve)
+        guard let first = values.first, values.count == imageFillSelection.count,
+              values.allSatisfy({ $0.mode == first.mode }) else { return nil }
+        return first.mode
+    }
+
+    @discardableResult
+    func commitImageFillEdit(_ edit: ImageFillEdit) -> Bool {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan else {
+            lastImageInspectorAnnouncement = ImageFillCommandError.stale.localizedDescription
+            return false
+        }
+        let identity = ImageInspectorOperationIdentity(
+            documentID: documentSession.document.id, pageID: pageID,
+            revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+            rendererGeneration: plan.identity.sceneGeneration,
+            selectedNodeIDs: selectionState.orderedIDs)
+        do {
+            let prepared = try ImageFillCommandRegistry().prepare(edit, identity: identity,
+                in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.command)
+            lastImageInspectorAnnouncement = "Image fill committed for \(prepared.applicableNodeIDs.count) object(s)"
+                + (prepared.skippedNodeIDs.isEmpty ? "" : "; skipped \(prepared.skippedNodeIDs.count) incompatible")
+            announcementPoster.post(lastImageInspectorAnnouncement)
+            return true
+        } catch {
+            lastImageInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastImageInspectorAnnouncement)
+            return false
+        }
+    }
+
     func imageAssetUsageCount(_ assetID: AssetID) -> Int {
         let reference = assetID.description
         return documentSession.document.pages.flatMap(\.nodes).filter {
             $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
+                || $0.insertionStringProperty(CanonicalImageFill.assetKey) == reference
         }.count
     }
 
@@ -1552,9 +1609,9 @@ final class WorkspaceShellState: ObservableObject {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Delete this image and its uses?"
-            alert.informativeText = "This asset is used by \(uses) Image object\(uses == 1 ? "" : "s"). SiteForge can remove those objects and the asset together as one undoable edit, or leave the project unchanged."
+            alert.informativeText = "This asset has \(uses) Image or image-fill use\(uses == 1 ? "" : "s"). SiteForge can detach those uses and remove the asset in one undoable edit, or leave the project unchanged."
             alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Delete Uses and Asset")
+            alert.addButton(withTitle: "Detach Uses and Delete")
             guard alert.runModal() == .alertSecondButtonReturn else {
                 lastAssetAnnouncement = "Asset deletion cancelled; the project is unchanged"
                 announcementPoster.post(lastAssetAnnouncement)
@@ -1574,16 +1631,27 @@ final class WorkspaceShellState: ObservableObject {
                 $0.kind == .image && $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
             }.map { DocumentCommand.removeNode(.init(pageID: page.id, nodeID: $0.id)) }
         }
-        let command: DocumentCommand = nodeRemovals.isEmpty
+        let fillRemovals: [DocumentCommand] = documentSession.document.pages.flatMap { page in
+            page.nodes.filter { $0.insertionStringProperty(CanonicalImageFill.assetKey) == reference }
+                .flatMap { node in
+                    [CanonicalImageFill.assetKey, CanonicalImageFill.modeKey].compactMap { key in
+                        node.insertionProperty(key).map {
+                            .removeProperty(.init(pageID: page.id, nodeID: node.id, propertyID: $0.id))
+                        }
+                    }
+                }
+        }
+        let removals = nodeRemovals + fillRemovals
+        let command: DocumentCommand = removals.isEmpty
             ? .removeImageAsset(.init(assetID: assetID))
-            : .batch(nodeRemovals + [.removeImageAsset(.init(assetID: assetID))])
+            : .batch(removals + [.removeImageAsset(.init(assetID: assetID))])
         do {
             _ = try documentSession.execute(command)
             if selectedAssetID == assetID { selectedAssetID = nil }
             imageThumbnailData[assetID] = nil
-            lastAssetAnnouncement = nodeRemovals.isEmpty
+            lastAssetAnnouncement = removals.isEmpty
                 ? "Deleted unused image asset"
-                : "Deleted image asset and \(nodeRemovals.count) use\(nodeRemovals.count == 1 ? "" : "s")"
+                : "Detached image uses and deleted asset"
             announcementPoster.post(lastAssetAnnouncement)
         } catch { lastAssetAnnouncement = error.localizedDescription }
     }

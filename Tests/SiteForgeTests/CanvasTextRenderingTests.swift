@@ -1,9 +1,59 @@
 import AppKit
+import ImageIO
 import XCTest
 @testable import SiteForge
 
 @MainActor
 final class CanvasTextRenderingTests: XCTestCase {
+    func testFrameImageFillPaintsInsideAuthoredBoundsAtNativeScale() throws {
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(Array(repeating: [UInt8(255), 0, 0, 255], count: 4).flatMap { $0 }) as CFData))
+        let redImage = try XCTUnwrap(CGImage(width: 2, height: 2,
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 8,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let encoded = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(encoded, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, redImage, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let png = encoded as Data
+        XCTAssertNotNil(NSImage(data: png))
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil))
+        XCTAssertNotNil(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertNotNil(CGImageSourceCreateImageAtIndex(source, 0, [
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceShouldAllowFloat: true,
+        ] as CFDictionary))
+        for scale in [1.0, 2.0] {
+            let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+                viewportSize: .init(width: 300, height: 120),
+                contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 300, height: 120)),
+                pixelRatio: CanvasPixelRatio(scale))
+            let object = CanvasRenderObject(id: NodeID(),
+                frame: .init(origin: .init(x: 40, y: 30), size: .init(width: 160, height: 60)),
+                clipRect: nil, paintOrder: 0, style: .frameSurface, isVisible: true,
+                accessibilityLabel: "Frame with image fill", imageAssetID: AssetID(),
+                imageData: png, imagePixelWidth: 2, imagePixelHeight: 2,
+                imageFitMode: .fill)
+            let pixels = rasterizedBytes(object: object, viewport: viewport)
+            let inside = rgba(at: (x: 120, y: 60), in: pixels, width: 300, height: 120)
+            XCTAssertGreaterThan(inside.red, 200)
+            XCTAssertLessThan(inside.green, 40)
+            XCTAssertLessThan(inside.blue, 40)
+            XCTAssertEqual(inside.alpha, 255)
+            let outside = rgba(at: (x: 4, y: 4), in: pixels, width: 300, height: 120)
+            XCTAssertEqual(outside.alpha, 0)
+            let translucent = CanvasRenderObject(id: object.id, frame: object.frame,
+                clipRect: nil, paintOrder: 0, style: .frameSurface, isVisible: true,
+                accessibilityLabel: object.accessibilityLabel, fillRGBA: [0, 0, 1, 1],
+                opacity: 0.5, imageAssetID: object.imageAssetID, imageData: png,
+                imagePixelWidth: 2, imagePixelHeight: 2, imageFitMode: .fill)
+            let translucentInside = rgba(at: (x: 120, y: 60),
+                in: rasterizedBytes(object: translucent, viewport: viewport), width: 300, height: 120)
+            XCTAssertEqual(Int(translucentInside.alpha), 128, accuracy: 3,
+                "Object opacity must apply once after image-over-color compositing")
+        }
+    }
+
     func testAuthoredTextForegroundSharesLiveLayerAndInlineEditorWithoutGeometryChange() throws {
         let color = CanonicalSolidColor(red: 0.8, green: 0.1, blue: 0.2, alpha: 1)
         for zoom in [0.25, 1.0, 8.0] {

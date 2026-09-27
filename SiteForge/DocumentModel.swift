@@ -1063,6 +1063,38 @@ struct CanonicalImageStyle: Equatable, Sendable {
     }
 }
 
+/// One optional local raster background for Frame/Section. An unresolved
+/// stable reference remains authored intent; resource availability is a
+/// separate package/runtime concern, never a reason to rewrite the node.
+struct CanonicalImageFill: Equatable, Sendable {
+    static let namespace = "style.fill.image.v1."
+    static let assetKey = namespace + "assetID"
+    static let modeKey = namespace + "mode"
+    let assetID: AssetID
+    let mode: ImageFitMode
+
+    static func resolve(_ node: DocumentNode) -> CanonicalImageFill? {
+        guard [.frame, .section].contains(node.kind),
+              let raw = node.insertionStringProperty(assetKey),
+              let id = AssetID(uuidString: raw) else { return nil }
+        let mode = node.insertionStringProperty(modeKey).flatMap(ImageFitMode.init(rawValue:)) ?? .fill
+        return .init(assetID: id, mode: mode)
+    }
+
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix(namespace) }
+        guard !owned.isEmpty else { return }
+        guard [.frame, .section].contains(node.kind),
+              Set(owned.map(\.key.rawValue)).isSubset(of: [assetKey, modeKey]),
+              resolve(node) != nil else { throw ModelValidationError.invalidImageReference }
+        if let mode = node.insertionProperty(modeKey) {
+            guard case .string(let raw) = mode.value, [.fit, .fill].contains(ImageFitMode(rawValue: raw)) else {
+                throw ModelValidationError.invalidImageReference
+            }
+        }
+    }
+}
+
 struct DocumentPage: Codable, Equatable, Identifiable, Sendable {
     let id: PageID
     var name: String
@@ -2176,6 +2208,7 @@ private extension DocumentPage {
             }
             try CanonicalLinkTarget.validate(node)
             try CanonicalImageNamespaceValidator.validate(node)
+            try CanonicalImageFill.validate(node)
             try CanonicalResponsiveGeometryNamespaceValidator.validate(node)
             try CanonicalResponsiveContainerNamespaceValidator.validate(node)
             try CanonicalResponsiveVisibilityNamespaceValidator.validate(node)
