@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## Focused checkpoint — SF-AUTHORING-062
+
+- Component definitions can expose a child’s Boolean visibility. Linked
+  instances inherit the definition default or author their own reversible
+  show/hide override through native Content controls. Layers names hidden
+  component content without drawing a ghost on the canvas; native rendering
+  and the closed static plan resolve the same effective visibility.
+
 ## Focused checkpoint — SF-AUTHORING-061
 
 - Frame and Section can reference one imported local image as a background

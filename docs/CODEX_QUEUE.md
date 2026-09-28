@@ -12,7 +12,7 @@ persistence/history/accessibility/cancellation, focused evidence, and factual
 documentation. Run focused affected tests before each local commit; do not run
 the full gate or hosted CI per slice.
 
-`SF-AUTHORING-061` is Development Prompt **8 of 10**. After Prompt 10, run one
+`SF-AUTHORING-062` is Development Prompt **9 of 10**. After Prompt 10, run one
 authoritative `./sf verify`, repair failures, commit, push main, and monitor
 hosted CI until green. Debug-only owner add-ons do not increment this cadence.
 Until that checkpoint, commits stay local and no external GitHub/release action
@@ -24,6 +24,12 @@ actually evidenced.
 None.
 
 ## IN PROGRESS
+
+- [x] `SF-AUTHORING-062` Component Boolean visibility-property foundation v1 (P1; Development Prompt 9 of 10; focused local checkpoint).
+  - Requirements: bounded `SF-0901-001`–`008`, `SF-0902-001`–`008`, `SF-0905-001`–`008`; supporting `SF-0305`/`SF-0306`, `SF-0701`/`SF-0702`, and `SF-1204`.
+  - Plan: extend existing definition-child bindings and instance override namespace with a stable typed Boolean visibility property; validate name/default/ownership and block destructive removal while overrides exist; resolve once during component expansion so renderer, Preview, output, hit testing, and accessibility share effective visibility; expose native definition/instance Inspector controls and focused model/render/UI evidence.
+  - Exclusions: slots, enums, media/action props, variants, nested authoring, arbitrary style/expressions, per-breakpoint visibility properties, browser runtime, and release acceptance.
+  - Evidence: four exact unit/integration selectors and one fresh-process native Inspector/reopen selector passed 5/5. Five original-resolution screenshots were reviewed: definition default, inherited-hidden, authored-visible, reset-inherited, and reopened-visible. An initial XCTest automation initialization timeout was external; the later native checkbox-value mismatch was corrected in the test without weakening state assertions. See `docs/evidence/SF-AUTHORING-062-COMPONENT-VISIBILITY.md`. Full/hosted gates remain reserved for Prompt 10.
 
 - [x] `SF-AUTHORING-061` Native Frame/Section image-fill foundation v1 (P1; Development Prompt 8 of 10; focused local checkpoint).
   - Requirements: bounded `SF-0508-001`–`008`, `SF-0801-001`–`008`, `SF-0802-001`–`008`; supporting `SF-0305`/`SF-0306`, `SF-0701`/`SF-0702`, and `SF-1204`.

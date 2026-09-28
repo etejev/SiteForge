@@ -935,6 +935,10 @@ enum ComponentEdit: Sendable {
     case setTextOverride(instanceID: NodeID, propertyID: ComponentTextPropertyID, value: String)
     case resetTextOverride(instanceID: NodeID, propertyID: ComponentTextPropertyID)
     case resetAllTextOverrides(NodeID)
+    case exposeVisibility(nodeID: NodeID, label: String, defaultValue: Bool)
+    case removeVisibilityProperty(NodeID)
+    case setVisibilityOverride(instanceID: NodeID, propertyID: ComponentVisibilityPropertyID, value: Bool)
+    case resetVisibilityOverride(instanceID: NodeID, propertyID: ComponentVisibilityPropertyID)
 }
 
 struct PreparedComponentEdit: Sendable {
@@ -971,7 +975,7 @@ struct ComponentCommandRegistry {
               let index = document.pages.firstIndex(where: { $0.id == identity.pageID }) else { throw TransformError.pageUnavailable }
         var page = document.pages[index]
         switch edit {
-        case .exposeText, .removeTextProperty:
+        case .exposeText, .removeTextProperty, .exposeVisibility, .removeVisibilityProperty:
             guard page.role == .componentDefinition else { throw TransformError.incompatibleGeometry }
         default:
             guard page.role != .componentDefinition else {
@@ -981,26 +985,26 @@ struct ComponentCommandRegistry {
         func replace(_ graph: DocumentPage, at index: Int) -> [DocumentCommand] {
             [.removePage(.init(pageID: graph.id)), .insertPage(.init(page: graph, index: index))]
         }
-        func selected(_ id: NodeID) throws -> DocumentNode {
+        func selected(_ id: NodeID, allowHidden: Bool = false) throws -> DocumentNode {
             guard context.selectedNodeIDs == [id] else { throw TransformError.selectionMismatch }
             guard let node = page.nodes.first(where: { $0.id == id }) else { throw TransformError.missingTarget }
             guard context.availableNodeIDs.contains(id) else { throw TransformError.unavailableTarget }
             guard !node.selectionBooleanProperty("locked") else { throw TransformError.lockedTarget }
-            guard !node.selectionBooleanProperty("hidden") else { throw TransformError.hiddenTarget }
+            guard allowHidden || !node.selectionBooleanProperty("hidden") else { throw TransformError.hiddenTarget }
             return node
         }
-        func properties(_ node: DocumentNode, setting: [(String, String)] = [], removing: Set<String> = []) throws -> PreparedComponentEdit {
+        func properties(_ node: DocumentNode, setting: [(String, PropertyValue)] = [], removing: Set<String> = []) throws -> PreparedComponentEdit {
             var commands: [DocumentCommand] = []
             var updated = node
             for property in node.properties where removing.contains(property.key.rawValue) {
                 commands.append(.removeProperty(.init(pageID: page.id, nodeID: node.id, propertyID: property.id)))
                 updated.properties.removeAll { $0.id == property.id }
             }
-            for (key, text) in setting {
+            for (key, value) in setting {
                 let old = node.properties.first { $0.key.rawValue == key }
-                guard old?.value != .string(text) || old?.origin != .authored else { continue }
+                guard old?.value != value || old?.origin != .authored else { continue }
                 let property = NodeProperty(id: old?.id ?? PropertyID(), key: .init(rawValue: key),
-                                            value: .string(text), origin: .authored)
+                                            value: value, origin: .authored)
                 commands.append(.setProperty(.init(pageID: page.id, nodeID: node.id, property: property)))
                 if let i = updated.properties.firstIndex(where: { $0.key == property.key }) { updated.properties[i] = property }
                 else { updated.properties.append(property) }
@@ -1009,6 +1013,7 @@ struct ComponentCommandRegistry {
             candidate.pages[index].nodes[page.nodes.firstIndex(where: { $0.id == node.id })!] = updated
             try candidate.validate()
             try CanonicalComponentText.validateTransition(from: document, to: candidate)
+            try CanonicalComponentVisibility.validateTransition(from: document, to: candidate)
             return .init(command: .batch(commands), selectedNodeID: node.id,
                          definitionID: page.role == .componentDefinition ? page.id : CanonicalComponentReference.definitionID(for: node))
         }
@@ -1021,9 +1026,9 @@ struct ComponentCommandRegistry {
             }
             let propertyID = CanonicalComponentText.property(on: node)?.id ?? ComponentTextPropertyID()
             return try properties(node, setting: [
-                (CanonicalComponentText.namespace + "id", propertyID.description),
-                (CanonicalComponentText.namespace + "label", label),
-                (CanonicalComponentText.namespace + "type", "plain-text"), ("content.text", text)])
+                (CanonicalComponentText.namespace + "id", .string(propertyID.description)),
+                (CanonicalComponentText.namespace + "label", .string(label)),
+                (CanonicalComponentText.namespace + "type", .string("plain-text")), ("content.text", .string(text))])
         case .removeTextProperty(let id):
             let node = try selected(id)
             guard node.kind == .text else { throw TransformError.incompatibleGeometry }
@@ -1036,7 +1041,7 @@ struct ComponentCommandRegistry {
                   text.utf8.count <= CanonicalComponentText.maximumTextBytes else {
                 throw CommandExecutionError.disabled("The text binding is missing or the draft exceeds 64 KiB. Restore the binding or shorten the draft.")
             }
-            return try properties(node, setting: [(CanonicalComponentText.overrideKey(propertyID), text)])
+            return try properties(node, setting: [(CanonicalComponentText.overrideKey(propertyID), .string(text))])
         case .resetTextOverride(let id, let propertyID):
             let node = try selected(id)
             guard node.kind == .component else { throw TransformError.incompatibleGeometry }
@@ -1047,6 +1052,34 @@ struct ComponentCommandRegistry {
             return try properties(node, removing: Set(node.properties.map(\.key.rawValue).filter {
                 $0.hasPrefix(CanonicalComponentText.overrideNamespace)
             }))
+        case .exposeVisibility(let id, let label, let value):
+            let node = try selected(id, allowHidden: true)
+            guard CanonicalComponentVisibility.eligibleKinds.contains(node.kind),
+                  !page.rootNodeIDs.contains(id), CanonicalComponentVisibility.validLabel(label) else {
+                throw CommandExecutionError.disabled("Select an eligible definition child and use a unique, nonempty property name.")
+            }
+            let propertyID = CanonicalComponentVisibility.property(on: node)?.id ?? ComponentVisibilityPropertyID()
+            return try properties(node, setting: [
+                (CanonicalComponentVisibility.namespace + "id", .string(propertyID.description)),
+                (CanonicalComponentVisibility.namespace + "label", .string(label)),
+                (CanonicalComponentVisibility.namespace + "type", .string("boolean-visibility")),
+                (CanonicalComponentVisibility.namespace + "default", .boolean(value))])
+        case .removeVisibilityProperty(let id):
+            let node = try selected(id, allowHidden: true)
+            guard CanonicalComponentVisibility.property(on: node) != nil else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: CanonicalComponentVisibility.metadataKeys)
+        case .setVisibilityOverride(let id, let propertyID, let value):
+            let node = try selected(id)
+            guard let definitionID = CanonicalComponentReference.definitionID(for: node),
+                  let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+                  CanonicalComponentVisibility.properties(in: definition).contains(where: { $0.id == propertyID }) else {
+                throw CommandExecutionError.disabled("The visibility binding is missing. Restore it before editing this instance.")
+            }
+            return try properties(node, setting: [(CanonicalComponentVisibility.overrideKey(propertyID), .boolean(value))])
+        case .resetVisibilityOverride(let id, let propertyID):
+            let node = try selected(id)
+            guard node.kind == .component else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: [CanonicalComponentVisibility.overrideKey(propertyID)])
         case .create(let id):
             let root = try selected(id)
             guard root.kind.acceptsAuthoredChildren, let rootGeometry = root.insertionGeometry,

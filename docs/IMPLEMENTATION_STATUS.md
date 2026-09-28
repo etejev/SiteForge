@@ -1,6 +1,17 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-27.
+Last updated: 2026-09-28.
+
+SF-AUTHORING-062 adds a bounded component Boolean visibility-property
+foundation (`SF-0901`, `SF-0902`, `SF-0905` Partial). Definition children own a
+stable property ID, name, and default; instances may author or reset a typed
+override without changing the definition. Component expansion resolves the
+visibility before layout, canvas/Preview rendering, accessibility projection,
+and closed static output. The native Content Inspector exposes inherited versus
+authored provenance, and Layers retains a read-only hidden-child status. Exact
+focused results and original-resolution visual review are recorded in
+`docs/evidence/SF-AUTHORING-062-COMPONENT-VISIBILITY.md`. The prompt-nine full
+gate and hosted checkpoint have not run.
 
 SF-AUTHORING-061 is a focused local Frame/Section image-fill checkpoint
 (`SF-0508`, `SF-0801`, `SF-0802` Partial). A strictly validated optional

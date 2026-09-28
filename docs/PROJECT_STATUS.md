@@ -1,6 +1,14 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-27.
+Last updated: 2026-09-28.
+
+Current local development prompt: SF-AUTHORING-062 (9 of 10), bounded
+component Boolean visibility properties. Definition defaults and linked
+instance overrides use typed history; native Content controls, Layers status,
+canvas/Preview, and closed static output share the resolved state. See
+`docs/evidence/SF-AUTHORING-062-COMPONENT-VISIBILITY.md` for exact focused
+results and limits. The full gate and hosted checkpoint remain reserved for
+prompt 10; SF-0901/0902/0905 remain Partial.
 
 Current local development prompt: SF-AUTHORING-061 (8 of 10), bounded
 Frame/Section image fills backed by existing local assets. Its focused model,

@@ -27,6 +27,190 @@ final class CommandKernelTests: XCTestCase {
         return session
     }
 
+    private func exposedVisibilitySession(defaultVisible: Bool = false) throws -> DocumentSession {
+        let document = try componentTextFixture(), definition = document.componentDefinitions[0]
+        let child = definition.nodes[1]
+        let session = DocumentSession(document: document)
+        try session.execute(textCommand(.exposeVisibility(nodeID: child.id, label: "Optional text",
+            defaultValue: defaultVisible), document: document, pageID: definition.id, selected: child.id).command)
+        return session
+    }
+
+    func testComponentVisibilityDefaultOverrideResetHistoryAndPersistence() throws {
+        let session = try exposedVisibilitySession()
+        let definition = session.document.componentDefinitions[0]
+        let child = definition.nodes[1]
+        let binding = try XCTUnwrap(CanonicalComponentVisibility.property(on: child))
+        let page = session.document.websitePages[0]
+        let first = page.nodes[1], second = page.nodes[2]
+        func derived(_ instance: DocumentNode) throws -> DocumentNode {
+            let resolved = try ComponentGraphResolver.resolvedPage(session.document.websitePages[0],
+                in: session.document, breakpoint: .desktop)
+            let id = NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue,
+                label: "component-child:" + child.id.description))
+            return try XCTUnwrap(resolved.nodes.first { $0.id == id })
+        }
+        XCTAssertTrue(try derived(first).selectionBooleanProperty("hidden"))
+        XCTAssertTrue(try derived(second).selectionBooleanProperty("hidden"))
+        let before = session.document.pages
+        try session.execute(textCommand(.setVisibilityOverride(instanceID: first.id,
+            propertyID: binding.id, value: true), document: session.document,
+            pageID: page.id, selected: first.id).command)
+        let override = try XCTUnwrap(session.document.websitePages[0].nodes[1]
+            .insertionProperty(CanonicalComponentVisibility.overrideKey(binding.id)))
+        XCTAssertEqual(override.value, .boolean(true))
+        XCTAssertEqual(override.origin, .authored)
+        XCTAssertFalse(try derived(first).selectionBooleanProperty("hidden"))
+        XCTAssertTrue(try derived(second).selectionBooleanProperty("hidden"))
+        let authored = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, authored)
+        try session.execute(textCommand(.resetVisibilityOverride(instanceID: first.id,
+            propertyID: binding.id), document: session.document,
+            pageID: page.id, selected: first.id).command)
+        XCTAssertNil(session.document.websitePages[0].nodes[1]
+            .insertionProperty(CanonicalComponentVisibility.overrideKey(binding.id)))
+        try session.undo()
+        XCTAssertEqual(session.document.websitePages[0].nodes[1]
+            .insertionProperty(CanonicalComponentVisibility.overrideKey(binding.id)), override)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.redo()
+        XCTAssertTrue(try derived(first).selectionBooleanProperty("hidden"))
+    }
+
+    func testComponentVisibilityStrictValidationStaleCancellationAndRemovalGuard() throws {
+        let session = try exposedVisibilitySession()
+        let document = session.document, definition = document.componentDefinitions[0]
+        let child = definition.nodes[1]
+        let binding = try XCTUnwrap(CanonicalComponentVisibility.property(on: child))
+        let page = document.websitePages[0], first = page.nodes[1]
+        let scene = CanvasViewportSceneID()
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: page.id,
+            revision: document.revision, sceneID: scene, rendererGeneration: document.revision)
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: scene,
+            rendererGeneration: document.revision, selectedNodeIDs: [first.id],
+            availableNodeIDs: [first.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let edit = ComponentEdit.setVisibilityOverride(instanceID: first.id, propertyID: binding.id, value: true)
+        let registry = ComponentCommandRegistry()
+        XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: document, context: context, cancelled: true))
+        for stale in [
+            DesignInspectorOperationIdentity(documentID: DocumentID(), pageID: page.id, revision: document.revision,
+                sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: PageID(), revision: document.revision,
+                sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: page.id, revision: 0,
+                sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: page.id, revision: document.revision,
+                sceneID: CanvasViewportSceneID(), rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: page.id, revision: document.revision,
+                sceneID: scene, rendererGeneration: 0)
+        ] { XCTAssertThrowsError(try registry.prepare(edit, identity: stale, in: document, context: context)) }
+        XCTAssertThrowsError(try textCommand(.setVisibilityOverride(instanceID: first.id,
+            propertyID: ComponentVisibilityPropertyID(), value: true), document: document,
+            pageID: page.id, selected: first.id))
+        XCTAssertThrowsError(try textCommand(.exposeVisibility(nodeID: child.id, label: " ", defaultValue: true),
+            document: document, pageID: definition.id, selected: child.id))
+        XCTAssertThrowsError(try textCommand(.exposeVisibility(nodeID: definition.rootNodeIDs[0],
+            label: "Root", defaultValue: true), document: document, pageID: definition.id,
+            selected: definition.rootNodeIDs[0]))
+        var malformed = document
+        let index = malformed.pages[2].nodes[1].properties.firstIndex {
+            $0.key.rawValue == CanonicalComponentVisibility.namespace + "default"
+        }!
+        malformed.pages[2].nodes[1].properties[index].value = .string("true")
+        XCTAssertThrowsError(try DocumentSerializer.encode(malformed))
+        try session.execute(textCommand(edit, document: session.document, pageID: page.id,
+            selected: first.id).command)
+        XCTAssertThrowsError(try textCommand(.removeVisibilityProperty(child.id),
+            document: session.document, pageID: definition.id, selected: child.id))
+        try session.execute(textCommand(.resetVisibilityOverride(instanceID: first.id,
+            propertyID: binding.id), document: session.document, pageID: page.id, selected: first.id).command)
+        try session.execute(textCommand(.removeVisibilityProperty(child.id),
+            document: session.document, pageID: definition.id, selected: child.id).command)
+        XCTAssertNil(CanonicalComponentVisibility.property(on: session.document.componentDefinitions[0].nodes[1]))
+    }
+
+    func testComponentVisibilityRendererAccessibilityAndStaticOutputShareEffectiveState() async throws {
+        let session = try exposedVisibilitySession()
+        let definition = session.document.componentDefinitions[0], child = definition.nodes[1]
+        let binding = try XCTUnwrap(CanonicalComponentVisibility.property(on: child))
+        let page = session.document.websitePages[0], instance = page.nodes[1]
+        let childID = NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue,
+            label: "component-child:" + child.id.description))
+        let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: 1_000, height: 700),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 900)),
+            pixelRatio: .init(2))
+        let worker = WorkspaceScenePreparationWorker(), surface = CanvasRenderSurfaceID()
+        let hidden = try await worker.prepare(.init(document: session.document, activePageID: page.id,
+            activeContainerID: nil, viewport: viewport, surfaceID: surface))
+        XCTAssertFalse(hidden.renderScene.objects.contains { $0.id == childID })
+        let hiddenPlan = try CanvasRendererCore().prepare(scene: hidden.renderScene, overlays: hidden.overlays,
+            viewport: viewport, previous: nil)
+        XCTAssertFalse(hiddenPlan.accessibilityElements.contains { $0.objectID == childID })
+        let hiddenStatic = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        let selector = CanonicalCSSRule.selector(for: childID)
+        let hiddenCSS = try XCTUnwrap(hiddenStatic.files.first { $0.path == "styles.css" }).contents
+        XCTAssertTrue(hiddenCSS.contains("\(selector) {"))
+        XCTAssertTrue(hiddenCSS.contains("\(selector) { box-sizing: border-box;"))
+        XCTAssertTrue(hiddenCSS.components(separatedBy: "\(selector) {").dropFirst().first?
+            .components(separatedBy: "}").first?.contains("display: none;") == true)
+        try session.execute(textCommand(.setVisibilityOverride(instanceID: instance.id,
+            propertyID: binding.id, value: true), document: session.document,
+            pageID: page.id, selected: instance.id).command)
+        let shown = try await worker.prepare(.init(document: session.document, activePageID: page.id,
+            activeContainerID: nil, viewport: viewport, surfaceID: surface))
+        XCTAssertTrue(shown.renderScene.objects.contains { $0.id == childID })
+        XCTAssertEqual(shown.renderScene.identity.sceneGeneration, session.document.revision)
+        XCTAssertFalse(hidden.renderScene.objects.contains { $0.id == childID },
+            "Previously adopted immutable scenes may not acquire newer visibility")
+        let shownPlan = try CanvasRendererCore().prepare(scene: shown.renderScene, overlays: shown.overlays,
+            viewport: viewport, previous: hidden.renderScene)
+        XCTAssertTrue(shownPlan.accessibilityElements.contains { $0.objectID == childID })
+        let shownStatic = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        let shownCSS = try XCTUnwrap(shownStatic.files.first { $0.path == "styles.css" }).contents
+        XCTAssertTrue(shownCSS.components(separatedBy: "\(selector) {").dropFirst().first?
+            .components(separatedBy: "}").first?.contains("display: block;") == true)
+    }
+
+    func testComponentVisibilityDuplicationAndDetachPreserveIntentAndStableIDs() throws {
+        let session = try exposedVisibilitySession()
+        let definition = session.document.componentDefinitions[0], child = definition.nodes[1]
+        let binding = try XCTUnwrap(CanonicalComponentVisibility.property(on: child))
+        let page = session.document.websitePages[0], instance = page.nodes[1]
+        try session.execute(textCommand(.setVisibilityOverride(instanceID: instance.id,
+            propertyID: binding.id, value: true), document: session.document,
+            pageID: page.id, selected: instance.id).command)
+        let original = session.document.pages
+        let duplicate = try PageCommandRegistry().prepare(.duplicate,
+            identity: .init(documentID: session.document.id, revision: session.document.revision, pageID: page.id),
+            in: session.document, isAvailable: true)
+        try session.execute(duplicate.command)
+        let copy = try XCTUnwrap(session.document.pages.first { $0.id == duplicate.selectedPageID })
+        let copiedInstance = try XCTUnwrap(copy.nodes.first {
+            $0.kind == .component && CanonicalComponentReference.definitionID(for: $0) == definition.id
+        })
+        XCTAssertNotEqual(copiedInstance.id, instance.id)
+        XCTAssertEqual(CanonicalComponentVisibility.overrides(on: copiedInstance)[binding.id], true)
+        let derivedID = NodeID(DocumentPage.deterministicUUID(namespace: copiedInstance.id.rawValue,
+            label: "component-child:" + child.id.description))
+        let expanded = try ComponentGraphResolver.resolvedPage(copy, in: session.document, breakpoint: .desktop)
+        XCTAssertFalse(try XCTUnwrap(expanded.nodes.first { $0.id == derivedID }).selectionBooleanProperty("hidden"))
+        try session.execute(textCommand(.detach(instance.id), document: session.document,
+            pageID: page.id, selected: instance.id).command)
+        let materializedID = NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue,
+            label: "component-child:" + child.id.description))
+        XCTAssertFalse(try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == materializedID })
+            .selectionBooleanProperty("hidden"))
+        XCTAssertFalse(session.document.pages[0].nodes.contains { $0.properties.contains {
+            $0.key.rawValue.hasPrefix(CanonicalComponentVisibility.namespace)
+                || $0.key.rawValue.hasPrefix(CanonicalComponentVisibility.overrideNamespace)
+        } })
+        try session.undo(); try session.undo()
+        XCTAssertEqual(session.document.pages, original)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
     func testComponentTextV7MigrationAndStrictBindingValidation() throws {
         let legacy = try componentTextFixture()
         XCTAssertTrue(CanonicalComponentText.properties(in: legacy.componentDefinitions[0]).isEmpty)

@@ -877,6 +877,7 @@ enum ComponentGraphResolver {
     static func detachedNodes(_ instance: DocumentNode, definition: DocumentPage,
                               page: DocumentPage) -> [DocumentNode]? {
         guard CanonicalComponentText.unresolvedOverrides(on: instance, definition: definition).isEmpty,
+              CanonicalComponentVisibility.unresolvedOverrides(on: instance, definition: definition).isEmpty,
               let geometry = page.resolvedStructuralGeometry(breakpoint: .desktop)[instance.id],
               var nodes = expand(instance, definition: definition, pageID: page.id,
                                  geometry: geometry, breakpoint: .desktop) else { return nil }
@@ -954,6 +955,7 @@ enum ComponentGraphResolver {
               !definition.nodes.contains(where: { $0.kind == .component }) else { return nil }
         let frames = definition.resolvedStructuralGeometry(breakpoint: breakpoint)
         let textOverrides = CanonicalComponentText.overrides(on: instance)
+        let visibilityOverrides = CanonicalComponentVisibility.overrides(on: instance)
         guard let rootGeometry = frames[rootID] else { return nil }
         let ids = Dictionary(uniqueKeysWithValues: definition.nodes.map { node in
             (node.id, node.id == rootID ? instance.id : NodeID(DocumentPage.deterministicUUID(
@@ -962,9 +964,12 @@ enum ComponentGraphResolver {
         return definition.nodes.map { node in
             let id = ids[node.id]!
             let isRoot = node.id == rootID
+            let visibilityBinding = CanonicalComponentVisibility.property(on: node)
             var properties = node.properties.filter {
                 !$0.key.rawValue.hasPrefix("responsive.geometry.v1.")
                     && !$0.key.rawValue.hasPrefix(CanonicalComponentText.namespace)
+                    && !$0.key.rawValue.hasPrefix(CanonicalComponentVisibility.namespace)
+                    && (visibilityBinding == nil || !$0.key.rawValue.hasPrefix(ResponsiveVisibilityResolver.namespace + "."))
             }.map { property in
                 NodeProperty(id: PropertyID(DocumentPage.deterministicUUID(namespace: id.rawValue,
                     label: "component-property:" + property.id.description)), key: property.key,
@@ -977,6 +982,18 @@ enum ComponentGraphResolver {
                let index = properties.firstIndex(where: { $0.key.rawValue == "content.text" }) {
                 properties[index].value = .string(text)
                 properties[index].origin = .authored
+            }
+            if let binding = visibilityBinding {
+                let visible = CanonicalComponentVisibility.resolvedVisible(for: node,
+                    overrides: visibilityOverrides)
+                let old = properties.first { $0.key.rawValue == "hidden" }
+                let effective = NodeProperty(id: old?.id ?? PropertyID(DocumentPage.deterministicUUID(
+                    namespace: id.rawValue, label: "component-visibility:" + binding.id.description)),
+                    key: .init(rawValue: "hidden"), value: .boolean(!visible),
+                    origin: visibilityOverrides[binding.id] == nil ? .defaulted : .authored)
+                if let index = properties.firstIndex(where: { $0.key.rawValue == "hidden" }) {
+                    properties[index] = effective
+                } else { properties.append(effective) }
             }
             if let frame = frames[node.id] {
                 let values: [String: Double] = [

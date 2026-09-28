@@ -5,9 +5,22 @@
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-061` is Development Prompt 8 of 10; Prompt 10
+its local commit. `SF-AUTHORING-062` is Development Prompt 9 of 10; Prompt 10
 triggers the next full verification and hosted checkpoint. Until then do not
 push or run broad gates. Normative modules remain Partial unless fully proven.
+
+## Current component-visibility work
+
+SF-AUTHORING-062 adds strict `component.exposedVisibility.v1.*` definition-child
+metadata and `component.instance.v1.visibility.*` instance overrides. Reuse
+`ComponentCommandRegistry`, `ComponentGraphResolver`, and the existing Content
+Inspector path; do not add a parallel component state or hidden virtual layer.
+Instance override wins over definition default, which wins over the child’s
+canonical hidden state when no binding exists. The derived `hidden` property
+feeds layout, native/Preview rendering, accessibility, and closed static CSS.
+See `docs/evidence/SF-AUTHORING-062-COMPONENT-VISIBILITY.md` for focused results.
+Next: choose the tenth dependency-ready bounded slice from the specification;
+after its focused local commit, run the reset-policy full/hosted checkpoint.
 
 ## Current image-fill work
 

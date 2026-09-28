@@ -385,6 +385,24 @@ private struct NavigatorView: View {
                             ForEach(state.layerTargets, id: \.id) { target in
                                 NavigatorLayerRow(target: target, state: state, focus: focus)
                             }
+                            if let instance = state.selectedComponent {
+                                ForEach(state.componentVisibilityProperties) { property in
+                                    let authored = CanonicalComponentVisibility.overrides(on: instance)[property.id]
+                                    HStack {
+                                        Image(systemName: (authored ?? property.defaultValue) ? "eye" : "eye.slash")
+                                        Text(property.label).lineLimit(1)
+                                        Spacer(minLength: 4)
+                                        Text((authored ?? property.defaultValue) ? "Visible" : "Hidden in instance")
+                                            .font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    .padding(.horizontal, 8).padding(.vertical, 5)
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityLabel("Component child \(property.label)")
+                                    .accessibilityValue("\((authored ?? property.defaultValue) ? "Visible" : "Hidden"); \(authored == nil ? "definition default" : "instance override")")
+                                    .accessibilityHint("Select the instance and use Content to show, hide, or reset this child.")
+                                    .accessibilityIdentifier("navigator.componentVisibility.\(property.id)")
+                                }
+                            }
                         }
                     }
                     .accessibilityLabel("Layers navigator")
@@ -464,6 +482,147 @@ private struct ComponentTextInspectorView: View {
                 .font(.caption).accessibilityLabel("Component text status")
                 .accessibilityValue(state.componentAnnouncement)
                 .accessibilityIdentifier("component.text.status")
+        }
+    }
+}
+
+private struct ComponentVisibilityInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Component Visibility").font(.headline)
+            if let node = state.selectedDefinitionVisibilityChild {
+                ComponentVisibilityDefinitionFields(state: state, node: node)
+                    .disabled(!state.componentVisibilityEditingAvailable)
+            } else if let instance = state.selectedComponent {
+                let properties = state.componentVisibilityProperties
+                let overrides = CanonicalComponentVisibility.overrides(on: instance)
+                if properties.isEmpty {
+                    Text("No exposed visibility properties. Edit the definition, select a child layer, then expose its visibility here.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(properties) { property in
+                    ComponentVisibilityInstanceFields(state: state, instanceID: instance.id,
+                        property: property, authored: overrides[property.id])
+                        .disabled(!state.componentVisibilityEditingAvailable)
+                }
+                ForEach(overrides.keys.filter { id in !properties.contains { $0.id == id } }
+                    .sorted { $0.description < $1.description }, id: \.self) { id in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Missing visibility binding").font(.headline)
+                        Text("The authored value is retained. Restore its definition binding or explicitly reset it.")
+                            .font(.caption)
+                        Button("Reset Missing Override") {
+                            if let identity = state.componentTextDraftIdentity {
+                                state.commitComponentVisibility(.resetVisibilityOverride(instanceID: instance.id,
+                                    propertyID: id), identity: identity)
+                            }
+                        }.accessibilityIdentifier("component.visibility.missing.reset.\(id)")
+                    }
+                }
+            } else {
+                Text("Select an eligible definition child or linked instance to edit visibility. Component roots are not eligible.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text(state.componentAnnouncement)
+                .font(.caption).accessibilityLabel("Component visibility status")
+                .accessibilityValue(state.componentAnnouncement)
+                .accessibilityIdentifier("component.visibility.status")
+        }
+    }
+}
+
+private struct ComponentVisibilityDefinitionFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let node: DocumentNode
+    @State private var name: String
+    @State private var defaultVisible: Bool
+    @State private var identity: DesignInspectorOperationIdentity?
+    @State private var cancelled = false
+
+    init(state: WorkspaceShellState, node: DocumentNode) {
+        self.state = state; self.node = node
+        let binding = CanonicalComponentVisibility.property(on: node)
+        _name = State(initialValue: binding?.label ?? node.name)
+        _defaultVisible = State(initialValue: binding?.defaultValue ?? !node.selectionBooleanProperty("hidden"))
+        _identity = State(initialValue: state.componentTextDraftIdentity)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(CanonicalComponentVisibility.property(on: node) == nil
+                ? "Not exposed · canonical child visibility" : "Exposed · Boolean definition default")
+                .font(.caption).accessibilityIdentifier("component.visibility.definition.provenance")
+            TextField("Property name", text: $name)
+                .accessibilityLabel("Component visibility property name")
+                .accessibilityIdentifier("component.visibility.definition.name")
+            Toggle("Visible by default", isOn: $defaultVisible)
+                .accessibilityIdentifier("component.visibility.definition.default")
+            HStack {
+                Button(CanonicalComponentVisibility.property(on: node) == nil ? "Expose Visibility" : "Apply") { commit() }
+                    .accessibilityIdentifier("component.visibility.definition.apply")
+                Button("Cancel") { cancel() }.accessibilityIdentifier("component.visibility.definition.cancel")
+                Button("Remove Property") {
+                    if let identity { state.commitComponentVisibility(.removeVisibilityProperty(node.id), identity: identity) }
+                }
+                .disabled(CanonicalComponentVisibility.property(on: node) == nil)
+                .accessibilityIdentifier("component.visibility.definition.remove")
+            }
+            if cancelled { Text("Draft cancelled; committed visibility unchanged.").font(.caption) }
+        }
+        .onSubmit { commit() }
+        .onExitCommand { cancel() }
+    }
+    private func commit() {
+        if let identity {
+            state.commitComponentVisibility(.exposeVisibility(nodeID: node.id, label: name,
+                defaultValue: defaultVisible), identity: identity)
+        }
+    }
+    private func cancel() {
+        let binding = CanonicalComponentVisibility.property(on: node)
+        name = binding?.label ?? node.name
+        defaultVisible = binding?.defaultValue ?? !node.selectionBooleanProperty("hidden")
+        cancelled = true
+    }
+}
+
+private struct ComponentVisibilityInstanceFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let instanceID: NodeID
+    let property: ExposedComponentVisibilityProperty
+    let authored: Bool?
+    @State private var identity: DesignInspectorOperationIdentity?
+
+    init(state: WorkspaceShellState, instanceID: NodeID, property: ExposedComponentVisibilityProperty,
+         authored: Bool?) {
+        self.state = state; self.instanceID = instanceID; self.property = property; self.authored = authored
+        _identity = State(initialValue: state.componentTextDraftIdentity)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Toggle(property.label, isOn: Binding(
+                get: { authored ?? property.defaultValue },
+                set: { value in
+                    if let identity {
+                        state.commitComponentVisibility(.setVisibilityOverride(instanceID: instanceID,
+                            propertyID: property.id, value: value), identity: identity)
+                    }
+                }
+            ))
+            .accessibilityLabel("\(property.label) visible in this component instance")
+            .accessibilityValue((authored ?? property.defaultValue) ? "Visible" : "Hidden")
+            .accessibilityHint(authored == nil ? "Inherited from the definition default" : "Authored instance override")
+            .accessibilityIdentifier("component.visibility.value.\(property.id)")
+            Text(authored == nil ? "Inherited · definition default" : "Authored · this instance")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("component.visibility.provenance.\(property.id)")
+            Button("Reset Override") {
+                if let identity { state.commitComponentVisibility(.resetVisibilityOverride(instanceID: instanceID,
+                    propertyID: property.id), identity: identity) }
+            }
+            .disabled(authored == nil)
+            .accessibilityIdentifier("component.visibility.reset.\(property.id)")
         }
     }
 }
@@ -2655,7 +2814,13 @@ private struct InspectorView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.accessibility.summary")
         case .content where state.hasComponentTextInspectorContext:
-            ComponentTextInspectorView(state: state)
+            VStack(alignment: .leading, spacing: 14) {
+                if state.selectedDefinitionText != nil || !state.componentTextProperties.isEmpty
+                    || (state.selectedComponent.map { !CanonicalComponentText.overrides(on: $0).isEmpty } ?? false) {
+                    ComponentTextInspectorView(state: state)
+                }
+                ComponentVisibilityInspectorView(state: state)
+            }
                 .id("component-text:" + state.componentTextInspectorKey)
         case .content where state.hasFormInspectorContext:
             FormInspectorFieldsView(state: state)

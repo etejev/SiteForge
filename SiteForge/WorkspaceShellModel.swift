@@ -1849,6 +1849,14 @@ final class WorkspaceShellState: ObservableObject {
               selectedCanonicalNodes[0].kind == .text else { return nil }
         return selectedCanonicalNodes[0]
     }
+    var selectedDefinitionVisibilityChild: DocumentNode? {
+        guard let definitionID = editingComponentID, selectedCanonicalNodes.count == 1,
+              let node = selectedCanonicalNodes.first,
+              CanonicalComponentVisibility.eligibleKinds.contains(node.kind),
+              let definition = componentDefinitions.first(where: { $0.id == definitionID }),
+              !definition.rootNodeIDs.contains(node.id) else { return nil }
+        return node
+    }
     var hasComponentTextInspectorContext: Bool {
         editingComponentID != nil || selectedCanonicalNodes.contains { $0.kind == .component }
     }
@@ -1862,6 +1870,18 @@ final class WorkspaceShellState: ObservableObject {
               let definition = componentDefinitions.first(where: { $0.id == id }) else { return [] }
         return CanonicalComponentText.properties(in: definition)
     }
+    var componentVisibilityProperties: [ExposedComponentVisibilityProperty] {
+        guard let node = selectedComponent, let id = CanonicalComponentReference.definitionID(for: node),
+              let definition = componentDefinitions.first(where: { $0.id == id }) else { return [] }
+        return CanonicalComponentVisibility.properties(in: definition)
+    }
+    var componentVisibilityEditingAvailable: Bool {
+        guard selectedCanonicalNodes.count == 1, let node = selectedCanonicalNodes.first else { return false }
+        return componentTextDraftIdentity != nil && transformValidationContext.isLifecycleAvailable
+            && transformValidationContext.availableNodeIDs.contains(node.id)
+            && !node.selectionBooleanProperty("locked")
+            && (editingComponentID != nil || !node.selectionBooleanProperty("hidden"))
+    }
     var componentTextDraftIdentity: DesignInspectorOperationIdentity? {
         ComponentCommandRegistry.draftIdentity(document: documentSession.document,
             pageID: effectiveSelectedPageID, renderer: canvasRenderPlan?.identity)
@@ -1873,6 +1893,9 @@ final class WorkspaceShellState: ObservableObject {
             + ":" + (componentTextDraftIdentity.map { String($0.rendererGeneration) } ?? "adopting")
     }
     func commitComponentText(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity) {
+        performComponentEdit(edit, draftIdentity: identity)
+    }
+    func commitComponentVisibility(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity) {
         performComponentEdit(edit, draftIdentity: identity)
     }
     var canCreateComponent: Bool {

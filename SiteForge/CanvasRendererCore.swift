@@ -1064,7 +1064,9 @@ enum MultiPageStaticBuildPlanner {
         document: CanonicalDocument,
         imageOutputEntries: [StaticAssetExportEntry] = []
     ) throws -> LocalStaticBuildPlan {
-        let pages = document.pages.filter { $0.role != .componentDefinition }
+        let pages = try document.pages.filter { $0.role != .componentDefinition }.map {
+            try ComponentGraphResolver.resolvedPage($0, in: document, breakpoint: .desktop)
+        }
         let imageOutputPaths = staticImagePaths(
             assets: document.imageAssets,
             entries: imageOutputEntries

@@ -2669,6 +2669,78 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertFalse(application.buttons["component.text.resetAll"].isEnabled)
     }
 
+    func testComponentVisibilityDefinitionInstanceResetAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("component-visibility.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let frameID = canvasObject(named: "Frame", in: application).identifier
+            .replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + frameID, in: application).click()
+        componentMenu("Component", "Create Component from Selection", in: application)
+        componentMenu("Component", "Edit Definition", in: application)
+        let textRow = application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
+        XCTAssertTrue(textRow.waitForExistence(timeout: 3))
+        revealComponentPointerTarget(textRow.identifier, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("component.visibility.definition.name", with: "Optional caption", in: application)
+        revealComponentPointerTarget("component.visibility.definition.default", in: application).click()
+        revealComponentPointerTarget("component.visibility.definition.apply", in: application).click()
+        XCTAssertTrue(waitForValue(application.staticTexts["component.visibility.status"], containing: "committed"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-062 hidden definition default")
+        revealComponentPointerTarget("components.exit", in: application).click()
+        let toggle = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "component.visibility.value.")).firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 3))
+        let propertyID = toggle.identifier.replacingOccurrences(of: "component.visibility.value.", with: "")
+        XCTAssertTrue(waitForComponentVisibilityState(toggle.identifier, visible: false, in: application))
+        XCTAssertTrue(application.descendants(matching: .any)["navigator.componentVisibility." + propertyID].exists)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-062 instance inherits hidden")
+        revealComponentPointerTarget(toggle.identifier, in: application).click()
+        XCTAssertTrue(waitForComponentVisibilityState(toggle.identifier, visible: true, in: application))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        XCTAssertTrue(waitForComponentRenderedText("Text", in: application))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-062 authored visible override")
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForComponentVisibilityState(toggle.identifier, visible: false, in: application))
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForComponentVisibilityState(toggle.identifier, visible: true, in: application))
+        revealComponentPointerTarget("component.visibility.reset." + propertyID, in: application).click()
+        XCTAssertTrue(waitForComponentVisibilityState(toggle.identifier, visible: false, in: application))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-062 reset inherits hidden")
+        revealComponentPointerTarget(toggle.identifier, in: application).click()
+        saveDocumentIfModified(in: application)
+        terminateAndWait(application)
+        application = launchExistingIntegrationProject(project,
+            recoveryDirectory: fixtureRoot.appendingPathComponent("component-visibility-recovery"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + frameID, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        XCTAssertTrue(waitForComponentVisibilityState(toggle.identifier, visible: true, in: application))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-062 reopened visible override")
+    }
+
+    private func waitForComponentVisibilityState(_ identifier: String, visible: Bool,
+                                                  in application: XCUIApplication) -> Bool {
+        let expected = visible ? 1 : 0
+        let predicate = NSPredicate { _, _ in
+            let control = application.checkBoxes[identifier]
+            return control.exists && (control.value as? NSNumber)?.intValue == expected
+        }
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
+                             timeout: 5) == .completed
+    }
+
     private func replaceComponentTextField(_ identifier: String, with value: String, in application: XCUIApplication) {
         revealComponentPointerTarget(identifier, in: application).click()
         let live = application.textFields[identifier]

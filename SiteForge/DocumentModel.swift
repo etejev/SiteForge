@@ -1305,11 +1305,16 @@ enum CanonicalComponentReference {
     static func validate(_ node: DocumentNode) throws {
         let properties = node.properties.filter { $0.key.rawValue.hasPrefix("component.") }
         guard !properties.isEmpty else { return }
-        if node.kind == .text, properties.allSatisfy({ $0.key.rawValue.hasPrefix(CanonicalComponentText.namespace) }) {
+        if node.kind != .component, properties.allSatisfy({
+            $0.key.rawValue.hasPrefix(CanonicalComponentText.namespace)
+                || $0.key.rawValue.hasPrefix(CanonicalComponentVisibility.namespace)
+        }) {
             return // The definition-scoped validator owns exposed bindings.
         }
         guard node.kind == .component, properties.contains(where: { $0.key.rawValue == key }),
-              properties.allSatisfy({ $0.key.rawValue == key || CanonicalComponentText.overrideID($0.key.rawValue) != nil }),
+              properties.allSatisfy({ $0.key.rawValue == key
+                  || CanonicalComponentText.overrideID($0.key.rawValue) != nil
+                  || CanonicalComponentVisibility.overrideID($0.key.rawValue) != nil }),
               definitionID(for: node) != nil, node.childIDs.isEmpty else {
             throw ModelValidationError.invalidComponentReference
         }
@@ -1420,6 +1425,107 @@ enum CanonicalComponentText {
     }
 }
 
+enum ComponentVisibilityPropertyIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "component-visibility-property"
+}
+typealias ComponentVisibilityPropertyID = StableIdentifier<ComponentVisibilityPropertyIdentifierDomain>
+
+struct ExposedComponentVisibilityProperty: Equatable, Identifiable, Sendable {
+    let id: ComponentVisibilityPropertyID
+    let sourceNodeID: NodeID
+    let label: String
+    let defaultValue: Bool
+}
+
+/// One Boolean binding owns the entire definition child. Derived visibility
+/// is resolved before layout/rendering; instance overrides never mutate the
+/// definition or the virtual child graph.
+enum CanonicalComponentVisibility {
+    static let namespace = "component.exposedVisibility.v1."
+    static let overrideNamespace = "component.instance.v1.visibility."
+    static let metadataKeys = Set([namespace + "id", namespace + "label", namespace + "type", namespace + "default"])
+    static let maximumProperties = 64
+    static let eligibleKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .image, .button, .link, .form]
+
+    static func validLabel(_ label: String) -> Bool { CanonicalComponentText.validLabel(label) }
+    static func overrideKey(_ id: ComponentVisibilityPropertyID) -> String { overrideNamespace + id.description }
+    static func overrideID(_ key: String) -> ComponentVisibilityPropertyID? {
+        guard key.hasPrefix(overrideNamespace) else { return nil }
+        let raw = String(key.dropFirst(overrideNamespace.count))
+        guard let id = ComponentVisibilityPropertyID(uuidString: raw), id.description == raw else { return nil }
+        return id
+    }
+    static func property(on node: DocumentNode) -> ExposedComponentVisibilityProperty? {
+        guard eligibleKinds.contains(node.kind),
+              let raw = node.insertionProperty(namespace + "id"),
+              case .string(let identifier) = raw.value,
+              let id = ComponentVisibilityPropertyID(uuidString: identifier), id.description == identifier,
+              let label = node.insertionProperty(namespace + "label"), case .string(let name) = label.value,
+              let fallback = node.insertionProperty(namespace + "default"),
+              case .boolean(let value) = fallback.value else { return nil }
+        return .init(id: id, sourceNodeID: node.id, label: name, defaultValue: value)
+    }
+    static func properties(in definition: DocumentPage) -> [ExposedComponentVisibilityProperty] {
+        definition.nodes.compactMap(property)
+    }
+    static func overrides(on instance: DocumentNode) -> [ComponentVisibilityPropertyID: Bool] {
+        var result: [ComponentVisibilityPropertyID: Bool] = [:]
+        for property in instance.properties {
+            if let id = overrideID(property.key.rawValue), case .boolean(let value) = property.value { result[id] = value }
+        }
+        return result
+    }
+    static func unresolvedOverrides(on instance: DocumentNode, definition: DocumentPage) -> Set<ComponentVisibilityPropertyID> {
+        Set(overrides(on: instance).keys).subtracting(properties(in: definition).map(\.id))
+    }
+    static func resolvedVisible(for node: DocumentNode, overrides: [ComponentVisibilityPropertyID: Bool]) -> Bool {
+        guard let binding = property(on: node) else {
+            return node.insertionProperty("hidden")?.value != .boolean(true)
+        }
+        return overrides[binding.id] ?? binding.defaultValue
+    }
+    static func validate(_ node: DocumentNode, inDefinition: Bool) throws {
+        let metadata = node.properties.filter { $0.key.rawValue.hasPrefix(namespace) }
+        if !metadata.isEmpty {
+            guard inDefinition, eligibleKinds.contains(node.kind),
+                  Set(metadata.map(\.key.rawValue)) == metadataKeys,
+                  metadata.allSatisfy({ $0.origin == .authored }),
+                  let binding = property(on: node), validLabel(binding.label),
+                  node.insertionProperty(namespace + "type")?.value == .string("boolean-visibility") else {
+                throw ModelValidationError.invalidComponentReference
+            }
+        }
+        let overrides = node.properties.filter { $0.key.rawValue.hasPrefix(overrideNamespace) }
+        guard overrides.count <= maximumProperties else { throw ModelValidationError.invalidComponentReference }
+        for property in overrides {
+            guard node.kind == .component, !inDefinition, overrideID(property.key.rawValue) != nil,
+                  property.origin == .authored, case .boolean = property.value else {
+                throw ModelValidationError.invalidComponentReference
+            }
+        }
+    }
+    static func validateTransition(from old: CanonicalDocument, to new: CanonicalDocument) throws {
+        let oldDefinitions = Dictionary(uniqueKeysWithValues: old.componentDefinitions.map { ($0.id, $0) })
+        let newDefinitions = Dictionary(uniqueKeysWithValues: new.componentDefinitions.map { ($0.id, $0) })
+        let newNodes = Dictionary(uniqueKeysWithValues: new.websitePages.flatMap(\.nodes).map { ($0.id, $0) })
+        for instance in old.websitePages.flatMap(\.nodes) {
+            guard let definitionID = CanonicalComponentReference.definitionID(for: instance),
+                  let oldDefinition = oldDefinitions[definitionID],
+                  let newInstance = newNodes[instance.id], newInstance.kind == .component else { continue }
+            let oldOverrides = overrides(on: instance), newOverrides = overrides(on: newInstance)
+            let retained = Set(oldOverrides.keys).intersection(newOverrides.keys)
+            guard retained.isEmpty || CanonicalComponentReference.definitionID(for: newInstance) == definitionID else {
+                throw ModelValidationError.componentVisibilityIntentWouldBeLost
+            }
+            let prior = Dictionary(uniqueKeysWithValues: properties(in: oldDefinition).map { ($0.id, $0.sourceNodeID) })
+            let current = Dictionary(uniqueKeysWithValues: (newDefinitions[definitionID].map(properties) ?? []).map { ($0.id, $0.sourceNodeID) })
+            for id in retained where prior[id] != nil {
+                guard current[id] == prior[id] else { throw ModelValidationError.componentVisibilityIntentWouldBeLost }
+            }
+        }
+    }
+}
+
 extension CanonicalDocument {
     var componentDefinitions: [DocumentPage] { pages.filter { $0.role == .componentDefinition } }
     var websitePages: [DocumentPage] { pages.filter { $0.role != .componentDefinition } }
@@ -1493,6 +1599,7 @@ enum ProjectCreation {
 
 enum ModelValidationError: Error, Equatable, LocalizedError {
     case componentTextIntentWouldBeLost
+    case componentVisibilityIntentWouldBeLost
     case revisionNotIncrementable
     case emptyPageList
     case duplicatePageID
@@ -1537,6 +1644,7 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .componentTextIntentWouldBeLost: "This text property has authored instance values. Reset those values or detach the affected instances before removing its source or binding."
+        case .componentVisibilityIntentWouldBeLost: "This visibility property has authored instance values. Reset them or detach affected instances before removing its source or binding."
         case .revisionNotIncrementable: "The document revision cannot accept another transaction."
         case .invalidComponentReference: "The component reference is malformed or belongs to an incompatible object."
         case .emptyPageList: "A project must contain at least one page."
@@ -2126,9 +2234,13 @@ private extension DocumentPage {
                 throw ModelValidationError.incompatibleChildOwnership
             }
             let exposed = CanonicalComponentText.properties(in: self)
-            guard exposed.count <= CanonicalComponentText.maximumProperties,
+            let visible = CanonicalComponentVisibility.properties(in: self)
+            let names = exposed.map(\.label) + visible.map(\.label)
+            guard names.count <= CanonicalComponentText.maximumProperties,
                   Set(exposed.map(\.id)).count == exposed.count,
-                  Set(exposed.map { $0.label.lowercased() }).count == exposed.count else {
+                  Set(visible.map(\.id)).count == visible.count,
+                  Set(names.map { $0.lowercased() }).count == names.count,
+                  visible.allSatisfy({ !rootNodeIDs.contains($0.sourceNodeID) }) else {
                 throw ModelValidationError.invalidComponentReference
             }
         }
@@ -2194,6 +2306,7 @@ private extension DocumentPage {
             try CanonicalFillLayerNamespaceValidator.validate(node)
             try CanonicalComponentReference.validate(node)
             try CanonicalComponentText.validate(node, inDefinition: role == .componentDefinition)
+            try CanonicalComponentVisibility.validate(node, inDefinition: role == .componentDefinition)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalSizingNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
@@ -2695,6 +2808,12 @@ enum DocumentSerializer {
             page.nodes.contains { node in node.properties.contains {
                 $0.key.rawValue.hasPrefix(CanonicalComponentText.namespace)
                     || $0.key.rawValue.hasPrefix(CanonicalComponentText.overrideNamespace)
+            } }
+        }) { throw DocumentSerializationError.malformedInput }
+        if header.schemaVersion < 10, document.pages.contains(where: { page in
+            page.nodes.contains { node in node.properties.contains {
+                $0.key.rawValue.hasPrefix(CanonicalComponentVisibility.namespace)
+                    || $0.key.rawValue.hasPrefix(CanonicalComponentVisibility.overrideNamespace)
             } }
         }) { throw DocumentSerializationError.malformedInput }
         if header.schemaVersion < 7,

@@ -743,6 +743,7 @@ struct CommandRegistry {
             _ = try mutate(command, document: &draft, cancellation: .never)
             try draft.validate()
             try CanonicalComponentText.validateTransition(from: document, to: draft)
+            try CanonicalComponentVisibility.validateTransition(from: document, to: draft)
             return .enabled
         } catch let error as ModelValidationError {
             return .disabled(reason: error.localizedDescription)
@@ -1267,6 +1268,7 @@ final class DocumentSession: ObservableObject {
             do {
                 try draft.validate()
                 try CanonicalComponentText.validateTransition(from: committedDocument, to: draft)
+                try CanonicalComponentVisibility.validateTransition(from: committedDocument, to: draft)
             } catch let error as ModelValidationError {
                 throw CommandExecutionError.invalidResult(error)
             }
