@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## In progress — SF-AUTHORING-063
+
+- The Assets pane now offers project-local folders, tags, favorites, and
+  search/filter controls. Organization edits preserve image bytes and asset
+  references and use the existing undoable asset command. The native
+  import/organization/search/undo/reopen path passed focused acceptance;
+  final checkpoint verification remains pending.
+
 ## Focused checkpoint — SF-AUTHORING-062
 
 - Component definitions can expose a child’s Boolean visibility. Linked

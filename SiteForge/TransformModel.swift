@@ -3455,6 +3455,49 @@ enum ImageFillCommandError: Error, LocalizedError, Equatable, Sendable {
     }
 }
 
+/// An Assets-pane edit is prepared against the same live document and scene
+/// selection that will execute it. DocumentSession supplies the exact inverse.
+struct AssetOrganizationEditIdentity: Equatable, Sendable {
+    let documentID: DocumentID
+    let revision: UInt64
+    let assetID: AssetID
+    let sceneID: CanvasViewportSceneID
+}
+
+enum AssetOrganizationEditError: Error, Equatable {
+    case cancelled, stale, invalid, noChanges
+
+    var message: String {
+        switch self {
+        case .cancelled: "Asset organization edit cancelled; the project is unchanged."
+        case .stale: "The asset or document changed. Select the asset and try again."
+        case .invalid: "Use a folder of up to four names and up to twelve distinct short tags."
+        case .noChanges: "Asset organization is already up to date."
+        }
+    }
+}
+
+struct AssetOrganizationCommandRegistry: Sendable {
+    func prepare(folder: String?, tags: [String], favorite: Bool,
+                 identity: AssetOrganizationEditIdentity, live: AssetOrganizationEditIdentity,
+                 document: CanonicalDocument, cancelled: Bool = false) throws -> DocumentCommand {
+        if cancelled { throw AssetOrganizationEditError.cancelled }
+        guard identity == live, identity.documentID == document.id,
+              identity.revision == document.revision,
+              document.revision < UInt64.max - 1,
+              var asset = document.imageAssets.first(where: { $0.id == identity.assetID }) else {
+            throw AssetOrganizationEditError.stale
+        }
+        let organization: AssetOrganization
+        do { organization = try AssetOrganization(folderPath: folder, tags: tags, favorite: favorite) }
+        catch { throw AssetOrganizationEditError.invalid }
+        let replacement = organization.isEmpty ? nil : organization
+        guard asset.organization != replacement else { throw AssetOrganizationEditError.noChanges }
+        asset.organization = replacement
+        return .updateImageAsset(.init(asset: asset))
+    }
+}
+
 struct ImageFillCommandRegistry: Sendable {
     func prepare(_ edit: ImageFillEdit, identity: ImageInspectorOperationIdentity,
                  in document: CanonicalDocument, context: TransformValidationContext,

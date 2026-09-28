@@ -5,9 +5,20 @@
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-062` is Development Prompt 9 of 10; Prompt 10
-triggers the next full verification and hosted checkpoint. Until then do not
-push or run broad gates. Normative modules remain Partial unless fully proven.
+its local commit. `SF-AUTHORING-063` is Development Prompt 10 of 10 and must
+trigger the full verification and hosted checkpoint after focused/visual
+acceptance. Normative modules remain Partial unless fully proven.
+
+## Current asset-organization work
+
+SF-AUTHORING-063 extends the existing ImageAsset and Assets pane with optional
+schema-eleven project-local folder/tags/favorite metadata. Reuse
+AssetOrganizationCommandRegistry and the existing resource/history path;
+never derive paths or alter image bytes. Four model/migration/static-reference
+tests and one native UI journey passed. Five original-resolution states were
+reviewed. Commit the slice, then run `./sf verify`, repair if needed, push, and
+monitor hosted CI. See
+`docs/evidence/SF-AUTHORING-063-ASSET-ORGANIZATION.md`.
 
 ## Current component-visibility work
 

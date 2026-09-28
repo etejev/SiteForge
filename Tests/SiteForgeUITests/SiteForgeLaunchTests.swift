@@ -1490,6 +1490,93 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-012 native reopened appearance")
     }
 
+    // SF-0801-001...008 — project-local organization is edited through the
+    // visible Assets sheet; draft/filter state never becomes document content.
+    func testNativeAssetOrganizationSearchFavoriteUndoAndReopenJourney() throws {
+        let imageURL = try makeLocalImageFixture(named: "siteforge-organized.png")
+        let project = fixtureRoot.appendingPathComponent("asset-organization.siteforge")
+        var application = launchIntegrationOpen(project,
+            base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"),
+            windowAlignment: leadingEdgeAlignmentOnNarrowDisplay)
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application,
+            permitsLeadingEdgeConstrainedPlacementOnNarrowDisplay: leadingEdgeAlignmentOnNarrowDisplay != nil)
+        application.buttons["navigator.tab.assets"].click()
+        application.buttons["assets.empty.import"].click()
+        XCTAssertTrue(waitForNativeOpenPanel(in: application))
+        application.typeKey("g", modifierFlags: [.command, .shift])
+        let path = application.sheets.textFields["PathTextField"]
+        XCTAssertTrue(path.waitForExistence(timeout: 3))
+        path.click(); path.typeKey("a", modifierFlags: .command); path.typeText(imageURL.path)
+        path.typeKey(.return, modifierFlags: [])
+        if path.exists {
+            let go = application.sheets.buttons["Go"]
+            if go.exists && go.isEnabled { go.click() }
+        }
+        let row = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "assets.row.", "siteforge-organized"
+        )).firstMatch
+        if !row.exists { application.typeKey(.return, modifierFlags: []) }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate { [weak application] _, _ in
+                guard let application else { return false }
+                if row.exists { return true }
+                let action = application.buttons["OKButton"]
+                return action.exists && action.isEnabled
+            }, object: application
+        )], timeout: 8), .completed,
+        "The native panel must either import the chosen image or expose an enabled Import action")
+        if !row.exists {
+            let importButton = application.buttons["OKButton"]
+            XCTAssertTrue(importButton.exists && importButton.isEnabled); importButton.click()
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 8)); row.click()
+        attachWindowScreenshot(application, named: "SF-AUTHORING-063 unorganized asset")
+
+        let organize = application.buttons["assets.organize.selected"]
+        XCTAssertTrue(organize.waitForExistence(timeout: 3)); organize.click()
+        let folder = application.textFields["assets.organization.folder"]
+        let tags = application.textFields["assets.organization.tags"]
+        XCTAssertTrue(folder.waitForExistence(timeout: 3))
+        folder.click(); folder.typeText("Campaign/Summer")
+        tags.click(); tags.typeText("hero, launch")
+        application.descendants(matching: .any)["assets.organization.favorite"].click()
+        attachWindowScreenshot(application, named: "SF-AUTHORING-063 organization draft")
+        application.buttons["assets.organization.save"].click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["assets.status"], containing: "Updated asset organization"))
+        XCTAssertTrue(waitForValue(row, containing: "Campaign/Summer"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-063 organized asset")
+
+        let search = application.textFields["assets.search"]
+        search.click(); search.typeText("launch")
+        XCTAssertTrue(row.exists)
+        search.typeKey("a", modifierFlags: .command); search.typeText("missing-tag")
+        XCTAssertTrue(application.descendants(matching: .any)["assets.empty"].waitForExistence(timeout: 3))
+        search.typeKey("a", modifierFlags: .command); search.typeKey(.delete, modifierFlags: [])
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(row, containing: "not favorite"))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(row, containing: "Campaign/Summer"))
+        application.descendants(matching: .any)["assets.filter.favorites"].click()
+        XCTAssertTrue(row.exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-063 favorite filtered")
+        saveDocumentIfModified(in: application)
+        terminateAndWait(application)
+
+        application = launchExistingIntegrationProject(project,
+            recoveryDirectory: fixtureRoot.appendingPathComponent("organization-reopen-recovery", isDirectory: true),
+            windowAlignment: leadingEdgeAlignmentOnNarrowDisplay)
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        application.buttons["navigator.tab.assets"].click()
+        let reopened = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "assets.row.", "siteforge-organized"
+        )).firstMatch
+        XCTAssertTrue(reopened.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForValue(reopened, containing: "Campaign/Summer"))
+        XCTAssertTrue((reopened.value as? String)?.contains("favorite") == true)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-063 reopened asset")
+    }
+
     // SF-0801-001...008, SF-0802-001...008 — a real native Open panel feeds
     // the production resource store, then the visible Assets/Image surfaces
     // drive canonical insertion, non-destructive fit/focal/alt edits, history,

@@ -303,6 +303,75 @@ enum ImageAssetProvenance: String, Codable, Sendable {
     case imported
 }
 
+/// Project-local grouping only. No segment denotes a filesystem location.
+struct AssetOrganization: Codable, Equatable, Sendable {
+    static let version = 1
+    static let maximumTags = 12
+    let version: Int
+    var folderPath: String?
+    var tags: [String]
+    var favorite: Bool
+
+    init(folderPath: String? = nil, tags: [String] = [], favorite: Bool = false) throws {
+        version = Self.version
+        self.folderPath = try Self.normalizedFolder(folderPath)
+        self.tags = try Self.normalizedTags(tags)
+        self.favorite = favorite
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case version, folderPath, tags, favorite }
+    init(from decoder: Decoder) throws {
+        if SiteForgeDecodingPolicy.requiresExactKeys(decoder) {
+            try requireKnownKeys(CodingKeys.self, in: decoder)
+            let raw = try decoder.container(keyedBy: AnySiteForgeCodingKey.self)
+            let present = Set(raw.allKeys.map(\.stringValue))
+            guard Set(["version", "tags", "favorite"]).isSubset(of: present) else {
+                throw ModelValidationError.invalidImageAsset
+            }
+        }
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        folderPath = try values.decodeIfPresent(String.self, forKey: .folderPath)
+        tags = try values.decode([String].self, forKey: .tags)
+        favorite = try values.decode(Bool.self, forKey: .favorite)
+        guard isValid else { throw ModelValidationError.invalidImageAsset }
+    }
+
+    var isValid: Bool {
+        version == Self.version
+            && (try? Self.normalizedFolder(folderPath)) == folderPath
+            && (try? Self.normalizedTags(tags)) == tags
+    }
+
+    var isEmpty: Bool { folderPath == nil && tags.isEmpty && !favorite }
+
+    static func normalizedFolder(_ input: String?) throws -> String? {
+        guard let input, !input.isEmpty else { return nil }
+        let segments = input.precomposedStringWithCanonicalMapping.split(separator: "/", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard (1...4).contains(segments.count), segments.allSatisfy({ validSegment($0, maximumBytes: 40) }) else {
+            throw ModelValidationError.invalidImageAsset
+        }
+        return segments.joined(separator: "/")
+    }
+
+    static func normalizedTags(_ input: [String]) throws -> [String] {
+        guard input.count <= maximumTags else { throw ModelValidationError.invalidImageAsset }
+        let normalized = input.map { $0.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard normalized.allSatisfy({ validSegment($0, maximumBytes: 32) }),
+              Set(normalized.map { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX")) }).count == normalized.count else {
+            throw ModelValidationError.invalidImageAsset
+        }
+        return normalized.sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+    }
+
+    private static func validSegment(_ value: String, maximumBytes: Int) -> Bool {
+        !value.isEmpty && value != "." && value != ".." && value.utf8.count <= maximumBytes
+            && !value.contains("/") && !value.contains("\\")
+            && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+}
+
 /// Canonical image-library metadata. Original bytes remain in the existing
 /// content-addressed resource store; canonical state never retains a user
 /// path, a decoded bitmap, or an editor thumbnail.
@@ -323,13 +392,15 @@ struct ImageAsset: Codable, Equatable, Identifiable, Sendable {
     var byteCount: Int
     var contentHash: String
     var provenance: ImageAssetProvenance
+    var organization: AssetOrganization?
 
     init(
         id: AssetID = AssetID(), resourceID: ResourceID,
         displayName: String, originalFilename: String,
         format: ImageAssetFormat, pixelWidth: Int, pixelHeight: Int,
         byteCount: Int, contentHash: String,
-        provenance: ImageAssetProvenance = .imported
+        provenance: ImageAssetProvenance = .imported,
+        organization: AssetOrganization? = nil
     ) {
         self.id = id
         self.resourceID = resourceID
@@ -341,15 +412,22 @@ struct ImageAsset: Codable, Equatable, Identifiable, Sendable {
         self.byteCount = byteCount
         self.contentHash = contentHash
         self.provenance = provenance
+        self.organization = organization
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, resourceID, displayName, originalFilename, format, pixelWidth,
-             pixelHeight, byteCount, contentHash, provenance
+             pixelHeight, byteCount, contentHash, provenance, organization
     }
 
     init(from decoder: Decoder) throws {
-        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        if SiteForgeDecodingPolicy.requiresExactKeys(decoder) {
+            try requireKnownKeys(CodingKeys.self, in: decoder)
+            let raw = try decoder.container(keyedBy: AnySiteForgeCodingKey.self)
+            let present = Set(raw.allKeys.map(\.stringValue))
+            let required = Set(CodingKeys.allCases.map(\.stringValue)).subtracting([CodingKeys.organization.rawValue])
+            guard required.isSubset(of: present) else { throw ModelValidationError.invalidImageAsset }
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(AssetID.self, forKey: .id)
         resourceID = try container.decode(ResourceID.self, forKey: .resourceID)
@@ -361,6 +439,7 @@ struct ImageAsset: Codable, Equatable, Identifiable, Sendable {
         byteCount = try container.decode(Int.self, forKey: .byteCount)
         contentHash = try container.decode(String.self, forKey: .contentHash)
         provenance = try container.decode(ImageAssetProvenance.self, forKey: .provenance)
+        organization = try container.decodeIfPresent(AssetOrganization.self, forKey: .organization)
     }
 
     func validate() throws {
@@ -375,7 +454,8 @@ struct ImageAsset: Codable, Equatable, Identifiable, Sendable {
               byteCount > 0, byteCount <= Self.maximumResourceBytes,
               contentHash.count == 64,
               contentHash == contentHash.lowercased(),
-              contentHash.allSatisfy(\.isHexDigit) else {
+              contentHash.allSatisfy(\.isHexDigit),
+              organization?.isValid != false else {
             throw ModelValidationError.invalidImageAsset
         }
     }
@@ -2420,10 +2500,10 @@ enum DocumentSerializationError: Error, Equatable, LocalizedError {
 }
 
 enum DocumentSerializer {
-    // Schema 10 migrates schema-nine fill-only token references to the
-    // target-keyed binding namespace without changing property identity.
+    // Schema 11 adds optional versioned image-asset organization metadata;
+    // schema-ten assets migrate with organization omitted.
     // Historical schemas cannot acquire newer closed namespaces by permissive decoding.
-    static let currentSchemaVersion = 10
+    static let currentSchemaVersion = 11
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -2792,7 +2872,7 @@ enum DocumentSerializer {
                     }
                 }
             } catch { throw DocumentSerializationError.malformedInput }
-        case currentSchemaVersion:
+        case 10, currentSchemaVersion:
             do {
                 let strictDecoder = JSONDecoder()
                 strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
@@ -2804,6 +2884,9 @@ enum DocumentSerializer {
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
         try checkpoint()
+        if header.schemaVersion < 11, document.imageAssets.contains(where: { $0.organization != nil }) {
+            throw DocumentSerializationError.malformedInput
+        }
         if header.schemaVersion < 8, document.pages.contains(where: { page in
             page.nodes.contains { node in node.properties.contains {
                 $0.key.rawValue.hasPrefix(CanonicalComponentText.namespace)

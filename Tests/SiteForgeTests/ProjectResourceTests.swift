@@ -7,12 +7,104 @@ import XCTest
 
 final class ProjectResourceTests: XCTestCase {
 
+    func testAssetOrganizationNormalizesAndRejectsInvalidFoldersAndTags() throws {
+        let value = try AssetOrganization(folderPath: " Campaign / Summer ",
+                                          tags: [" hero ", "Detail"], favorite: true)
+        XCTAssertEqual(value.folderPath, "Campaign/Summer")
+        XCTAssertEqual(value.tags, ["Detail", "hero"])
+        XCTAssertTrue(value.favorite)
+        XCTAssertThrowsError(try AssetOrganization(folderPath: "../../private"))
+        XCTAssertThrowsError(try AssetOrganization(folderPath: "A//B"))
+        XCTAssertThrowsError(try AssetOrganization(tags: ["hero", "HERO"]))
+        XCTAssertThrowsError(try AssetOrganization(tags: [String(repeating: "x", count: 33)]))
+        XCTAssertThrowsError(try AssetOrganization(tags: Array(repeating: "x", count: 13)))
+    }
+
+    @MainActor
+    func testAssetOrganizationRegistryGuardsIdentityAndPreservesExactHistory() throws {
+        let bytes = try makePNG(width: 3, height: 2)
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Hero", originalFilename: "hero.png",
+            format: .png, pixelWidth: 3, pixelHeight: 2, byteCount: bytes.count,
+            contentHash: ProjectResourceStore.digest(bytes))
+        let session = DocumentSession()
+        try session.execute(.insertImageAsset(.init(asset: asset, index: 0)))
+        let scene = CanvasViewportSceneID()
+        let first = AssetOrganizationEditIdentity(documentID: session.document.id,
+            revision: session.document.revision, assetID: asset.id, sceneID: scene)
+        let registry = AssetOrganizationCommandRegistry()
+        let edit = try registry.prepare(folder: "Campaign", tags: ["hero"], favorite: true,
+            identity: first, live: first, document: session.document)
+        try session.execute(edit)
+        let organized = try XCTUnwrap(session.document.imageAssets.first)
+        XCTAssertEqual(organized.id, asset.id)
+        XCTAssertEqual(organized.resourceID, asset.resourceID)
+        XCTAssertEqual(organized.organization?.folderPath, "Campaign")
+        XCTAssertEqual(organized.organization?.tags, ["hero"])
+        XCTAssertThrowsError(try registry.prepare(folder: "Other", tags: [], favorite: false,
+            identity: first, live: first, document: session.document))
+        let second = AssetOrganizationEditIdentity(documentID: session.document.id,
+            revision: session.document.revision, assetID: asset.id, sceneID: scene)
+        let otherScene = AssetOrganizationEditIdentity(documentID: session.document.id,
+            revision: session.document.revision, assetID: asset.id, sceneID: CanvasViewportSceneID())
+        XCTAssertThrowsError(try registry.prepare(folder: nil, tags: [], favorite: false,
+            identity: second, live: otherScene, document: session.document))
+        XCTAssertThrowsError(try registry.prepare(folder: nil, tags: [], favorite: false,
+            identity: second, live: second, document: session.document, cancelled: true))
+        XCTAssertThrowsError(try registry.prepare(folder: "Campaign", tags: ["hero"], favorite: true,
+            identity: second, live: second, document: session.document))
+        XCTAssertThrowsError(try registry.prepare(folder: nil, tags: ["hero", "HERO"], favorite: false,
+            identity: second, live: second, document: session.document))
+        XCTAssertEqual(session.document.imageAssets, [organized])
+        try session.undo()
+        XCTAssertEqual(session.document.imageAssets, [asset])
+        try session.redo()
+        XCTAssertEqual(session.document.imageAssets, [organized])
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(session.document))
+        XCTAssertEqual(reopened.imageAssets, [organized])
+    }
+
+    @MainActor
+    func testSchemaTenAssetOrganizationMigrationAndVersionGuard() throws {
+        let bytes = try makePNG(width: 2, height: 2)
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Legacy", originalFilename: "legacy.png",
+            format: .png, pixelWidth: 2, pixelHeight: 2, byteCount: bytes.count,
+            contentHash: ProjectResourceStore.digest(bytes))
+        var original = ProjectCreation.blank()
+        original.imageAssets = [asset]
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(original)) as? [String: Any])
+        object["schemaVersion"] = 10
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+        let migrated = try DocumentSerializer.decode(legacy)
+        XCTAssertNil(migrated.imageAssets[0].organization)
+        XCTAssertEqual(migrated.imageAssets[0].id, asset.id)
+        var authored = migrated
+        authored.imageAssets[0].organization = try AssetOrganization(folderPath: "Studio", tags: ["hero"], favorite: true)
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(authored))
+        XCTAssertEqual(reopened.imageAssets, authored.imageAssets)
+        var invalid = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(authored)) as? [String: Any])
+        var invalidDocument = try XCTUnwrap(invalid["document"] as? [String: Any])
+        var invalidAssets = try XCTUnwrap(invalidDocument["imageAssets"] as? [[String: Any]])
+        var invalidOrganization = try XCTUnwrap(invalidAssets[0]["organization"] as? [String: Any])
+        invalidOrganization["unexpected"] = "not canonical"
+        invalidAssets[0]["organization"] = invalidOrganization
+        invalidDocument["imageAssets"] = invalidAssets
+        invalid["document"] = invalidDocument
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: invalid)))
+        var smuggled = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(authored)) as? [String: Any])
+        smuggled["schemaVersion"] = 10
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: smuggled)))
+    }
+
     func testStaticImageOutputReferenceUsesOnlyVerifiedContentAddressedEntry() throws {
         let bytes = Data([0x89, 0x50, 0x4e, 0x47])
         let hash = ProjectResourceStore.digest(bytes)
         let asset = ImageAsset(resourceID: ResourceID(), displayName: "Card", originalFilename: "card.png", format: .png, pixelWidth: 1, pixelHeight: 1, byteCount: bytes.count, contentHash: hash)
         let entry = StaticAssetExportEntry(resourceID: asset.resourceID, outputPath: "assets/\(hash).png", sha256: hash)
         XCTAssertEqual(try StaticImageOutputReferencePlanner.path(for: asset, entries: [entry]), entry.outputPath)
+        var organized = asset
+        organized.organization = try AssetOrganization(folderPath: "Campaign", tags: ["hero"], favorite: true)
+        XCTAssertEqual(try StaticImageOutputReferencePlanner.path(for: organized, entries: [entry]), entry.outputPath,
+                       "Project-local organization must not alter the authored/static asset reference")
         XCTAssertThrowsError(try StaticImageOutputReferencePlanner.path(for: asset, entries: []))
     }
     @MainActor

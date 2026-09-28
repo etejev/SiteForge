@@ -2,6 +2,16 @@
 
 Last updated: 2026-09-28.
 
+SF-AUTHORING-063 is IN PROGRESS pending the prompt-ten full/hosted checkpoint: bounded project-local image-asset folder,
+tag, and favorite organization (`SF-0801` Partial). Optional schema-eleven
+metadata preserves existing asset/resource identity and schema-ten decoding;
+native Assets controls use one revision- and scene-guarded history command.
+Focused model/migration/static-reference tests passed 4/4; the exact native
+import/organize/filter/undo/reopen journey passed 1/1 after the console was
+unlocked, and five original-resolution screenshots were reviewed. The
+tenth-prompt full/hosted gate remains pending. See
+`docs/evidence/SF-AUTHORING-063-ASSET-ORGANIZATION.md`.
+
 SF-AUTHORING-062 adds a bounded component Boolean visibility-property
 foundation (`SF-0901`, `SF-0902`, `SF-0905` Partial). Definition children own a
 stable property ID, name, and default; instances may author or reset a typed

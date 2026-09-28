@@ -31,20 +31,19 @@ CANVAS_VIEWPORT_SLICE = MODEL_SLICE + [
 LAYOUT_ENGINE_SLICE = MODEL_SLICE + [
     "SiteForge/LayoutEngine.swift",
 ]
-CANVAS_RENDERER_SLICE = MODEL_SLICE + [
-    "SiteForge/CanvasViewport.swift",
-    "SiteForge/CanvasRendererCore.swift",
-]
-SELECTION_MODEL_SLICE = MODEL_SLICE + [
-    "SiteForge/CanvasViewport.swift",
-    "SiteForge/CanvasRendererCore.swift",
-    "SiteForge/SelectionModel.swift",
-]
-INSERTION_MODEL_SLICE = list(dict.fromkeys(ENGINE_SLICE + [
+# CanvasRendererCore now resolves typed fills, box style, components, and
+# closed-static asset references. Its headless proof must include those actual
+# dependencies, while still excluding all AppKit/SwiftUI surface files.
+CANVAS_RENDERER_SLICE = list(dict.fromkeys(ENGINE_SLICE + [
     "SiteForge/CanvasViewport.swift",
     "SiteForge/LayoutEngine.swift",
     "SiteForge/InsertionModel.swift",
+    "SiteForge/SelectionModel.swift",
+    "SiteForge/TransformModel.swift",
+    "SiteForge/CanvasRendererCore.swift",
 ]))
+SELECTION_MODEL_SLICE = CANVAS_RENDERER_SLICE
+INSERTION_MODEL_SLICE = CANVAS_RENDERER_SLICE
 TRANSFORM_MODEL_SLICE = list(dict.fromkeys(
     INSERTION_MODEL_SLICE + SELECTION_MODEL_SLICE + ["SiteForge/TransformModel.swift"]
 ))

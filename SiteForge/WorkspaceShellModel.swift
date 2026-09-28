@@ -1139,6 +1139,9 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var designInspectorFailure: DesignInspectorError?
     @Published private(set) var lastDesignInspectorAnnouncement = "Design Inspector inactive"
     @Published var assetSearchText = ""
+    @Published var assetFavoritesOnly = false
+    @Published var assetFolderFilter: String?
+    @Published var assetTagFilter: String?
     @Published var selectedAssetID: AssetID?
     @Published private(set) var isImportingImages = false
     @Published private(set) var lastAssetAnnouncement = "No image asset selected"
@@ -1338,11 +1341,51 @@ final class WorkspaceShellState: ObservableObject {
 
     var imageAssets: [ImageAsset] {
         let query = assetSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return documentSession.document.imageAssets }
-        return documentSession.document.imageAssets.filter {
-            $0.displayName.localizedCaseInsensitiveContains(query)
-                || $0.originalFilename.localizedCaseInsensitiveContains(query)
+        return documentSession.document.imageAssets.filter { asset in
+            (!assetFavoritesOnly || asset.organization?.favorite == true)
+                && (assetFolderFilter == nil || asset.organization?.folderPath == assetFolderFilter)
+                && (assetTagFilter.map { tag in asset.organization?.tags.contains(tag) == true } ?? true)
+                && (query.isEmpty || asset.displayName.localizedCaseInsensitiveContains(query)
+                    || asset.originalFilename.localizedCaseInsensitiveContains(query)
+                    || asset.organization?.folderPath?.localizedCaseInsensitiveContains(query) == true
+                    || asset.organization?.tags.contains(where: { $0.localizedCaseInsensitiveContains(query) }) == true)
         }
+    }
+
+    var imageAssetFolders: [String] {
+        Array(Set(documentSession.document.imageAssets.compactMap { $0.organization?.folderPath })).sorted()
+    }
+
+    var imageAssetTags: [String] {
+        Array(Set(documentSession.document.imageAssets.flatMap { $0.organization?.tags ?? [] })).sorted()
+    }
+
+    func organizeImageAsset(_ assetID: AssetID, folder: String?, tags: [String], favorite: Bool,
+                            expected: AssetOrganizationEditIdentity? = nil, cancelled: Bool = false) {
+        guard selectedAssetID == assetID else {
+            lastAssetAnnouncement = AssetOrganizationEditError.stale.message
+            announcementPoster.post(lastAssetAnnouncement)
+            return
+        }
+        let live = AssetOrganizationEditIdentity(documentID: documentSession.document.id,
+            revision: documentSession.document.revision, assetID: assetID, sceneID: viewportState.sceneID)
+        do {
+            let command = try AssetOrganizationCommandRegistry().prepare(
+                folder: folder, tags: tags, favorite: favorite, identity: expected ?? live,
+                live: live, document: documentSession.document, cancelled: cancelled)
+            _ = try documentSession.execute(command)
+            lastAssetAnnouncement = "Updated asset organization"
+        } catch let error as AssetOrganizationEditError {
+            lastAssetAnnouncement = error.message
+        } catch {
+            lastAssetAnnouncement = "Asset organization could not be updated; select the asset and try again."
+        }
+        announcementPoster.post(lastAssetAnnouncement)
+    }
+
+    func assetOrganizationEditIdentity(_ assetID: AssetID) -> AssetOrganizationEditIdentity {
+        .init(documentID: documentSession.document.id, revision: documentSession.document.revision,
+              assetID: assetID, sceneID: viewportState.sceneID)
     }
 
     var imageFillSelection: [DocumentNode] {

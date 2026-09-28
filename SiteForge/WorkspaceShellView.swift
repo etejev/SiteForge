@@ -788,6 +788,7 @@ private struct ComponentsNavigatorView: View {
 
 private struct AssetsNavigatorView: View {
     @ObservedObject var state: WorkspaceShellState
+    @State private var editingAsset: ImageAsset?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -803,17 +804,36 @@ private struct AssetsNavigatorView: View {
             TextField("Search Images", text: $state.assetSearchText)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("assets.search")
+            Toggle("Favorites", isOn: $state.assetFavoritesOnly)
+                .accessibilityIdentifier("assets.filter.favorites")
+            HStack(spacing: 5) {
+                Picker("Folder", selection: $state.assetFolderFilter) {
+                    Text("All folders").tag(String?.none)
+                    ForEach(state.imageAssetFolders, id: \.self) { folder in
+                        Text(folder).tag(Optional(folder))
+                    }
+                }
+                .accessibilityIdentifier("assets.filter.folder")
+                Picker("Tag", selection: $state.assetTagFilter) {
+                    Text("All tags").tag(String?.none)
+                    ForEach(state.imageAssetTags, id: \.self) { tag in
+                        Text(tag).tag(Optional(tag))
+                    }
+                }
+                .accessibilityIdentifier("assets.filter.tag")
+            }
 
             if state.imageAssets.isEmpty {
                 ContentUnavailableView {
-                    Label("No Images", systemImage: "photo.on.rectangle.angled")
+                    Label(state.documentSession.document.imageAssets.isEmpty ? "No Images" : "No Matching Images",
+                          systemImage: "photo.on.rectangle.angled")
                         .accessibilityIdentifier("assets.empty")
                 } description: {
-                    Text(state.assetSearchText.isEmpty
+                    Text(state.documentSession.document.imageAssets.isEmpty
                          ? "Import local PNG, JPEG, GIF, TIFF, or HEIC images. Originals stay inside this project."
-                         : "No imported image matches this search.")
+                         : "No image matches the current search or filters.")
                 } actions: {
-                    if state.assetSearchText.isEmpty {
+                    if state.documentSession.document.imageAssets.isEmpty {
                         Button("Import Images…") { state.importImages() }
                             .accessibilityIdentifier("assets.empty.import")
                     }
@@ -823,7 +843,10 @@ private struct AssetsNavigatorView: View {
                 ScrollView {
                     LazyVStack(spacing: 6) {
                         ForEach(state.imageAssets) { asset in
-                            AssetRow(asset: asset, state: state)
+                            AssetRow(asset: asset, state: state) {
+                                state.selectedAssetID = asset.id
+                                editingAsset = asset
+                            }
                         }
                     }
                 }
@@ -844,6 +867,14 @@ private struct AssetsNavigatorView: View {
                     .accessibilityIdentifier("assets.import.insert")
             }
             .controlSize(.small)
+            if let selected = state.documentSession.document.imageAssets.first(where: { $0.id == state.selectedAssetID }) {
+                Button("Organize Selected Image…") { editingAsset = selected }
+                    .accessibilityIdentifier("assets.organize.selected")
+            }
+        }
+        .sheet(item: $editingAsset) { asset in
+            AssetOrganizationEditor(asset: asset, state: state,
+                identity: state.assetOrganizationEditIdentity(asset.id))
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Assets")
@@ -854,6 +885,7 @@ private struct AssetsNavigatorView: View {
 private struct AssetRow: View {
     let asset: ImageAsset
     @ObservedObject var state: WorkspaceShellState
+    let onOrganize: () -> Void
     @State private var nameDraft = ""
     @State private var isRenaming = false
     @FocusState private var renameFocused: Bool
@@ -868,7 +900,7 @@ private struct AssetRow: View {
             }
         }
         .accessibilityLabel(asset.displayName)
-        .accessibilityValue("\(asset.originalFilename), \(asset.pixelWidth) by \(asset.pixelHeight) pixels, \(asset.format.rawValue), \(state.imageAssetUsageCount(asset.id)) uses")
+        .accessibilityValue("\(asset.originalFilename), \(asset.pixelWidth) by \(asset.pixelHeight) pixels, \(asset.format.rawValue), \(state.imageAssetUsageCount(asset.id)) uses, \(asset.organization?.favorite == true ? "favorite" : "not favorite"), folder \(asset.organization?.folderPath ?? "none"), tags \(asset.organization?.tags.joined(separator: ", ") ?? "none")")
         .accessibilityIdentifier("assets.row.\(asset.id.description)")
         .contextMenu {
             Button("Insert Image") { state.selectedAssetID = asset.id; state.insertSelectedImage() }
@@ -877,6 +909,7 @@ private struct AssetRow: View {
                 isRenaming = true
                 DispatchQueue.main.async { renameFocused = true }
             }
+            Button("Organize…", action: onOrganize)
             Button("Replace…") { state.replaceImageAsset(asset.id) }
             Button("Reveal Usage") { state.revealImageUsage(asset.id) }
             Divider()
@@ -911,8 +944,15 @@ private struct AssetRow: View {
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 Text("\(state.imageAssetUsageCount(asset.id)) use\(state.imageAssetUsageCount(asset.id) == 1 ? "" : "s")")
                     .font(.caption2).foregroundStyle(.secondary)
+                if let organization = asset.organization {
+                    Text(([organization.folderPath].compactMap { $0 } + organization.tags).joined(separator: " · "))
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 2)
+            if asset.organization?.favorite == true { Image(systemName: "star.fill").accessibilityHidden(true) }
             if state.selectedAssetID == asset.id { Image(systemName: "checkmark.circle.fill") }
         }
         .padding(6).contentShape(Rectangle())
@@ -923,6 +963,68 @@ private struct AssetRow: View {
     private func commitRename() {
         state.renameImageAsset(asset.id, to: nameDraft)
         isRenaming = false
+    }
+}
+
+private struct AssetOrganizationEditor: View {
+    let asset: ImageAsset
+    @ObservedObject var state: WorkspaceShellState
+    let identity: AssetOrganizationEditIdentity
+    @Environment(\.dismiss) private var dismiss
+    @State private var folder: String
+    @State private var tags: String
+    @State private var favorite: Bool
+    @State private var validation = ""
+
+    init(asset: ImageAsset, state: WorkspaceShellState, identity: AssetOrganizationEditIdentity) {
+        self.asset = asset
+        self.state = state
+        self.identity = identity
+        _folder = State(initialValue: asset.organization?.folderPath ?? "")
+        _tags = State(initialValue: asset.organization?.tags.joined(separator: ", ") ?? "")
+        _favorite = State(initialValue: asset.organization?.favorite ?? false)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Organize Image").font(.headline)
+            Text(asset.displayName).lineLimit(1).foregroundStyle(.secondary)
+            TextField("Project folder", text: $folder)
+                .accessibilityIdentifier("assets.organization.folder")
+            TextField("Tags (comma-separated)", text: $tags)
+                .accessibilityIdentifier("assets.organization.tags")
+            Toggle("Favorite", isOn: $favorite)
+                .accessibilityIdentifier("assets.organization.favorite")
+            if !validation.isEmpty {
+                Text(validation).foregroundStyle(.red)
+                    .accessibilityIdentifier("assets.organization.validation")
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save Organization") { commit() }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("assets.organization.save")
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 300, idealWidth: 360)
+        .onExitCommand { dismiss() }
+    }
+
+    private func commit() {
+        let parsedTags = tags.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        let requestedTags = tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : parsedTags
+        do {
+            _ = try AssetOrganization(folderPath: folder, tags: requestedTags, favorite: favorite)
+        } catch {
+            validation = AssetOrganizationEditError.invalid.message
+            return
+        }
+        state.organizeImageAsset(asset.id, folder: folder, tags: requestedTags,
+                                 favorite: favorite, expected: identity)
+        dismiss()
     }
 }
 

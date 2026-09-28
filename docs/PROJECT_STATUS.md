@@ -2,6 +2,13 @@
 
 Last updated: 2026-09-28.
 
+Current local development prompt: SF-AUTHORING-063 (10 of 10), bounded native
+Asset Library organization. Model/migration/static-reference checks passed 4/4;
+the native import/organize/filter/undo/reopen journey passed 1/1 and five
+original-resolution states were reviewed. Full local and hosted checkpoint
+evidence remain pending. SF-0801 remains Partial; see
+`docs/evidence/SF-AUTHORING-063-ASSET-ORGANIZATION.md`.
+
 Current local development prompt: SF-AUTHORING-062 (9 of 10), bounded
 component Boolean visibility properties. Definition defaults and linked
 instance overrides use typed history; native Content controls, Layers status,

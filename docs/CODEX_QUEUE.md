@@ -12,7 +12,7 @@ persistence/history/accessibility/cancellation, focused evidence, and factual
 documentation. Run focused affected tests before each local commit; do not run
 the full gate or hosted CI per slice.
 
-`SF-AUTHORING-062` is Development Prompt **9 of 10**. After Prompt 10, run one
+`SF-AUTHORING-063` is Development Prompt **10 of 10**. After its focused feature commit, run one
 authoritative `./sf verify`, repair failures, commit, push main, and monitor
 hosted CI until green. Debug-only owner add-ons do not increment this cadence.
 Until that checkpoint, commits stay local and no external GitHub/release action
@@ -24,6 +24,12 @@ actually evidenced.
 None.
 
 ## IN PROGRESS
+
+- [ ] `SF-AUTHORING-063` Native Asset Library organization foundation v1 (P1; Development Prompt 10 of 10).
+  - Requirements: bounded `SF-0801-001`–`008`; supporting `SF-0305`/`SF-0306`, `SF-0701`/`SF-0702`, and `SF-1204` where existing asset uses are affected.
+  - Plan: add versioned, strictly validated project-local folder/tags/favorite metadata to existing ImageAsset records without changing resource identity; route edits through revision-guarded existing asset history commands; expose native Assets search, favorite/folder/tag filters and compact editable controls; prove migration, exact history, safe existing use/deletion accounting, output neutrality, and an actual-app journey. After the feature commit, perform the reset-policy full local and hosted checkpoint.
+  - Exclusions: filesystem folders, remote/cloud libraries, smart collections, bulk edits, drag reorder, media types beyond existing raster imports, image transformation, browser runtime, and release work.
+  - Current evidence: optional schema-eleven organization, guarded asset history, and native pane controls are implemented; model/migration/static-reference selectors passed 4/4, the exact native import/organize/filter/undo/reopen journey passed 1/1, five original-resolution attachments were reviewed, and repository checks passed. The tenth-prompt full/hosted gate remains pending; see `docs/evidence/SF-AUTHORING-063-ASSET-ORGANIZATION.md`.
 
 - [x] `SF-AUTHORING-062` Component Boolean visibility-property foundation v1 (P1; Development Prompt 9 of 10; focused local checkpoint).
   - Requirements: bounded `SF-0901-001`–`008`, `SF-0902-001`–`008`, `SF-0905-001`–`008`; supporting `SF-0305`/`SF-0306`, `SF-0701`/`SF-0702`, and `SF-1204`.
