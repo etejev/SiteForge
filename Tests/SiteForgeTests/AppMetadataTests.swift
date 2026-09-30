@@ -10,6 +10,41 @@ final class AppMetadataTests: XCTestCase {
         XCTAssertEqual(Bundle.main.bundleIdentifier, AppMetadata.localBundleIdentifier)
     }
 
+    // SF-0201-009: the app target must package the approved static artwork,
+    // not resolve an untracked image or generate one at application launch.
+    func testAppIconCatalogCoversEveryMacSizeAndIsSelectedByBothAppConfigurations() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let catalog = root.appendingPathComponent("SiteForge/Assets.xcassets/AppIcon.appiconset")
+        let contents = try Data(contentsOf: catalog.appendingPathComponent("Contents.json"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: contents) as? [String: Any])
+        let images = try XCTUnwrap(object["images"] as? [[String: String]])
+        let expectedSizes = [16, 32, 128, 256, 512]
+        XCTAssertEqual(images.count, expectedSizes.count * 2)
+
+        for points in expectedSizes {
+            for scale in [1, 2] {
+                let entry = try XCTUnwrap(images.first {
+                    $0["idiom"] == "mac" && $0["size"] == "\(points)x\(points)"
+                        && $0["scale"] == "\(scale)x"
+                })
+                let filename = try XCTUnwrap(entry["filename"])
+                let png = try Data(contentsOf: catalog.appendingPathComponent(filename))
+                let bitmap = try XCTUnwrap(NSBitmapImageRep(data: png))
+                XCTAssertEqual(bitmap.pixelsWide, points * scale)
+                XCTAssertEqual(bitmap.pixelsHigh, points * scale)
+                XCTAssertTrue(bitmap.hasAlpha)
+            }
+        }
+
+        let project = try String(contentsOf: root.appendingPathComponent("SiteForge.xcodeproj/project.pbxproj"), encoding: .utf8)
+        XCTAssertEqual(project.components(separatedBy: "ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;").count - 1, 2)
+        XCTAssertTrue(project.contains("Assets.xcassets in Resources"))
+        XCTAssertNotNil(Bundle.main.url(forResource: "Assets", withExtension: "car"))
+    }
+
     // SF-1902-008
     func testFoundationRequirementTraceabilityIsComplete() {
         XCTAssertEqual(

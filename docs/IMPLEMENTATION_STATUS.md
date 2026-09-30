@@ -1,16 +1,160 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-28.
+Last updated: 2026-09-30.
 
-SF-AUTHORING-063 is IN PROGRESS pending the prompt-ten full/hosted checkpoint: bounded project-local image-asset folder,
+Batch SF-AUTHORING-065–074 local acceptance: one complete `./sf verify`
+executed 504 unit/integration tests (all passed) and 81 UI tests (79 passed,
+two failed). The keyboard traversal assertion was updated for the newly native
+Pages search focus stop. The Layers type-filter journey was corrected to query
+its own picker and account for the structural Root as a Frame-kind row. Both
+exact failed journeys passed focused reruns; no second full-gate pass is
+claimed under the owner's repair cadence. Original-resolution Elements,
+Layers, Quick Open, and Settings screenshots were reviewed. `SF-0205` and
+`SF-0206` remain Partial outside these bounded slices.
+
+SF-AUTHORING-074 adds an explicit All/Pages/Layers/Actions scope to native
+Quick Open under bounded `SF-0205-003/004/006/008`. Scope filters existing
+authorized result projections and recent sections without changing PageID,
+NodeID, command validation, or canonical document content. Focused policy
+and actual-app tests passed in the batch, completing the ten source slices
+065–074. Original-resolution scope screenshots were reviewed. See
+`docs/evidence/SF-AUTHORING-074-QUICK-OPEN-SCOPES.md`.
+
+SF-AUTHORING-073 adds bounded scene-local recent Layers to Quick Open under
+`SF-0205-003/004/006/008`. Only successful Layers selection records a NodeID;
+projection revalidates against the current page's authorized targets and
+document identity. No visit history enters canonical content or packages.
+Focused unit and actual-app tests passed in the batch; the recent-Layers
+screenshot was reviewed. See
+`docs/evidence/SF-AUTHORING-073-RECENT-LAYERS.md`.
+
+SF-AUTHORING-072 adds bounded, deduplicated recent pages to native Quick Open
+under bounded `SF-0205-003/004/006/008` and existing page navigation. The
+list stores stable PageIDs in scene memory, revalidates against the live
+document, and resets on document identity change. It neither serializes nor
+alters project history. Focused policy and actual-app tests passed in the
+batch; the recent-pages screenshot was reviewed. See
+`docs/evidence/SF-AUTHORING-072-RECENT-PAGES.md`.
+
+SF-AUTHORING-071 extends Quick Open with a closed list of non-destructive
+Fit Document, Actual Size, and Toggle Grid actions under bounded
+`SF-0205-002/003/004/006/008`, using the existing scene-local viewport/Grid
+paths (`SF-0407`). The actions do not enter document history, packages, or
+authored pixels. Focused policy and actual-app tests passed in the batch;
+the Actions screenshot was reviewed. See
+`docs/evidence/SF-AUTHORING-071-QUICK-OPEN-ACTIONS.md`.
+
+SF-AUTHORING-070 implements an editor-only native Quick Open sheet for
+current-document pages and current-page authorized Layers under bounded
+`SF-0205-002/003/004/006/008`. A visible navigator button and View-menu
+`Command-Shift-O` share the same active-window state. Results retain PageID/
+NodeID and canonical order and dispatch through existing `selectPage` and
+`selectLayer` paths; Cancel and no-result state are noncanonical. Focused
+policy and actual-app tests passed in the batch, with sheet visual review;
+see `docs/evidence/SF-AUTHORING-070-QUICK-OPEN.md`.
+
+SF-AUTHORING-069 implements a native Layers NodeKind filter composed with
+the existing local name query (`SF-0205-003/004/006/008`). The picker filters
+only existing authorized targets and preserves selection, stable IDs, paint
+order, project data, and renderer adoption. Show Selected Layer clears both
+filters to recover a hidden selected row. The unit test passed in the batch;
+the exact UI journey passed after picker-scoped querying and a truthful
+two-Frame-kind fixture assertion. Both filter screenshots were reviewed. See
+`docs/evidence/SF-AUTHORING-069-LAYERS-TYPE-FILTER.md`.
+
+SF-AUTHORING-068 implements scene-local native Elements catalogue search under
+bounded `SF-0205-002/003/004/006/008` and existing `SF-0405-002/006`.
+Search matches names/categories without changing stable item identity,
+availability, insertion commands, or project content. A count, no-result state,
+Clear Search, and Escape are present. Focused policy and actual-app tests
+passed in the batch; original-resolution result/empty/unavailable screenshots
+were reviewed. `SF-0205` remains Partial;
+see `docs/evidence/SF-AUTHORING-068-ELEMENTS-SEARCH.md`.
+
+SF-AUTHORING-067 adds a native Layers search over the current page's existing
+authorized targets (`SF-0205-002/003/004/006/008`, supporting
+`SF-0402-002/006`). It preserves stable NodeIDs, paint order, and selection
+while filtering; Return uses the existing Layers selection command, Escape
+clears the query, and no-result/filtered-selection states offer a visible
+recovery action. The new pure policy and actual-app journeys plus the affected
+existing keyboard/multi-selection journey passed focused 3/3. Three original-
+resolution states were reviewed. `SF-0205` remains Partial; the later batch
+result is recorded above. See
+`docs/evidence/SF-AUTHORING-067-LAYERS-SEARCH.md`.
+
+SF-AUTHORING-066 adds a scene-local native Pages search field under bounded
+`SF-0205-002/003/004/006/008` and existing `SF-0303-002/006`. It matches
+current-document page names and routes case/diacritic-insensitively in canonical
+page order. Return opens the first result; Escape and Clear Search restore the
+list, and Show Selected Page recovers a filtered-out current page. Search alone
+does not change selection, project revision, history, or package content. The
+new model and UI journeys plus the affected Pages keyboard-navigation journey
+passed focused 3/3; three original-resolution states were reviewed. `SF-0205`
+remains Partial; the later batch result is recorded above.
+See `docs/evidence/SF-AUTHORING-066-PAGES-SEARCH.md`.
+
+SF-AUTHORING-065 adds a native application-only Reset tab for the two existing
+Appearance and new-workspace Grid defaults (bounded `SF-0206-002/003/004/006/008`).
+One explicit confirm action captures both exact records, rejects unsaved drafts,
+managed preferences, and stale storage, then removes both with rollback on a
+write mismatch. Cancel is neutral; Restore Previous recovers the prior records
+within the Settings session. The existing tabs refresh from committed storage;
+projects and open-workspace Grid state do not participate. Five focused model
+tests and three affected actual-app Settings journeys passed 8/8;
+five full-resolution Settings states were reviewed. No project schema, shared
+document persistence, renderer, or global workspace boundary changed, so this
+slice did not rerun the broad gate; the later batch result is recorded above.
+`SF-0206` remains Partial. See
+`docs/evidence/SF-AUTHORING-065-APPLICATION-RESET.md`.
+
+SF-AUTHORING-064 adds an application-local Canvas Settings default for Grid
+visibility in newly created workspaces (bounded `SF-0206-002/003/004/006/008`;
+supporting `SF-0407-006`). A versioned, strictly decoded preference stays out of
+project packages; draft, Apply, Cancel/Escape, Reset, stale-context rejection,
+and session restoration use the existing native Settings window. The live
+toolbar/View-menu Grid toggle remains scene-local and existing workspaces do
+not change when the default is saved. Three exact unit tests and three affected
+actual-app journeys passed focused 6/6; five original-resolution new-slice
+captures were reviewed. No post-063 full gate, commit, push, or hosted result
+is claimed for that focused slice; the later batch result is recorded above.
+`SF-0206` remains Partial; see
+`docs/evidence/SF-AUTHORING-064-CANVAS-SETTINGS.md`.
+
+SF-PRODUCT-UI-004 adds an owner-approved, original static AppIcon and bounded
+native frosted-pane refinement (`SF-0201-009`; supporting `SF-0201-003/006`,
+`SF-1505-006`, `SF-1605-002/006`). Debug and Release select the same complete
+macOS icon catalog; the built app contains its icon and bundle registration.
+Navigator/Inspector use native behind-window material, with opaque Reduce
+Transparency and stronger Increased Contrast boundaries. Three focused unit
+and three affected UI selectors passed (6/6); seven full-resolution shell
+screenshots and the built icon were reviewed. The XCTest Dock screenshot still
+showed a generic icon, so fresh Finder/Dock cache presentation remains an
+explicit visual follow-up. No new full gate, commit, push, or hosted result is
+claimed. See `docs/evidence/SF-PRODUCT-UI-004-BRANDING-SHELL.md`.
+
+SF-AUTHORING-063 passed its local prompt-ten checkpoint: bounded project-local image-asset folder,
 tag, and favorite organization (`SF-0801` Partial). Optional schema-eleven
 metadata preserves existing asset/resource identity and schema-ten decoding;
 native Assets controls use one revision- and scene-guarded history command.
 Focused model/migration/static-reference tests passed 4/4; the exact native
 import/organize/filter/undo/reopen journey passed 1/1 after the console was
 unlocked, and five original-resolution screenshots were reviewed. The
-tenth-prompt full/hosted gate remains pending. See
+tenth-prompt gate passed 486/486 unit/integration and 70/70 UI tests on
+2026-09-29 (556 total, zero failures). Previously,
+an earlier managed UI launch was denied before testing by macOS testmanagerd
+sandbox error 159, while a later direct UI run completed 70 tests and exposed
+the two selection failures corrected below. The final post-repair full gate
+passed. This tree remains uncommitted; no hosted/release completion is claimed. See
 `docs/evidence/SF-AUTHORING-063-ASSET-ORGANIZATION.md`.
+
+Focused checkpoint recovery (`SF-0402-005`, `SF-0601-003`, `SF-0602-003`):
+the direct UI run completed 70 tests, with 68 passing and two Mobile-preset
+selection failures. `SelectionCommandRegistry.adopt` incorrectly cleared a
+valid selection when the selected Frame became fully artboard-clipped. The
+corrected scene-local retention passes one focused model test and both exact
+UI journeys (2/2); reviewed Tablet/Mobile/Reveal attachments show no ghost
+overlay and truthful accessibility status. The broader SF-AUTHORING-063 gate
+subsequently passed 556/556. See `docs/evidence/SF-RESPONSIVE-SELECTION-RECOVERY.md`.
 
 SF-AUTHORING-062 adds a bounded component Boolean visibility-property
 foundation (`SF-0901`, `SF-0902`, `SF-0905` Partial). Definition children own a

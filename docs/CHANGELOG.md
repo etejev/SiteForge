@@ -1,12 +1,128 @@
 # SiteForge Development Changelog
 
-## In progress — SF-AUTHORING-063
+## Local batch acceptance — SF-AUTHORING-065–074 (2026-09-30)
+
+- One full gate passed 504/504 unit/integration and 79/81 UI tests. The two
+  affected UI journeys passed exact focused reruns after their native-focus
+  and picker-scope fixture assertions were corrected. Original-resolution
+  navigator and Quick Open states were reviewed; no second full-gate pass is
+  claimed under the owner-directed repair cadence.
+
+## SF-AUTHORING-074
+
+- Quick Open now has native All, Pages, Layers, and Actions scopes so large
+  result sets can be narrowed without changing targets or the document.
+  Model and actual-app coverage passed in the batch; scoped sheet visuals were
+  reviewed.
+
+## SF-AUTHORING-073
+
+- Quick Open now lists recently selected current-page Layers by stable NodeID.
+  The list is bounded, scene-local, and revalidated against live authorized
+  targets; it never saves user activity in a project. Focused tests are
+  passed in the batch, with recent-Layers visual review.
+
+## SF-AUTHORING-072
+
+- Quick Open now shows recently visited pages in a small deduplicated list
+  ahead of broad results when the query is empty. The list is local to the
+  current scene and document identity, not saved into a project. Focused
+  tests passed in the batch; the recent-pages state was reviewed.
+
+## SF-AUTHORING-071
+
+- Quick Open now lists the existing Fit Document, Actual Size, and Grid View
+  actions. They use the same editor viewport state as the native menu and
+  cannot mutate the document. Model and actual-app coverage passed in the
+  batch; the Actions state was reviewed.
+
+## SF-AUTHORING-070
+
+- Quick Open is now available from a visible navigator action and the native
+  View menu with Command-Shift-O. It finds current-document pages and
+  current-page Layers and opens them through existing navigation commands;
+  Cancel and no-result states do not edit project content. Model and actual-app
+  coverage passed in the batch, with original-resolution sheet visual review.
+
+## SF-AUTHORING-069
+
+- The Layers navigator now offers a native object-type filter that composes
+  with name search. Filtering does not mutate selection or authored content;
+  Show Selected Layer clears both filters. The model selector passed in the
+  batch; the exact UI journey passed after correcting the picker-scoped query
+  and structural-root fixture count. Filtered/restored visuals were reviewed.
+
+## SF-AUTHORING-068
+
+- The Elements catalogue now has a native name/category search with count,
+  no-result, Clear Search, and Escape recovery. Search does not make future
+  elements available or bypass existing insertion commands. Model and actual-
+  app coverage passed in the batch; result/empty/unavailable visuals were
+  reviewed.
+
+## Focused local checkpoint — SF-AUTHORING-067
+
+- Layers can now be searched by displayed node name without changing the
+  current selection. Return selects the first match through the existing
+  Layers command, Escape clears the query, and a no-result state can reveal
+  the selected layer. Three affected focused tests passed; three full-window
+  states were reviewed. No new full gate or external action is claimed.
+
+## Focused local checkpoint — SF-AUTHORING-066
+
+- Pages can now be searched by name or route in the native navigator. Return
+  opens the first match; Escape clears the query; a no-result state offers a
+  direct path back to the selected page. Filtering preserves project content
+  and page selection. Three affected focused tests passed, and route, empty,
+  and cleared-search window states were reviewed. No new full gate or external
+  action is claimed.
+
+## Focused local checkpoint — SF-AUTHORING-065
+
+- Settings now has a Reset tab for the two implemented application defaults:
+  native Appearance and whether new workspaces start with Grid. A confirmation
+  step resets both together; Cancel leaves them unchanged, and Restore Previous
+  recovers the exact prior records within the session. Projects and the Grid
+  state of open workspaces are unaffected. Eight affected focused tests passed and five
+  original-resolution Settings states were reviewed; no new full gate or
+  external action is claimed.
+
+## Focused local checkpoint — SF-AUTHORING-064
+
+- Canvas Settings now lets people choose whether new workspaces start with
+  Grid visible. Apply saves an application-only preference; Cancel/Escape,
+  Reset, and Restore Previous preserve clear draft and committed boundaries.
+  Open workspaces keep their own toolbar/View-menu Grid state, and project
+  files are unchanged. Six affected focused selectors passed, with five
+  original-resolution Settings/workspace states reviewed. No new full gate,
+  commit, push, or hosted result is claimed.
+
+## Focused local review — SF-PRODUCT-UI-004
+
+- Packaged the approved original SF monogram as a static macOS AppIcon and
+  refined native frosted navigator/Inspector panes. Reduce Transparency keeps
+  opaque readable chrome; Increased Contrast strengthens pane boundaries.
+  Six affected focused tests passed and seven original-resolution shell states
+  were reviewed. The built icon is correct, but fresh Dock/Finder display
+  remains unconfirmed because the XCTest Dock capture showed a generic icon.
+  This owner-approved add-on remains uncommitted with SF-AUTHORING-063.
+
+## Locally verified — SF-AUTHORING-063 and responsive selection recovery
+
+- Switching to a narrower artboard no longer silently deselects an existing
+  Frame just because its unchanged authored geometry is temporarily outside
+  the page. Mobile still suppresses off-artboard pixels and selection chrome;
+  the status explains the selection and Reveal Selection restores it on
+  Desktop. The two formerly failing native journeys passed focused 2/2;
+  the final local `./sf verify` passed 486 unit/integration and 70 UI tests
+  (556 total, zero failures). The work remains uncommitted for owner review.
+
+## Locally verified — SF-AUTHORING-063
 
 - The Assets pane now offers project-local folders, tags, favorites, and
   search/filter controls. Organization edits preserve image bytes and asset
   references and use the existing undoable asset command. The native
-  import/organization/search/undo/reopen path passed focused acceptance;
-  final checkpoint verification remains pending.
+  import/organization/search/undo/reopen path passed focused acceptance.
 
 ## Focused checkpoint — SF-AUTHORING-062
 

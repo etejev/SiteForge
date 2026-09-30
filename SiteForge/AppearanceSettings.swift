@@ -113,6 +113,9 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
     }
 
     var resolved: ApplicationAppearance { ApplicationAppearanceRecord.decode(committedData)?.appearance ?? .system }
+    static func committedAppearance(defaults: UserDefaults = .standard) -> ApplicationAppearance {
+        ApplicationAppearanceRecord.decode(defaults.data(forKey: storageKey))?.appearance ?? .system
+    }
     var choice: ApplicationAppearance { draft?.appearance ?? .system }
     var isDirty: Bool { draft != ApplicationAppearanceRecord.decode(committedData) }
     var canApply: Bool { isDirty || (committedData != nil && ApplicationAppearanceRecord.decode(committedData) == nil) }

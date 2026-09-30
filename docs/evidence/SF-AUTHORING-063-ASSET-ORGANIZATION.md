@@ -1,6 +1,6 @@
 # SF-AUTHORING-063 — Native Asset Library organization foundation v1
 
-Status: IN PROGRESS. Bounded evidence for SF-0801-001–008; the normative
+Status: local checkpoint verified; uncommitted for owner review. Bounded evidence for SF-0801-001–008; the normative
 asset module remains Partial.
 
 ## Implemented contract
@@ -52,6 +52,33 @@ remain pending.
 Repository checks passed after aligning the headless architecture source
 closure with renderer dependencies and repairing stale pre-existing
 traceability anchors/duplicate IDs. No product assertion was removed.
+
+## Prompt-ten verification interruption
+
+The full-gate unit/integration target passed **486/486** on 2026-09-28.
+Ten historical schema/sizing test expectations were then reconciled with
+schema eleven and current minimum-size clamping; their exact focused rerun
+passed **10/10**. A prior full UI attempt exposed an Inspector scrolling-test
+defect: XCTest considered an off-viewport Shadow control hittable, so its click
+did not commit. The test now checks its bounds against the visible scroll
+viewport before clicking. The affected Border/Shadow and local-color-token
+journeys passed together **3/3** after that repair. The subsequent full-gate
+unit/integration target again passed **486/486**, but its UI target was
+interrupted before a final result.
+
+On 2026-09-29, a UI-target-only continuation did not launch any test: the
+managed xcodebuild process exited 133 when macOS denied its connection to
+`com.apple.testmanagerd.control` with sandbox error 159. That attempt was an
+environment/authorization failure, not a SiteForge assertion result. A later
+direct macOS UI run executed 70 tests (68 passed, two failed) and exposed a
+shared selection-adoption defect when a selected Frame became off-artboard at
+Mobile. The focused product correction passed one new model test and both
+affected UI journeys (2/2), with original-resolution Tablet/Mobile/Reveal
+evidence reviewed; see `SF-RESPONSIVE-SELECTION-RECOVERY.md`. A final
+post-repair `./sf verify` passed **486/486 unit/integration** and **70/70 UI**
+tests (**556 total, zero failures**) on 2026-09-29. Its retained result bundle
+is `full-4cb096f9-35f2-49ef-956e-1a6887212d48.xcresult`. This closes the
+local checkpoint only; no commit, push, hosted CI, or release claim is recorded.
 
 ## Deferred
 

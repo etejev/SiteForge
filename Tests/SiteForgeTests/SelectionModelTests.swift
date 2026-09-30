@@ -2,6 +2,122 @@ import XCTest
 @testable import SiteForge
 
 final class SelectionModelTests: XCTestCase {
+    // SF-0205-002/003 — Quick Open composes existing authorized projections.
+    func testQuickOpenResultsKeepPageThenCurrentLayerIdentityWithoutMutation() throws {
+        let fixture = try makeFixture(count: 2)
+        let home = DocumentPage(name: "Home", route: .init(rawValue: "/"), role: .home)
+        let notFound = DocumentPage(name: "Not Found", route: .init(rawValue: "/404"), role: .notFound)
+        let pages = [home, notFound]
+        let targets = fixture.targets
+        let pageResult = QuickOpenSearchPolicy.results(pages: pages, layers: targets, query: "/404")
+        XCTAssertEqual(pageResult.pages.map(\.id), [notFound.id])
+        XCTAssertTrue(pageResult.layers.isEmpty)
+        let layerResult = QuickOpenSearchPolicy.results(pages: pages, layers: targets, query: "OBJECT 2")
+        XCTAssertTrue(layerResult.pages.isEmpty)
+        XCTAssertEqual(layerResult.layers.map(\.id), [fixture.ids[1]])
+        let all = QuickOpenSearchPolicy.results(pages: pages, layers: targets, query: "")
+        XCTAssertEqual(all.pages.map(\.id), pages.map(\.id))
+        XCTAssertEqual(all.layers.map(\.id), targets.map(\.id))
+        XCTAssertEqual(targets, fixture.targets)
+    }
+
+    // SF-0205-002/003 — only approved editor View commands are discoverable.
+    func testQuickOpenViewActionsAreClosedOrderedAndQueryDeterministic() {
+        XCTAssertEqual(QuickOpenViewAction.matches(""), [.fitDocument, .actualSize, .toggleGrid])
+        XCTAssertEqual(QuickOpenViewAction.matches("  FIT DOCUMENT  "), [.fitDocument])
+        XCTAssertEqual(QuickOpenViewAction.matches("grid"), [.toggleGrid])
+        XCTAssertTrue(QuickOpenViewAction.matches("delete project").isEmpty)
+        let result = QuickOpenSearchPolicy.results(pages: [], layers: [], query: "actual")
+        XCTAssertTrue(result.pages.isEmpty && result.layers.isEmpty)
+        XCTAssertEqual(result.actions, [.actualSize])
+    }
+
+    // SF-0205-003/004 — stale/missing NodeIDs cannot become recent targets.
+    func testQuickOpenRecentLayersBoundDeduplicateAndProjectOnlyAuthorizedNodes() throws {
+        let fixture = try makeFixture(count: 3)
+        let first = QuickOpenRecentLayerPolicy.recording(fixture.ids[0], in: [])
+        let second = QuickOpenRecentLayerPolicy.recording(fixture.ids[1], in: first)
+        XCTAssertEqual(QuickOpenRecentLayerPolicy.recording(fixture.ids[0], in: second), [fixture.ids[0], fixture.ids[1]])
+        XCTAssertEqual(QuickOpenRecentLayerPolicy.recording(fixture.ids[2], in: second, limit: 2), [fixture.ids[2], fixture.ids[1]])
+        XCTAssertEqual(QuickOpenRecentLayerPolicy.available([NodeID(), fixture.ids[1], fixture.ids[0]], in: fixture.targets).map(\.id), [fixture.ids[1], fixture.ids[0]])
+        XCTAssertEqual(QuickOpenRecentLayerPolicy.recording(fixture.ids[2], in: second, limit: 0), [])
+    }
+
+    // SF-0205-003/004 — scope removes result classes without reordering or
+    // changing the underlying page/NodeID/action projections.
+    func testQuickOpenScopesFilterResultClassesDeterministically() throws {
+        let fixture = try makeFixture(count: 1)
+        let home = DocumentPage(name: "Home", route: .init(rawValue: "/"), role: .home)
+        let pages = [home]
+        let layers = fixture.targets
+        let all = QuickOpenSearchPolicy.results(pages: pages, layers: layers, query: "", scope: .all)
+        XCTAssertEqual(all.pages.map(\.id), [home.id])
+        XCTAssertEqual(all.layers.map(\.id), [fixture.ids[0]])
+        XCTAssertEqual(all.actions, QuickOpenViewAction.allCases)
+        let pageOnly = QuickOpenSearchPolicy.results(pages: pages, layers: layers, query: "", scope: .pages)
+        XCTAssertEqual(pageOnly.pages.map(\.id), [home.id])
+        XCTAssertTrue(pageOnly.layers.isEmpty && pageOnly.actions.isEmpty)
+        let layerOnly = QuickOpenSearchPolicy.results(pages: pages, layers: layers, query: "", scope: .layers)
+        XCTAssertEqual(layerOnly.layers.map(\.id), [fixture.ids[0]])
+        XCTAssertTrue(layerOnly.pages.isEmpty && layerOnly.actions.isEmpty)
+        let actionsOnly = QuickOpenSearchPolicy.results(pages: pages, layers: layers, query: "grid", scope: .actions)
+        XCTAssertEqual(actionsOnly.actions, [.toggleGrid])
+        XCTAssertTrue(actionsOnly.pages.isEmpty && actionsOnly.layers.isEmpty)
+    }
+
+    // SF-0205-002/003/004 — filtering is a stable view of authorized targets.
+    func testLayerSearchPreservesTargetIdentityPaintOrderAndSelectionSnapshot() throws {
+        let fixture = try makeFixture(count: 3)
+        let first = SelectionTargetSnapshot(
+            id: fixture.ids[0], pageID: fixture.pageID, parentID: nil, name: "Résumé Frame",
+            frame: fixture.targets[0].frame, clipRect: nil, paintOrder: 0,
+            isVisible: true, isLocked: false, isAvailable: true
+        )
+        let second = SelectionTargetSnapshot(
+            id: fixture.ids[1], pageID: fixture.pageID, parentID: nil, name: "Frame Card",
+            frame: fixture.targets[1].frame, clipRect: nil, paintOrder: 1,
+            isVisible: true, isLocked: false, isAvailable: true
+        )
+        let third = SelectionTargetSnapshot(
+            id: fixture.ids[2], pageID: fixture.pageID, parentID: nil, name: "Text",
+            frame: fixture.targets[2].frame, clipRect: nil, paintOrder: 2,
+            isVisible: true, isLocked: false, isAvailable: true
+        )
+        let targets = [first, second, third]
+        let original = targets
+        XCTAssertEqual(LayerSearchPolicy.results(in: targets, query: " FRAME ").map(\.id), [first.id, second.id])
+        XCTAssertEqual(LayerSearchPolicy.results(in: targets, query: "RÉSUMÉ").map(\.id), [first.id])
+        XCTAssertTrue(LayerSearchPolicy.results(in: targets, query: "no matching layer").isEmpty)
+        XCTAssertEqual(LayerSearchPolicy.results(in: targets, query: " \n ").map(\.id), targets.map(\.id))
+        XCTAssertEqual(targets, original)
+    }
+
+    // SF-0205-003/004 — type and name predicates compose without broadening
+    // the authorized target set or changing canonical target identity.
+    func testLayerTypeFilterComposesWithNameAndRetainsCanonicalOrder() throws {
+        let fixture = try makeFixture(count: 3)
+        let frame = SelectionTargetSnapshot(
+            id: fixture.ids[0], pageID: fixture.pageID, parentID: nil, name: "Hero",
+            kind: .frame, frame: fixture.targets[0].frame, clipRect: nil, paintOrder: 0,
+            isVisible: true, isLocked: false, isAvailable: true
+        )
+        let text = SelectionTargetSnapshot(
+            id: fixture.ids[1], pageID: fixture.pageID, parentID: nil, name: "Hero Text",
+            kind: .text, frame: fixture.targets[1].frame, clipRect: nil, paintOrder: 1,
+            isVisible: true, isLocked: false, isAvailable: true
+        )
+        let frame2 = SelectionTargetSnapshot(
+            id: fixture.ids[2], pageID: fixture.pageID, parentID: nil, name: "Card",
+            kind: .frame, frame: fixture.targets[2].frame, clipRect: nil, paintOrder: 2,
+            isVisible: true, isLocked: false, isAvailable: true
+        )
+        let targets = [frame, text, frame2]
+        XCTAssertEqual(LayerSearchPolicy.results(in: targets, query: "", kind: .frame).map(\.id), [frame.id, frame2.id])
+        XCTAssertEqual(LayerSearchPolicy.results(in: targets, query: "hero", kind: .text).map(\.id), [text.id])
+        XCTAssertTrue(LayerSearchPolicy.results(in: targets, query: "card", kind: .text).isEmpty)
+        XCTAssertEqual(LayerSearchPolicy.results(in: targets, query: "", kind: nil).map(\.id), targets.map(\.id))
+    }
+
     // SF-0402-001 through SF-0402-004, SF-0402-006
     func testOrderedSelectionPrimaryAnchorAndAllInputPaths() throws {
         let fixture = try makeFixture(count: 3)
@@ -458,6 +574,78 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertEqual(state.primaryID, fixture.ids[0])
         XCTAssertTrue(overlay.overlays.isEmpty)
         XCTAssertFalse(overlay.authoredContentInvalidated)
+    }
+
+    // SF-0402-005, SF-0601-003, SF-0602-003 — preset clipping is not a
+    // lifecycle removal. The real artboard clip is present on the selection
+    // target, unlike the older overlay-only regression above.
+    func testBreakpointClipRetainsExistingSelectionButRejectsNewCanvasHit() throws {
+        let fixture = try makeFixture(count: 1)
+        let id = fixture.ids[0]
+        let frame = WorldRect(origin: .init(x: 600, y: 370),
+                              size: .init(width: 240, height: 160))
+        let registry = SelectionCommandRegistry()
+        var state = SelectionState()
+
+        func scene(width: Double, generation: UInt64) -> SelectionSceneSnapshot {
+            let identity = fixture.identity.copy(sceneGeneration: generation)
+            let target = SelectionTargetSnapshot(
+                id: id, pageID: fixture.pageID, parentID: nil, name: "Frame",
+                frame: frame,
+                clipRect: .init(origin: .init(x: 0, y: 0),
+                                size: .init(width: width, height: 900)),
+                paintOrder: 0, isVisible: true, isLocked: false,
+                isAvailable: true
+            )
+            return .init(identity: identity, activePageID: fixture.pageID,
+                         activeContainerID: nil, targets: [target])
+        }
+
+        let desktop = scene(width: 1_440, generation: 5)
+        _ = try registry.adopt(desktop, boundary: .documentAdoption, state: &state)
+        try registry.apply(.init(.replace, targetID: id,
+                                 expectedIdentity: desktop.identity, provenance: .pointer),
+                           to: &state, scene: desktop)
+
+        for (width, generation) in [(768.0, UInt64(6)), (390.0, 7), (1_440.0, 8)] {
+            let current = scene(width: width, generation: generation)
+            XCTAssertEqual(try registry.adopt(current, boundary: .rendererGeneration,
+                                              state: &state), .none)
+            XCTAssertEqual(state.orderedIDs, [id])
+            XCTAssertEqual(state.primaryID, id)
+            XCTAssertEqual(state.provenance, .pointer)
+            if width == 390 {
+                XCTAssertTrue(current.orderedSelectableTargets.isEmpty)
+                var viewport = fixture.viewport
+                try viewport.setContentBounds(.init(origin: .init(x: 0, y: 0),
+                                                    size: .init(width: width, height: 900)))
+                let renderScene = CanvasRenderSceneSnapshot(
+                    identity: current.identity, surfaceID: fixture.renderScene.surfaceID,
+                    objects: [CanvasRenderObject(
+                        id: id, frame: frame, clipRect: current.targets[0].clipRect,
+                        paintOrder: 0, style: .container, isVisible: true,
+                        accessibilityLabel: "Frame"
+                    )]
+                )
+                let plan = try CanvasRendererCore().prepare(
+                    scene: renderScene,
+                    overlays: .init(identity: current.identity, overlays: []),
+                    viewport: viewport
+                )
+                let overlay = try SelectionOverlayPlanner().plan(
+                    selection: state, scene: current, renderPlan: plan
+                )
+                XCTAssertTrue(overlay.overlays.isEmpty)
+                XCTAssertFalse(plan.accessibilityElements.contains { $0.objectID == id })
+                var fresh = try established(current)
+                XCTAssertThrowsError(try registry.apply(
+                    .init(.replace, targetID: id, expectedIdentity: current.identity,
+                          provenance: .pointer), to: &fresh, scene: current
+                )) { XCTAssertEqual($0 as? SelectionCommandError,
+                                   .disabled("The object is outside the selectable clipped region.")) }
+                XCTAssertTrue(fresh.isEmpty)
+            }
+        }
     }
 
     // SF-0401-001, SF-0403-003 — transform chrome has the same artboard

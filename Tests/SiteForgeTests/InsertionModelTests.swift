@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class InsertionModelTests: XCTestCase {
+    // SF-0205-002/003/004 — discovery cannot change catalogue order or
+    // accidentally turn an unavailable element into an insertion command.
+    func testElementCatalogSearchPreservesOrderCategoriesAndAvailability() {
+        let all = ElementCatalogItem.allCases
+        XCTAssertEqual(ElementCatalogSearchPolicy.results(in: all, query: " \n "), all)
+        XCTAssertEqual(ElementCatalogSearchPolicy.results(in: all, query: " STACK "), [.stack])
+        XCTAssertEqual(
+            ElementCatalogSearchPolicy.results(in: all, query: "layout"),
+            [.section, .stack, .grid, .frame]
+        )
+        XCTAssertEqual(ElementCatalogSearchPolicy.results(in: all, query: "navBAR"), [.navbar])
+        XCTAssertTrue(ElementCatalogSearchPolicy.results(in: all, query: "no matching element").isEmpty)
+        XCTAssertEqual(ElementCatalogItem.navbar.availability, .unavailable(
+            "Site sections are not available until responsive site structure is implemented."
+        ))
+        XCTAssertEqual(all, ElementCatalogItem.allCases)
+    }
+
     // SF-0405-001, SF-0405-002, SF-0405-004, SF-0405-005
     func testFrameAndTextDefaultsHaveStableIdentityOwnershipOrderAndOrigins() throws {
         let fixture = makeFixture()
@@ -373,7 +391,7 @@ final class InsertionModelTests: XCTestCase {
             try session.execute(try prepare(kind, fixture: current, nodeID: id).documentCommand)
         }
         let bytes = try DocumentSerializer.encode(session.document)
-        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":9"))
+        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("\"schemaVersion\":11"))
         let reopened = try DocumentSerializer.decode(bytes)
         XCTAssertEqual(reopened, session.document)
         XCTAssertEqual(reopened.pages[0].nodes.first { $0.id == sectionID }?.kind, .section)
@@ -388,6 +406,7 @@ final class InsertionModelTests: XCTestCase {
         legacyEnvelope["schemaVersion"] = 3
         var legacyDocument = try XCTUnwrap(legacyEnvelope["document"] as? [String: Any])
         legacyDocument.removeValue(forKey: "imageAssets")
+        legacyDocument.removeValue(forKey: "colorTokens")
         legacyEnvelope["document"] = legacyDocument
         let legacy = try JSONSerialization.data(withJSONObject: legacyEnvelope)
         XCTAssertEqual(try DocumentSerializer.decode(legacy), fixture.document)

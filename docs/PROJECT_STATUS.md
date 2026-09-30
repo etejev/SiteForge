@@ -1,15 +1,109 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-28.
+Last updated: 2026-09-30.
 
-Current local development prompt: SF-AUTHORING-063 (10 of 10), bounded native
+The SF-AUTHORING-065–074 search/Quick Open batch has local acceptance: one
+full verification run passed 504/504 unit/integration and 79/81 UI tests;
+the two UI failures then passed exact focused reruns after test-contract
+corrections. A second full run was intentionally not started under the owner
+repair cadence. Original-resolution navigator and Quick Open states were
+reviewed. This is not a claim of a wholly green single `./sf verify` run.
+
+SF-AUTHORING-074 Quick Open result scopes are locally accepted. Scope is
+editor-only and preserves page, Layers, and View-action identities. See
+`docs/evidence/SF-AUTHORING-074-QUICK-OPEN-SCOPES.md`.
+
+SF-AUTHORING-073 recent-Layers Quick Open passed model/UI selectors in the
+batch. Stable NodeIDs stay in scene memory and the authorized projection.
+See `docs/evidence/SF-AUTHORING-073-RECENT-LAYERS.md`.
+
+SF-AUTHORING-072 recent-page Quick Open passed model/UI selectors in the
+batch. Stable PageIDs stay in scene memory, are filtered against live pages,
+and reset on document identity change. See
+`docs/evidence/SF-AUTHORING-072-RECENT-PAGES.md`.
+
+SF-AUTHORING-071 Quick Open View actions passed policy/UI selectors in the
+batch. The closed local set routes to viewport/Grid state, not project content. See
+`docs/evidence/SF-AUTHORING-071-QUICK-OPEN-ACTIONS.md`.
+
+SF-AUTHORING-070 Quick Open passed model/UI selectors in the batch. Its native
+menu/keyboard and navigator entry search local page and authorized Layers
+projections without new project data. See
+`docs/evidence/SF-AUTHORING-070-QUICK-OPEN.md`.
+
+SF-AUTHORING-069 Layers type filtering passed its unit selector in the batch
+and exact UI journey on focused repair. It composes NodeKind and name over
+authorized rows without changing selection or project content. See
+`docs/evidence/SF-AUTHORING-069-LAYERS-TYPE-FILTER.md`.
+
+SF-AUTHORING-068 Elements catalogue discovery passed model/UI selectors in
+the batch. Its scene-local query filters native rows by name/category while
+preserving availability and insertion paths. See
+`docs/evidence/SF-AUTHORING-068-ELEMENTS-SEARCH.md`.
+
+Current focused local checkpoint: SF-AUTHORING-067 adds native Layers search
+by displayed node name, with explicit count, no-result recovery, Return to
+select the first match, and Escape to clear. Three affected focused selectors
+passed 3/3; three original-resolution states were reviewed. The search is a
+scene-local projection and does not alter project content or selection until
+the user opens a result. `SF-0205` remains Partial; the later batch result is
+recorded above. See
+`docs/evidence/SF-AUTHORING-067-LAYERS-SEARCH.md`.
+
+Current focused local checkpoint: SF-AUTHORING-066 adds native Pages search by
+name or route with keyboard open/clear and an explicit no-result recovery
+state. Three affected focused selectors passed 3/3 and three original-resolution
+states were reviewed. The query is scene-local and preserves canonical page
+order and selection until an explicit open action. `SF-0205` remains Partial;
+the later batch result is recorded above. See
+`docs/evidence/SF-AUTHORING-066-PAGES-SEARCH.md`.
+
+Current focused local checkpoint: SF-AUTHORING-065 provides one native Reset
+tab for the existing application-only Appearance and new-workspace Grid
+defaults. The exact-record group operation supports confirm, cancel, rollback,
+and session restoration without project mutation. Five model tests, the new
+native journey, and two existing Settings journeys passed 8/8; five
+original-resolution Settings states were reviewed. `SF-0206` remains Partial;
+the later batch result is recorded above. See
+`docs/evidence/SF-AUTHORING-065-APPLICATION-RESET.md`.
+
+Current focused local checkpoint: SF-AUTHORING-064 adds a native application-
+only Canvas Settings preference for initial Grid visibility in new workspaces.
+The original scene-local Grid control remains independent. Three model tests
+and three affected native journeys passed 6/6, and five original-resolution
+states were reviewed. `SF-0206` remains Partial; the later batch result is
+recorded above. The prior SF-AUTHORING-063 and visual add-on work is preserved.
+See
+`docs/evidence/SF-AUTHORING-064-CANVAS-SETTINGS.md`.
+
+Owner-approved SF-PRODUCT-UI-004 is locally reviewed: the original static SF
+AppIcon is bundled in Debug and Release, and native frosted navigator/Inspector
+surfaces retain accessible opaque/contrast fallbacks. Affected focused tests
+passed 6/6 and seven original-resolution shell states were reviewed. XCTest's
+Dock capture did not yet show the new icon despite the correct built bundle;
+fresh Finder/Dock display is not claimed. The combined tree stays uncommitted
+for owner review. See `docs/evidence/SF-PRODUCT-UI-004-BRANDING-SHELL.md`.
+
+Prior prompt-ten checkpoint: SF-AUTHORING-063 (10 of 10), bounded native
 Asset Library organization. Model/migration/static-reference checks passed 4/4;
 the native import/organize/filter/undo/reopen journey passed 1/1 and five
-original-resolution states were reviewed. Full local and hosted checkpoint
-evidence remain pending. SF-0801 remains Partial; see
+original-resolution states were reviewed. The full-gate unit/integration
+target and final post-repair `./sf verify` passed 486/486 unit/integration plus
+70/70 UI tests (556 total, zero failures). An earlier managed UI launch was denied by macOS
+testmanagerd sandbox error 159, but a later direct UI run completed 70 tests
+and exposed the two selection failures corrected below. The corrected tree is
+locally verified but remains uncommitted for owner review; no push is authorized.
+SF-0801 remains Partial; see
 `docs/evidence/SF-AUTHORING-063-ASSET-ORGANIZATION.md`.
 
-Current local development prompt: SF-AUTHORING-062 (9 of 10), bounded
+The subsequent direct UI run completed 70 tests (68 passed, two failed at
+Mobile preset selection adoption). One focused model regression and the two
+affected UI journeys now pass after retaining clipped-but-valid scene
+selection without a canvas ghost. Reviewed evidence is in
+`docs/evidence/SF-RESPONSIVE-SELECTION-RECOVERY.md`. This is a focused repair,
+and the subsequent full local gate passed. No hosted result is claimed.
+
+Earlier local development prompt: SF-AUTHORING-062 (9 of 10), bounded
 component Boolean visibility properties. Definition defaults and linked
 instance overrides use typed history; native Content controls, Layers status,
 canvas/Preview, and closed static output share the resolved state. See
@@ -17,7 +111,7 @@ canvas/Preview, and closed static output share the resolved state. See
 results and limits. The full gate and hosted checkpoint remain reserved for
 prompt 10; SF-0901/0902/0905 remain Partial.
 
-Current local development prompt: SF-AUTHORING-061 (8 of 10), bounded
+Earlier local development prompt: SF-AUTHORING-061 (8 of 10), bounded
 Frame/Section image fills backed by existing local assets. Its focused model,
 raster, and native Inspector/reopen journey passed 3/3; four original-resolution
 captures were reviewed. Existing runtime warnings remain documented in
@@ -31,7 +125,7 @@ Focused model/render/actual-app evidence is recorded in
 checkpoint remain reserved for prompt 10. SF-0507/0508/0509 remain Partial.
 The historical prompt-six note below describes the prior checkpoint.
 
-Current local development prompt: SF-AUTHORING-059 (6 of 10), local Color Token
+Earlier local development prompt: SF-AUTHORING-059 (6 of 10), local Color Token
 binding across Fill, Border, and Outer Shadow. Canonical migration, Inspector,
 renderer/static, and focused evidence are recorded in
 `docs/evidence/SF-AUTHORING-059-APPEARANCE-TOKENS.md`. The full gate and hosted

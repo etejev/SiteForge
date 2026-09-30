@@ -383,7 +383,10 @@ struct SelectionCommandRegistry: Sendable {
             }
             guard value.isAvailable else { repair = .unavailable; return false }
             guard value.isVisible || retainsHiddenLayersInspection else { repair = .hidden; return false }
-            guard !value.isFullyClipped || retainsHiddenLayersInspection else { repair = .clipped; return false }
+            // A breakpoint or ancestor clip changes where a node can be
+            // painted and hit, not whether its existing selection is valid.
+            // New canvas selection remains bounded by requiredTarget and
+            // orderedSelectableTargets; the overlay planner clips chrome.
             return true
         }
         let primary = prior.primaryID.flatMap { retained.contains($0) ? $0 : nil } ?? retained.last
@@ -407,7 +410,8 @@ struct SelectionCommandRegistry: Sendable {
     private func target(
         _ id: NodeID,
         in scene: SelectionSceneSnapshot,
-        allowsHiddenInspection: Bool = false
+        allowsHiddenInspection: Bool = false,
+        allowsClippedRetention: Bool = false
     ) throws -> SelectionTargetSnapshot {
         guard let target = scene.targets.first(where: { $0.id == id }) else {
             throw SelectionCommandError.missingTarget
@@ -417,7 +421,9 @@ struct SelectionCommandRegistry: Sendable {
         }
         guard target.isAvailable else { throw SelectionCommandError.unavailableTarget(id) }
         guard target.isVisible || allowsHiddenInspection else { throw SelectionCommandError.hiddenTarget(id) }
-        guard !target.isFullyClipped || allowsHiddenInspection else { throw SelectionCommandError.clippedTarget(id) }
+        guard !target.isFullyClipped || allowsHiddenInspection || allowsClippedRetention else {
+            throw SelectionCommandError.clippedTarget(id)
+        }
         return target
     }
 
@@ -444,7 +450,8 @@ struct SelectionCommandRegistry: Sendable {
         // visible and does not participate in canvas traversal.
         let allowsHiddenInspection = state.provenance == .layersNavigator
         for id in state.orderedIDs {
-            _ = try target(id, in: scene, allowsHiddenInspection: allowsHiddenInspection)
+            _ = try target(id, in: scene, allowsHiddenInspection: allowsHiddenInspection,
+                           allowsClippedRetention: true)
         }
     }
 }

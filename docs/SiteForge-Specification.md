@@ -1154,6 +1154,18 @@ Verification  Unit tests cover resolution and invalid inputs; integration tests 
 
 Priority / milestone  MUST. Release blocking for the first milestone in which this module is enabled; later refinements may be separately scoped only when the mandatory path remains complete.
 
+##### SF-0201-009 — Application identity and adaptive chrome
+
+Requirement  The macOS app MUST bundle an original SiteForge icon with a dark flat field, an inset purple-to-blue rounded-square border, and a readable rounded SF monogram at standard AppIcon sizes. The app icon MUST be static application artwork, never project content or a runtime-generated image. Navigator, Inspector, viewport header, status, recovery, and launch surfaces MUST use native macOS materials with a readable opaque fallback for Reduce Transparency and stronger boundaries for Increased Contrast. Material decoration MUST NOT intercept canvas input, alter authored pixels, or change the normal maximized-windowed presentation.
+
+Rationale  App identity should remain recognizable at Dock and Finder sizes while native shell surfaces stay legible under macOS accessibility preferences. Brand decoration is independent of canonical project state.
+
+Acceptance criteria  The Xcode target selects an asset-catalog AppIcon with complete macOS size and scale variants; a local app build contains that icon. Policy tests cover the named chrome regions, light/dark and inactive states, opaque Reduce Transparency fallback, Increased Contrast boundaries, and non-intercepting material views. Actual-app review checks the icon, shell legibility, menu bar and Dock availability, and canvas interaction at a normal and practical-minimum window. The approved artwork may be resized or have only its exterior matte removed for packaging; its SF lettering and inset border are not redrawn or replaced without owner approval.
+
+Verification  Asset-catalog and target-configuration checks, focused material-policy tests, an affected actual-app journey, and original-resolution visual review provide bounded evidence. Broad hardware, VoiceOver, and release acceptance remain separate.
+
+Priority / milestone  SHOULD. Bounded branding and shell refinement after the native workspace foundation; this requirement does not authorize signing, notarization, or publication.
+
 #### Module Acceptance Checklist
 
 ☐ A new user can complete: open multiple projects; resize and rearrange panels; enter focus mode; restore a workspace.

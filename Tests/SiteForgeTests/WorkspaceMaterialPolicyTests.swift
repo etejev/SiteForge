@@ -32,9 +32,37 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         for region in WorkspaceChromeRegion.allCases {
             let style = WorkspaceMaterialPolicy.resolve(region: region, environment: environment)
             XCTAssertEqual(style.presentation, .opaque)
+            XCTAssertEqual(style.blending, .withinWindow)
             XCTAssertGreaterThanOrEqual(style.separatorOpacity, 0.5)
             XCTAssertTrue(style.accessibilityDescription.contains("Opaque"))
         }
+    }
+
+    // SF-0201-009 — only workspace side panes sample behind the window;
+    // the viewport header/status stay bounded inside the document window.
+    func testFrostedSidePanesKeepOpaqueAccessibilityFallbackAndCanvasSeparation() {
+        for region in WorkspaceChromeRegion.allCases {
+            let standardStyle = WorkspaceMaterialPolicy.resolve(region: region, environment: standard)
+            let expected: WorkspaceMaterialBlending = region == .navigator || region == .inspector
+                ? .behindWindow : .withinWindow
+            XCTAssertEqual(standardStyle.blending, expected, "Unexpected blend at \(region)")
+
+            var reduced = standard
+            reduced.reduceTransparency = true
+            let fallback = WorkspaceMaterialPolicy.resolve(region: region, environment: reduced)
+            XCTAssertEqual(fallback.presentation, .opaque)
+            XCTAssertEqual(fallback.blending, .withinWindow)
+            XCTAssertGreaterThan(fallback.separatorOpacity, standardStyle.separatorOpacity)
+        }
+    }
+
+    // SF-0201-009 — the native decoration is not an input or AX target.
+    @MainActor
+    func testNativeMaterialDecorationDoesNotInterceptPointerOrAccessibility() {
+        let view = PassthroughVisualEffectView(frame: CGRect(x: 0, y: 0, width: 200, height: 300))
+        view.setAccessibilityElement(false)
+        XCTAssertNil(view.hitTest(NSPoint(x: 80, y: 120)))
+        XCTAssertFalse(view.isAccessibilityElement())
     }
 
     // SF-0201-006, SF-1505-006, SF-1605-006
@@ -418,7 +446,7 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
     // SF-0201-008, SF-1505-008, SF-1605-008
     func testRequirementTraceabilityIsExact() {
         XCTAssertEqual(WorkspaceMaterialPolicy.requirementIDs, [
-            "SF-0201-002", "SF-0201-003", "SF-0201-006", "SF-0201-007", "SF-0201-008",
+            "SF-0201-002", "SF-0201-003", "SF-0201-006", "SF-0201-007", "SF-0201-008", "SF-0201-009",
             "SF-1505-006", "SF-1505-007", "SF-1505-008",
             "SF-1605-002", "SF-1605-006", "SF-1605-007", "SF-1605-008",
         ])

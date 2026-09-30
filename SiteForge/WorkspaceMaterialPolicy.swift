@@ -25,6 +25,11 @@ enum WorkspaceNativeMaterial: String, Equatable, Sendable {
     case launch
 }
 
+enum WorkspaceMaterialBlending: String, Equatable, Sendable {
+    case behindWindow
+    case withinWindow
+}
+
 enum WorkspaceAppearanceMode: String, CaseIterable, Sendable {
     case light
     case dark
@@ -51,6 +56,7 @@ struct WorkspaceMaterialStyle: Equatable, Sendable {
     let region: WorkspaceChromeRegion
     let presentation: WorkspaceChromePresentation
     let material: WorkspaceNativeMaterial
+    let blending: WorkspaceMaterialBlending
     let separatorOpacity: Double
     let isEmphasized: Bool
 
@@ -62,7 +68,7 @@ struct WorkspaceMaterialStyle: Equatable, Sendable {
 
 enum WorkspaceMaterialPolicy {
     static let requirementIDs: Set<String> = [
-        "SF-0201-002", "SF-0201-003", "SF-0201-006", "SF-0201-007", "SF-0201-008",
+        "SF-0201-002", "SF-0201-003", "SF-0201-006", "SF-0201-007", "SF-0201-008", "SF-0201-009",
         "SF-1505-006", "SF-1505-007", "SF-1505-008",
         "SF-1605-002", "SF-1605-006", "SF-1605-007", "SF-1605-008",
     ]
@@ -85,6 +91,8 @@ enum WorkspaceMaterialPolicy {
             region: region,
             presentation: environment.reduceTransparency ? .opaque : .translucent,
             material: material,
+            blending: !environment.reduceTransparency && (region == .navigator || region == .inspector)
+                ? .behindWindow : .withinWindow,
             separatorOpacity: strongerBoundary ? 0.52 : (inactive ? 0.18 : 0.28),
             isEmphasized: region == .recoveryBar && !inactive
         )
@@ -181,14 +189,15 @@ private struct WorkspaceNativeMaterialView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PassthroughVisualEffectView {
         let view = PassthroughVisualEffectView()
-        view.blendingMode = .withinWindow
         view.autoresizingMask = [.width, .height]
+        view.setAccessibilityElement(false)
         updateNSView(view, context: context)
         return view
     }
 
     func updateNSView(_ view: PassthroughVisualEffectView, context: Context) {
         view.material = style.appKitMaterial
+        view.blendingMode = style.blending == .behindWindow ? .behindWindow : .withinWindow
         view.state = style.presentation == .translucent ? .followsWindowActiveState : .inactive
         view.isEmphasized = style.isEmphasized
         view.wantsLayer = true
@@ -198,7 +207,7 @@ private struct WorkspaceNativeMaterialView: NSViewRepresentable {
     }
 }
 
-private final class PassthroughVisualEffectView: NSVisualEffectView {
+final class PassthroughVisualEffectView: NSVisualEffectView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 

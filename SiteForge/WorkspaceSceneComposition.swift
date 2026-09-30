@@ -39,6 +39,7 @@ final class WorkspaceDocumentContext: ObservableObject {
         session: DocumentSession = DocumentSession(),
         recoveryDirectory: URL = DocumentLifecycleController.defaultRecoveryDirectory,
         previewScenario: LaunchPreviewScenario? = nil,
+        initialWorldGridVisible: Bool = CanvasSettingsStore.committedGridVisibility(),
         autosaveDebouncer: any LifecycleAutosaveDebouncing = ContinuousLifecycleAutosaveDebouncer()
     ) {
         let lifecycle = DocumentLifecycleController(
@@ -46,7 +47,10 @@ final class WorkspaceDocumentContext: ObservableObject {
             recoveryDirectory: recoveryDirectory,
             autosaveDebouncer: autosaveDebouncer
         )
-        shellState = WorkspaceShellState(documentSession: session, lifecycle: lifecycle)
+        shellState = WorkspaceShellState(
+            documentSession: session, lifecycle: lifecycle,
+            initialWorldGridVisible: initialWorldGridVisible
+        )
         launchExperience = LaunchExperienceController(
             lifecycle: lifecycle,
             previewScenario: previewScenario

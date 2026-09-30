@@ -45,6 +45,22 @@ readable validation and native Cancel/Apply semantics. Deletion names its
 object/link impact and uses a destructive confirmation. New pages contain
 only a non-rendered structural root; page changes do not leave old canvas
 objects or editor drafts visible. Duplication is not a template operation.
+The Pages search field filters current-document names and routes without
+changing selection until an explicit open; Layers search filters only the
+current authorized row projection by name without changing NodeID or paint
+order. Both display a readable count and no-result recovery, and preserve
+visible keyboard focus and Return/Escape semantics.
+The Elements query filters native catalogue names/categories but keeps
+unavailable entries visibly disabled. Layers' native type picker composes with
+name search, retains the structural Root where its kind matches, and exposes
+Show Selected Layer when filtering hides selection. A visible Quick Open entry
+and View-menu shortcut open a native centered sheet with readable All/Pages/
+Layers/Actions scopes, current-document page and authorized current-page
+Layer results, bounded scene-local recents, and only the closed non-destructive
+View actions. Long result sets scroll inside the sheet; labels, routes, type
+names, status counts, and Cancel stay legible at the practical minimum. Query,
+scope, and recent state are editor-only and must never appear as authored
+content or in a saved site.
 
 ## Button and Link authoring (SF-AUTHORING-020)
 
@@ -176,15 +192,32 @@ the document unchanged.
 
 ## Surface system
 
+- SiteForge's static app identity uses the approved original SF monogram: a dark
+  flat field, inset purple-to-blue rounded-square border, and no glass effect
+  inside the icon. The macOS AppIcon asset catalog owns standard Dock/Finder
+  sizes; icon artwork never enters project data, authored rendering, or export.
+
 - Application Appearance Settings uses a compact native Settings window with
   readable radio choices for Follow macOS, Light and Dark. Scope, provenance,
   unsaved preview and recovery status remain visible. Apply persists; Cancel,
   Escape or window close restores committed appearance. Reset removes the
   app-local override. Dynamic native colors/materials remain authoritative;
   this never changes canonical project content or website colors (ADR-0006).
+- The native Canvas Settings tab labels its application-only scope and shows
+  whether Grid visibility for *new* workspaces is defaulted, drafted, or
+  authored. Apply, Cancel/Escape, Reset, and Restore Previous are visible and
+  accessible. Already-open workspaces retain independent Grid toolbar/View-menu
+  state; the grid remains editor-only and never becomes project content.
+- The Settings Reset tab shows the two implemented application defaults with
+  readable labels and current values. Its explicit confirmation replaces the
+  staged action, Cancel leaves both values intact, and Restore Previous is
+  disabled until a reversible group operation exists. Status text names the
+  application-only scope and does not imply project or live-scene mutation.
 
 - The title bar and toolbar are unified native macOS chrome.
-- Navigator and inspector use native sidebar material; viewport controls use a
+- Navigator and inspector use native sidebar material blended behind the
+  window so their frosted surfaces stay distinct from the canvas. Viewport
+  controls use a
   header material; status uses under-window material; recovery has an
   emphasized material; launch uses a native popover-like material.
 - Materials are `NSVisualEffectView` based and pass through hit testing. Canvas
@@ -194,6 +227,9 @@ the document unchanged.
   fallback. Increased Contrast raises separator strength without changing
   semantics. Light/dark, accent color, and inactive-window appearance rely on
   native dynamic colors and materials.
+- Material views are accessibility-hidden decoration and never become extra
+  focus stops or pointer targets. The normal app remains windowed within the
+  usable display frame, with the macOS menu bar and Dock available.
 - Canvas remains visually distinct from surrounding chrome through material
   boundaries, native separators, and its under-page background—not static
   gradients or simulated glass.

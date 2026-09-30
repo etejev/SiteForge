@@ -5,6 +5,9 @@ import SwiftUI
 final class SiteForgeApplicationDelegate: NSObject, NSApplicationDelegate {
     private var windowPresentation: WorkspaceWindowLifecycleOwner?
     let appearanceSettings = AppearanceSettingsStore()
+    let canvasSettings = CanvasSettingsStore()
+    lazy var applicationSettingsGroup = ApplicationSettingsGroupStore(
+        appearance: appearanceSettings, canvas: canvasSettings)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let owner = WorkspaceWindowLifecycleOwner()
@@ -35,7 +38,15 @@ struct SiteForgeApp: App {
             SiteForgeCommands()
         }
         Settings {
-            AppearanceSettingsView(store: applicationDelegate.appearanceSettings)
+            TabView {
+                AppearanceSettingsView(store: applicationDelegate.appearanceSettings)
+                    .tabItem { Label("Appearance", systemImage: "paintbrush") }
+                CanvasSettingsView(store: applicationDelegate.canvasSettings)
+                    .tabItem { Label("Canvas", systemImage: "circle.grid.2x2") }
+                ApplicationSettingsGroupView(store: applicationDelegate.applicationSettingsGroup)
+                    .tabItem { Label("Reset", systemImage: "arrow.uturn.backward") }
+            }
+            .accessibilityIdentifier("settings.tabs")
         }
     }
 }

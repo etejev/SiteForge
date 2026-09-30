@@ -66,6 +66,9 @@ struct WorkspaceShellView: View {
         .sheet(item: $state.pageEditorRequest) { request in
             PageEditorSheet(state: state, request: request)
         }
+        .sheet(isPresented: $state.isQuickOpenPresented) {
+            QuickOpenSheet(state: state)
+        }
         .toolbar {
             WorkspaceToolbar(state: state)
         }
@@ -346,7 +349,29 @@ private struct NavigatorView: View {
                 }
             )
 
+            Button("Quick Open…", systemImage: "magnifyingglass") {
+                state.isQuickOpenPresented = true
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("navigator.quickOpen")
+
             if state.navigatorTab == .pages {
+                HStack(spacing: 6) {
+                    TextField("Search Pages", text: $state.pageSearchText)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Search pages by name or route")
+                        .accessibilityIdentifier("navigator.pages.search")
+                        .onSubmit { state.openFirstMatchingPage() }
+                        .onExitCommand { state.clearPageSearch() }
+                    if !state.pageSearchText.isEmpty {
+                        Button("Clear Search", systemImage: "xmark.circle.fill") { state.clearPageSearch() }
+                            .labelStyle(.iconOnly)
+                            .accessibilityIdentifier("navigator.pages.search.clear")
+                    }
+                }
+                Text(state.pageSearchSummary)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("navigator.pages.search.status")
                 Button("New Page…", systemImage: "doc.badge.plus") { state.presentPageEditor(.create) }
                     .disabled(!state.pageEditingIsAvailable)
                     .accessibilityIdentifier("navigator.pages.new")
@@ -357,7 +382,16 @@ private struct NavigatorView: View {
                 }
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(state.pages) { page in
+                        if state.filteredPages.isEmpty {
+                            ContentUnavailableView.search(text: state.pageSearchText)
+                                .accessibilityIdentifier("navigator.pages.search.empty")
+                        }
+                        if let selected = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }),
+                           !state.filteredPages.contains(where: { $0.id == selected.id }) {
+                            Button("Show Selected Page") { state.clearPageSearch() }
+                                .accessibilityIdentifier("navigator.pages.search.showSelected")
+                        }
+                        ForEach(state.filteredPages) { page in
                             NavigatorPageRow(
                                 page: page,
                                 isSelected: state.effectiveSelectedPageID == page.id,
@@ -371,6 +405,34 @@ private struct NavigatorView: View {
                 .accessibilityLabel("Pages navigator")
                 .accessibilityIdentifier("navigator.pages.list")
             } else if state.navigatorTab == .layers {
+                HStack(spacing: 6) {
+                    TextField("Search Layers", text: $state.layerSearchText)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Search layers by name")
+                        .accessibilityIdentifier("navigator.layers.search")
+                        .onSubmit { state.selectFirstMatchingLayer() }
+                        .onExitCommand { state.clearLayerSearch() }
+                    if !state.layerSearchText.isEmpty {
+                        Button("Clear Search", systemImage: "xmark.circle.fill") { state.clearLayerSearch() }
+                            .labelStyle(.iconOnly)
+                            .accessibilityIdentifier("navigator.layers.search.clear")
+                    }
+                }
+                Picker("Layer Type", selection: $state.layerKindFilter) {
+                    Text("All Types").tag(nil as NodeKind?)
+                    ForEach(NodeKind.allCases, id: \.self) { kind in
+                        Text(kind.rawValue.capitalized).tag(Optional(kind))
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("navigator.layers.typeFilter")
+                if state.layerKindFilter != nil {
+                    Button("Clear Layer Filters") { state.clearLayerFilters() }
+                        .accessibilityIdentifier("navigator.layers.filters.clear")
+                }
+                Text(state.layerSearchSummary)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("navigator.layers.search.status")
                 if state.layerTargets.isEmpty {
                     ContentUnavailableView {
                         Label("No Selectable Layers", systemImage: "square.3.layers.3d")
@@ -382,7 +444,17 @@ private struct NavigatorView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 4) {
-                            ForEach(state.layerTargets, id: \.id) { target in
+                            if state.filteredLayerTargets.isEmpty {
+                                ContentUnavailableView.search(text: state.layerSearchText)
+                                    .accessibilityIdentifier("navigator.layers.search.empty")
+                            }
+                            if let selectedID = state.selectionState.primaryID,
+                               state.layerTargets.contains(where: { $0.id == selectedID }),
+                               !state.filteredLayerTargets.contains(where: { $0.id == selectedID }) {
+                                Button("Show Selected Layer") { state.clearLayerFilters() }
+                                    .accessibilityIdentifier("navigator.layers.search.showSelected")
+                            }
+                            ForEach(state.filteredLayerTargets, id: \.id) { target in
                                 NavigatorLayerRow(target: target, state: state, focus: focus)
                             }
                             if let instance = state.selectedComponent {
@@ -422,6 +494,153 @@ private struct NavigatorView: View {
         .workspaceChrome(.navigator)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.navigator.rawValue)
+    }
+}
+
+private struct QuickOpenSheet: View {
+    @ObservedObject var state: WorkspaceShellState
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var scope: QuickOpenScope = .all
+
+    private var results: (pages: [DocumentPage], layers: [SelectionTargetSnapshot], actions: [QuickOpenViewAction]) {
+        QuickOpenSearchPolicy.results(pages: state.pages, layers: state.layerTargets, query: query, scope: scope)
+    }
+
+    private func openFirst() {
+        if scope.includesPages, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let recent = state.recentQuickOpenPages.first { state.selectPage(recent.id) }
+        else if scope.includesLayers, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                let recentLayer = state.recentQuickOpenLayers.first { state.selectLayer(recentLayer.id) }
+        else if let page = results.pages.first { state.selectPage(page.id) }
+        else if let layer = results.layers.first { state.selectLayer(layer.id) }
+        else if let action = results.actions.first { action.perform(on: state) }
+        else { return }
+        dismiss()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Quick Open").font(.title2.weight(.semibold))
+            TextField("Find a page, layer, or action", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("quickOpen.search")
+                .onSubmit(openFirst)
+            Picker("Search Scope", selection: $scope) {
+                ForEach(QuickOpenScope.allCases) { choice in
+                    Text(choice.title).tag(choice)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("quickOpen.scope")
+            Text("\(results.pages.count) pages · \(results.layers.count) current-page layers · \(results.actions.count) actions")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("quickOpen.status")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    if scope.includesPages, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !state.recentQuickOpenPages.isEmpty {
+                        Text("Recent Pages").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(state.recentQuickOpenPages) { page in
+                            Button {
+                                state.selectPage(page.id)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(page.name)
+                                    Spacer()
+                                    Text(page.route.rawValue).foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityIdentifier("quickOpen.recentPage.\(page.id.description)")
+                        }
+                    }
+                    if scope.includesLayers, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !state.recentQuickOpenLayers.isEmpty {
+                        Text("Recent Current-Page Layers")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(state.recentQuickOpenLayers, id: \.id) { layer in
+                            Button {
+                                state.selectLayer(layer.id)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(layer.name)
+                                    Spacer()
+                                    Text(layer.kind.rawValue.capitalized).foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityIdentifier("quickOpen.recentLayer.\(layer.id.description)")
+                        }
+                    }
+                    if results.pages.isEmpty && results.layers.isEmpty && results.actions.isEmpty {
+                        ContentUnavailableView.search(text: query)
+                            .accessibilityIdentifier("quickOpen.empty")
+                    }
+                    if !results.pages.isEmpty {
+                        Text("Pages").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(results.pages) { page in
+                            Button {
+                                state.selectPage(page.id)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(page.name)
+                                    Spacer()
+                                    Text(page.route.rawValue).foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityIdentifier("quickOpen.page.\(page.id.description)")
+                        }
+                    }
+                    if !results.layers.isEmpty {
+                        Text("Current Page Layers").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(results.layers, id: \.id) { layer in
+                            Button {
+                                state.selectLayer(layer.id)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(layer.name)
+                                    Spacer()
+                                    Text(layer.kind.rawValue.capitalized).foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityIdentifier("quickOpen.layer.\(layer.id.description)")
+                        }
+                    }
+                    if !results.actions.isEmpty {
+                        Text("View Actions").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(results.actions) { action in
+                            Button {
+                                action.perform(on: state)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(action.title)
+                                    Spacer()
+                                    if action == .toggleGrid {
+                                        Text(state.isWorldGridVisible ? "On" : "Off")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .accessibilityIdentifier("quickOpen.action.\(action.id)")
+                        }
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("quickOpen.cancel")
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 440, minHeight: 320)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("quickOpen.sheet")
     }
 }
 
@@ -1030,23 +1249,53 @@ private struct AssetOrganizationEditor: View {
 
 private struct ElementsCatalogView: View {
     @ObservedObject var state: WorkspaceShellState
+    @State private var searchText = ""
+
+    private var results: [ElementCatalogItem] {
+        ElementCatalogSearchPolicy.results(in: ElementCatalogItem.allCases, query: searchText)
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                ForEach(["Layout", "Basic", "Site"], id: \.self) { category in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(category).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        ForEach(ElementCatalogItem.allCases.filter { $0.category == category }) { item in
-                            ElementCatalogRow(item: item, state: state)
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                TextField("Search Elements", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Search elements by name or category")
+                    .accessibilityIdentifier("navigator.elements.search")
+                    .onExitCommand { searchText = "" }
+                if !searchText.isEmpty {
+                    Button("Clear Search", systemImage: "xmark.circle.fill") { searchText = "" }
+                        .labelStyle(.iconOnly)
+                        .accessibilityIdentifier("navigator.elements.search.clear")
+                }
+            }
+            Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                 ? "\(results.count) elements"
+                 : "\(results.count) of \(ElementCatalogItem.allCases.count) elements match")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("navigator.elements.search.status")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if results.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
+                            .accessibilityIdentifier("navigator.elements.search.empty")
+                    }
+                    ForEach(["Layout", "Basic", "Site"], id: \.self) { category in
+                        if results.contains(where: { $0.category == category }) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(category).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                ForEach(results.filter { $0.category == category }) { item in
+                                    ElementCatalogRow(item: item, state: state)
+                                }
+                            }
                         }
                     }
                 }
+                .padding(.vertical, 2)
             }
-            .padding(.vertical, 2)
+            .accessibilityLabel("Elements catalog")
+            .accessibilityIdentifier("navigator.elements.catalog")
         }
-        .accessibilityLabel("Elements catalog")
-        .accessibilityIdentifier("navigator.elements.catalog")
     }
 }
 
@@ -5344,6 +5593,10 @@ struct SiteForgeCommands: Commands {
         }
 
         CommandGroup(after: .toolbar) {
+            Divider()
+            Button("Quick Open…") { commandState?.isQuickOpenPresented = true }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .disabled(commandState == nil)
             Divider()
             Button("Zoom In") { state?.performViewportCommand(CanvasViewportCommand(.zoomIn)) }
                 .keyboardShortcut("+", modifiers: .command)

@@ -265,6 +265,21 @@ enum ElementCatalogItem: String, CaseIterable, Identifiable {
     }
 }
 
+/// Catalogue discovery is an editor-only projection; it never changes the
+/// insertion registry's availability or authorizes an unavailable element.
+enum ElementCatalogSearchPolicy {
+    static func results(in items: [ElementCatalogItem], query: String) -> [ElementCatalogItem] {
+        let source = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(256))
+        guard !source.isEmpty else { return items }
+        let locale = Locale(identifier: "en_US_POSIX")
+        let needle = source.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
+        return items.filter {
+            $0.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale).contains(needle)
+                || $0.category.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale).contains(needle)
+        }
+    }
+}
+
 enum InspectorTab: String, CaseIterable, Identifiable {
     case design
     case layout
@@ -1070,6 +1085,121 @@ private struct InspectorAnnouncementContext {
     }
 }
 
+/// A scene-local query projection; it never becomes a document preference or
+/// changes page identity, route order, selection, or the canonical revision.
+enum PageSearchPolicy {
+    static func results(in pages: [DocumentPage], query: String) -> [DocumentPage] {
+        let source = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(256))
+        guard !source.isEmpty else { return pages }
+        let locale = Locale(identifier: "en_US_POSIX")
+        let needle = source.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
+        return pages.filter { page in
+            page.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale).contains(needle)
+                || page.route.rawValue.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale).contains(needle)
+        }
+    }
+}
+
+/// Filters the already-authorized Layers projection; a query cannot expose
+/// hidden targets or reorder the current page's paint/selection hierarchy.
+enum LayerSearchPolicy {
+    static func results(
+        in targets: [SelectionTargetSnapshot], query: String, kind: NodeKind? = nil
+    ) -> [SelectionTargetSnapshot] {
+        let source = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(256))
+        let locale = Locale(identifier: "en_US_POSIX")
+        let needle = source.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
+        return targets.filter {
+            (kind == nil || $0.kind == kind)
+                && (source.isEmpty || $0.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale).contains(needle))
+        }
+    }
+}
+
+/// Quick Open composes the same current-document/page projections as the two
+/// navigators; it owns no index and cannot authorize an unavailable target.
+enum QuickOpenSearchPolicy {
+    static func results(
+        pages: [DocumentPage], layers: [SelectionTargetSnapshot], query: String,
+        scope: QuickOpenScope = .all
+    ) -> (pages: [DocumentPage], layers: [SelectionTargetSnapshot], actions: [QuickOpenViewAction]) {
+        (
+            scope.includesPages ? PageSearchPolicy.results(in: pages, query: query) : [],
+            scope.includesLayers ? LayerSearchPolicy.results(in: layers, query: query) : [],
+            scope.includesActions ? QuickOpenViewAction.matches(query) : []
+        )
+    }
+}
+
+enum QuickOpenScope: String, CaseIterable, Identifiable {
+    case all, pages, layers, actions
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var includesPages: Bool { self == .all || self == .pages }
+    var includesLayers: Bool { self == .all || self == .layers }
+    var includesActions: Bool { self == .all || self == .actions }
+}
+
+/// A closed, non-destructive editor-action surface. Canonical document
+/// commands are deliberately absent until their validation can be shared.
+enum QuickOpenViewAction: String, CaseIterable, Identifiable {
+    case fitDocument, actualSize, toggleGrid
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .fitDocument: "Fit Document"
+        case .actualSize: "Actual Size"
+        case .toggleGrid: "Toggle Grid"
+        }
+    }
+
+    static func matches(_ query: String) -> [Self] {
+        let source = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(256))
+        guard !source.isEmpty else { return allCases }
+        let locale = Locale(identifier: "en_US_POSIX")
+        let needle = source.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
+        return allCases.filter {
+            $0.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale).contains(needle)
+        }
+    }
+
+    @MainActor
+    func perform(on state: WorkspaceShellState) {
+        switch self {
+        case .fitDocument: state.performViewportCommand(CanvasViewportCommand(.fitDocument))
+        case .actualSize: state.performViewportCommand(CanvasViewportCommand(.actualSize))
+        case .toggleGrid: state.isWorldGridVisible.toggle()
+        }
+    }
+}
+
+/// Scene-only MRU; invalid IDs are removed when projected against the live
+/// document, and no query or visit history is serialized into a project.
+enum QuickOpenRecentPagePolicy {
+    static func recording(_ id: PageID, in current: [PageID], limit: Int = 8) -> [PageID] {
+        guard limit > 0 else { return [] }
+        return Array(([id] + current.filter { $0 != id }).prefix(limit))
+    }
+
+    static func available(_ ids: [PageID], in pages: [DocumentPage]) -> [DocumentPage] {
+        let byID = Dictionary(uniqueKeysWithValues: pages.map { ($0.id, $0) })
+        return ids.compactMap { byID[$0] }
+    }
+}
+
+enum QuickOpenRecentLayerPolicy {
+    static func recording(_ id: NodeID, in current: [NodeID], limit: Int = 8) -> [NodeID] {
+        guard limit > 0 else { return [] }
+        return Array(([id] + current.filter { $0 != id }).prefix(limit))
+    }
+
+    static func available(_ ids: [NodeID], in layers: [SelectionTargetSnapshot]) -> [SelectionTargetSnapshot] {
+        let byID = Dictionary(uniqueKeysWithValues: layers.map { ($0.id, $0) })
+        return ids.compactMap { byID[$0] }
+    }
+}
+
 @MainActor
 final class WorkspaceShellState: ObservableObject {
     static let requirementIDs: Set<String> = [
@@ -1138,6 +1268,14 @@ final class WorkspaceShellState: ObservableObject {
     private var responsiveVisibilityAnnouncementContext: InspectorAnnouncementContext?
     @Published private(set) var designInspectorFailure: DesignInspectorError?
     @Published private(set) var lastDesignInspectorAnnouncement = "Design Inspector inactive"
+    @Published var pageSearchText = ""
+    @Published var layerSearchText = ""
+    @Published var layerKindFilter: NodeKind?
+    @Published var isQuickOpenPresented = false
+    @Published private(set) var recentPageIDs: [PageID] = []
+    private var recentPageDocumentID: DocumentID?
+    @Published private(set) var recentLayerIDs: [NodeID] = []
+    private var recentLayerDocumentID: DocumentID?
     @Published var assetSearchText = ""
     @Published var assetFavoritesOnly = false
     @Published var assetFolderFilter: String?
@@ -1159,7 +1297,7 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var snapResolution: SnapResolution?
     @Published private(set) var isSnappingSuppressed = false
     /// Scene-local editor orientation preference; never canonical project data.
-    @Published var isWorldGridVisible = true
+    @Published var isWorldGridVisible: Bool
     @Published private(set) var selectedGuideID: GuideID?
     @Published private(set) var guideEditingSession = GuideEditingSession()
     @Published private(set) var guideFailure: GuideCommandError?
@@ -1239,11 +1377,13 @@ final class WorkspaceShellState: ObservableObject {
     init(
         documentSession: DocumentSession = DocumentSession(),
         lifecycle: DocumentLifecycleController? = nil,
+        initialWorldGridVisible: Bool = true,
         viewportPreparer: CanvasViewportScenePreparer = CanvasViewportScenePreparer(),
         viewportDiagnostics: CanvasViewportDiagnostics = CanvasViewportDiagnostics(),
         announcementPoster: AccessibilityAnnouncementPoster = .native
     ) {
         self.documentSession = documentSession
+        isWorldGridVisible = initialWorldGridVisible
         viewportState = try! CanvasViewportState()
         viewportDocumentID = documentSession.document.id
         self.viewportPreparer = viewportPreparer
@@ -1878,6 +2018,25 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     var pages: [DocumentPage] { documentSession.document.websitePages }
+    var filteredPages: [DocumentPage] { PageSearchPolicy.results(in: pages, query: pageSearchText) }
+    var recentQuickOpenPages: [DocumentPage] {
+        guard recentPageDocumentID == documentSession.document.id else { return [] }
+        return QuickOpenRecentPagePolicy.available(recentPageIDs, in: pages)
+    }
+    var recentQuickOpenLayers: [SelectionTargetSnapshot] {
+        guard recentLayerDocumentID == documentSession.document.id else { return [] }
+        return QuickOpenRecentLayerPolicy.available(recentLayerIDs, in: layerTargets)
+    }
+    var pageSearchSummary: String {
+        let count = filteredPages.count
+        return pageSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "\(count) pages"
+            : "\(count) of \(pages.count) pages match"
+    }
+    func openFirstMatchingPage() {
+        if let page = filteredPages.first { selectPage(page.id) }
+    }
+    func clearPageSearch() { pageSearchText = "" }
     // Website navigation excludes definitions, but authoring commands must
     // resolve the currently edited canonical graph, including definitions.
     private var activeAuthoringPage: DocumentPage? {
@@ -2080,6 +2239,12 @@ final class WorkspaceShellState: ObservableObject {
         selectedGuideID = nil
         selectedPageID = pageID
         refreshSelectionScene(boundary: .pageSwitch)
+        let documentID = documentSession.document.id
+        if recentPageDocumentID != documentID {
+            recentPageIDs = []
+            recentPageDocumentID = documentID
+        }
+        recentPageIDs = QuickOpenRecentPagePolicy.recording(pageID, in: recentPageIDs)
     }
 
     func adjacentPage(to pageID: PageID, offset: Int) -> PageID? {
@@ -2229,6 +2394,28 @@ final class WorkspaceShellState: ObservableObject {
                     ? $0.id.description < $1.id.description
                     : $0.paintOrder < $1.paintOrder
             }
+    }
+
+    var filteredLayerTargets: [SelectionTargetSnapshot] {
+        LayerSearchPolicy.results(in: layerTargets, query: layerSearchText, kind: layerKindFilter)
+    }
+
+    var layerSearchSummary: String {
+        let count = filteredLayerTargets.count
+        return layerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && layerKindFilter == nil
+            ? "\(count) layers"
+            : "\(count) of \(layerTargets.count) layers match"
+    }
+
+    func selectFirstMatchingLayer() {
+        if let target = filteredLayerTargets.first { selectLayer(target.id) }
+    }
+
+    func clearLayerSearch() { layerSearchText = "" }
+
+    func clearLayerFilters() {
+        layerSearchText = ""
+        layerKindFilter = nil
     }
 
     var selectionSummary: String {
@@ -3613,6 +3800,14 @@ final class WorkspaceShellState: ObservableObject {
         case .toggle: .toggle
         }
         performSelectionCommand(command, targetID: id, provenance: .layersNavigator)
+        if selectionState.primaryID == id {
+            let documentID = documentSession.document.id
+            if recentLayerDocumentID != documentID {
+                recentLayerIDs = []
+                recentLayerDocumentID = documentID
+            }
+            recentLayerIDs = QuickOpenRecentLayerPolicy.recording(id, in: recentLayerIDs)
+        }
     }
 
     var transformStatus: String {

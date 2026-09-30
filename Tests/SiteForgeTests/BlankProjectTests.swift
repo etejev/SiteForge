@@ -3,6 +3,50 @@ import XCTest
 
 @MainActor
 final class BlankProjectTests: XCTestCase {
+    // SF-0205-003/004 — recent pages are bounded scene navigation, not
+    // canonical query or package history.
+    func testQuickOpenRecentPagesDeduplicateBoundAndDiscardMissingIDs() {
+        let home = DocumentPage(name: "Home", route: .init(rawValue: "/"), role: .home)
+        let missing = DocumentPage(name: "Not Found", route: .init(rawValue: "/404"), role: .notFound)
+        let extra = PageID()
+        let first = QuickOpenRecentPagePolicy.recording(home.id, in: [])
+        let second = QuickOpenRecentPagePolicy.recording(missing.id, in: first)
+        XCTAssertEqual(QuickOpenRecentPagePolicy.recording(home.id, in: second), [home.id, missing.id])
+        XCTAssertEqual(QuickOpenRecentPagePolicy.recording(extra, in: second, limit: 2), [extra, missing.id])
+        XCTAssertEqual(QuickOpenRecentPagePolicy.available([extra, missing.id, home.id], in: [home, missing]).map(\.id), [missing.id, home.id])
+        XCTAssertEqual(QuickOpenRecentPagePolicy.recording(extra, in: second, limit: 0), [])
+    }
+
+    // SF-0205-002/003/004: page search is a stable, scene-local projection.
+    func testPagesSearchMatchesNameAndRouteWithoutChangingDocumentOrSelection() throws {
+        let home = DocumentPage(name: "Home", route: .init(rawValue: "/"), role: .home)
+        let missing = DocumentPage(name: "Not Found", route: .init(rawValue: "/404"), role: .notFound)
+        let accented = DocumentPage(name: "Résumé", route: .init(rawValue: "/resume"))
+        let document = CanonicalDocument(pages: [home, missing, accented])
+        try document.validate()
+        let state = WorkspaceShellState(documentSession: DocumentSession(document: document))
+        XCTAssertEqual(state.filteredPages.map(\.id), [home.id, missing.id, accented.id])
+        XCTAssertEqual(PageSearchPolicy.results(in: state.pages, query: " RÉSUMÉ ").map(\.id), [accented.id])
+        XCTAssertEqual(PageSearchPolicy.results(in: state.pages, query: "/404").map(\.id), [missing.id])
+        XCTAssertEqual(PageSearchPolicy.results(in: state.pages, query: "o").map(\.id), [home.id, missing.id])
+
+        state.pageSearchText = "nOt"
+        XCTAssertEqual(state.filteredPages.map(\.id), [missing.id])
+        XCTAssertEqual(state.pageSearchSummary, "1 of 3 pages match")
+        XCTAssertEqual(state.effectiveSelectedPageID, home.id)
+        XCTAssertEqual(state.documentSession.document, document)
+        state.openFirstMatchingPage()
+        XCTAssertEqual(state.effectiveSelectedPageID, missing.id)
+        XCTAssertEqual(state.documentSession.document.revision, 0)
+        state.pageSearchText = "no match"
+        XCTAssertTrue(state.filteredPages.isEmpty)
+        state.openFirstMatchingPage()
+        XCTAssertEqual(state.effectiveSelectedPageID, missing.id)
+        state.clearPageSearch()
+        XCTAssertEqual(state.filteredPages.map(\.id), [home.id, missing.id, accented.id])
+        XCTAssertEqual(state.documentSession.document, document)
+    }
+
     // SF-0301-001, SF-0303-001, SF-0303-003
     func testApprovedDefaultsHaveExactNamesRoutesRolesOrderAndMinimumRoots() throws {
         let document = ProjectCreation.blank()

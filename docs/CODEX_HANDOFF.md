@@ -1,13 +1,100 @@
 # Codex Continuation Handoff
 
+## Current ten-slice local checkpoint (2026-09-30)
+
+SF-AUTHORING-065–074 deliver application Settings reset plus native Pages,
+Layers, Elements, and Quick Open search under bounded `SF-0205-002/003/004/006/008`
+and `SF-0206-002/003/004/006/008`. Quick Open offers current-document pages,
+authorized current-page Layers, a closed View-action set, scene-local recents,
+and native All/Pages/Layers/Actions scopes. Filter and query state never enters
+project packages or renderer content. The one full batch run executed 504/504
+unit/integration passes and 79/81 UI passes. Its two test-contract failures
+were corrected and passed exact focused reruns: keyboard focus traverses the
+new Pages search stop; the Layer Type picker is queried in its own menu and
+includes the structural Root among Frame-kind rows. Original-resolution
+Elements, Layers, Quick Open, and Settings states were reviewed. The owner
+directed no second broad run after exact focused repairs; do not describe
+the original full run as green. See `docs/evidence/SF-AUTHORING-068-ELEMENTS-SEARCH.md`
+through `docs/evidence/SF-AUTHORING-074-QUICK-OPEN-SCOPES.md`.
+
+Next action: review the combined preexisting and batch diff, run repository
+hygiene/security/traceability checks, then create the owner-authorized local
+checkpoint commit and push main. Do not start a new feature before that
+checkpoint. No publication or release work is authorized.
+
+## Current Layers search checkpoint
+
+SF-AUTHORING-067 filters only the current Layers navigator targets by name
+under bounded `SF-0205-002/003/004/006/008` and existing `SF-0402-002/006`.
+Return selects through the established Layers command; Escape and Clear Search
+leave canonical content untouched. The new policy and real-app journeys plus
+the existing multi-selection keyboard journey passed focused 3/3. Three
+original-resolution states were reviewed; see
+`docs/evidence/SF-AUTHORING-067-LAYERS-SEARCH.md`. Preserve the preceding
+owner-review tree. The later batch verification result is recorded above.
+
+## Current Pages search checkpoint
+
+SF-AUTHORING-066 adds a scene-local native Pages search by page name or route
+under bounded `SF-0205-002/003/004/006/008`. Return opens the first result;
+Escape and Clear Search restore the full list; a no-result state can reveal the
+selected page. The new model and native UI journeys and the affected existing
+Pages keyboard-navigation journey passed focused 3/3. Three original-resolution
+window states were reviewed. See `docs/evidence/SF-AUTHORING-066-PAGES-SEARCH.md`.
+The later batch verification result is recorded above; no module-complete
+claim is made.
+
+## Current application preference-group checkpoint
+
+SF-AUTHORING-065 adds an explicit native Settings Reset tab for the existing
+application-only Appearance and new-workspace Grid records (`SF-0206-002/003/004/006/008`
+bounded). It stages one exact pair, rejects dirty/managed/stale state, resets
+both with rollback on storage failure, and restores previous bytes within the
+session. No project schema, document history, renderer, or live Grid state is
+changed. Five exact model tests, the fresh-process group journey, and two
+existing Settings journeys passed focused 8/8; five
+original-resolution states were reviewed. See
+`docs/evidence/SF-AUTHORING-065-APPLICATION-RESET.md`. Preserve the earlier
+uncommitted SF-AUTHORING-063, SF-PRODUCT-UI-004, and SF-AUTHORING-064 work.
+No new full gate, commit, push, or hosted result is claimed. Project-owned
+Settings still require a concrete spec-backed preference choice; none was
+invented in this application-only slice.
+
+## Current focused Canvas Settings checkpoint
+
+SF-AUTHORING-064 adds a strictly decoded application-only default for Grid in
+new workspaces under bounded `SF-0206-002/003/004/006/008` and `SF-0407-006`.
+Existing scenes retain their independent toolbar/View-menu state; no project
+content, renderer output, or recovery package stores the preference. Three
+exact model tests and the new Canvas Settings, existing Appearance Settings,
+and existing grid/artboard actual-app journeys passed focused 6/6. Five new
+original-resolution states were reviewed. See
+`docs/evidence/SF-AUTHORING-064-CANVAS-SETTINGS.md`. Preserve all earlier
+uncommitted SF-AUTHORING-063/SF-PRODUCT-UI-004 work. No new full gate, commit,
+push, hosted result, or release is claimed. Remaining module work includes
+broader project preferences, scale/accessibility matrices, and release QA.
+
+## Owner-approved local visual add-on
+
+SF-PRODUCT-UI-004 packages the approved original SF AppIcon and refines native
+frosted navigator/Inspector materials under `SF-0201-009`. Three exact unit
+and three affected actual-app selectors passed; seven shell states and the
+built icon were visually reviewed. The XCTest Dock capture remained generic
+despite correct app-bundle icon keys/files, so confirm fresh Finder/Dock display
+before claiming that particular surface. See
+`docs/evidence/SF-PRODUCT-UI-004-BRANDING-SHELL.md`. Do not rerun the already
+passed SF-AUTHORING-063 full gate merely for this add-on, and do not commit or
+push this owner-review tree.
+
 ## Execution policy — reset 2026-09-27
 
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.
 Every prompt is a bounded user-visible vertical slice with focused tests before
-its local commit. `SF-AUTHORING-063` is Development Prompt 10 of 10 and must
-trigger the full verification and hosted checkpoint after focused/visual
-acceptance. Normative modules remain Partial unless fully proven.
+its local commit. `SF-AUTHORING-063` was Development Prompt 10 of 10. Its
+post-repair `./sf verify` passed 486 unit/integration and 70 UI tests on
+2026-09-29. The owner requested the verified tree remain uncommitted for review;
+do not push or publish. Normative modules remain Partial unless fully proven.
 
 ## Current asset-organization work
 
@@ -16,9 +103,21 @@ schema-eleven project-local folder/tags/favorite metadata. Reuse
 AssetOrganizationCommandRegistry and the existing resource/history path;
 never derive paths or alter image bytes. Four model/migration/static-reference
 tests and one native UI journey passed. Five original-resolution states were
-reviewed. Commit the slice, then run `./sf verify`, repair if needed, push, and
-monitor hosted CI. See
+reviewed. The full-gate unit/integration target passed 486/486; reconciled
+historical tests passed focused 10/10 and affected Inspector journeys 3/3.
+An earlier managed runner could not start the UI target because macOS denied
+testmanagerd with sandbox error 159. A later direct run found the two
+Mobile-preset failures below. The final post-repair full gate passed 556/556;
+no commit or push has been made. See
 `docs/evidence/SF-AUTHORING-063-ASSET-ORGANIZATION.md`.
+
+A later direct UI target ran 70 tests (68 passed, two failed at Mobile preset
+selection adoption). The clipped-selection correction now passes its focused
+model regression and both affected native UI journeys (2/2), with original-
+resolution artboard evidence reviewed. See
+`docs/evidence/SF-RESPONSIVE-SELECTION-RECOVERY.md`. The subsequent full local
+gate passed; retain the recovery evidence and leave this tree uncommitted for
+owner review.
 
 ## Current component-visibility work
 
@@ -30,8 +129,8 @@ Instance override wins over definition default, which wins over the child’s
 canonical hidden state when no binding exists. The derived `hidden` property
 feeds layout, native/Preview rendering, accessibility, and closed static CSS.
 See `docs/evidence/SF-AUTHORING-062-COMPONENT-VISIBILITY.md` for focused results.
-Next: choose the tenth dependency-ready bounded slice from the specification;
-after its focused local commit, run the reset-policy full/hosted checkpoint.
+That prior prompt-ten checkpoint has since passed its local full gate; the
+current bounded post-checkpoint slice is SF-AUTHORING-064 above.
 
 ## Current image-fill work
 

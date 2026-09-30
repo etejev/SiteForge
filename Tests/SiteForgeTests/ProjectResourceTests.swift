@@ -735,10 +735,11 @@ final class ProjectResourceTests: XCTestCase {
         legacyObject["schemaVersion"] = 4
         var legacyDocument = try XCTUnwrap(legacyObject["document"] as? [String: Any])
         legacyDocument.removeValue(forKey: "imageAssets")
+        legacyDocument.removeValue(forKey: "colorTokens")
         legacyObject["document"] = legacyDocument
         let migrated = try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacyObject))
         XCTAssertTrue(migrated.imageAssets.isEmpty)
-        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":9"))
+        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":11"))
     }
 
     func testImageInspectorRejectsInvalidStaleAndInapplicableEditsWithoutMutation() throws {

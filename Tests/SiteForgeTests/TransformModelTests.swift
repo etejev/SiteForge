@@ -607,7 +607,7 @@ final class TransformModelTests: XCTestCase {
             in: fixture.document,
             context: fixture.context
         )) { XCTAssertEqual($0 as? TransformError, .invalidDelta) }
-        XCTAssertThrowsError(try registry.prepare(
+        let clampedResize = try registry.prepare(
             fixture.command(operation: .resize(
                 handle: .left,
                 delta: .init(dx: 500, dy: 0),
@@ -615,7 +615,8 @@ final class TransformModelTests: XCTestCase {
             )),
             in: fixture.document,
             context: fixture.context
-        )) { XCTAssertEqual($0 as? TransformError, .invalidResult) }
+        )
+        XCTAssertEqual(clampedResize.geometries[0].preview.size.width, TransformPolicy.minimumDimension)
         XCTAssertThrowsError(try registry.prepare(
             fixture.command(operation: .move(delta: .init(dx: 1, dy: 1), constraint: .none)),
             in: fixture.document,

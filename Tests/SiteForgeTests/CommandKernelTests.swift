@@ -219,7 +219,7 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertEqual(document.websitePages, legacy.websitePages)
         let encoded = try DocumentSerializer.encode(document)
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(String(decoding: encoded, as: UTF8.self)
-            .replacingOccurrences(of: "\"schemaVersion\":9", with: "\"schemaVersion\":7").utf8)))
+            .replacingOccurrences(of: "\"schemaVersion\":11", with: "\"schemaVersion\":7").utf8)))
         for (suffix, value) in [("id", "not-an-id"), ("type", "media"), ("label", " "), ("label", "Title\n")] {
             var invalid = document
             let index = invalid.pages[2].nodes[1].properties.firstIndex { $0.key.rawValue == CanonicalComponentText.namespace + suffix }!
@@ -532,11 +532,11 @@ final class CommandKernelTests: XCTestCase {
         document.pages[0].nodes.append(instance)
         let bytes = try DocumentSerializer.encode(document)
         XCTAssertEqual(try DocumentSerializer.decode(bytes), document)
-        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":9", with: "\"schemaVersion\":6")
+        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":11", with: "\"schemaVersion\":6")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(old.utf8)))
-        let future = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":9", with: "\"schemaVersion\":10")
+        let future = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":11", with: "\"schemaVersion\":12")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(future.utf8))) {
-            XCTAssertEqual($0 as? DocumentSerializationError, .unsupportedSchema(10))
+            XCTAssertEqual($0 as? DocumentSerializationError, .unsupportedSchema(12))
         }
         var invalid = document
         invalid.pages[0].nodes[1].properties[0].value = .string("invalid")
@@ -1544,7 +1544,7 @@ final class CommandKernelTests: XCTestCase {
 
         XCTAssertEqual(first, second)
         let json = String(decoding: first, as: UTF8.self)
-        XCTAssertTrue(json.contains("\"schemaVersion\":9"))
+        XCTAssertTrue(json.contains("\"schemaVersion\":11"))
         XCTAssertTrue(json.contains("\"origin\":\"authored\""))
     }
 
@@ -1558,7 +1558,7 @@ final class CommandKernelTests: XCTestCase {
     // SF-0302-004, SF-1702-004, SF-1702-008
     func testUnknownMalformedAndInvalidSchemaInputsAreRejected() throws {
         let valid = String(decoding: try DocumentSerializer.encode(populatedDocument()), as: UTF8.self)
-        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":9", with: "\"schemaVersion\":99").utf8)
+        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":11", with: "\"schemaVersion\":99").utf8)
         XCTAssertThrowsError(try DocumentSerializer.decode(unknown)) { error in
             XCTAssertEqual(error as? DocumentSerializationError, .unsupportedSchema(99))
         }
