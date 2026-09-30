@@ -1287,18 +1287,17 @@ final class SiteForgeLaunchTests: XCTestCase {
         let inspector = application.scrollViews["inspector.selection.scroll"]
         func reveal(_ identifier: String) -> XCUIElement {
             let element = application.descendants(matching: .any)[identifier].firstMatch
-            for _ in 0..<20 where !element.isHittable {
+            guard element.waitForExistence(timeout: 5) else { return element }
+            for _ in 0..<12 where !element.isHittable {
                 let upperEdge = inspector.frame.minY + 16
                 let lowerEdge = inspector.frame.maxY - 56
-                let deltaY: CGFloat
                 if element.frame.midY <= upperEdge {
-                    deltaY = 100
+                    inspector.swipeDown() // Reveal content above the viewport.
                 } else if element.frame.midY >= lowerEdge {
-                    deltaY = -100
+                    inspector.swipeUp() // Reveal content below the viewport.
                 } else {
                     break // A visible but disabled/occluded field is not a scrolling problem.
                 }
-                inspector.scroll(byDeltaX: 0, deltaY: deltaY)
             }
             return element
         }
@@ -1313,8 +1312,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(reveal("inspector.design.validation").waitForExistence(timeout: 3))
         foreground.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForValue(reveal("inspector.design.typography.foregroundStatus"), containing: "#C02040FF"))
-        reveal("inspector.tokens.new").click()
+        let newToken = reveal("inspector.tokens.new")
+        XCTAssertTrue(waitForHittable(newToken, in: application))
+        newToken.click()
         let name = reveal("inspector.tokens.name")
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "New Color Token must reveal its native draft form")
+        XCTAssertTrue(waitForHittable(name, in: application))
         name.click(); name.typeKey("a", modifierFlags: .command); name.typeText("Ink")
         let tokenColor = reveal("inspector.tokens.color")
         tokenColor.click(); tokenColor.typeKey("a", modifierFlags: .command); tokenColor.typeText("#20A040FF")

@@ -1,5 +1,13 @@
 # SiteForge Development Changelog
 
+## Hosted token-control reachability correction (2026-09-30)
+
+- The text-foreground/Color Token UI journey now uses real native Inspector
+  swipes and confirms that New Color Token is visible before pressing it.
+  It also requires the editable token form to appear before typing. The exact
+  journey passed locally 1/1 after the hosted run reached 80/81 UI passes;
+  the next hosted result remains pending.
+
 ## Hosted minimum-display correction (2026-09-30)
 
 - The selected-object Inspector now leaves bottom scroll clearance so its

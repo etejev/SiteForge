@@ -22,6 +22,13 @@ a 30-second readiness bound while retaining the exact window/shell assertion.
 The three exact UI selectors passed locally 3/3. Push this correction and
 inspect the next hosted result before starting another slice.
 
+The next run (`36680840818`) passed 504/504 non-UI and 80/81 UI. The only
+remaining hosted failure was an AX-present but offscreen New Color Token
+button in the text-foreground journey; its click did not reveal the form.
+The corrected journey requires a real native-scroll reveal, a hittable button,
+and an actual hittable draft field. It passed focused 1/1 locally. Push this
+single-selector correction and wait for a genuinely green hosted gate.
+
 ## Current ten-slice local checkpoint (2026-09-30)
 
 SF-AUTHORING-065–074 deliver application Settings reset plus native Pages,

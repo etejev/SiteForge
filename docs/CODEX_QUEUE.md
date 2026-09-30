@@ -55,6 +55,15 @@ affected journeys passed locally 3/3 after bounded fixture-specific readiness
 and geometry-directed reveal corrections. A new hosted run is required before
 calling this checkpoint green.
 
+Third hosted correction: Actions run `36680840818` improved to 504/504
+non-UI and 80/81 UI passes. The remaining failure was the text-foreground
+token journey clicking an AX-present but offscreen "New Color Token" button;
+the native draft form therefore never appeared. The journey now swipes the
+real Inspector scroll view according to target position, requires the button
+to be hittable before clicking, and requires the draft field to appear and
+be hittable. Its exact selector passed locally 1/1. The next hosted result
+is pending; no green full gate is claimed.
+
 ## READY
 
 None; the ten-slice `SF-AUTHORING-065`–`074` batch has completed local acceptance. Select the next specification-backed slice only after this checkpoint is recorded.
