@@ -15,10 +15,10 @@ concurrency:
 jobs:
   verify:
     runs-on: macos-latest
-    # The 430 non-UI / 63 UI gate reaches the former 50-minute limit on hosted
-    # macOS. Reserve bounded build, cleanup, and runner-variance headroom—not
-    # longer XCTest waits or relaxed application performance budgets.
-    timeout-minutes: 60
+    # The 504 non-UI / 81 UI gate reached the former 60-minute limit on hosted
+    # macOS while XCTest was still progressing. Keep bounded runner headroom;
+    # this does not extend individual XCTest waits or application budgets.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - name: Select Xcode

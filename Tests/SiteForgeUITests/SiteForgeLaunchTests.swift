@@ -2045,14 +2045,24 @@ final class SiteForgeLaunchTests: XCTestCase {
             String(format: "%.1f points", originalPoints + 1)
         )
 
-        let suppress = application.checkBoxes["inspector.snapping.suppress"]
-        XCTAssertTrue(suppress.exists)
-        suppress.click()
+        let inspectorScroll = application.scrollViews["inspector.selection.scroll"]
+        XCTAssertTrue(inspectorScroll.exists)
+        func revealInspectorControl(_ identifier: String, deltaY: CGFloat) -> XCUIElement {
+            for _ in 0..<8 {
+                let control = application.descendants(matching: .any).matching(identifier: identifier).firstMatch
+                if control.isHittable { return control }
+                inspectorScroll.scroll(byDeltaX: 0, deltaY: deltaY)
+            }
+            let control = application.descendants(matching: .any).matching(identifier: identifier).firstMatch
+            XCTAssertTrue(waitForHittable(control, in: application), "Inspector control must be visible before pointer interaction: \(identifier)")
+            return control
+        }
+        revealInspectorControl("inspector.snapping.suppress", deltaY: -160).click()
         XCTAssertTrue(application.descendants(matching: .any)["status.snapping"].waitForExistence(timeout: 2))
         attachWindowScreenshot(application, named: "SF-AUTHORING-007 snapping suppressed")
-        suppress.click()
+        revealInspectorControl("inspector.snapping.suppress", deltaY: -160).click()
 
-        application.buttons["inspector.guide.remove"].click()
+        revealInspectorControl("inspector.guide.remove", deltaY: 160).click()
         XCTAssertFalse(guide.exists)
         application.typeKey("z", modifierFlags: .command)
         XCTAssertTrue(
@@ -2222,7 +2232,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["quickOpen.empty"].waitForExistence(timeout: 3))
         application.buttons["quickOpen.cancel"].click()
         XCTAssertFalse(application.descendants(matching: .any)["quickOpen.sheet"].exists)
-        application.buttons["navigator.tab.pages"].click()
+        // Quick Open does not change the navigator tab. On a narrow hosted
+        // display the production-minimum window can place this tab partially
+        // offscreen, so verify its live selected state without a redundant click.
+        XCTAssertTrue(application.buttons["navigator.tab.pages"].isSelected)
         pageRow(named: "Home", in: application).click()
         application.buttons["navigator.quickOpen"].click()
         XCTAssertTrue(search.waitForExistence(timeout: 3))

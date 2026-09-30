@@ -1,5 +1,17 @@
 # Codex Continuation Handoff
 
+## Hosted checkpoint correction (2026-09-30)
+
+Commit `73c653a` was pushed, but Actions run `36669009531` hit its 60-minute
+job cap while UI tests were still progressing. Its log identified two
+offscreen/not-hittable pointer interactions on the 1024-point hosted display.
+The exact Quick Open and snapping/guide selectors now pass locally 2/2 after
+the test uses live selected-state and scroll-to-reveal assertions. The checked-
+in CI job has a 90-minute cap; no production minimum-window reduction or
+individual XCTest timeout increase was made. Next: push the correction and
+inspect the resulting hosted run. Do not claim a green hosted gate until it
+actually completes successfully.
+
 ## Current ten-slice local checkpoint (2026-09-30)
 
 SF-AUTHORING-065–074 deliver application Settings reset plus native Pages,
@@ -17,10 +29,10 @@ directed no second broad run after exact focused repairs; do not describe
 the original full run as green. See `docs/evidence/SF-AUTHORING-068-ELEMENTS-SEARCH.md`
 through `docs/evidence/SF-AUTHORING-074-QUICK-OPEN-SCOPES.md`.
 
-Next action: review the combined preexisting and batch diff, run repository
-hygiene/security/traceability checks, then create the owner-authorized local
-checkpoint commit and push main. Do not start a new feature before that
-checkpoint. No publication or release work is authorized.
+The combined checkpoint was committed as `73c653a` and pushed. The current
+next action is the hosted correction described above; do not start a new
+feature before its hosted result is known. No publication or release work is
+authorized.
 
 ## Current Layers search checkpoint
 

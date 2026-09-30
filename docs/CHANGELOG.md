@@ -1,5 +1,14 @@
 # SiteForge Development Changelog
 
+## Hosted checkpoint correction — SF-AUTHORING-065–074 (2026-09-30)
+
+- The Quick Open journey now checks the actual Pages-tab selected state without
+  a redundant pointer click that was offscreen on a 1024-point hosted display.
+  The snapping journey scrolls native Inspector controls into view before
+  pointer interaction. Both exact UI selectors passed locally (2/2). The CI
+  job timeout increased from 60 to 90 minutes after the 81-journey suite was
+  cancelled while still progressing; hosted rerun is pending.
+
 ## Local batch acceptance — SF-AUTHORING-065–074 (2026-09-30)
 
 - One full gate passed 504/504 unit/integration and 79/81 UI tests. The two

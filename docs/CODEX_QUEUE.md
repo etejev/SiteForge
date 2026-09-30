@@ -34,6 +34,16 @@ checks, then create the expressly authorized local batch commit and push
 main. This does not authorize a release or imply a single wholly green full
 run. `SF-0205` and `SF-0206` remain Partial.
 
+Hosted checkpoint correction (2026-09-30): commit `73c653a` reached the CI
+job's 60-minute limit while XCTest was still progressing. The log also exposed
+two actual-app pointer targets that were not hittable on the 1024-point hosted
+display: a redundant Pages-tab click after Quick Open cancellation and the
+scrollable Inspector's snapping checkbox. The exact affected selectors passed
+locally 2/2 after retaining the selected-tab assertion and revealing the real
+Inspector controls before clicking. The workflow now allows 90 minutes of
+bounded runner headroom without lengthening XCTest waits or shrinking the
+production window. Hosted verification of this correction remains pending.
+
 ## READY
 
 None; the ten-slice `SF-AUTHORING-065`–`074` batch has completed local acceptance. Select the next specification-backed slice only after this checkpoint is recorded.
