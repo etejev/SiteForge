@@ -1288,12 +1288,22 @@ final class SiteForgeLaunchTests: XCTestCase {
         func reveal(_ identifier: String) -> XCUIElement {
             let element = application.descendants(matching: .any)[identifier].firstMatch
             for _ in 0..<20 where !element.isHittable {
-                inspector.scroll(byDeltaX: 0, deltaY: element.frame.maxY > inspector.frame.maxY ? -100 : 100)
+                let upperEdge = inspector.frame.minY + 16
+                let lowerEdge = inspector.frame.maxY - 56
+                let deltaY: CGFloat
+                if element.frame.midY <= upperEdge {
+                    deltaY = 100
+                } else if element.frame.midY >= lowerEdge {
+                    deltaY = -100
+                } else {
+                    break // A visible but disabled/occluded field is not a scrolling problem.
+                }
+                inspector.scroll(byDeltaX: 0, deltaY: deltaY)
             }
             return element
         }
         let foreground = reveal("inspector.design.typography.foregroundHex")
-        XCTAssertTrue(foreground.isHittable && foreground.isEnabled)
+        XCTAssertTrue(waitForHittable(foreground, in: application) && foreground.isEnabled)
         XCTAssertTrue(waitForValue(reveal("inspector.design.typography.foregroundStatus"), containing: "Automatic"))
         foreground.click(); foreground.typeText("#C02040FF"); foreground.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForValue(reveal("inspector.design.typography.foregroundStatus"), containing: "Authored"))
@@ -2424,6 +2434,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         _ scenario: String,
         reduceMotion: Bool = false,
         windowAlignment: TestWindowAlignment? = nil,
+        workspaceReadinessTimeout: TimeInterval = 5,
         extraArguments: [String] = []
     ) -> XCUIApplication {
         continueAfterFailure = false
@@ -2447,7 +2458,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let state = application.descendants(matching: .any)["launch.experience"]
         if scenario == "workspace" {
             application.activate()
-            XCTAssertTrue(waitForWorkspaceReady(application))
+            XCTAssertTrue(waitForWorkspaceReady(application, timeout: workspaceReadinessTimeout))
         } else {
             XCTAssertTrue(state.waitForExistence(timeout: 5))
             let stateIdentifier = switch scenario {
@@ -5543,7 +5554,10 @@ final class SiteForgeLaunchTests: XCTestCase {
     // SF-0201-002, SF-0201-007, SF-1505-007, SF-1605-007
     @MainActor
     func testLargeFixtureScrollsAndRetainsMinimumLayoutResponsiveness() throws {
-        let application = launchScenario("workspace", extraArguments: [
+        // The 10,000-page AX projection is deliberately much larger than an
+        // ordinary workspace. Preserve the exact window/shell readiness check
+        // while allowing its first hosted AX query to finish under load.
+        let application = launchScenario("workspace", workspaceReadinessTimeout: 30, extraArguments: [
             "-SiteForgeWorkspaceFixture", "large",
             "-SiteForgeWindowSize", "minimum",
         ])

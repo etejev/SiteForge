@@ -42,7 +42,18 @@ scrollable Inspector's snapping checkbox. The exact affected selectors passed
 locally 2/2 after retaining the selected-tab assertion and revealing the real
 Inspector controls before clicking. The workflow now allows 90 minutes of
 bounded runner headroom without lengthening XCTest waits or shrinking the
-production window. Hosted verification of this correction remains pending.
+production window. The resulting hosted failure is detailed below.
+
+Second hosted correction: Actions run `36674126611` completed the full UI
+target with 78/81 passes and 504/504 non-UI passes. The retained artifact
+showed the Dock covering the final Inspector checkbox at the 1100-point
+minimum window on a 1024×768 display, an AX readiness query exceeding five
+seconds only for the 10,000-page fixture, and a typography test helper
+scrolling the wrong way when its field met the Inspector bottom edge. The
+Inspector now has editor-only bottom scroll clearance; the three exact
+affected journeys passed locally 3/3 after bounded fixture-specific readiness
+and geometry-directed reveal corrections. A new hosted run is required before
+calling this checkpoint green.
 
 ## READY
 

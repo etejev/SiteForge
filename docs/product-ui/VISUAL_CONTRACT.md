@@ -1,5 +1,14 @@
 # SiteForge Visual Contract
 
+## Short-display Inspector reachability
+
+At the supported production minimum window size, selected-object Inspector
+content retains bottom scroll clearance. On a shorter macOS display the Dock
+may overlap the window's lower edge, but the final native control must still
+scroll entirely above it and remain pointer/keyboard accessible. This
+clearance is editor chrome only and does not change project content or the
+production minimum width.
+
 ## Native pointer and composition contract
 
 The flipped AppKit canvas backing layer owns the top-left/Y-down conversion.

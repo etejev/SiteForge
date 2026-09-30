@@ -1,5 +1,14 @@
 # SiteForge Development Changelog
 
+## Hosted minimum-display correction (2026-09-30)
+
+- The selected-object Inspector now leaves bottom scroll clearance so its
+  final controls can rise above the Dock on a short display, without changing
+  authored content or the 1100-point production window minimum. The exact
+  large-fixture, snapping/guide, and text-foreground UI journeys passed 3/3
+  locally after correcting their bounded readiness/reveal checks. Hosted
+  verification remains pending; no full-gate pass is claimed here.
+
 ## Hosted checkpoint correction — SF-AUTHORING-065–074 (2026-09-30)
 
 - The Quick Open journey now checks the actual Pages-tab selected state without
@@ -7,7 +16,8 @@
   The snapping journey scrolls native Inspector controls into view before
   pointer interaction. Both exact UI selectors passed locally (2/2). The CI
   job timeout increased from 60 to 90 minutes after the 81-journey suite was
-  cancelled while still progressing; hosted rerun is pending.
+  cancelled while still progressing; the resulting hosted failure is recorded
+  above.
 
 ## Local batch acceptance — SF-AUTHORING-065–074 (2026-09-30)
 

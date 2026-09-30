@@ -3092,6 +3092,11 @@ private struct InspectorView: View {
                         }
                         inspectorDetails
                     }
+                    // The production minimum-height window can extend under the
+                    // Dock on a shorter display. Keep the last native control
+                    // scrollable above that occlusion instead of stranding it
+                    // against the bottom edge of the Inspector.
+                    .padding(.bottom, 80)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel("Inspector selection summary")

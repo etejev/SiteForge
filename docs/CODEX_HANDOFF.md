@@ -8,9 +8,19 @@ offscreen/not-hittable pointer interactions on the 1024-point hosted display.
 The exact Quick Open and snapping/guide selectors now pass locally 2/2 after
 the test uses live selected-state and scroll-to-reveal assertions. The checked-
 in CI job has a 90-minute cap; no production minimum-window reduction or
-individual XCTest timeout increase was made. Next: push the correction and
-inspect the resulting hosted run. Do not claim a green hosted gate until it
-actually completes successfully.
+individual XCTest timeout increase was made in that first correction. Its
+hosted result is recorded below; do not claim a green gate until one actually
+completes successfully.
+
+That next run (`36674126611`) completed 504/504 non-UI and 78/81 UI. Its
+artifact proved the Inspector's last control was trapped behind the Dock on
+the 1024×768 hosted display; the large fixture displayed a real workspace but
+its first AX query exceeded the ordinary five-second bound; and a text-field
+reveal helper chose the wrong scroll direction at the lower edge. The product
+Inspector gained bottom scroll clearance; only the 10,000-page fixture gets
+a 30-second readiness bound while retaining the exact window/shell assertion.
+The three exact UI selectors passed locally 3/3. Push this correction and
+inspect the next hosted result before starting another slice.
 
 ## Current ten-slice local checkpoint (2026-09-30)
 
