@@ -160,6 +160,12 @@ struct PageCommandRegistry {
                        case .string(let encoded) = value {
                         value = .string(try CanonicalFormSelectOptions.remappingStableIDs(in: encoded))
                     }
+                    if property.key.rawValue.hasPrefix(CanonicalFluidValueCodec.namespace + "."),
+                       case .string(let encoded) = value,
+                       let target = FluidValueTarget(rawValue: String(property.key.rawValue.dropFirst(
+                            CanonicalFluidValueCodec.namespace.count + 1))) {
+                        value = .string(try CanonicalFluidValueCodec.remappingStableID(in: encoded, target: target))
+                    }
                     return NodeProperty(key: property.key, value: value, origin: property.origin)
                 }
                 return DocumentNode(id: ids[node.id]!, kind: node.kind, name: node.name,

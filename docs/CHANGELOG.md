@@ -1,5 +1,187 @@
 # SiteForge Development Changelog
 
+## 2026-10-07 — Integrated authoring checkpoint
+
+- Integrated bounded authoring slices `SF-AUTHORING-075`–`105` except the
+  still-ready starter-template slice `106`, plus `SF-AUTHORING-107` and
+  product-UI slices `005/006`.
+- Reconciled native text entry under Xcode 27 by resolving live controls after
+  SwiftUI replacement, preserving NSTextView automatic focus, and using
+  document-boundary keyboard selection for multiline clipboard proof.
+- Added explicit launch identity/assurance semantics and truthful Preview
+  status accessibility while preserving the maximized-window contract.
+- The authoritative `./sf verify` passed every repository check and all 640
+  tests: 542 unit/integration plus the complete 98-journey UI target. Both
+  corrected inline-editor journeys also passed their exact focused 2/2 rerun.
+
+## Unverified source work — SF-AUTHORING-107
+
+- Added native Cut, Copy, Paste, Paste in Place, and Duplicate for authored
+  subtree selections through one bounded versioned SiteForge pasteboard type.
+- Copy/Cut validate dependency closure before changing clipboard/document
+  state. Paste remaps stable identities, preserves hierarchy/relative geometry,
+  deduplicates or imports verified local image/token dependencies, uses one
+  atomic history transaction, and publishes selection/accessibility status.
+  Cross-project component transfer rejects explicitly; focused source tests are
+  present but unrun.
+- OD-016 is approved: Blank Site stays neutral and the next Starter Site slice
+  contains only ordinary Home/About pages with neutral local semantic content.
+
+## Unverified source work — SF-AUTHORING-105
+
+- Added a bounded Recent Projects section to the native welcome surface for
+  projects previously opened through user-authorized macOS file access.
+- Recent entries contain a stable hashed bookmark lookup key and display name,
+  never an absolute path or duplicate bookmark bytes. Reopen uses the existing
+  security-scoped lifecycle; stale access offers Locate recovery, and removing
+  recency does not revoke authorization. Focused test source is unrun.
+
+## Unverified source work — SF-PRODUCT-UI-006
+
+- The native welcome surface now uses the approved packaged SiteForge icon,
+  names its New Site/Open Project actions directly, and states the local,
+  private-by-default, recovery-protected product boundary.
+- The native toolbar keeps Select, Frame, Text, Image, and Component visible at
+  the practical minimum. Other implemented tools remain in a nearby accessible
+  More Tools menu and retain Insert-menu/shortcut parity. Tests are unrun.
+
+## Unverified source work — SF-AUTHORING-104
+
+- Added a native Support tab to Settings with current version/build/channel,
+  a truthful installed-distribution update boundary, and the established
+  edited-document recovery policy.
+- Added cancellable background generation, review, copy, and native export of
+  a deterministic redacted JSON report that excludes projects, paths, authored
+  values, credentials, and raw identifiers. Focused tests are present but unrun.
+
+## Unverified source work — SF-AUTHORING-103
+
+- Local Preview now resolves every website page through the production canvas
+  scene pipeline and follows committed internal Link targets without changing
+  the editor's active page or document state.
+- Added native current-page, Back, Forward, Refresh, and Done controls plus
+  truthful missing/external-target recovery. Preview uses the actual artboard
+  and continues to exclude editor chrome. Focused tests are present but unrun.
+
+## Unverified source work — SF-AUTHORING-102
+
+- Added canonical monotonic fluid values for object width/height, typography
+  size/line height, and structural padding/gap at Mobile, Tablet, and Desktop
+  reference widths.
+- Added native Layout Inspector creation, editing, cancellation, mixed-state,
+  removal, and accessibility semantics through the existing transaction path.
+- Canvas preparation, breakpoint comparison, and safe static CSS now consume
+  the same resolved clamp. Focused tests are present but execution is deferred.
+
+## Unverified source work — SF-AUTHORING-101
+
+- Added a visible native responsive comparison sheet for Desktop, Tablet, and
+  Mobile with resolved geometry, visibility, container overrides, provenance,
+  and difference summaries from the existing canonical cascade.
+- Added scene-only Review actions and View-menu parity; comparison does not
+  write project data or history. Test source is present but execution remains
+  deferred by owner direction.
+
+## Unverified source work — SF-AUTHORING-100
+
+- Added native renaming for local component definitions.
+- One atomic component transaction preserves definition/instance IDs and
+  propagates the new display name to all linked uses with exact Undo/Redo.
+- Added model and actual-app test source; verification remains deferred.
+
+## Unverified source work — SF-AUTHORING-099
+
+- Added a visible Heading element and native Insert action backed by the
+  existing Text model, with semantic `<h2>`, bold 32/38 typography, and
+  deterministic in-bounds geometry.
+- Heading content, typography, semantic role, history, persistence, renderer,
+  and accessibility reuse established systems. Model/UI test source is unrun.
+
+## Unverified source work — SF-AUTHORING-098
+
+- Added editable Accessible name and Description fields for applicable general
+  authored objects, with truthful defaulted/authored/mixed presentation.
+- Commits use the existing identity-gated transaction/history path and project
+  authored metadata into canvas accessibility and escaped static semantics.
+- Image and Form keep their dedicated accessibility schemas. Focused model,
+  output, and actual-app test source is present but remains unrun.
+
+## Unverified source work — SF-AUTHORING-097
+
+- Added native directional canvas marquee selection: drag left-to-right to
+  contain visible objects or right-to-left to intersect them.
+- Shift-add and Command-toggle reuse the existing ordered selection registry;
+  the marquee is editor-only and cancellation preserves the prior selection.
+- Added focused model and actual-app test source. Verification and original-
+  resolution visual review remain deferred.
+
+## Unverified source work — SF-AUTHORING-096
+
+- Added a Form-aware Accessibility Inspector that reports canonical control
+  roles, accessible names, requirements, descriptions, options, bounds, and
+  property provenance, with a direct path back to Content editing.
+- Added form-level configuration counts and the existing privacy-preserving
+  local validation action while preserving disabled/unconfigured submission.
+- Mixed field selections now show Mixed instead of borrowing the primary
+  field's values. Verification and visual review remain deferred.
+
+## Unverified source work — SF-AUTHORING-091–095
+
+- Added Form-only Email, Text Area, Checkbox, Select, and Submit actions to
+  Elements and the native Insert menu. They reuse canonical Text/form-field
+  transactions, Content Inspector, exact history, persistence, and safe static
+  output. Select has deterministic starter options; Submit remains safely
+  disabled until a later approved destination workflow. Verification is
+  deferred.
+
+## Unverified source work — SF-AUTHORING-090
+
+- Added a Form-only Input insertion action to Elements and the native Insert
+  menu. It uses the existing transactional Text/form-field model and Content
+  Inspector. Tests and visual review are deferred; this is not yet accepted.
+
+## Unverified source work — SF-AUTHORING-086–089
+
+- Divider and Header, Navigation, and Footer now use real Frame/Section
+  insertions from Elements and the Insert menu. Site sections carry authored
+  semantic roles; verification and visual review are deferred.
+
+
+## Unverified source work — SF-AUTHORING-085
+
+- Quick Open component results now provide a separate Insert Instance action
+  that reuses the existing linked-component command. A failed insertion leaves
+  the search sheet open. Testing is deferred.
+
+
+## Unverified source work — SF-AUTHORING-084
+
+- Quick Open asset results now offer a direct Insert Image action alongside
+  reveal-only navigation. The action uses the existing authored Image command
+  and restores scene asset selection if rejected. Testing is deferred.
+
+
+## Source-only Quick Open and navigator discovery completion (2026-09-30)
+
+- Added a New Page action to Quick Open using the existing native page editor.
+- Added component-definition search and a current-project Assets usage filter.
+- Added Quick Open results that reveal matching assets and component definitions
+  by stable identity in their actual navigators, without implicit insertion.
+- Synchronized the approved icon wording into the editable specification copy.
+  Test cases are written but not yet executed; these changes are not accepted
+  until the one authorized local cycle gate and repair review complete.
+
+## Source-only approved icon and Quick Open insertion half-batch (2026-09-30)
+
+- Repackaged the approved purple-to-blue SF icon at every macOS AppIcon size,
+  removing only the exterior matte; kept the owner-approved source artwork.
+- Added Quick Open actions for Frame, Text, Section, Stack, Grid, Button,
+  Link, Form, selected Image, and native Import and Insert Image. These reuse
+  the existing live insertion availability/transaction and image-import paths.
+- Added focused policy, actual-app, and icon assertion source. Execution and
+  visual acceptance are deferred by the current owner batch instruction; none
+  of these slices is marked verified or complete.
+
 ## Hosted token-control reachability correction (2026-09-30)
 
 - The text-foreground/Color Token UI journey now uses real native Inspector

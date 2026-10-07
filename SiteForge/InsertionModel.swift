@@ -45,10 +45,15 @@ enum ResponsiveBreakpoint: String, CaseIterable, Codable, Sendable {
 
 enum ResponsiveGeometrySource: Equatable, Sendable {
     case baseDesktop
+    case fluid
     case override(ResponsiveBreakpoint)
 
     var label: String {
-        switch self { case .baseDesktop: "Inherited from Desktop"; case .override(let value): "Authored for \(value.title)" }
+        switch self {
+        case .baseDesktop: "Inherited from Desktop"
+        case .fluid: "Fluid responsive value"
+        case .override(let value): "Authored for \(value.title)"
+        }
     }
 }
 
@@ -57,28 +62,40 @@ enum ResponsiveGeometryResolver {
     static func key(_ field: GeometryInspectorField, breakpoint: ResponsiveBreakpoint) -> String {
         "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).\(field.rawValue)"
     }
-    static func value(for field: GeometryInspectorField, node: DocumentNode, breakpoint: ResponsiveBreakpoint)
+    static func value(for field: GeometryInspectorField, node: DocumentNode, breakpoint: ResponsiveBreakpoint,
+                      viewportWidth: Double? = nil)
         -> (Double, PropertyOrigin, ResponsiveGeometrySource)? {
         if breakpoint != .desktop,
            let property = node.insertionProperty(key(field, breakpoint: breakpoint)),
            case .number(let value) = property.value, isValid(value, for: field) {
             return (value, property.origin, .override(breakpoint))
         }
+        let fluidTarget: FluidValueTarget? = switch field {
+        case .width: .width
+        case .height: .height
+        case .x, .y: nil
+        }
+        if let fluidTarget, let viewportWidth,
+           let fluid = CanonicalFluidValueCodec.value(for: fluidTarget, node: node),
+           let resolved = fluid.0.resolved(viewportWidth: viewportWidth) {
+            return (resolved, fluid.1, .fluid)
+        }
         guard let property = node.insertionProperty(field.propertyKey),
               case .number(let value) = property.value, isValid(value, for: field) else { return nil }
         return (value, property.origin, .baseDesktop)
     }
-    static func geometry(for node: DocumentNode, breakpoint: ResponsiveBreakpoint) -> InsertionGeometry? {
-        guard let x = value(for: .x, node: node, breakpoint: breakpoint)?.0,
-              let y = value(for: .y, node: node, breakpoint: breakpoint)?.0,
-              let width = value(for: .width, node: node, breakpoint: breakpoint)?.0,
-              let height = value(for: .height, node: node, breakpoint: breakpoint)?.0 else { return nil }
+    static func geometry(for node: DocumentNode, breakpoint: ResponsiveBreakpoint,
+                         viewportWidth: Double? = nil) -> InsertionGeometry? {
+        guard let x = value(for: .x, node: node, breakpoint: breakpoint, viewportWidth: viewportWidth)?.0,
+              let y = value(for: .y, node: node, breakpoint: breakpoint, viewportWidth: viewportWidth)?.0,
+              let width = value(for: .width, node: node, breakpoint: breakpoint, viewportWidth: viewportWidth)?.0,
+              let height = value(for: .height, node: node, breakpoint: breakpoint, viewportWidth: viewportWidth)?.0 else { return nil }
         return InsertionGeometry(origin: .init(x: x, y: y), size: .init(width: width, height: height))
     }
-    static func frame(for node: DocumentNode, base: WorldRect, breakpoint: ResponsiveBreakpoint) -> WorldRect {
-        guard breakpoint != .desktop else { return base }
+    static func frame(for node: DocumentNode, base: WorldRect, breakpoint: ResponsiveBreakpoint,
+                      viewportWidth: Double? = nil) -> WorldRect {
         func resolved(_ field: GeometryInspectorField, fallback: Double) -> Double {
-            value(for: field, node: node, breakpoint: breakpoint)?.0 ?? fallback
+            value(for: field, node: node, breakpoint: breakpoint, viewportWidth: viewportWidth)?.0 ?? fallback
         }
         return .init(origin: .init(x: resolved(.x, fallback: base.origin.x), y: resolved(.y, fallback: base.origin.y)),
                      size: .init(width: resolved(.width, fallback: base.size.width),
@@ -116,12 +133,23 @@ enum ResponsiveContainerLayoutResolver {
     static func key(_ field: ContainerLayoutField, breakpoint: ResponsiveBreakpoint) -> String {
         "\(namespace).\(breakpoint.id.rawValue.uuidString.lowercased()).\(field.propertySuffix)"
     }
-    static func value(for field: ContainerLayoutField, node: DocumentNode, breakpoint: ResponsiveBreakpoint)
+    static func value(for field: ContainerLayoutField, node: DocumentNode, breakpoint: ResponsiveBreakpoint,
+                      viewportWidth: Double? = nil)
         -> (ContainerLayoutValue, PropertyOrigin, ResponsiveGeometrySource)? {
         if breakpoint != .desktop,
            let property = node.insertionProperty(key(field, breakpoint: breakpoint)),
            let value = parse(property.value, field: field) {
             return (value, property.origin, .override(breakpoint))
+        }
+        let fluidTarget: FluidValueTarget? = switch field {
+        case .padding: .padding
+        case .gap: .gap
+        case .axis, .alignment, .columns: nil
+        }
+        if let fluidTarget, let viewportWidth,
+           let fluid = CanonicalFluidValueCodec.value(for: fluidTarget, node: node),
+           let resolved = fluid.0.resolved(viewportWidth: viewportWidth) {
+            return (.number(resolved), fluid.1, .fluid)
         }
         guard let property = node.insertionProperty(field.propertyKey),
               let value = parse(property.value, field: field) else { return nil }
@@ -188,7 +216,10 @@ enum StaticLayoutOutputEmitter {
         let ordered = nodes.sorted { $0.id.description < $1.id.description }
         let base = ordered.compactMap(baseRule(for:))
         let responsive = responsiveRules(nodes: ordered)
-        let css = ([base.joined(separator: "\n"), responsive.css].filter { !$0.isEmpty }).joined(separator: "\n")
+        let fluid = StaticFluidValueOutputEmitter.emit(
+            nodes: ordered, targets: [.width, .height, .padding, .gap])
+        let css = ([base.joined(separator: "\n"), fluid, responsive.css].filter { !$0.isEmpty })
+            .joined(separator: "\n")
         return (css, .init(baseRuleCount: base.count, responsiveRuleCount: responsive.report.appliedRuleCount,
                            breakpoints: responsive.report.breakpoints))
     }
@@ -276,6 +307,58 @@ enum StaticLayoutOutputEmitter {
     }
 }
 
+/// Closed SF-0604 projection. It emits only allowlisted properties and a
+/// deterministic two-segment linear clamp matching the canvas resolver's
+/// Mobile → Tablet → Desktop anchors. No authored CSS text crosses this edge.
+enum StaticFluidValueOutputEmitter {
+    static func emit(nodes: [DocumentNode], targets: Set<FluidValueTarget> = Set(FluidValueTarget.allCases)) -> String {
+        nodes.sorted { $0.id.description < $1.id.description }.flatMap { node in
+            FluidValueTarget.allCases.filter(targets.contains).compactMap { target -> String? in
+                guard let fluid = CanonicalFluidValueCodec.value(for: target, node: node)?.0,
+                      let property = cssProperty(target) else { return nil }
+                let selector = CanonicalCSSRule.selector(for: node.id)
+                let lower = segment(start: fluid.minimum, end: fluid.preferred,
+                                    from: CanonicalFluidValue.lowerViewport,
+                                    to: CanonicalFluidValue.preferredViewport)
+                let upper = segment(start: fluid.preferred, end: fluid.maximum,
+                                    from: CanonicalFluidValue.preferredViewport,
+                                    to: CanonicalFluidValue.upperViewport)
+                return "\(selector) { \(property): \(lower); } @media (min-width: 768px) { \(selector) { \(property): \(upper); } }"
+            }
+        }.joined(separator: "\n")
+    }
+
+    private static func cssProperty(_ target: FluidValueTarget) -> String? {
+        switch target {
+        case .width: "width"
+        case .height: "height"
+        case .fontSize: "font-size"
+        case .lineHeight: "line-height"
+        case .padding: "padding"
+        case .gap: "gap"
+        }
+    }
+
+    private static func segment(start: Double, end: Double, from lower: Double, to upper: Double) -> String {
+        guard end != start else { return "\(number(start))px" }
+        let slope = (end - start) / (upper - lower)
+        let vw = slope * 100
+        let intercept = start - slope * lower
+        let offset = intercept < 0
+            ? "- \(number(abs(intercept)))px"
+            : "+ \(number(intercept))px"
+        return "clamp(\(number(start))px, calc(\(number(vw))vw \(offset)), \(number(end))px)"
+    }
+
+    private static func number(_ value: Double) -> String {
+        let rounded = (value * 1_000).rounded() / 1_000
+        var output = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), rounded)
+        while output.contains(".") && output.last == "0" { output.removeLast() }
+        if output.last == "." { output.removeLast() }
+        return output == "-0" ? "0" : output
+    }
+}
+
 /// Fixed-breakpoint static CSS only; all values originate in typed canonical
 /// override namespaces, never authored CSS/media strings.
 enum ResponsiveStaticCSSEmitter {
@@ -320,6 +403,65 @@ enum InsertionKind: String, Codable, CaseIterable, Sendable {
         case .image: "SF-0802-002"
         case .button, .link: "SF-1102-002"
         case .form: "SF-1006-001"
+        }
+    }
+}
+
+/// Named catalogue templates retain the established Frame/Section node kinds
+/// and insertion transaction. They are not a second authored element schema.
+enum AuthoringElementTemplate: String, Sendable {
+    case heading, divider, header, navigation, footer
+    case input, emailInput, textArea, checkbox, selectField, submit
+
+    var displayName: String {
+        switch self {
+        case .emailInput: "Email"
+        case .textArea: "Text Area"
+        case .selectField: "Select"
+        default: rawValue.capitalized
+        }
+    }
+
+    var formFieldKind: FormFieldKind? {
+        switch self {
+        case .input: .text
+        case .emailInput: .email
+        case .textArea: .textarea
+        case .checkbox: .checkbox
+        case .selectField: .select
+        case .submit: .submit
+        case .heading, .divider, .header, .navigation, .footer: nil
+        }
+    }
+
+    var insertionKind: InsertionKind {
+        switch self {
+        case .divider: .frame
+        case .heading, .input, .emailInput, .textArea, .checkbox, .selectField, .submit: .text
+        case .header, .navigation, .footer: .section
+        }
+    }
+    var size: WorldSize {
+        switch self {
+        case .heading: WorldSize(width: 360, height: 48)
+        case .divider: WorldSize(width: 240, height: 1)
+        case .header: WorldSize(width: 960, height: 120)
+        case .navigation: WorldSize(width: 960, height: 80)
+        case .footer: WorldSize(width: 960, height: 200)
+        case .input: WorldSize(width: 240, height: 36)
+        case .emailInput, .selectField: WorldSize(width: 240, height: 36)
+        case .textArea: WorldSize(width: 240, height: 100)
+        case .checkbox: WorldSize(width: 240, height: 28)
+        case .submit: WorldSize(width: 160, height: 44)
+        }
+    }
+    var semanticElement: SemanticHTMLElement? {
+        switch self {
+        case .divider, .input, .emailInput, .textArea, .checkbox, .selectField, .submit: nil
+        case .heading: .h2
+        case .header: .header
+        case .navigation: .nav
+        case .footer: .footer
         }
     }
 }
@@ -535,6 +677,7 @@ enum InsertionError: Error, Equatable, LocalizedError, Sendable {
     case missingParent
     case crossPageParent
     case incompatibleParent
+    case formParentRequired
     case lockedParent
     case hiddenParent
     case unavailableParent
@@ -559,6 +702,7 @@ enum InsertionError: Error, Equatable, LocalizedError, Sendable {
         case .missingParent: "The insertion parent no longer exists."
         case .crossPageParent: "The insertion parent belongs to another page."
         case .incompatibleParent: "Only a frame on the active page can contain this object."
+        case .formParentRequired: "Select an unlocked Form on the active page to insert a field."
         case .lockedParent: "The destination frame is locked. Unlock it before inserting."
         case .hiddenParent: "The destination frame is hidden. Show it before inserting."
         case .unavailableParent: "The destination frame is not available in the current scene."
@@ -610,10 +754,11 @@ struct InsertionCommandRegistry: Sendable {
     func availability(
         for command: AuthoringInsertionCommand,
         in document: CanonicalDocument,
-        context: InsertionValidationContext
+        context: InsertionValidationContext,
+        template: AuthoringElementTemplate? = nil
     ) -> InsertionAvailability {
         do {
-            _ = try prepare(command, in: document, context: context)
+            _ = try prepare(command, in: document, context: context, template: template)
             return .enabled
         } catch {
             return .disabled(error.localizedDescription)
@@ -624,9 +769,11 @@ struct InsertionCommandRegistry: Sendable {
         _ command: AuthoringInsertionCommand,
         in document: CanonicalDocument,
         context: InsertionValidationContext,
-        cancellation: InsertionCancellation = .never
+        cancellation: InsertionCancellation = .never,
+        template: AuthoringElementTemplate? = nil
     ) throws -> PreparedInsertion {
         guard !cancellation.isCancelled() else { throw InsertionError.cancelled }
+        if let template, template.insertionKind != command.kind { throw InsertionError.incompatibleParent }
         if case .control(let control) = command, ![InsertionKind.button, .link].contains(control.kind) {
             throw InsertionError.incompatibleParent
         }
@@ -657,6 +804,9 @@ struct InsertionCommandRegistry: Sendable {
             throw InsertionError.missingParent
         }
         guard parent.kind.acceptsAuthoredChildren else { throw InsertionError.incompatibleParent }
+        if template?.formFieldKind != nil, parent.kind != .form {
+            throw InsertionError.formParentRequired
+        }
         guard !parent.insertionBooleanProperty("locked") else { throw InsertionError.lockedParent }
         guard !parent.insertionBooleanProperty("hidden") else { throw InsertionError.hiddenParent }
         if let availableNodeIDs = context.availableNodeIDs,
@@ -683,7 +833,56 @@ struct InsertionCommandRegistry: Sendable {
             throw InsertionError.invalidImageAsset
         }
         guard !cancellation.isCancelled() else { throw InsertionError.cancelled }
-        let node = makeNode(for: command)
+        var node = makeNode(for: command)
+        if let template {
+            node.name = template.displayName
+            if let semantic = template.semanticElement {
+                node.properties.append(property(node.id, CanonicalSemanticElement.key,
+                    .string(semantic.rawValue), .authored))
+            }
+            if template == .divider {
+                // A one-point authored surface has no border expansion; the
+                // selection outline remains editor-only and uses its frame.
+                node.properties.removeAll { $0.key.rawValue == "style.border" }
+                node.properties.append(property(node.id, "style.border", .string("none"), .defaulted))
+            }
+            if template == .heading {
+                // Heading is a semantic Text template, not a parallel node
+                // kind. Its defaults remain editable through the established
+                // Content, Typography, and semantic-element controls.
+                func replace(_ key: String, _ value: PropertyValue) {
+                    node.properties.removeAll { $0.key.rawValue == key }
+                    node.properties.append(property(node.id, key, value, .defaulted))
+                }
+                replace("content.text", .string("Heading"))
+                replace(CanonicalTypography.namespace + "weight", .string(CanonicalFontWeight.bold.rawValue))
+                replace(CanonicalTypography.namespace + "size", .number(32))
+                replace(CanonicalTypography.namespace + "lineHeight", .number(38))
+            }
+            if let fieldKind = template.formFieldKind {
+                // Form fields are existing Text nodes. A stable name derived
+                // from NodeID avoids collision without borrowing local input.
+                node.properties.removeAll { $0.key.rawValue == "content.text" }
+                node.properties.append(property(node.id, "content.text", .string(template.displayName), .defaulted))
+                node.properties += [
+                    property(node.id, CanonicalFormField.kindKey, .string(fieldKind.rawValue), .defaulted),
+                    property(node.id, CanonicalFormField.labelKey, .string(template.displayName), .defaulted),
+                    property(node.id, CanonicalFormField.nameKey,
+                             .string("field" + node.id.rawValue.uuidString.replacingOccurrences(of: "-", with: "").lowercased()), .defaulted),
+                    property(node.id, CanonicalFormField.requiredKey, .boolean(false), .defaulted),
+                ]
+                if fieldKind == .select {
+                    let options = (1...2).map { index in
+                        CanonicalFormSelectOption(
+                            id: FormOptionID(Self.derivedUUID(namespace: node.id.rawValue,
+                                label: "form.option.\(index)")),
+                            label: "Option \(index)", value: "option-\(index)")
+                    }
+                    node.properties.append(property(node.id, CanonicalFormField.optionsKey,
+                        .string(try CanonicalFormSelectOptions.encode(options)), .defaulted))
+                }
+            }
+        }
         let documentCommand = DocumentCommand.insertNode(
             InsertNodeCommand(pageID: page.id, node: node, index: command.index)
         )
@@ -1101,13 +1300,18 @@ extension DocumentPage {
         return bounded.map { max(1, $0 * scale) }
     }
 
-    func resolvedStructuralGeometry(breakpoint: ResponsiveBreakpoint = .desktop) -> [NodeID: InsertionGeometry] {
+    func resolvedStructuralGeometry(
+        breakpoint: ResponsiveBreakpoint = .desktop,
+        viewportWidth: Double? = nil
+    ) -> [NodeID: InsertionGeometry] {
         let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
         let visibleNodeIDs = effectiveVisibleNodeIDs(breakpoint: breakpoint)
         var result = Dictionary(uniqueKeysWithValues: nodes.compactMap { node in
             node.insertionGeometry.map {
                 let base = $0.frame
-                let resolved = ResponsiveGeometryResolver.frame(for: node, base: base, breakpoint: breakpoint)
+                let resolved = ResponsiveGeometryResolver.frame(
+                    for: node, base: base, breakpoint: breakpoint, viewportWidth: viewportWidth
+                )
                 return (node.id, InsertionGeometry(origin: resolved.origin, size: resolved.size))
             }
         })
@@ -1122,23 +1326,27 @@ extension DocumentPage {
                 // layout resolver and an unstyled Frame remains absolute.
                 let boxPadding = DesignBoxStyleCommandRegistry.resolvedStyle(for: parent)?.padding
                 guard parent.kind != .frame || boxPadding != nil else { continue }
-                let padding = boxPadding ?? ResponsiveContainerLayoutResolver.value(for: .padding, node: parent, breakpoint: breakpoint)
+                let padding = boxPadding ?? ResponsiveContainerLayoutResolver.value(
+                    for: .padding, node: parent, breakpoint: breakpoint, viewportWidth: viewportWidth)
                     .flatMap { if case .number(let value) = $0.0 { value } else { nil } }
                     ?? (parent.kind == .section ? 48 : 24)
                 let gap: Double
                 if parent.kind == .section || parent.kind == .form || parent.kind == .frame {
                     gap = 0
                 } else {
-                    gap = ResponsiveContainerLayoutResolver.value(for: .gap, node: parent, breakpoint: breakpoint)
+                    gap = ResponsiveContainerLayoutResolver.value(
+                        for: .gap, node: parent, breakpoint: breakpoint, viewportWidth: viewportWidth)
                         .flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 24
                 }
                 let axis = parent.kind == .section || parent.kind == .form || parent.kind == .frame
                     ? ContainerLayoutAxis.vertical
-                    : (ResponsiveContainerLayoutResolver.value(for: .axis, node: parent, breakpoint: breakpoint)
+                    : (ResponsiveContainerLayoutResolver.value(
+                        for: .axis, node: parent, breakpoint: breakpoint, viewportWidth: viewportWidth)
                         .flatMap { if case .axis(let value) = $0.0 { value } else { nil } } ?? .vertical)
                 let alignment = parent.kind == .section || parent.kind == .form || parent.kind == .frame
                     ? ContainerLayoutAlignment.start
-                    : (ResponsiveContainerLayoutResolver.value(for: .alignment, node: parent, breakpoint: breakpoint)
+                    : (ResponsiveContainerLayoutResolver.value(
+                        for: .alignment, node: parent, breakpoint: breakpoint, viewportWidth: viewportWidth)
                         .flatMap { if case .alignment(let value) = $0.0 { value } else { nil } } ?? .start)
                 let contentWidth = max(1, parentGeometry.size.width - (2 * padding))
                 let contentHeight = max(1, parentGeometry.size.height - (2 * padding))
@@ -1182,12 +1390,14 @@ extension DocumentPage {
                     result[child.id] = geometry
                 }
             case .grid:
-                let padding = ResponsiveContainerLayoutResolver.value(for: .padding, node: parent, breakpoint: breakpoint)
+                let padding = ResponsiveContainerLayoutResolver.value(
+                    for: .padding, node: parent, breakpoint: breakpoint, viewportWidth: viewportWidth)
                     .flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 24
-                let gap = ResponsiveContainerLayoutResolver.value(for: .gap, node: parent, breakpoint: breakpoint)
+                let gap = ResponsiveContainerLayoutResolver.value(
+                    for: .gap, node: parent, breakpoint: breakpoint, viewportWidth: viewportWidth)
                     .flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 24
                 let columnValue: Double = ResponsiveContainerLayoutResolver.value(
-                    for: .columns, node: parent, breakpoint: breakpoint
+                    for: .columns, node: parent, breakpoint: breakpoint, viewportWidth: viewportWidth
                 ).flatMap { if case .number(let value) = $0.0 { value } else { nil } } ?? 2
                 let columns = max(1, Int(columnValue))
                 let usableWidth = max(1, parentGeometry.size.width - (2 * padding) - (Double(columns - 1) * gap))

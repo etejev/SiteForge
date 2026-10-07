@@ -32,6 +32,95 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertEqual(result.actions, [.actualSize])
     }
 
+    // SF-AUTHORING-075, SF-0205-003/006, SF-0405-002/006
+    func testQuickOpenBasicInsertActionsAreClosedAndSearchable() {
+        XCTAssertEqual(QuickOpenInsertAction.matches("insert frame", hasSelectedImageAsset: false), [.frame])
+        XCTAssertEqual(QuickOpenInsertAction.matches(" TEXT ", hasSelectedImageAsset: false), [.text])
+        XCTAssertTrue(QuickOpenInsertAction.matches("delete project", hasSelectedImageAsset: false).isEmpty)
+        XCTAssertEqual(QuickOpenInsertAction.frame.insertionKind, .frame)
+        XCTAssertEqual(QuickOpenInsertAction.text.insertionKind, .text)
+    }
+
+    // SF-AUTHORING-076, SF-0205-003/006, SF-0502-002, SF-0503-002
+    func testQuickOpenStructuralInsertActionsPreserveCanonicalKindsAndOrder() {
+        let structural: [QuickOpenInsertAction] = [.section, .stack, .grid]
+        XCTAssertEqual(structural.compactMap(\.insertionKind), [.section, .stack, .grid])
+        let results = QuickOpenSearchPolicy.results(pages: [], layers: [], query: "insert", scope: .actions)
+        XCTAssertEqual(results.insertions.filter { structural.contains($0) }, structural)
+    }
+
+    // SF-AUTHORING-077, SF-0205-003/006, SF-0405-002/006
+    func testQuickOpenSiteControlsRouteOnlyToSupportedInsertionKinds() {
+        XCTAssertEqual([QuickOpenInsertAction.button, .link, .form].compactMap(\.insertionKind), [.button, .link, .form])
+        XCTAssertEqual(QuickOpenInsertAction.matches("insert link", hasSelectedImageAsset: false), [.link])
+        XCTAssertTrue(QuickOpenInsertAction.matches("navbar", hasSelectedImageAsset: false).isEmpty)
+    }
+
+    // SF-AUTHORING-078, SF-0205-004/006, SF-0801-002, SF-0802-002
+    func testQuickOpenImageInsertionRequiresSelectedAssetButImportRemainsDiscoverable() {
+        let withoutAsset = QuickOpenInsertAction.matches("image", hasSelectedImageAsset: false)
+        XCTAssertEqual(withoutAsset, [.importImage])
+        let withAsset = QuickOpenInsertAction.matches("image", hasSelectedImageAsset: true)
+        XCTAssertEqual(withAsset, [.selectedImage, .importImage])
+        XCTAssertEqual(QuickOpenInsertAction.selectedImage.insertionKind, .image)
+        XCTAssertEqual(QuickOpenInsertAction.importImage.insertionKind, .image)
+    }
+
+    // SF-AUTHORING-079, SF-0205-002/003, SF-0303-002/006
+    func testQuickOpenNewPageActionIsClosedAndQueryDeterministic() {
+        XCTAssertEqual(QuickOpenPageAction.matches("new page"), [.newPage])
+        XCTAssertEqual(QuickOpenPageAction.matches("  NEW PAGE  "), [.newPage])
+        XCTAssertTrue(QuickOpenPageAction.matches("delete page").isEmpty)
+        let actions = QuickOpenSearchPolicy.results(pages: [], layers: [], query: "new page", scope: .actions)
+        XCTAssertEqual(actions.pageActions, [.newPage])
+        XCTAssertTrue(actions.pages.isEmpty && actions.layers.isEmpty)
+    }
+
+    // SF-AUTHORING-080, SF-0205-003/004, SF-0901-003
+    func testComponentSearchPreservesDefinitionIdentityOrderAndEmptyRecovery() {
+        let first = DocumentPage(name: "Résumé Card", route: .init(rawValue: "/component-card"), role: .componentDefinition)
+        let second = DocumentPage(name: "Footer", route: .init(rawValue: "/component-footer"), role: .componentDefinition)
+        let definitions = [first, second]
+        XCTAssertEqual(ComponentSearchPolicy.results(in: definitions, query: "resume").map(\.id), [first.id])
+        XCTAssertEqual(ComponentSearchPolicy.results(in: definitions, query: "").map(\.id), definitions.map(\.id))
+        XCTAssertTrue(ComponentSearchPolicy.results(in: definitions, query: "missing").isEmpty)
+    }
+
+    // SF-AUTHORING-081, SF-0205-003/004, SF-0801-003
+    func testAssetUsageFilterSeparatesUsedUnusedWithoutChangingIdentity() {
+        XCTAssertEqual(AssetUsageFilter.allCases, [.all, .used, .unused])
+        XCTAssertTrue(AssetUsageFilter.all.includes(0))
+        XCTAssertTrue(AssetUsageFilter.all.includes(3))
+        XCTAssertFalse(AssetUsageFilter.used.includes(0))
+        XCTAssertTrue(AssetUsageFilter.used.includes(3))
+        XCTAssertTrue(AssetUsageFilter.unused.includes(0))
+        XCTAssertFalse(AssetUsageFilter.unused.includes(3))
+    }
+
+    // SF-AUTHORING-082, SF-0205-003/004, SF-0801-003
+    func testQuickOpenImageAssetResultsUseStableIDsAndBoundedNameProjection() {
+        let first = ImageAsset(resourceID: ResourceID(), displayName: "Hero Art", originalFilename: "hero.png",
+            format: .png, pixelWidth: 10, pixelHeight: 10, byteCount: 100, contentHash: String(repeating: "a", count: 64))
+        let second = ImageAsset(resourceID: ResourceID(), displayName: "Footer", originalFilename: "footer.png",
+            format: .png, pixelWidth: 10, pixelHeight: 10, byteCount: 100, contentHash: String(repeating: "b", count: 64))
+        let assets = [first, second]
+        XCTAssertEqual(QuickOpenAssetSearchPolicy.results(in: assets, query: "HERO").map(\.id), [first.id])
+        XCTAssertEqual(QuickOpenAssetSearchPolicy.results(in: assets, query: "footer.png").map(\.id), [second.id])
+        XCTAssertTrue(QuickOpenAssetSearchPolicy.results(in: assets, query: "missing").isEmpty)
+        XCTAssertEqual(QuickOpenSearchPolicy.results(pages: [], layers: [], query: "hero", assets: assets).assets.map(\.id), [first.id])
+        XCTAssertTrue(QuickOpenSearchPolicy.results(pages: [], layers: [], query: "hero", scope: .actions, assets: assets).assets.isEmpty)
+    }
+
+    // SF-AUTHORING-083, SF-0205-003/004, SF-0902-002
+    func testQuickOpenComponentResultsKeepDefinitionIDsAndActionScopeSeparate() {
+        let first = DocumentPage(name: "Header Card", route: .init(rawValue: "/component-header"), role: .componentDefinition)
+        let second = DocumentPage(name: "Footer Card", route: .init(rawValue: "/component-footer"), role: .componentDefinition)
+        let results = QuickOpenSearchPolicy.results(pages: [], layers: [], query: "footer", components: [first, second])
+        XCTAssertEqual(results.components.map(\.id), [second.id])
+        XCTAssertTrue(QuickOpenSearchPolicy.results(pages: [], layers: [], query: "footer", scope: .actions,
+            components: [first, second]).components.isEmpty)
+    }
+
     // SF-0205-003/004 — stale/missing NodeIDs cannot become recent targets.
     func testQuickOpenRecentLayersBoundDeduplicateAndProjectOnlyAuthorizedNodes() throws {
         let fixture = try makeFixture(count: 3)
@@ -444,6 +533,110 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertEqual(state.primaryID, fixture.ids[2])
         try apply(.clear, nil, .pointer, fixture, &state)
         XCTAssertTrue(state.isEmpty)
+    }
+
+    // SF-AUTHORING-097, SF-0402-002/003 — directional marquee selection
+    // evaluates the visible clipped geometry in stable paint order. A
+    // left-to-right gesture contains; a right-to-left gesture intersects.
+    func testMarqueeSelectionUsesDirectionalContainmentClippingAndPaintOrder() throws {
+        let fixture = try makeFixture(count: 3)
+        let targets = [
+            SelectionTargetSnapshot(
+                id: fixture.ids[0], pageID: fixture.pageID, parentID: nil, name: "First",
+                frame: .init(origin: .init(x: 10, y: 10), size: .init(width: 20, height: 20)),
+                clipRect: nil, paintOrder: 2, isVisible: true, isLocked: false, isAvailable: true
+            ),
+            SelectionTargetSnapshot(
+                id: fixture.ids[1], pageID: fixture.pageID, parentID: nil, name: "Second",
+                frame: .init(origin: .init(x: 35, y: 10), size: .init(width: 20, height: 20)),
+                clipRect: nil, paintOrder: 1, isVisible: true, isLocked: false, isAvailable: true
+            ),
+            SelectionTargetSnapshot(
+                id: fixture.ids[2], pageID: fixture.pageID, parentID: nil, name: "Clipped",
+                frame: .init(origin: .init(x: 65, y: 10), size: .init(width: 20, height: 20)),
+                clipRect: .init(origin: .init(x: 70, y: 10), size: .init(width: 10, height: 20)),
+                paintOrder: 3, isVisible: true, isLocked: false, isAvailable: true
+            ),
+        ]
+        let scene = SelectionSceneSnapshot(
+            identity: fixture.identity, activePageID: fixture.pageID,
+            activeContainerID: nil, targets: targets
+        )
+        let contained = SelectionMarqueeCommand(
+            identity: fixture.identity,
+            frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 60, height: 40)),
+            rule: .contains, modifier: .replace, cancelled: false
+        )
+        XCTAssertEqual(try SelectionMarqueeResolver.targetIDs(for: contained, in: scene),
+                       [fixture.ids[1], fixture.ids[0]])
+
+        let intersected = SelectionMarqueeCommand(
+            identity: fixture.identity,
+            frame: .init(origin: .init(x: 0, y: 0), size: .init(width: 75, height: 40)),
+            rule: .intersects, modifier: .replace, cancelled: false
+        )
+        XCTAssertEqual(try SelectionMarqueeResolver.targetIDs(for: intersected, in: scene),
+                       [fixture.ids[1], fixture.ids[0], fixture.ids[2]])
+
+        let forward = SelectionMarqueeDraft(
+            identity: fixture.identity, start: .init(x: 0, y: 0),
+            current: .init(x: 75, y: 40), modifier: .replace
+        )
+        let reverse = SelectionMarqueeDraft(
+            identity: fixture.identity, start: .init(x: 75, y: 40),
+            current: .init(x: 0, y: 0), modifier: .replace
+        )
+        XCTAssertEqual(forward.rule, .contains)
+        XCTAssertEqual(reverse.rule, .intersects)
+        XCTAssertEqual(forward.frame, reverse.frame)
+    }
+
+    // SF-AUTHORING-097, SF-0402-004/006/008 — modifier behavior is applied
+    // only after a valid live gesture commits. Cancellation, stale identity,
+    // and invalid geometry leave the last valid scene-owned selection intact.
+    func testMarqueeSelectionModifiersAndRejectedGesturesAreStateNeutral() throws {
+        let fixture = try makeFixture(count: 3)
+        let registry = SelectionCommandRegistry()
+        var state = try established(fixture.scene)
+        try apply(.replace, fixture.ids[0], .pointer, fixture, &state, registry)
+
+        let secondOnly = WorldRect(
+            origin: .init(x: 11, y: 0), size: .init(width: 11, height: 11)
+        )
+        XCTAssertEqual(try registry.applyMarquee(
+            .init(identity: fixture.identity, frame: secondOnly, rule: .intersects,
+                  modifier: .add, cancelled: false),
+            to: &state, scene: fixture.scene
+        ), .changed)
+        XCTAssertEqual(state.orderedIDs, [fixture.ids[0], fixture.ids[1]])
+        XCTAssertEqual(state.primaryID, fixture.ids[1])
+        XCTAssertEqual(state.anchorID, fixture.ids[0])
+
+        XCTAssertEqual(try registry.applyMarquee(
+            .init(identity: fixture.identity, frame: secondOnly, rule: .intersects,
+                  modifier: .toggle, cancelled: false),
+            to: &state, scene: fixture.scene
+        ), .changed)
+        XCTAssertEqual(state.orderedIDs, [fixture.ids[0]])
+        let valid = state
+
+        XCTAssertThrowsError(try registry.applyMarquee(
+            .init(identity: fixture.identity, frame: secondOnly, rule: .contains,
+                  modifier: .replace, cancelled: true),
+            to: &state, scene: fixture.scene
+        )) { XCTAssertEqual($0 as? SelectionCommandError, .cancelled) }
+        XCTAssertThrowsError(try registry.applyMarquee(
+            .init(identity: fixture.identity.copy(sceneGeneration: 99), frame: secondOnly,
+                  rule: .contains, modifier: .replace, cancelled: false),
+            to: &state, scene: fixture.scene
+        )) { XCTAssertEqual($0 as? SelectionCommandError, .staleScene) }
+        XCTAssertThrowsError(try registry.applyMarquee(
+            .init(identity: fixture.identity,
+                  frame: .init(origin: .init(x: .nan, y: 0), size: .init(width: 10, height: 10)),
+                  rule: .contains, modifier: .replace, cancelled: false),
+            to: &state, scene: fixture.scene
+        )) { XCTAssertEqual($0 as? SelectionCommandError, .invalidMarquee) }
+        XCTAssertEqual(state, valid)
     }
 
     // SF-0402-003 through SF-0402-005

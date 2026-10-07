@@ -1,6 +1,145 @@
 # SiteForge Project Status
 
-Last updated: 2026-09-30.
+Last updated: 2026-10-07.
+
+The current integrated checkpoint covers bounded slices
+`SF-AUTHORING-075`–`105` (excluding ready item `106`), `SF-AUTHORING-107`, and
+`SF-PRODUCT-UI-005/006`. The authoritative `./sf verify` passed every
+repository check and all 640 tests: 542 unit/integration plus the complete
+98-journey UI target. The shared live NSTextView query/focus correction is
+therefore covered both by its focused 2/2 rerun and by the clean full gate.
+Requirement modules stay Partial wherever linked evidence records deferred
+scope.
+
+The chronological source-only notes below predate this verification checkpoint.
+
+SF-AUTHORING-107 source-connects a bounded native authored-object clipboard to
+the existing transaction, resource, history, selection, renderer, menu, and
+accessibility owners. Same-project paste/duplicate remap canonical identities;
+cross-project transfer verifies and deduplicates image/token dependencies and
+rejects unsupported component closure without mutation. The new source tests
+are unrun, so the slice is SOURCE IMPLEMENTED — VERIFICATION DEFERRED and
+SF-0308 remains Partial.
+
+The owner approved OD-016. SF-AUTHORING-106 is now ready with one local neutral
+Starter Site containing ordinary Home and About pages; Blank Site remains the
+neutral path and starter content must not expose a Not Found/404 page.
+
+SF-AUTHORING-105 source-connects authorized recent projects to the welcome
+surface without retaining raw paths or introducing a second bookmark owner.
+Successful user-selected Open records bounded app-local recency; a fresh scene
+resolves it through the existing security-scoped service and lifecycle. Missing
+authorization remains recoverable through Open Project. Test source is unrun,
+so the slice is SOURCE IMPLEMENTED — VERIFICATION DEFERRED and its modules
+remain Partial.
+
+The final source audit does not find SiteForge globally source-complete. It
+classifies major unfinished modules and queues the next dependency-safe work in
+`docs/evidence/SF-SOURCE-COMPLETENESS-AUDIT.md`. OD-016 now supplies the bounded
+Starter Site content decision; implementation remains queued as SF-AUTHORING-106.
+
+SF-PRODUCT-UI-006 source-reconciles the two clearest remaining shell hierarchy
+gaps: launch now presents the approved packaged SiteForge identity rather than
+a generic tool glyph, and the practical-minimum native toolbar guarantees the
+five essential authoring tools instead of allowing eleven equal-priority tools
+to crowd into unpredictable overflow. All other working tools remain in a
+native More Tools menu plus the existing Insert/shortcut routes. Updated tests
+are unrun, so this visual slice remains SOURCE IMPLEMENTED — VERIFICATION
+DEFERRED and its normative modules remain Partial.
+
+SF-AUTHORING-104 adds a source-only native Support settings surface. It exposes
+current build/distribution provenance and truthful recovery/update boundaries,
+then prepares a bounded content-free diagnostic report away from the main
+actor for review, copy, or user-selected export. No updater, network request,
+installer, project-content collection, or plugin boundary is simulated. Model
+and actual-app tests are written but unrun, so the slice remains SOURCE
+IMPLEMENTED — VERIFICATION DEFERRED and SF-0206/SF-1507/SF-1602/SF-1607 remain
+Partial.
+
+SF-AUTHORING-103 adds source-only isolated multi-page navigation to local
+Preview. It reuses canonical stable Link targets and immutable canvas scene
+preparation, retains visitor Back/Forward history only in the Preview scene,
+and keeps missing/external targets bounded and non-executable. New state,
+compiler, and actual-app tests are written but unrun, so the slice remains
+SOURCE IMPLEMENTED — VERIFICATION DEFERRED and interaction/Preview modules
+remain Partial.
+
+SF-AUTHORING-102 adds source-only fluid responsive values. A stable versioned
+minimum/preferred/maximum linear clamp now resolves supported sizes and spacing
+through existing canvas, typography, container, comparison, and static-output
+systems, while explicit breakpoint overrides remain authoritative. Native
+Inspector drafts and central transactions are implemented; focused tests are
+written but unrun, so the bounded slice remains SOURCE IMPLEMENTED —
+VERIFICATION DEFERRED and `SF-0604` remains Partial.
+
+SF-AUTHORING-101 adds source-only responsive comparison for the existing
+Desktop, Tablet, and Mobile cascade. A native sheet reports resolved object
+visibility, geometry/layout/visibility overrides, Desktop differences, and
+selected-object provenance; Review changes only the window's viewport preset.
+New policy/UI tests are unrun, so the slice remains SOURCE IMPLEMENTED —
+VERIFICATION DEFERRED and responsive modules remain Partial.
+
+SF-AUTHORING-100 adds source-only native component renaming with deterministic
+linked-instance name propagation through the existing stable-ID transaction
+system. Model/UI evidence source is unrun, so the bounded component slice
+remains Partial and unaccepted alongside the accumulated dirty batch.
+
+SF-AUTHORING-099 adds a source-only semantic Heading template through the real
+Elements/native Insert and Text authoring pipelines. Its default typography and
+`<h2>` role are editable rather than special-cased after insertion. Focused
+model and actual-app tests are written but unrun under the owner pause; the
+slice and normative modules remain Partial and unaccepted.
+
+SF-AUTHORING-098 adds source-only authored accessibility name/help editing for
+applicable general objects. It uses the existing Inspector transaction and
+semantic-element boundaries, projects one canonical value into canvas and safe
+static semantics, and deliberately leaves Image/Form on their dedicated
+schemas. Model, output, and actual-app tests are written but unrun under the
+owner pause. The slice and `SF-0701`/`SF-0702`/`SF-1203` remain Partial and
+unaccepted.
+
+SF-AUTHORING-097 adds source-only directional marquee selection to the native
+canvas without changing canonical project content. Containment/intersection,
+modifier semantics, clipped candidate geometry, cancellation, stable identity,
+and semantic navigator/status parity have focused test source, but no build,
+test, UI automation, or visual acceptance ran under the owner pause. The slice
+and `SF-0402` therefore remain Partial and unaccepted.
+
+SF-AUTHORING-096 completes the source-only Form Inspector accessibility and
+local-validation integration. Canonical field metadata has truthful
+defaulted/authored/mixed presentation in Content and Accessibility; mixed
+selection no longer copies a primary value into the draft; and the owning Form
+reports configured/required/submit counts plus category-only local validation.
+Submission remains safely disabled and unconfigured. Test source is present but
+unrun, so the slice and its normative modules remain Partial and unaccepted.
+
+SF-AUTHORING-091–095 complete the source implementation of the supported Form
+field template set: Email, Text Area, Checkbox, Select, and Submit now join
+Input as Form-only transactional Elements/Insert actions. Shared source tests
+cover metadata, stable option IDs/order, history, serialization, Inspector
+discovery, and safe output, but are unrun. No gate or commit is claimed.
+
+SF-AUTHORING-090 adds source-only Form Input insertion through existing
+Text/form-field metadata and native Elements/Insert actions. The test source
+is unrun under the owner pause. SF-AUTHORING-075–090 and the approved icon
+changes remain dirty and unverified; no new milestone gate or commit is claimed.
+See `docs/evidence/SF-AUTHORING-090-FORM-INPUT-TEMPLATE.md`.
+
+The ten-slice source cycle now includes SF-AUTHORING-079–083: Quick Open New
+Page; Components search; Assets usage filtering; and Quick Open asset and
+component-definition navigation. These reuse stable current-document IDs and
+existing page/insertion commands. Source and tests are written but the single
+owner-authorized full local gate has not run, so the ten slices remain open.
+The editable DOCX icon contract now matches Markdown and its affected pages
+were visually inspected. See
+`docs/evidence/SF-AUTHORING-079-083-QUICK-OPEN-DISCOVERY.md`.
+
+The source-only SF-PRODUCT-UI-005 / SF-AUTHORING-075–078 half-batch is pending
+verification. It packages the newly approved gradient SF icon and adds closed
+Quick Open insertion actions using existing document commands. Test source is
+present but has not been executed; no new app screenshot, full gate, commit,
+push, or hosted result is claimed. See
+`docs/evidence/SF-PRODUCT-UI-005-QUICK-OPEN-INSERTIONS.md`.
 
 The SF-AUTHORING-065–074 search/Quick Open batch has local acceptance: one
 full verification run passed 504/504 unit/integration and 79/81 UI tests;

@@ -15,12 +15,219 @@ final class InsertionModelTests: XCTestCase {
             ElementCatalogSearchPolicy.results(in: all, query: "layout"),
             [.section, .stack, .grid, .frame]
         )
-        XCTAssertEqual(ElementCatalogSearchPolicy.results(in: all, query: "navBAR"), [.navbar])
+        XCTAssertEqual(ElementCatalogSearchPolicy.results(in: all, query: "navigation"), [.navbar])
         XCTAssertTrue(ElementCatalogSearchPolicy.results(in: all, query: "no matching element").isEmpty)
-        XCTAssertEqual(ElementCatalogItem.navbar.availability, .unavailable(
-            "Site sections are not available until responsive site structure is implemented."
-        ))
+        XCTAssertEqual(ElementCatalogItem.divider.availability, .available(.frame))
+        XCTAssertEqual(ElementCatalogItem.header.availability, .available(.section))
+        XCTAssertEqual(ElementCatalogItem.navbar.availability, .available(.section))
+        XCTAssertEqual(ElementCatalogItem.footer.availability, .available(.section))
+        XCTAssertEqual(ElementCatalogItem.input.category, "Forms")
+        XCTAssertEqual(ElementCatalogItem.input.template, .input)
+        XCTAssertEqual(
+            ElementCatalogSearchPolicy.results(in: all, query: "forms"),
+            [.input, .emailInput, .textArea, .checkbox, .selectField, .submit]
+        )
         XCTAssertEqual(all, ElementCatalogItem.allCases)
+    }
+
+    // SF-AUTHORING-091–095: every supported field template shares the Form-
+    // owned Text model, deterministic metadata, history, and safe output.
+    func testFormFieldTemplatesPreserveKindsOptionsHistoryAndSafeOutput() throws {
+        let fixture = makeFixture()
+        let formID = NodeID(UUID(uuidString: "63000000-0000-4000-8000-000000000001")!)
+        let form = try prepare(.form, fixture: fixture, nodeID: formID)
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(form.documentCommand)
+        let templates: [AuthoringElementTemplate] = [
+            .emailInput, .textArea, .checkbox, .selectField, .submit,
+        ]
+        var insertedIDs: [NodeID] = []
+        for (offset, template) in templates.enumerated() {
+            let current = fixture.with(document: session.document)
+            let id = NodeID()
+            let geometry = InsertionGeometry(origin: .init(x: 20, y: 30), size: template.size)
+            let invalid = command(.text, fixture: current, nodeID: id,
+                                  parentID: current.rootID, geometry: geometry)
+            XCTAssertThrowsError(try InsertionCommandRegistry().prepare(invalid,
+                in: current.document, context: current.context, template: template)) { error in
+                XCTAssertEqual(error as? InsertionError, .formParentRequired)
+            }
+            let operation = command(.text, fixture: current, nodeID: id,
+                                    parentID: formID, index: offset, geometry: geometry)
+            let prepared = try InsertionCommandRegistry().prepare(operation,
+                in: current.document, context: current.context, template: template)
+            XCTAssertEqual(prepared.node.id, id)
+            XCTAssertEqual(prepared.node.kind, .text)
+            XCTAssertEqual(prepared.node.parent, .node(formID))
+            XCTAssertEqual(prepared.node.name, template.displayName)
+            XCTAssertEqual(prepared.geometry.size, template.size)
+            XCTAssertEqual(prepared.node.insertionStringProperty(CanonicalFormField.kindKey),
+                           template.formFieldKind?.rawValue)
+            XCTAssertEqual(prepared.node.insertionStringProperty(CanonicalFormField.labelKey),
+                           template.displayName)
+            XCTAssertEqual(prepared.node.insertionProperty(CanonicalFormField.requiredKey)?.value,
+                           .boolean(false))
+            if template == .selectField {
+                let encoded = try XCTUnwrap(
+                    prepared.node.insertionStringProperty(CanonicalFormField.optionsKey)
+                )
+                let options = try CanonicalFormSelectOptions.decode(encoded)
+                XCTAssertEqual(options.map(\.label), ["Option 1", "Option 2"])
+                XCTAssertEqual(options.map(\.value), ["option-1", "option-2"])
+                let repeated = try InsertionCommandRegistry().prepare(operation,
+                    in: current.document, context: current.context, template: template)
+                XCTAssertEqual(repeated.node.insertionStringProperty(CanonicalFormField.optionsKey), encoded)
+            } else {
+                XCTAssertNil(prepared.node.insertionProperty(CanonicalFormField.optionsKey))
+            }
+            try session.execute(prepared.documentCommand)
+            insertedIDs.append(id)
+            XCTAssertNoThrow(try session.document.validate())
+        }
+        let page = session.document.pages[0]
+        XCTAssertEqual(page.nodes.first { $0.id == formID }?.childIDs, insertedIDs)
+        let tree = try InternalDocumentRenderTreeCompiler.compile(
+            page: page, documentID: session.document.id, revision: session.document.revision
+        )
+        let output = try SafeHTMLEmitter.emit(tree)
+        XCTAssertTrue(output.contains("type=\"email\""))
+        XCTAssertTrue(output.contains("<textarea"))
+        XCTAssertTrue(output.contains("type=\"checkbox\""))
+        XCTAssertTrue(output.contains("<select") && output.contains("option-2"))
+        XCTAssertTrue(output.contains("type=\"submit\" disabled aria-disabled=\"true\""))
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(session.document))
+        XCTAssertEqual(reopened, session.document)
+        let reopenedSelect = try XCTUnwrap(reopened.pages[0].nodes.first {
+            $0.insertionStringProperty(CanonicalFormField.kindKey) == FormFieldKind.select.rawValue
+        })
+        XCTAssertEqual(
+            try CanonicalFormSelectOptions.decode(try XCTUnwrap(
+                reopenedSelect.insertionStringProperty(CanonicalFormField.optionsKey)
+            )).map(\.id),
+            try CanonicalFormSelectOptions.decode(try XCTUnwrap(
+                session.document.pages[0].nodes.first { $0.id == reopenedSelect.id }?
+                    .insertionStringProperty(CanonicalFormField.optionsKey)
+            )).map(\.id)
+        )
+        for expectedCount in stride(from: templates.count - 1, through: 0, by: -1) {
+            try session.undo()
+            let children = session.document.pages[0].nodes.first { $0.id == formID }?.childIDs
+            XCTAssertEqual(children?.count, expectedCount)
+        }
+        for expectedCount in 1...templates.count {
+            try session.redo()
+            let children = session.document.pages[0].nodes.first { $0.id == formID }?.childIDs
+            XCTAssertEqual(children?.count, expectedCount)
+        }
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == formID }?.childIDs,
+                       insertedIDs)
+    }
+
+    // SF-AUTHORING-090: an Input is a canonical Text child of Form, never a
+    // standalone field or a second node schema.
+    func testInputTemplateRequiresFormParentAndPreservesFieldIdentityThroughHistory() throws {
+        let fixture = makeFixture()
+        let formID = NodeID(UUID(uuidString: "62000000-0000-4000-8000-000000000001")!)
+        let form = try prepare(.form, fixture: fixture, nodeID: formID)
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(form.documentCommand)
+        let current = fixture.with(document: session.document)
+        let fieldID = NodeID(UUID(uuidString: "62000000-0000-4000-8000-000000000002")!)
+        let geometry = InsertionGeometry(origin: .init(x: 30, y: 40), size: AuthoringElementTemplate.input.size)
+        let registry = InsertionCommandRegistry()
+        let invalidParent = command(.text, fixture: current, nodeID: fieldID,
+                                    parentID: current.rootID, geometry: geometry)
+        XCTAssertThrowsError(try registry.prepare(invalidParent, in: current.document,
+            context: current.context, template: .input)) { error in
+            XCTAssertEqual(error as? InsertionError, .formParentRequired)
+        }
+        let operation = command(.text, fixture: current, nodeID: fieldID,
+                                parentID: formID, geometry: geometry)
+        let prepared = try registry.prepare(operation, in: current.document,
+                                            context: current.context, template: .input)
+        XCTAssertEqual(prepared.node.kind, .text)
+        XCTAssertEqual(prepared.node.parent, .node(formID))
+        XCTAssertEqual(prepared.node.id, fieldID)
+        XCTAssertEqual(prepared.node.name, "Input")
+        XCTAssertEqual(prepared.geometry.size, .init(width: 240, height: 36))
+        XCTAssertEqual(prepared.node.insertionStringProperty("content.text"), "Input")
+        XCTAssertEqual(prepared.node.insertionStringProperty(CanonicalFormField.kindKey), "text")
+        XCTAssertEqual(prepared.node.insertionStringProperty(CanonicalFormField.labelKey), "Input")
+        XCTAssertEqual(prepared.node.insertionStringProperty(CanonicalFormField.nameKey),
+                       "field62000000000040008000000000000002")
+        XCTAssertEqual(prepared.node.insertionProperty(CanonicalFormField.kindKey)?.origin, .defaulted)
+        XCTAssertEqual(prepared.node.insertionProperty(CanonicalFormField.requiredKey)?.value, .boolean(false))
+        XCTAssertEqual(registry.availability(for: operation, in: current.document,
+            context: current.context, template: .input), .enabled)
+        let cancelled = InsertionCancellation { true }
+        XCTAssertThrowsError(try registry.prepare(operation, in: current.document,
+            context: current.context, cancellation: cancelled, template: .input)) { error in
+            XCTAssertEqual(error as? InsertionError, .cancelled)
+        }
+        try session.execute(prepared.documentCommand)
+        XCTAssertNoThrow(try session.document.validate())
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == formID }?.childIDs, [fieldID])
+        try session.undo()
+        XCTAssertFalse(session.document.pages[0].nodes.contains { $0.id == fieldID })
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == fieldID }?.properties,
+                       prepared.node.properties)
+    }
+
+    // SF-AUTHORING-086–089: site/line templates remain single canonical
+    // Frame/Section commands with stable IDs and exact history inverses.
+    func testDividerAndSiteSectionTemplatesUseCanonicalInsertionAndSemanticRoles() throws {
+        for template in [AuthoringElementTemplate.divider, .header, .navigation, .footer] {
+            let fixture = makeFixture()
+            let id = NodeID()
+            let geometry = InsertionGeometry(origin: .init(x: 20, y: 30), size: template.size)
+            let operation = command(template.insertionKind, fixture: fixture, nodeID: id,
+                                    geometry: geometry)
+            let prepared = try InsertionCommandRegistry().prepare(operation,
+                in: fixture.document, context: fixture.context, template: template)
+            XCTAssertEqual(prepared.node.id, id)
+            XCTAssertEqual(prepared.node.name, template.rawValue.capitalized)
+            XCTAssertEqual(prepared.geometry.size, template.size)
+            XCTAssertEqual(prepared.node.kind, template.insertionKind.nodeKind)
+            XCTAssertEqual(prepared.node.insertionStringProperty(CanonicalSemanticElement.key),
+                template.semanticElement?.rawValue)
+            if template == .divider {
+                XCTAssertEqual(prepared.node.insertionStringProperty("style.border"), "none")
+            }
+            let session = DocumentSession(document: fixture.document)
+            try session.execute(prepared.documentCommand)
+            XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == id }?.name,
+                template.rawValue.capitalized)
+            try session.undo()
+            XCTAssertNil(session.document.pages[0].nodes.first { $0.id == id })
+            try session.redo()
+            XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == id }?.id, id)
+        }
+    }
+
+    // SF-AUTHORING-099: Heading is one canonical Text insertion whose
+    // semantic and typography defaults remain editable by existing systems.
+    func testHeadingTemplateUsesCanonicalTextSemanticAndTypographyDefaults() throws {
+        let fixture = makeFixture()
+        let id = NodeID()
+        let template = AuthoringElementTemplate.heading
+        let operation = command(.text, fixture: fixture, nodeID: id,
+            geometry: .init(origin: .init(x: 20, y: 30), size: template.size))
+        let prepared = try InsertionCommandRegistry().prepare(operation,
+            in: fixture.document, context: fixture.context, template: template)
+        XCTAssertEqual(prepared.node.kind, .text)
+        XCTAssertEqual(prepared.node.name, "Heading")
+        XCTAssertEqual(prepared.geometry.size, .init(width: 360, height: 48))
+        XCTAssertEqual(prepared.node.insertionStringProperty("content.text"), "Heading")
+        XCTAssertEqual(prepared.node.insertionStringProperty(CanonicalSemanticElement.key), "h2")
+        XCTAssertEqual(prepared.node.insertionStringProperty(CanonicalTypography.namespace + "weight"), "bold")
+        XCTAssertEqual(prepared.node.insertionNumberProperty(CanonicalTypography.namespace + "size"), 32)
+        XCTAssertEqual(prepared.node.insertionNumberProperty(CanonicalTypography.namespace + "lineHeight"), 38)
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(prepared.documentCommand)
+        XCTAssertNoThrow(try session.document.validate())
+        try session.undo(); try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == id }?.id, id)
     }
 
     // SF-0405-001, SF-0405-002, SF-0405-004, SF-0405-005

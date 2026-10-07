@@ -422,6 +422,44 @@ actor FileAccessService {
 
     func diagnosticRecords() async -> [FileAccessDiagnostic] { await diagnostics.records }
 
+    /// Resolves an app-local recent-project reference through the same
+    /// security-scoped bookmark owner used by normal Open. The returned URL is
+    /// only a transient routing value; the subsequent lifecycle read still
+    /// acquires, balances, and coordinates the real scoped access.
+    func resolveAuthorizedProject(bookmarkKey key: String) async throws -> URL {
+        guard key.count == 64,
+              key == key.lowercased(), key.allSatisfy(\.isHexDigit),
+              let record = try await bookmarks.bookmark(for: key),
+              record.schemaVersion == PersistedFileBookmark.currentSchemaVersion else {
+            throw FileAccessFailure.missingBookmark
+        }
+        do {
+            let resolution = try await runtime.resolveBookmark(record.bookmark)
+            let resolvedURL: URL
+            if let member = record.relativeMember {
+                guard !member.isEmpty, member != ".", member != "..", !member.contains("/") else {
+                    throw FileAccessFailure.corruptBookmarkStore
+                }
+                resolvedURL = resolution.url.appendingPathComponent(member)
+            } else {
+                resolvedURL = resolution.url
+            }
+            if resolution.isStale {
+                let data = try await runtime.makeBookmark(for: resolution.url)
+                let refreshed = PersistedFileBookmark(bookmark: data, relativeMember: record.relativeMember)
+                try await bookmarks.setBookmark(refreshed, for: key)
+                try await bookmarks.setBookmark(refreshed, for: Self.key(for: resolvedURL))
+            } else if Self.key(for: resolvedURL) != key {
+                try await bookmarks.setBookmark(record, for: Self.key(for: resolvedURL))
+            }
+            return resolvedURL
+        } catch let error as FileAccessFailure {
+            throw error
+        } catch {
+            throw FileAccessFailure.staleBookmarkRepairFailed
+        }
+    }
+
     private func retainBookmark(for url: URL, aliases: [String]) async throws {
         let data = try await runtime.makeBookmark(for: url)
         let record = PersistedFileBookmark(bookmark: data)

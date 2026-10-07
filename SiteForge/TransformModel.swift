@@ -361,15 +361,25 @@ struct TypographyCommandRegistry: Sendable {
     static let requirementIDs = Set((1...8).map { String(format: "SF-0507-%03d", $0) })
     static let namespace = CanonicalTypography.namespace
 
-    static func resolvedTypography(for node: DocumentNode) -> CanonicalTypography? {
-        CanonicalTypography.resolved(for: node)
+    static func resolvedTypography(for node: DocumentNode, viewportWidth: Double? = nil) -> CanonicalTypography? {
+        guard let fixed = CanonicalTypography.resolved(for: node) else { return nil }
+        guard let viewportWidth else { return fixed }
+        let size = CanonicalFluidValueCodec.resolved(.fontSize, node: node, viewportWidth: viewportWidth)
+            ?? fixed.size
+        let lineHeight = CanonicalFluidValueCodec.resolved(.lineHeight, node: node, viewportWidth: viewportWidth)
+            ?? fixed.lineHeight
+        let resolved = CanonicalTypography(
+            family: fixed.family, weight: fixed.weight, size: size,
+            lineHeight: lineHeight, tracking: fixed.tracking, alignment: fixed.alignment
+        )
+        return resolved.isValid ? resolved : nil
     }
 
     static func selectionValue(nodes: [DocumentNode]) -> TypographyInspectorValue {
         guard !nodes.isEmpty else { return .unavailable("Select Text, Button, or Link to edit typography.") }
         let applicable = nodes.filter { $0.kind.isTextual }
         guard !applicable.isEmpty else { return .unavailable("Typography applies only to Text, Button, or Link.") }
-        let values = applicable.compactMap(resolvedTypography)
+        let values = applicable.compactMap { resolvedTypography(for: $0) }
         guard values.count == applicable.count, let first = values.first,
               values.dropFirst().allSatisfy({ $0 == first }) else {
             return .mixed(applicableCount: applicable.count, skippedCount: nodes.count - applicable.count)
@@ -927,6 +937,7 @@ enum DesignInspectorProvenance: String, Codable, Sendable { case picker, stepper
 
 enum ComponentEdit: Sendable {
     case create(NodeID)
+    case rename(definitionID: PageID, name: String)
     case insert(definitionID: PageID, parentID: NodeID, geometry: InsertionGeometry)
     case detach(NodeID)
     case delete(definitionID: PageID, detachUses: Bool)
@@ -1018,6 +1029,42 @@ struct ComponentCommandRegistry {
                          definitionID: page.role == .componentDefinition ? page.id : CanonicalComponentReference.definitionID(for: node))
         }
         switch edit {
+        case .rename(let definitionID, let draft):
+            guard let definition = document.componentDefinitions.first(where: { $0.id == definitionID }) else {
+                throw TransformError.missingTarget
+            }
+            let name: String
+            do { name = try StaticPagePolicy.name(draft) }
+            catch {
+                throw CommandExecutionError.disabled(
+                    "Enter a component name of 1–256 UTF-8 bytes without control characters."
+                )
+            }
+            guard name != definition.name else {
+                throw CommandExecutionError.disabled("The component already has that name.")
+            }
+            guard !document.componentDefinitions.contains(where: {
+                $0.id != definitionID && $0.name.caseInsensitiveCompare(name) == .orderedSame
+            }) else {
+                throw CommandExecutionError.disabled("Use a unique component name.")
+            }
+            var commands: [DocumentCommand] = []
+            for (pageIndex, original) in document.pages.enumerated() where original.role != .componentDefinition {
+                var graph = original
+                var changed = false
+                for nodeIndex in graph.nodes.indices where
+                    CanonicalComponentReference.definitionID(for: graph.nodes[nodeIndex]) == definitionID
+                {
+                    if graph.nodes[nodeIndex].name != name {
+                        graph.nodes[nodeIndex].name = name
+                        changed = true
+                    }
+                }
+                if changed { commands += replace(graph, at: pageIndex) }
+            }
+            commands.append(.renamePage(.init(pageID: definitionID, name: name)))
+            return .init(command: .batch(commands), selectedNodeID: context.selectedNodeIDs.first,
+                         definitionID: definitionID)
         case .exposeText(let id, let label, let text):
             let node = try selected(id)
             guard node.kind == .text, CanonicalComponentText.validLabel(label),
@@ -2542,6 +2589,253 @@ enum ContainerLayoutInspectorValue: Equatable, Sendable {
     case mixed(applicableCount: Int, skippedCount: Int)
 }
 
+enum FluidValueProvenance: String, Sendable {
+    case pointer, keyboard, focusLoss = "focus-loss", accessibility, automation
+}
+
+enum FluidValueInspectorValue: Equatable, Sendable {
+    case single(CanonicalFluidValue, PropertyOrigin, applicableCount: Int, skippedCount: Int)
+    case mixed(applicableCount: Int, skippedCount: Int)
+    case unavailable(String)
+}
+
+struct FluidValueCommand: Sendable {
+    let identity: GeometryInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let target: FluidValueTarget
+    let value: CanonicalFluidValue?
+    let provenance: FluidValueProvenance
+    let cancelled: Bool
+}
+
+struct PreparedFluidValueEdit: Sendable {
+    let identity: GeometryInspectorOperationIdentity
+    let target: FluidValueTarget
+    let applicableNodeIDs: [NodeID]
+    let skippedNodeIDs: [NodeID]
+    let documentCommand: DocumentCommand
+}
+
+enum FluidValueCommandError: Error, Equatable, LocalizedError, Sendable {
+    case stale, cancelled, duplicateTarget, emptySelection, missingTarget
+    case lockedTarget, hiddenTarget, unavailableTarget, invalidValue
+    case noApplicableTargets, noChanges, revisionExhausted, lifecycleUnavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .stale: "The fluid-value edit is stale; committed content is unchanged."
+        case .cancelled: "The fluid-value draft was cancelled; committed content is unchanged."
+        case .duplicateTarget: "The fluid-value selection contains a duplicate object."
+        case .emptySelection: "Select an object that supports fluid sizing or spacing."
+        case .missingTarget: "A selected object is no longer on the active page."
+        case .lockedTarget: "Unlock the selected object before editing fluid values."
+        case .hiddenTarget: "Show the selected object before editing fluid values."
+        case .unavailableTarget: "A selected object is unavailable in the current scene."
+        case .invalidValue: "Use finite monotonic minimum, preferred, and maximum values in the supported range."
+        case .noApplicableTargets: "The selection has no object that supports this fluid value."
+        case .noChanges: "The selected objects already use that fluid value."
+        case .revisionExhausted: "The document cannot accept another fluid-value revision."
+        case .lifecycleUnavailable(let reason): reason
+        }
+    }
+}
+
+struct FluidValueCommandRegistry: Sendable {
+    static let requirementIDs = Set((1...8).map { String(format: "SF-0604-%03d", $0) })
+
+    func value(for target: FluidValueTarget, in document: CanonicalDocument,
+               context: TransformValidationContext) -> FluidValueInspectorValue {
+        guard let page = document.pages.first(where: { $0.id == context.activePageID }) else {
+            return .unavailable("The active page is unavailable.")
+        }
+        let selected = context.selectedNodeIDs.compactMap { id in page.nodes.first { $0.id == id } }
+        let applicable = selected.filter { target.supports($0.kind) }
+        guard !applicable.isEmpty else {
+            return .unavailable("The selection does not support fluid \(target.title.lowercased()).")
+        }
+        let values = applicable.map { CanonicalFluidValueCodec.value(for: target, node: $0) }
+        guard let first = values.first else { return .unavailable("Fluid value unavailable.") }
+        if values.dropFirst().allSatisfy({ $0?.0 == first?.0 && $0?.1 == first?.1 }) {
+            if let first {
+                return .single(first.0, first.1, applicableCount: applicable.count,
+                               skippedCount: selected.count - applicable.count)
+            }
+            return .unavailable("Fluid \(target.title.lowercased()) is off; the fixed authored value remains active.")
+        }
+        return .mixed(applicableCount: applicable.count, skippedCount: selected.count - applicable.count)
+    }
+
+    func prepare(_ command: FluidValueCommand, in document: CanonicalDocument,
+                 context: TransformValidationContext) throws -> PreparedFluidValueEdit {
+        guard !command.cancelled else { throw FluidValueCommandError.cancelled }
+        guard context.isLifecycleAvailable else {
+            throw FluidValueCommandError.lifecycleUnavailable(
+                context.lifecycleDisabledReason ?? "Fluid editing is unavailable during the current document operation.")
+        }
+        guard command.identity.documentID == document.id,
+              command.identity.pageID == context.activePageID,
+              command.identity.revision == document.revision,
+              command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration,
+              command.orderedNodeIDs == context.selectedNodeIDs,
+              let page = document.pages.first(where: { $0.id == context.activePageID }) else {
+            throw FluidValueCommandError.stale
+        }
+        guard document.revision < UInt64.max else { throw FluidValueCommandError.revisionExhausted }
+        guard !command.orderedNodeIDs.isEmpty else { throw FluidValueCommandError.emptySelection }
+        guard Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count else {
+            throw FluidValueCommandError.duplicateTarget
+        }
+        if let value = command.value {
+            guard value.isValid,
+                  command.target.accepts(value.minimum), command.target.accepts(value.preferred),
+                  command.target.accepts(value.maximum) else { throw FluidValueCommandError.invalidValue }
+        }
+
+        var applicable: [NodeID] = [], skipped: [NodeID] = [], changes: [DocumentCommand] = []
+        var assignedValueIDs = Set(document.pages.flatMap(\.nodes).flatMap { node in
+            FluidValueTarget.allCases.compactMap {
+                CanonicalFluidValueCodec.value(for: $0, node: node)?.0.id
+            }
+        })
+        for id in command.orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }),
+                  let current = CanonicalFluidValueCodec.value(for: command.target, node: node)?.0 else { continue }
+            assignedValueIDs.remove(current.id)
+        }
+        for id in command.orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else {
+                throw FluidValueCommandError.missingTarget
+            }
+            guard command.target.supports(node.kind) else { skipped.append(id); continue }
+            guard !node.insertionBooleanProperty("locked") else { throw FluidValueCommandError.lockedTarget }
+            guard !node.insertionBooleanProperty("hidden") else { throw FluidValueCommandError.hiddenTarget }
+            guard context.availableNodeIDs.contains(id) else { throw FluidValueCommandError.unavailableTarget }
+            let key = CanonicalFluidValueCodec.key(command.target)
+            let existing = node.insertionProperty(key)
+            if let value = command.value {
+                if command.target == .fontSize || command.target == .lineHeight {
+                    guard Self.typographyRemainsValid(node: node, replacing: command.target, with: value) else {
+                        throw FluidValueCommandError.invalidValue
+                    }
+                }
+                let existingValue: CanonicalFluidValue? = existing.flatMap {
+                    guard case .string(let raw) = $0.value else { return nil }
+                    return try? CanonicalFluidValueCodec.decode(raw, target: command.target)
+                }
+                let identity: FluidValueID
+                if let existingValue {
+                    guard assignedValueIDs.insert(existingValue.id).inserted else {
+                        throw FluidValueCommandError.invalidValue
+                    }
+                    identity = existingValue.id
+                } else if assignedValueIDs.insert(value.id).inserted {
+                    identity = value.id
+                } else {
+                    var generated = FluidValueID()
+                    while !assignedValueIDs.insert(generated).inserted { generated = FluidValueID() }
+                    identity = generated
+                }
+                let canonicalValue = CanonicalFluidValue(
+                    id: identity, minimum: value.minimum, preferred: value.preferred,
+                    maximum: value.maximum, curve: value.curve)
+                let encoded: String
+                do { encoded = try CanonicalFluidValueCodec.encode(canonicalValue, target: command.target) }
+                catch { throw FluidValueCommandError.invalidValue }
+                if existing?.value == .string(encoded), existing?.origin == .authored { continue }
+                applicable.append(id)
+                changes.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                    property: .init(id: existing?.id ?? PropertyID(), key: .init(rawValue: key),
+                                    value: .string(encoded), origin: .authored),
+                    insertionIndex: existing == nil ? node.properties.count : nil)))
+            } else if let existing {
+                applicable.append(id)
+                changes.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: existing.id)))
+            }
+        }
+        guard !applicable.isEmpty else {
+            if skipped.count == command.orderedNodeIDs.count { throw FluidValueCommandError.noApplicableTargets }
+            throw FluidValueCommandError.noChanges
+        }
+        let documentCommand = DocumentCommand.batch(changes)
+        guard CommandRegistry().availability(for: documentCommand, in: document).isEnabled else {
+            throw FluidValueCommandError.invalidValue
+        }
+        return .init(identity: command.identity, target: command.target,
+                     applicableNodeIDs: applicable, skippedNodeIDs: skipped,
+                     documentCommand: documentCommand)
+    }
+
+    private static func typographyRemainsValid(
+        node: DocumentNode, replacing target: FluidValueTarget, with value: CanonicalFluidValue
+    ) -> Bool {
+        guard let fixed = CanonicalTypography.resolved(for: node) else { return false }
+        return [CanonicalFluidValue.lowerViewport, CanonicalFluidValue.preferredViewport,
+                CanonicalFluidValue.upperViewport].allSatisfy { width in
+            let size = target == .fontSize
+                ? value.resolved(viewportWidth: width)
+                : CanonicalFluidValueCodec.resolved(.fontSize, node: node, viewportWidth: width) ?? fixed.size
+            let lineHeight = target == .lineHeight
+                ? value.resolved(viewportWidth: width)
+                : CanonicalFluidValueCodec.resolved(.lineHeight, node: node, viewportWidth: width) ?? fixed.lineHeight
+            guard let size, let lineHeight else { return false }
+            return CanonicalTypography(
+                family: fixed.family, weight: fixed.weight, size: size, lineHeight: lineHeight,
+                tracking: fixed.tracking, alignment: fixed.alignment).isValid
+        }
+    }
+}
+
+enum FluidValueDiagnosticResult: String, Codable, Sendable { case success, failure, cancelled, stale }
+
+struct FluidValueDiagnosticRecord: Codable, Equatable, Sendable {
+    let requirementIDs: [String]
+    let operationType: String
+    let provenance: String
+    let sanitizedIdentifiers: [String]
+    let durationMilliseconds: Double
+    let parentRevision: UInt64
+    let resultRevision: UInt64?
+    let result: FluidValueDiagnosticResult
+    let failureCategory: String?
+}
+
+actor FluidValueDiagnostics {
+    private var buffer = BoundedDiagnosticBuffer<FluidValueDiagnosticRecord>(
+        capacity: DiagnosticRetentionPolicy.defaultCapacity)
+    func append(_ record: FluidValueDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [FluidValueDiagnosticRecord] { buffer.snapshot() }
+}
+
+enum FluidValueDiagnosticFactory {
+    static func make(command: FluidValueCommand, durationMilliseconds: Double,
+                     resultRevision: UInt64?, result: FluidValueDiagnosticResult,
+                     failure: FluidValueCommandError?) -> FluidValueDiagnosticRecord {
+        .init(requirementIDs: FluidValueCommandRegistry.requirementIDs.sorted(),
+              operationType: command.value == nil ? "fluid-value.remove" : "fluid-value.set",
+              provenance: command.provenance.rawValue,
+              sanitizedIdentifiers: command.orderedNodeIDs.map {
+                  DiagnosticStableIdentifier.sanitize($0.description, domain: .fluidValue, kind: "node")
+              }, durationMilliseconds: max(0, durationMilliseconds),
+              parentRevision: command.identity.revision, resultRevision: resultRevision,
+              result: result, failureCategory: failure.map(Self.category))
+    }
+
+    private static func category(_ error: FluidValueCommandError) -> String {
+        switch error {
+        case .stale: "stale-identity"
+        case .cancelled: "cancelled"
+        case .duplicateTarget, .emptySelection, .missingTarget: "invalid-target"
+        case .lockedTarget, .hiddenTarget, .unavailableTarget: "unavailable-target"
+        case .invalidValue: "invalid-value"
+        case .noApplicableTargets: "no-applicable-target"
+        case .noChanges: "no-change"
+        case .revisionExhausted: "revision-exhausted"
+        case .lifecycleUnavailable: "lifecycle-unavailable"
+        }
+    }
+}
+
 enum ContainerLayoutProvenance: String, Sendable {
     case pointer, keyboard, focusLoss = "focus-loss", picker, accessibility, automation
 }
@@ -3646,6 +3940,141 @@ struct FormFieldConfiguration: Equatable, Sendable {
          options: [CanonicalFormSelectOption], maximumLength: Int? = nil) {
         self.kind = kind; self.label = label; self.name = name; self.help = help
         self.required = required; self.options = options; self.maximumLength = maximumLength
+    }
+}
+
+enum FormInspectorAggregateValue: Equatable, Sendable {
+    case value(String, provenance: String)
+    case mixed
+    case unavailable(String)
+
+    var displayValue: String {
+        switch self {
+        case .value(let value, _): value
+        case .mixed: "Mixed"
+        case .unavailable(let reason): reason
+        }
+    }
+
+    var provenance: String {
+        switch self {
+        case .value(_, let provenance): provenance
+        case .mixed: "Mixed provenance"
+        case .unavailable: "Unavailable"
+        }
+    }
+}
+
+/// A read-only projection of canonical field metadata for Content and
+/// Accessibility inspectors. It deliberately carries no draft state and
+/// cannot compile a command, preventing accessibility presentation from
+/// becoming a second source of truth.
+struct FormFieldInspectorPresentation: Equatable, Sendable {
+    let applicableCount: Int
+    let skippedCount: Int
+    let kind: FormInspectorAggregateValue
+    let accessibleName: FormInspectorAggregateValue
+    let machineName: FormInspectorAggregateValue
+    let help: FormInspectorAggregateValue
+    let required: FormInspectorAggregateValue
+    let options: FormInspectorAggregateValue
+    let maximumLength: FormInspectorAggregateValue
+    let configurationStatus: String
+
+    static func resolve(fields: [DocumentNode], totalSelectionCount: Int) -> Self {
+        guard !fields.isEmpty else {
+            let unavailable = FormInspectorAggregateValue.unavailable("Select a Form field")
+            return .init(applicableCount: 0, skippedCount: totalSelectionCount,
+                         kind: unavailable, accessibleName: unavailable, machineName: unavailable,
+                         help: unavailable, required: unavailable, options: unavailable,
+                         maximumLength: unavailable,
+                         configurationStatus: "No Form field is selected.")
+        }
+        func aggregate(_ values: [(String, PropertyOrigin?)], fallback: String? = nil) -> FormInspectorAggregateValue {
+            let resolved = values.map { value, origin in
+                (value, origin.map { $0 == .authored ? "Authored" : "Defaulted" } ?? (fallback ?? "Computed fallback"))
+            }
+            guard let first = resolved.first else { return .unavailable("Unavailable") }
+            guard resolved.dropFirst().allSatisfy({ $0.0 == first.0 }) else { return .mixed }
+            let provenance = resolved.dropFirst().allSatisfy({ $0.1 == first.1 })
+                ? first.1 : "Mixed provenance"
+            return .value(first.0, provenance: provenance)
+        }
+        let kinds = fields.map { node -> (String, PropertyOrigin?) in
+            let property = node.insertionProperty(CanonicalFormField.kindKey)
+            let raw = node.insertionStringProperty(CanonicalFormField.kindKey) ?? "text"
+            return (FormFieldKind(rawValue: raw)?.title ?? "Invalid field type", property?.origin)
+        }
+        let labels = fields.map { node -> (String, PropertyOrigin?) in
+            let property = node.insertionProperty(CanonicalFormField.labelKey)
+            return (node.insertionStringProperty(CanonicalFormField.labelKey) ?? node.name, property?.origin)
+        }
+        let names = fields.map { node -> (String, PropertyOrigin?) in
+            let property = node.insertionProperty(CanonicalFormField.nameKey)
+            return (node.insertionStringProperty(CanonicalFormField.nameKey) ?? "Not configured", property?.origin)
+        }
+        let helps = fields.map { node -> (String, PropertyOrigin?) in
+            let property = node.insertionProperty(CanonicalFormField.helpKey)
+            return (node.insertionStringProperty(CanonicalFormField.helpKey) ?? "No help text", property?.origin)
+        }
+        let requiredValues = fields.map { node -> (String, PropertyOrigin?) in
+            let property = node.insertionProperty(CanonicalFormField.requiredKey)
+            return (node.insertionBooleanProperty(CanonicalFormField.requiredKey) ? "Required" : "Optional", property?.origin)
+        }
+        let optionValues = fields.map { node -> (String, PropertyOrigin?) in
+            let property = node.insertionProperty(CanonicalFormField.optionsKey)
+            guard let encoded = node.insertionStringProperty(CanonicalFormField.optionsKey),
+                  let options = try? CanonicalFormSelectOptions.decode(encoded) else {
+                return ("Not applicable", property?.origin)
+            }
+            return ("\(options.count) ordered option\(options.count == 1 ? "" : "s")", property?.origin)
+        }
+        let maximumLengths = fields.map { node -> (String, PropertyOrigin?) in
+            let property = node.insertionProperty(CanonicalFormField.maximumLengthKey)
+            return (node.insertionNumberProperty(CanonicalFormField.maximumLengthKey).map { String(Int($0)) }
+                    ?? "Default limit \(CanonicalFormField.maximumMaximumLength)", property?.origin)
+        }
+        let configuredCount = fields.filter {
+            $0.insertionProperty(CanonicalFormField.kindKey) != nil
+                && $0.insertionProperty(CanonicalFormField.labelKey) != nil
+                && $0.insertionProperty(CanonicalFormField.nameKey) != nil
+                && $0.insertionProperty(CanonicalFormField.requiredKey) != nil
+        }.count
+        let skipped = max(0, totalSelectionCount - fields.count)
+        let status = configuredCount == fields.count
+            ? "\(fields.count) configured Form field\(fields.count == 1 ? "" : "s"); \(skipped) incompatible selection\(skipped == 1 ? "" : "s") unchanged."
+            : "\(configuredCount) of \(fields.count) Form fields configured; edit missing metadata in Content."
+        return .init(applicableCount: fields.count, skippedCount: skipped,
+                     kind: aggregate(kinds), accessibleName: aggregate(labels),
+                     machineName: aggregate(names), help: aggregate(helps),
+                     required: aggregate(requiredValues), options: aggregate(optionValues),
+                     maximumLength: aggregate(maximumLengths), configurationStatus: status)
+    }
+}
+
+struct FormContainerAccessibilityPresentation: Equatable, Sendable {
+    let fieldCount: Int
+    let configuredCount: Int
+    let requiredCount: Int
+    let submitCount: Int
+    let status: String
+
+    static func resolve(form: DocumentNode, page: DocumentPage) -> Self {
+        let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        let fields = form.childIDs.compactMap { nodesByID[$0] }.filter { $0.kind == .text }
+        let configured = fields.filter {
+            $0.insertionProperty(CanonicalFormField.kindKey) != nil
+                && $0.insertionProperty(CanonicalFormField.labelKey) != nil
+                && $0.insertionProperty(CanonicalFormField.nameKey) != nil
+                && $0.insertionProperty(CanonicalFormField.requiredKey) != nil
+        }
+        let required = configured.filter { $0.insertionBooleanProperty(CanonicalFormField.requiredKey) }
+        let submits = configured.filter { $0.insertionStringProperty(CanonicalFormField.kindKey) == FormFieldKind.submit.rawValue }
+        let status = configured.count == fields.count
+            ? "All \(fields.count) Form fields have canonical accessible labels and control types. Submission remains disabled until a destination is approved."
+            : "\(fields.count - configured.count) Form field\(fields.count - configured.count == 1 ? " needs" : "s need") accessible label and control metadata in Content."
+        return .init(fieldCount: fields.count, configuredCount: configured.count,
+                     requiredCount: required.count, submitCount: submits.count, status: status)
     }
 }
 

@@ -1,5 +1,207 @@
 # Codex Continuation Handoff
 
+## Authoritative checkpoint — 2026-10-07
+
+The bounded batch `SF-AUTHORING-075`–`105` (excluding `SF-AUTHORING-106`),
+`SF-AUTHORING-107`, and `SF-PRODUCT-UI-005/006` is integrated. The
+authoritative `./sf verify` passed every repository check and all 640 tests:
+542 unit/integration plus the complete 98-journey UI target. The shared live
+native text-control/focus correction also passed its exact focused 2/2 rerun.
+After this checkpoint, the earliest dependency-ready product slice is
+`SF-AUTHORING-106` using approved OD-016. Do not infer completion of explicitly
+deferred normative scope from this bounded batch.
+
+The source-only notes below are historical and no longer describe current test
+execution status for the bounded slices above.
+
+## Source-only continuation under owner testing pause
+
+SF-AUTHORING-107 adds one strict `com.siteforge.authored-objects.v1`
+pasteboard envelope and native Cut/Copy/Paste/Paste in Place/Duplicate routes.
+The central clipboard registry normalizes selected roots, captures bounded
+subtree/image/token closure, validates before Cut, remaps every destination
+node/property and supported dependency identity, stages bytes through the
+existing lifecycle rollback boundary, and emits one existing batch command.
+Cross-project component closure is intentionally rejected. Model and actual-app
+test source are unrun. Preserve this implementation and next implement
+SF-AUTHORING-106 from approved OD-016: Blank Site plus one local neutral Starter
+Site with exactly Home/About, semantic Header/Main/Footer, system typography,
+no remote assets, explicit template provenance, and editable/removable copy.
+
+SF-AUTHORING-105 adds path-free Recent Projects to the launch card. The new
+app-local store retains only display name, stable recent ID, and the SHA-256
+lookup key for the existing security-scoped bookmark owner. Reopen, stale
+repair, coordination, package validation, recovery, and adoption remain in the
+normal lifecycle. New source tests are unrun. OD-016 is now approved; after the
+connected SF-AUTHORING-107 clipboard source, the next implementation slice is
+SF-AUTHORING-106 local Starter Site creation. Use
+`docs/evidence/SF-SOURCE-COMPLETENESS-AUDIT.md` as the ordered gap map and do
+not infer full source completion from the large accumulated UI surface.
+
+SF-PRODUCT-UI-006 replaces the launch hammer glyph with the approved packaged
+AppIcon and establishes a bounded native toolbar hierarchy: Select, Frame,
+Text, Image, and Component are persistent; Section, Stack, Grid, Button, Link,
+and Form remain available in More Tools and the established Insert commands.
+No command or insertion model was duplicated. Updated source tests are unrun.
+Recent-project navigation was subsequently source-connected by SF-AUTHORING-105;
+the current next slice is the approved SF-AUTHORING-106 Starter Site workflow.
+
+SF-AUTHORING-104 adds a native Support settings tab with build/channel
+provenance, explicit installed-distribution update limits, the existing
+recovery contract, and cancellable redacted report generation/copy/export.
+The report is controlled metadata only and never reads document content or
+paths. New source tests are unrun. Continue the next exact Settings/update/
+recovery requirement without adding an unsigned updater, collecting project
+content, or duplicating lifecycle recovery. Plugin trust/distribution remains
+an owner-decision boundary if a future slice requires enabling third-party
+code.
+
+SF-AUTHORING-103 adds isolated multi-page local Preview navigation over the
+existing stable Link target and canvas scene systems. Preview owns page/history
+state, Back/Forward, page selection, and missing-target recovery without
+changing editor scene or canonical content. External targets remain non-
+executing and host-only in status. New source tests are unrun. Continue the
+next exact interaction/output gap without duplicating link targets, page
+routes, scene preparation, or static navigation.
+
+SF-AUTHORING-102 adds one canonical monotonic fluid-value model for supported
+width/height, typography size/line height, and container padding/gap. It uses
+the established responsive cascade, atomic property commands, immutable canvas
+preparation, comparison, and closed static output. Explicit Tablet/Mobile
+overrides win; removing fluid intent reveals the untouched fixed value. New
+model/output/UI tests are unrun. Continue the next exact uncovered responsive
+requirement without adding a parallel breakpoint or layout resolver.
+
+SF-AUTHORING-101 adds a native responsive comparison sheet driven exclusively
+by the established Desktop/Tablet/Mobile geometry, container-layout, and
+visibility resolvers. It reviews the selected objects or active page and
+switches only scene-local viewport preset; no document/history/package state is
+introduced. New model/UI tests are unrun. Pages/routes and internal PageID/
+Section navigation targets are already source-complete; continue the next
+genuinely uncovered responsive or navigation requirement without duplicating
+their command, resolver, Preview, or static-output paths.
+
+SF-AUTHORING-100 adds native component-definition rename. The existing central
+component registry updates a stable definition plus linked instance display
+names atomically; IDs, overrides, geometry, ordering, persistence, and exact
+history remain intact. New model/UI tests are unrun. Assets organization,
+replacement, usage filtering, portable static references, component creation,
+linked insertion, edit-main, text/visibility properties, detach/delete, search,
+and Quick Open were already source-complete and were not duplicated. Continue
+the next exact uncovered Assets/Components requirement, not a second asset
+store or component graph.
+
+SF-AUTHORING-099 adds Heading as a semantic Text template in Elements and the
+native Insert menu. It seeds deterministic geometry/content/typography and an
+authored `<h2>` property through the existing insertion command; all later
+editing and output stay on established systems. New model/UI tests are unrun.
+Continue the next exact uncovered Elements/site-structure requirement without
+inventing a node kind, automatic heading outline, or alternate renderer.
+
+SF-AUTHORING-098 adds one canonical general-accessibility metadata namespace
+for applicable Frame, Text, Section, Stack, Grid, Button, and Link nodes. The
+Accessibility Inspector edits name/help through the existing identity-gated
+transaction path; the immutable canvas accessibility snapshot and safe static
+HTML projection consume the same authored values. Role remains derived from
+the typed semantic-element registry. Image and Form remain on their dedicated
+schemas. New model/output/UI tests are unrun. Next continue the highest-value
+uncovered Elements/site-structure slice without adding a competing role, alt-
+text, or Form schema and without claiming this slice verified.
+
+SF-AUTHORING-097 adds directional native-canvas marquee selection through the
+existing immutable scene and central selection registry. Left-to-right contains
+visible clipped object geometry; right-to-left intersects; Shift/Command add or
+toggle in stable paint order. The marquee never enters document data, history,
+packages, renderer content, Preview, or static output. Model/UI test source is
+unrun. Next reconcile the highest-value uncovered Inspector property slice;
+do not duplicate established fills, typography, box style, responsive geometry,
+structural layout, or Form field registries.
+
+SF-AUTHORING-096 adds a canonical read-only Form Inspector presentation shared
+by Content and Accessibility. It exposes accessible names, roles, requirement,
+help, options, validation bounds, and provenance; mixed values stay Mixed until
+the author resolves every shared draft. Form accessibility reuses the existing
+scene-local validator and keeps Submit disabled/unconfigured. New model/UI test
+source is unrun. Do not add a submission destination or visitor-value storage
+without an approved specification/owner decision. The next safe action is the
+deferred focused Forms gate and original-resolution visual/accessibility review,
+not another competing Form schema.
+
+SF-AUTHORING-091–095 add the remaining supported Form field templates through
+the existing canonical Text/form-field path. Select options have deterministic
+stable IDs; Submit is intentionally inert in safe output until a destination
+is approved. The shared model/output/UI test source is unrun. Next inspect the
+remaining SF-1006 authoring experience (field configuration, local validation,
+accessibility semantics, and submit boundary) without duplicating the existing
+SF-AUTHORING-036/037 registries.
+
+SF-AUTHORING-090 adds Form-only Input insertion via the existing Text/form
+field transaction, Elements category, and native Insert menu. The model and
+actual-app test source is unrun. Continue with the next form-control slice;
+do not claim Form output or visual acceptance before the deferred gate.
+
+SF-AUTHORING-086–089 activate Divider and semantic Header/Navigation/Footer
+templates through existing Frame/Section commands. Added model/UI test source
+is unrun. Continue the remaining required Elements and Inspector/site-building
+source without claiming visual or output parity before the later gate.
+
+SF-AUTHORING-085 adds direct linked-instance insertion from Quick Open
+definition results. Its new source assertions, including the prior reveal-
+status correction, were not executed. Continue to the next dependency-ready
+product slice without building, testing, committing, or pushing.
+
+SF-AUTHORING-084 adds direct Quick Open Image insertion from a current-project
+asset result. It is source implemented, not tested or committed. The owner has
+paused all builds, tests, UI automation, verification, commits, and pushes while
+the remaining specification-backed product source is implemented. Continue
+from the existing dirty tree; do not describe 075–084 as verified.
+
+## 2026-10-04 external XCTest automation blocker
+
+The existing ten-slice dirty tree remains uncommitted and unpushed. Repository
+checks and 513/513 non-UI tests passed in the interrupted `./sf verify`. The
+macOS console locked at 12:58:32 EDT during the UI target, and app activation
+then failed. The exact new Quick Open insertion journey was attempted after
+unlock; `SiteForgeUITests-Runner` timed out in
+`XCUIInitializeForUITesting` before SiteForge launched. No SiteForge test
+process remains. The completed built-app AppIcon test passed 1/1, and
+`scripts/check-app-icon.py` passed. Resume only when macOS XCTest automation
+is available; run the exact new UI journeys, then an authoritative full gate,
+review visuals and diff, reconcile factual status, commit, and push. Begin the
+owner-requested two further ten-slice batches only after this checkpoint is
+clean and pushed. Do not mistake the interrupted run for a green gate.
+
+## Ten-slice source cycle awaiting one local gate (2026-09-30)
+
+SF-PRODUCT-UI-005 plus SF-AUTHORING-075–083 are source-complete in the dirty
+working tree, not verified. The final five slices provide New Page from Quick
+Open, Components search, Assets usage filtering, and Quick Open asset/component
+reveal. The pre-existing Assets name search was not duplicated. The approved
+`SF-0201-009` wording is synchronized from Markdown to the editable DOCX;
+rendered publication pages 40–42 were visually checked. See
+`docs/evidence/SF-AUTHORING-079-083-QUICK-OPEN-DISCOVERY.md` and the prior
+half-batch note below. Owner direction: run the complete local suite once now,
+repair failures with exact failed selectors/new regressions only, reconcile
+docs with actual results, review diff, then make one local commit and push
+origin/main if green. No PR, release, signing, notarization, or settings change.
+
+## Current source-only half-batch (2026-09-30)
+
+SF-PRODUCT-UI-005 and SF-AUTHORING-075–078 are implemented in the dirty local
+tree but not verified. The gradient AppIcon source is
+`docs/design-assets/siteforge-app-icon-sf-gradient-approved-v1.png`; the
+offline packager `scripts/package_app_icon.py` removes only its exterior matte
+and writes ten static catalog variants. Quick Open adds closed insertion
+actions for basic, structural, site-control, and image workflows and routes
+through existing active-scene commands. New policy/UI/icon test source is
+unrun. The owner forbids tests, UI automation, full verification, commits,
+pushes, and GitHub during this half-batch. Next action when authorized: run
+only affected AppMetadata/SelectionModel selectors and the new Quick Open
+insertion journey, inspect original-resolution icon/app screenshots, repair
+any issue, synchronize the editable specification publication copy with the
+approved `SF-0201-009` Markdown wording, then run the applicable milestone gate. Do not describe these
+source changes as verified or modify project content from Quick Open itself.
+
 ## Hosted checkpoint correction (2026-09-30)
 
 Commit `73c653a` was pushed, but Actions run `36669009531` hit its 60-minute

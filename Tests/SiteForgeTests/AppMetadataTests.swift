@@ -10,39 +10,11 @@ final class AppMetadataTests: XCTestCase {
         XCTAssertEqual(Bundle.main.bundleIdentifier, AppMetadata.localBundleIdentifier)
     }
 
-    // SF-0201-009: the app target must package the approved static artwork,
-    // not resolve an untracked image or generate one at application launch.
+    // SF-0201-009: source catalog integrity is checked by check-app-icon.py;
+    // the app-host assertion proves the asset catalog reaches the built bundle.
     func testAppIconCatalogCoversEveryMacSizeAndIsSelectedByBothAppConfigurations() throws {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let catalog = root.appendingPathComponent("SiteForge/Assets.xcassets/AppIcon.appiconset")
-        let contents = try Data(contentsOf: catalog.appendingPathComponent("Contents.json"))
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: contents) as? [String: Any])
-        let images = try XCTUnwrap(object["images"] as? [[String: String]])
-        let expectedSizes = [16, 32, 128, 256, 512]
-        XCTAssertEqual(images.count, expectedSizes.count * 2)
-
-        for points in expectedSizes {
-            for scale in [1, 2] {
-                let entry = try XCTUnwrap(images.first {
-                    $0["idiom"] == "mac" && $0["size"] == "\(points)x\(points)"
-                        && $0["scale"] == "\(scale)x"
-                })
-                let filename = try XCTUnwrap(entry["filename"])
-                let png = try Data(contentsOf: catalog.appendingPathComponent(filename))
-                let bitmap = try XCTUnwrap(NSBitmapImageRep(data: png))
-                XCTAssertEqual(bitmap.pixelsWide, points * scale)
-                XCTAssertEqual(bitmap.pixelsHigh, points * scale)
-                XCTAssertTrue(bitmap.hasAlpha)
-            }
-        }
-
-        let project = try String(contentsOf: root.appendingPathComponent("SiteForge.xcodeproj/project.pbxproj"), encoding: .utf8)
-        XCTAssertEqual(project.components(separatedBy: "ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;").count - 1, 2)
-        XCTAssertTrue(project.contains("Assets.xcassets in Resources"))
         XCTAssertNotNil(Bundle.main.url(forResource: "Assets", withExtension: "car"))
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleIconName") as? String, "AppIcon")
     }
 
     // SF-1902-008
@@ -78,6 +50,13 @@ final class AppMetadataTests: XCTestCase {
         let canonicalDocument = state.documentSession.document
 
         XCTAssertEqual(CanvasTool.allCases.map(\.title), ["Select", "Section", "Stack", "Grid", "Frame", "Text", "Image", "Button", "Link", "Form", "Component"])
+        XCTAssertEqual(CanvasTool.primaryToolbarTools, [.select, .frame, .text, .image, .component])
+        XCTAssertEqual(CanvasTool.additionalToolbarTools, [.section, .stack, .grid, .button, .link, .form])
+        XCTAssertEqual(
+            Set(CanvasTool.primaryToolbarTools + CanvasTool.additionalToolbarTools),
+            Set(CanvasTool.allCases)
+        )
+        XCTAssertTrue(Set(CanvasTool.primaryToolbarTools).isDisjoint(with: CanvasTool.additionalToolbarTools))
         XCTAssertEqual(state.selectedTool, .select)
         XCTAssertFalse(state.canUndo)
         XCTAssertFalse(state.canRedo)
@@ -147,7 +126,9 @@ final class AppMetadataTests: XCTestCase {
     @MainActor
     func testElementsCatalogIsOrderedTruthfulAndDoesNotCreateCanonicalState() {
         XCTAssertEqual(ElementCatalogItem.allCases.map(\.rawValue), [
-            "section", "stack", "grid", "frame", "text", "image", "button", "link", "form", "divider", "navbar", "footer"
+            "section", "stack", "grid", "frame", "text", "heading", "image", "button", "link", "form",
+            "input", "emailInput", "textArea", "checkbox", "selectField", "submit",
+            "divider", "header", "navbar", "footer"
         ])
         XCTAssertEqual(ElementCatalogItem.section.availability, .available(.section))
         XCTAssertEqual(ElementCatalogItem.stack.availability, .available(.stack))
@@ -158,16 +139,18 @@ final class AppMetadataTests: XCTestCase {
         XCTAssertEqual(ElementCatalogItem.button.availability, .available(.button))
         XCTAssertEqual(ElementCatalogItem.link.availability, .available(.link))
         XCTAssertEqual(ElementCatalogItem.form.availability, .available(.form))
+        for item in [ElementCatalogItem.input, .emailInput, .textArea, .checkbox, .selectField, .submit] {
+            XCTAssertEqual(item.category, "Forms")
+            XCTAssertEqual(item.availability, .available(.text))
+            XCTAssertNotNil(item.template?.formFieldKind)
+        }
+        XCTAssertEqual(ElementCatalogItem.divider.availability, .available(.frame))
+        XCTAssertEqual(ElementCatalogItem.header.availability, .available(.section))
+        XCTAssertEqual(ElementCatalogItem.navbar.availability, .available(.section))
+        XCTAssertEqual(ElementCatalogItem.footer.availability, .available(.section))
         XCTAssertTrue(ElementCatalogItem.frame.capabilityContract.contains("transactional Frame"))
         XCTAssertTrue(ElementCatalogItem.text.capabilityContract.contains("plain-Text"))
-        for item in ElementCatalogItem.allCases where ![.section, .stack, .grid, .frame, .text, .image, .button, .link, .form].contains(item) {
-            guard case .unavailable(let reason) = item.availability else {
-                return XCTFail("\(item) must not expose an unimplemented authoring command")
-            }
-            XCTAssertFalse(reason.isEmpty)
-            XCTAssertEqual(item.capabilityContract, reason)
-            XCTAssertTrue(item.accessibilityDescription.contains("Not available yet"))
-        }
+        XCTAssertTrue(ElementCatalogItem.selectField.capabilityContract.contains("selected Form"))
         let state = WorkspaceShellState()
         let document = state.documentSession.document
         for item in ElementCatalogItem.allCases {
@@ -433,6 +416,9 @@ final class AppMetadataTests: XCTestCase {
                 "SF-0405-005", "SF-0405-006", "SF-0405-007", "SF-0405-008",
                 "SF-0406-001", "SF-0406-002", "SF-0406-003", "SF-0406-004",
                 "SF-0406-005", "SF-0406-006", "SF-0406-007", "SF-0406-008",
+                "SF-1102-002", "SF-1102-003", "SF-1102-004", "SF-1102-006",
+                "SF-1201-001", "SF-1201-002", "SF-1201-003", "SF-1201-004",
+                "SF-1201-006",
             ]
         )
     }

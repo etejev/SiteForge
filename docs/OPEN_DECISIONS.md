@@ -1,5 +1,39 @@
 # Open Decisions
 
+## OD-016 — Initial starter-template catalogue and canonical content
+
+Status: Approved — 2026-10-05
+
+- Needed by: the first production template/onboarding slice under `SF-0204`.
+- Context: the specification requires choosing a template, editable/removable
+  examples, stable template identity, migration, Preview/output behavior, and
+  resettable learning state, but it does not define the initial template set or
+  authorize SiteForge to invent branded page copy/assets. Those choices become
+  persistent product content and cannot be inferred from competitor products.
+- Approved decision: retain **Blank Site** as the neutral existing creation
+  path and add exactly one local **Starter Site** template. The Starter Site
+  contains exactly two ordinary pages, **Home** and **About**, with semantic
+  Header/Main/Footer structure, system typography, no remote assets, explicit
+  template provenance, and entirely editable/removable neutral generic copy.
+  It does not present a Not Found/404 page as starter content. Existing internal
+  missing-route/404 handling remains separate where the specification requires
+  it.
+- Alternatives: ship only Blank Site (simpler but does not satisfy “choose a
+  template”); approve several vertical templates (more useful but creates a
+  larger content, localization, migration, and visual-review commitment); or
+  defer the entire template catalogue while keeping New Site direct.
+- Tradeoffs: one curated local starter proves the canonical workflow with low
+  maintenance and no licensing/network dependency, but its content establishes
+  visible product direction. Multiple templates improve discovery but broaden
+  quality and accessibility obligations immediately.
+- Affected requirements: `SF-0204-001`–`SF-0204-008`, supporting
+  `SF-0301-001/002/005`, `SF-1201-003`, and `SF-1203-002/003/004`.
+- Decision deadline: before SF-AUTHORING-106 writes any canonical template
+  fixture or migration.
+- Implementation consequence: SF-AUTHORING-106 is unblocked. Keep New Site's
+  Blank Site option unchanged and do not add branded identity, licensed
+  content, remote media, or additional template/page choices.
+
 ## OD-015 — Initial structural-element defaults
 
 Status: Approved — 2026-08-12

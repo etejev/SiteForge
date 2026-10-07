@@ -199,6 +199,28 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(css.contains("text-align: center;"))
     }
 
+    // SF-AUTHORING-098, SF-1203-003/004 — canonical accessibility metadata
+    // reaches the immutable canvas/static projections as escaped semantics,
+    // never as executable markup or editor-only chrome.
+    func testCanonicalAccessibilityMetadataReachesSafeStaticOutput() throws {
+        let pageID = PageID(), nodeID = NodeID()
+        let node = DocumentNode(id: nodeID, kind: .frame, name: "Hero", parent: .page(pageID), properties: [
+            .init(key: .init(rawValue: CanonicalAccessibilityMetadata.Field.name.key),
+                  value: .string("Hero <region>"), origin: .authored),
+            .init(key: .init(rawValue: CanonicalAccessibilityMetadata.Field.help.key),
+                  value: .string("Introduces & summarizes this page."), origin: .authored),
+        ])
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [nodeID], nodes: [node])
+        let tree = try InternalDocumentRenderTreeCompiler.compile(
+            page: page, documentID: DocumentID(), revision: 1
+        )
+        let output = try SafeHTMLEmitter.emit(tree)
+        XCTAssertTrue(output.contains("aria-label=\"Hero &lt;region&gt;\""))
+        XCTAssertTrue(output.contains("aria-description=\"Introduces &amp; summarizes this page.\""))
+        XCTAssertFalse(output.contains("selection"))
+    }
+
     func testSafeHTMLEmitterRejectsNonFormOrMalformedSelectControls() throws {
         let nodeID = NodeID()
         let orphan = InternalRenderTreeNode(id: nodeID, sourceNodeID: nodeID, paintOrder: 0, frame: Self.frame, semanticElement: "p", cssSelector: "", formField: .init(kind: "select", label: "Plan", name: "plan", help: nil, required: false, formID: NodeID(), options: [.init(id: FormOptionID(), label: "One", value: "one")]))
@@ -1203,6 +1225,81 @@ final class CanvasRendererTests: XCTestCase {
         preview.close()
         XCTAssertNil(preview.snapshot)
         XCTAssertEqual(preview.status, "Preview closed")
+    }
+
+    // SF-1102-003/004/006, SF-1201-001/003/004/006 — Preview history and
+    // routing are scene-local. Stable PageID targets navigate; missing and
+    // external targets retain the current page and publish bounded recovery.
+    func testLocalPreviewRuntimeNavigatesStableTargetsWithoutMutatingDocumentState() throws {
+        let documentID = DocumentID(), homeID = PageID(), guideID = PageID(), sectionID = NodeID()
+        let homeObject = CanvasRenderObject(
+            id: NodeID(), frame: Self.frame, clipRect: Self.frame, paintOrder: 0,
+            style: .textPlaceholder, isVisible: true, accessibilityLabel: "Guide",
+            plainText: "Guide", previewLink: .init(target: .page(guideID), context: .same, isMissing: false)
+        )
+        let guideObject = CanvasRenderObject(
+            id: sectionID, frame: Self.frame, clipRect: Self.frame, paintOrder: 0,
+            style: .sectionSurface, isVisible: true, accessibilityLabel: "Details"
+        )
+        let runtime = LocalPreviewRuntimeSnapshot(
+            documentID: documentID, revision: 9,
+            pages: [
+                .init(id: homeID, name: "Home", route: PageRoute(rawValue: "/"), role: .home,
+                      viewportBounds: Self.frame, objects: [homeObject]),
+                .init(id: guideID, name: "Guide", route: PageRoute(rawValue: "/guide"), role: .standard,
+                      viewportBounds: Self.frame, objects: [guideObject]),
+            ], deterministicDigest: "runtime"
+        )
+        var preview = LocalPreviewState()
+        preview.adopt(runtime, initialPageID: homeID)
+        XCTAssertEqual(preview.currentPageID, homeID)
+        XCTAssertTrue(preview.follow(try XCTUnwrap(homeObject.previewLink)))
+        XCTAssertEqual(preview.currentPageID, guideID)
+        XCTAssertTrue(preview.canGoBack)
+        preview.goBack()
+        XCTAssertEqual(preview.currentPageID, homeID)
+        preview.goForward()
+        XCTAssertEqual(preview.currentPageID, guideID)
+
+        let frozen = preview.snapshot
+        XCTAssertFalse(preview.follow(.init(target: .page(PageID()), context: .same, isMissing: true)))
+        XCTAssertEqual(preview.snapshot, frozen)
+        XCTAssertTrue(preview.status.contains("missing"))
+        XCTAssertFalse(preview.follow(.init(target: .external("https://example.com/private"), context: .new, isMissing: false)))
+        XCTAssertEqual(preview.snapshot, frozen)
+        XCTAssertFalse(preview.status.contains("/private"), "Preview status must not echo authored external paths")
+        preview.rejectRuntimePreparation()
+        XCTAssertEqual(preview.snapshot, frozen)
+        XCTAssertTrue(preview.status.contains("last valid page remains visible"))
+    }
+
+    func testScenePreparationCarriesOnlyValidatedLinkNavigationIntoPreview() async throws {
+        var document = ProjectCreation.blank()
+        let pageID = try XCTUnwrap(document.pages.first?.id)
+        let targetID = PageID()
+        let target = DocumentPage(id: targetID, name: "Guide", route: PageRoute(rawValue: "/guide"), role: .standard,
+                                  provenance: .authored, rootNodeIDs: [], nodes: [])
+        let linkID = NodeID()
+        var page = try XCTUnwrap(document.pages.first)
+        page.rootNodeIDs.append(linkID)
+        page.nodes.append(.init(
+            id: linkID, kind: .link, name: "Guide", parent: .page(pageID),
+            properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(20)),
+                .init(key: .init(rawValue: "layout.y"), value: .number(20)),
+                .init(key: .init(rawValue: "layout.width"), value: .number(120)),
+                .init(key: .init(rawValue: "layout.height"), value: .number(24)),
+            ] + typedControlProperties(.page(targetID), label: "Guide")
+        ))
+        document.pages[0] = page
+        document.pages.append(target)
+        let viewport = try CanvasViewportState()
+        let result = try await WorkspaceScenePreparationWorker().prepare(.init(
+            document: document, activePageID: pageID, activeContainerID: nil,
+            viewport: viewport, surfaceID: CanvasRenderSurfaceID()
+        ))
+        XCTAssertEqual(result.renderScene.objects.first(where: { $0.id == linkID })?.previewLink,
+                       .init(target: .page(targetID), context: .same, isMissing: false))
     }
 
     // SF-1006-001/003/004/008 — Inspector-facing local validation adopts only

@@ -667,6 +667,65 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertEqual(restored, beforeDetach)
     }
 
+    // SF-AUTHORING-100: definition rename is one atomic graph transaction;
+    // stable definition/instance identity and every linked display name agree.
+    func testComponentRenamePropagatesStableIdentityPersistsAndUndoesExactly() throws {
+        let document = try componentTextFixture()
+        let definition = try XCTUnwrap(document.componentDefinitions.first)
+        let page = try XCTUnwrap(document.websitePages.first)
+        let instance = try XCTUnwrap(page.nodes.first {
+            CanonicalComponentReference.definitionID(for: $0) == definition.id
+        })
+        let scene = CanvasViewportSceneID()
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: scene,
+            rendererGeneration: document.revision, selectedNodeIDs: [instance.id],
+            availableNodeIDs: [instance.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let prepared = try ComponentCommandRegistry().prepare(
+            .rename(definitionID: definition.id, name: "Feature Card"),
+            identity: .init(documentID: document.id, pageID: page.id,
+                revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            in: document, context: context)
+        let session = DocumentSession(document: document)
+        try session.execute(prepared.command)
+        XCTAssertEqual(session.document.componentDefinitions.first { $0.id == definition.id }?.name, "Feature Card")
+        let renamedUses = session.document.websitePages.flatMap(\.nodes).filter {
+            CanonicalComponentReference.definitionID(for: $0) == definition.id
+        }
+        XCTAssertFalse(renamedUses.isEmpty)
+        XCTAssertTrue(renamedUses.allSatisfy { $0.name == "Feature Card" })
+        XCTAssertTrue(renamedUses.contains { $0.id == instance.id })
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.undo()
+        var restored = session.document; restored.revision = document.revision
+        XCTAssertEqual(restored, document)
+        try session.redo()
+        XCTAssertEqual(session.document.componentDefinitions.first { $0.id == definition.id }?.name, "Feature Card")
+        let unchanged = session.document
+        let liveIdentity = DesignInspectorOperationIdentity(documentID: session.document.id,
+            pageID: page.id, revision: session.document.revision, sceneID: scene,
+            rendererGeneration: session.document.revision)
+        let liveContext = TransformValidationContext(activePageID: page.id,
+            currentSceneID: scene, rendererGeneration: session.document.revision,
+            selectedNodeIDs: [instance.id], availableNodeIDs: [instance.id],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(
+            .rename(definitionID: definition.id, name: "Feature Card"),
+            identity: liveIdentity, in: session.document, context: liveContext))
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(
+            .rename(definitionID: definition.id, name: " \n "), identity: liveIdentity,
+            in: session.document, context: liveContext))
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(
+            .rename(definitionID: definition.id, name: "Cancelled"), identity: liveIdentity,
+            in: session.document, context: liveContext, cancelled: true))
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(
+            .rename(definitionID: definition.id, name: "Stale"),
+            identity: .init(documentID: session.document.id, pageID: page.id,
+                revision: session.document.revision - 1, sceneID: scene,
+                rendererGeneration: session.document.revision),
+            in: session.document, context: liveContext))
+        XCTAssertEqual(session.document, unchanged)
+    }
+
     func testComponentInstancesPropagateAcrossPagesAndSafeDeleteRestoresExactGraphs() throws {
         var document = BlankProjectDefaults.document()
         let homeID = document.pages[0].id, otherID = document.pages[1].id
@@ -1820,6 +1879,42 @@ final class CommandKernelTests: XCTestCase {
         shell.redo()
         XCTAssertTrue(shell.canUndo)
         XCTAssertFalse(shell.canRedo)
+    }
+
+    // SF-0604-001/005 — page duplication keeps fluid intent and values but
+    // regenerates the value identity so source and copy cannot alias later.
+    func testPageDuplicateRemapsFluidValueIdentityAndPreservesFixedFallback() throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id, rootID = document.pages[0].rootNodeIDs[0]
+        let frameID = NodeID()
+        let fluid = CanonicalFluidValue(minimum: 160, preferred: 240, maximum: 360)
+        document.pages[0].nodes[0].childIDs = [frameID]
+        document.pages[0].nodes.append(.init(id: frameID, kind: .frame, name: "Fluid Frame",
+            parent: .node(rootID), properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(0), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.y"), value: .number(0), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.width"), value: .number(240), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.height"), value: .number(160), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalFluidValueCodec.key(.width)),
+                      value: .string(try CanonicalFluidValueCodec.encode(fluid, target: .width)),
+                      origin: .authored),
+            ]))
+        let session = DocumentSession(document: document)
+        let duplicate = try PageCommandRegistry().prepare(.duplicate,
+            identity: .init(documentID: document.id, revision: document.revision, pageID: pageID),
+            in: document, isAvailable: true)
+        try session.execute(duplicate.command)
+        let source = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == frameID })
+        let copyPage = try XCTUnwrap(session.document.pages.first { $0.id == duplicate.selectedPageID })
+        let copy = try XCTUnwrap(copyPage.nodes.first { $0.name == "Fluid Frame" })
+        let sourceFluid = try CanonicalFluidValueCodec.decode(try XCTUnwrap(
+            source.insertionStringProperty(CanonicalFluidValueCodec.key(.width))), target: .width)
+        let copyFluid = try CanonicalFluidValueCodec.decode(try XCTUnwrap(
+            copy.insertionStringProperty(CanonicalFluidValueCodec.key(.width))), target: .width)
+        XCTAssertNotEqual(copyFluid.id, sourceFluid.id)
+        XCTAssertEqual([copyFluid.minimum, copyFluid.preferred, copyFluid.maximum], [160, 240, 360])
+        XCTAssertEqual(copy.insertionNumberProperty("layout.width"), 240)
+        XCTAssertEqual(try DocumentSerializer.decode(try DocumentSerializer.encode(session.document)), session.document)
     }
 
     // SF-1902-008

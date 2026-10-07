@@ -56,6 +56,10 @@ if ! scripts/check-architecture-boundaries.py; then
   failed=1
 fi
 
+if ! python3 scripts/check-app-icon.py; then
+  failed=1
+fi
+
 if ! scripts/check-authoring-runway.py; then
   failed=1
 fi

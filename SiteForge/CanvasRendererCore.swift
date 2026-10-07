@@ -220,6 +220,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     let style: CanvasPaintStyle
     let isVisible: Bool
     let accessibilityLabel: String
+    let accessibilityHelp: String?
     let plainText: String?
     /// A canonical node name is safe to render as authored chrome. It is
     /// deliberately distinct from editor-only selection labels and handles.
@@ -245,6 +246,10 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     /// Read-only canonical semantic provenance carried into immutable Preview
     /// snapshots. It is metadata, never a rendered/editor-chrome pixel.
     let semanticElement: String?
+    /// Validated navigation intent for local Preview. Authoring canvas input
+    /// never follows this value, and static output resolves the same canonical
+    /// target independently at its trust boundary.
+    let previewLink: CanvasPreviewLink?
 
     init(
         id: NodeID,
@@ -254,6 +259,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         style: CanvasPaintStyle,
         isVisible: Bool,
         accessibilityLabel: String,
+        accessibilityHelp: String? = nil,
         plainText: String? = nil,
         displayName: String? = nil,
         fillRGBA: [Double]? = nil,
@@ -270,7 +276,8 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         imageFitMode: CanvasImageFitMode? = nil,
         imageFocalX: Double = 0.5,
         imageFocalY: Double = 0.5,
-        semanticElement: String? = nil
+        semanticElement: String? = nil,
+        previewLink: CanvasPreviewLink? = nil
     ) {
         self.id = id
         self.frame = frame
@@ -279,6 +286,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.style = style
         self.isVisible = isVisible
         self.accessibilityLabel = accessibilityLabel
+        self.accessibilityHelp = accessibilityHelp
         self.plainText = plainText
         self.displayName = displayName
         self.fillRGBA = fillRGBA
@@ -296,7 +304,14 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.imageFocalX = imageFocalX
         self.imageFocalY = imageFocalY
         self.semanticElement = semanticElement
+        self.previewLink = previewLink
     }
+}
+
+struct CanvasPreviewLink: Codable, Hashable, Sendable {
+    let target: CanonicalLinkTarget
+    let context: CanonicalLinkContext
+    let isMissing: Bool
 }
 
 enum CanvasImageFitMode: String, Codable, Hashable, Sendable {
@@ -396,6 +411,25 @@ struct CanvasPreviewSceneSnapshot: Equatable, Sendable {
     let deterministicDigest: String
 }
 
+struct LocalPreviewPageSnapshot: Equatable, Sendable, Identifiable {
+    let id: PageID
+    let name: String
+    let route: PageRoute
+    let role: PageRole
+    let viewportBounds: WorldRect
+    let objects: [CanvasRenderObject]
+}
+
+/// An immutable, document-revision-owned Preview bundle. Navigation mutates
+/// only `LocalPreviewState`; no active editor page, selection, history, or
+/// canonical document value is changed by visitor actions.
+struct LocalPreviewRuntimeSnapshot: Equatable, Sendable {
+    let documentID: DocumentID
+    let revision: UInt64
+    let pages: [LocalPreviewPageSnapshot]
+    let deterministicDigest: String
+}
+
 // SF-1202 v1: immutable internal render-tree metadata. This compiler consumes
 // an already-adopted scene; it cannot write canonical content or UI state.
 struct InternalRenderTreeNode: Equatable, Sendable {
@@ -433,6 +467,8 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     /// Base-only fixed sizing metadata. Static output uses only closed,
     /// validated declarations; responsive constraint overrides are absent.
     let sizingConstraints: CanonicalSizingConstraints?
+    let accessibilityName: String?
+    let accessibilityHelp: String?
 
     init(id: NodeID, sourceNodeID: NodeID, parentNodeID: NodeID? = nil, paintOrder: Int, frame: WorldRect,
          semanticElement: String, cssSelector: String, formField: InternalFormField?,
@@ -442,7 +478,8 @@ struct InternalRenderTreeNode: Equatable, Sendable {
          image: InternalStaticImage? = nil, imageFill: InternalStaticImage? = nil,
          fillLayers: [CanonicalFillLayer] = [],
          opacity: Double? = nil, boxStyle: CanonicalBoxStyle? = nil,
-         sizingConstraints: CanonicalSizingConstraints? = nil) {
+         sizingConstraints: CanonicalSizingConstraints? = nil,
+         accessibilityName: String? = nil, accessibilityHelp: String? = nil) {
         self.id = id
         self.sourceNodeID = sourceNodeID
         self.parentNodeID = parentNodeID
@@ -462,6 +499,8 @@ struct InternalRenderTreeNode: Equatable, Sendable {
         self.opacity = opacity
         self.boxStyle = boxStyle
         self.sizingConstraints = sizingConstraints
+        self.accessibilityName = accessibilityName
+        self.accessibilityHelp = accessibilityHelp
     }
 }
 
@@ -583,7 +622,9 @@ enum InternalDocumentRenderTreeCompiler {
                 opacity: staticOpacity(for: node),
                 boxStyle: staticBoxStyle(for: node, colorTokens: colorTokens),
                 sizingConstraints: [.frame, .image].contains(node.kind)
-                    ? CanonicalSizingConstraints.resolved(for: node) : nil
+                    ? CanonicalSizingConstraints.resolved(for: node) : nil,
+                accessibilityName: CanonicalAccessibilityMetadata.value(.name, for: node).0,
+                accessibilityHelp: CanonicalAccessibilityMetadata.value(.help, for: node).0
             )
         }
         return .init(documentID: documentID, revision: revision, pageID: page.id, nodes: nodes)
@@ -1116,7 +1157,14 @@ enum MultiPageStaticBuildPlanner {
         let fills = StaticFillLayerStyleOutputEmitter.emit(nodes: staticNodes)
         let boxStyles = StaticBoxStyleOutputEmitter.emit(nodes: staticNodes)
         let sizing = StaticSizingOutputEmitter.emit(nodes: staticNodes)
-        let stylesheet = [layout.css, typography, images, fills, boxStyles, sizing].filter { !$0.isEmpty }.joined(separator: "\n")
+        let fluidTypography = StaticFluidValueOutputEmitter.emit(
+            nodes: pages.flatMap { $0.canonicalDepthFirstNodes() },
+            targets: [.fontSize, .lineHeight])
+        // Fluid typography deliberately follows fixed typography. Geometry
+        // and spacing fluid rules live inside layout output before explicit
+        // breakpoint rules so authored breakpoint literals retain precedence.
+        let stylesheet = [layout.css, typography, fluidTypography, images, fills, boxStyles, sizing]
+            .filter { !$0.isEmpty }.joined(separator: "\n")
         if !stylesheet.isEmpty {
             guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
             files.append(.init(path: "styles.css", contents: stylesheet))
@@ -1333,7 +1381,8 @@ enum SafeHTMLEmitter {
             if node.semanticElement == "form" {
                 let identifier = try validatedIdentifier(node)
                 let fields = try (fieldsByForm[node.id] ?? []).map { try emitField($0, formIDs: formIDs) }.joined()
-                return "<form data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\">\(fields)</form>"
+                let accessibility = accessibilityAttributes(node)
+                return "<form data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\"\(accessibility)>\(fields)</form>"
             }
             return try emitNode(node, formIDs: formIDs)
         }.joined(separator: "\n")
@@ -1347,7 +1396,7 @@ enum SafeHTMLEmitter {
             return try emitField(node, formIDs: formIDs)
         }
         let anchor = node.anchorID.map { " id=\"\(escape($0))\"" } ?? ""
-        let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\"\(anchor)"
+        let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\"\(anchor)\(accessibilityAttributes(node))"
         if let control = node.control {
             let label = escape(control.label)
             if control.isLink {
@@ -1367,6 +1416,12 @@ enum SafeHTMLEmitter {
         // becoming executable or malformed HTML.
         let content = node.textContent.flatMap(safeTextContent).map(escape) ?? ""
         return "<\(node.semanticElement)\(attributes)>\(content)</\(node.semanticElement)>"
+    }
+
+    private static func accessibilityAttributes(_ node: InternalRenderTreeNode) -> String {
+        let name = node.accessibilityName.map { " aria-label=\"\(escape($0))\"" } ?? ""
+        let help = node.accessibilityHelp.map { " aria-description=\"\(escape($0))\"" } ?? ""
+        return name + help
     }
 
     private static func emitField(_ node: InternalRenderTreeNode, formIDs: Set<NodeID>) throws -> String {
@@ -1493,14 +1548,15 @@ struct CanvasAccessibilityElementSnapshot: Equatable, Sendable {
     let id: CanvasAccessibilityID
     let objectID: NodeID
     let label: String
+    let help: String?
     let frame: ViewportRect
     let paintOrder: Int
     let textContent: String?
 
-    init(id: CanvasAccessibilityID, objectID: NodeID, label: String, frame: ViewportRect,
-         paintOrder: Int, textContent: String? = nil) {
+    init(id: CanvasAccessibilityID, objectID: NodeID, label: String, help: String? = nil,
+         frame: ViewportRect, paintOrder: Int, textContent: String? = nil) {
         self.id = id; self.objectID = objectID; self.label = label; self.frame = frame
-        self.paintOrder = paintOrder; self.textContent = textContent
+        self.help = help; self.paintOrder = paintOrder; self.textContent = textContent
     }
 }
 
@@ -1613,6 +1669,7 @@ struct CanvasRendererCore: Sendable {
                 id: accessibilityID(for: object.id),
                 objectID: object.id,
                 label: object.accessibilityLabel,
+                help: object.accessibilityHelp,
                 frame: ViewportRect(
                     origin: origin,
                     size: ViewportSize(

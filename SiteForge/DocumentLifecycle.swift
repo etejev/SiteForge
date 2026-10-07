@@ -285,6 +285,11 @@ actor DocumentLifecycleBackend {
     func historyDiagnosticRecords() async -> [HistoryDiagnosticRecord] { await historyStore.diagnosticRecords() }
     func fileAccessDiagnosticRecords() async -> [FileAccessDiagnostic] { await fileAccess.diagnosticRecords() }
 
+    func resolveAuthorizedProject(bookmarkKey: String) async throws -> URL {
+        do { return try await fileAccess.resolveAuthorizedProject(bookmarkKey: bookmarkKey) }
+        catch { throw Self.map(error) }
+    }
+
     func recordEvent(
         _ identity: LifecycleOperationIdentity,
         result: LifecycleResult,
@@ -967,6 +972,10 @@ final class DocumentLifecycleController: ObservableObject {
         return fileURL == nil || recoveryCandidate.package.document.revision > project.document.revision
     }
     var currentProjectID: ProjectID { project.projectID }
+
+    func resolveAuthorizedProject(bookmarkKey: String) async throws -> URL {
+        try await backend.resolveAuthorizedProject(bookmarkKey: bookmarkKey)
+    }
 
     /// Stages original bytes and the canonical asset command as one in-memory
     /// commit boundary. If validation or command execution rejects the asset,

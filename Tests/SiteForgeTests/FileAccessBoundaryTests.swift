@@ -121,6 +121,44 @@ final class FileAccessBoundaryTests: XCTestCase {
         XCTAssertEqual(coordinationEvents, [.open])
     }
 
+    // SF-AUTHORING-105 / SF-0201-003/004 — a recent-project key resolves
+    // through the retained bookmark owner without beginning an unbalanced
+    // scoped-access lifetime or disclosing the original path in stored UI state.
+    func testRecentProjectResolutionUsesExistingBookmarkAndRepairsStaleIdentity() async throws {
+        let oldURL = fixture("Prior.siteforge")
+        let movedURL = fixture("Moved.siteforge")
+        let runtime = BookmarkRuntimeProbe(
+            resolution: SecurityScopedBookmarkResolution(url: movedURL, isStale: true)
+        )
+        let bookmarks = MemoryBookmarkStore()
+        let key = FileAccessService.key(for: oldURL)
+        await bookmarks.setBookmark(PersistedFileBookmark(bookmark: Data("prior".utf8)), for: key)
+        let service = FileAccessService(
+            policy: .sandboxedUserSelectedReadWrite,
+            runtime: runtime,
+            bookmarks: bookmarks,
+            coordinator: FileCoordinatorProbe()
+        )
+
+        let resolved = try await service.resolveAuthorizedProject(bookmarkKey: key)
+        let starts = await runtime.startCount
+        let stops = await runtime.stopCount
+        let creations = await runtime.bookmarkCreationCount
+        let retained = await bookmarks.bookmark(for: key)
+
+        XCTAssertEqual(resolved, movedURL)
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(stops, 0)
+        XCTAssertEqual(creations, 1)
+        XCTAssertNotNil(retained)
+        do {
+            _ = try await service.resolveAuthorizedProject(bookmarkKey: "not-a-key")
+            XCTFail("Invalid recent-project keys must be rejected")
+        } catch {
+            XCTAssertEqual(error as? FileAccessFailure, .missingBookmark)
+        }
+    }
+
     // SF-1504-003, SF-1504-004
     func testMissingAndDeniedAccessAreTypedAndNeverRunFileOperation() async throws {
         let url = fixture("Denied.siteforge")

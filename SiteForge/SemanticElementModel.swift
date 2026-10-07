@@ -108,3 +108,121 @@ struct SemanticElementCommandRegistry: Sendable {
         return .init(applicableNodeIDs: applicable, skippedNodeIDs: skipped, skippedReasons: reasons, documentCommand: batch)
     }
 }
+
+enum AccessibilityMetadataInspectorValue: Equatable, Sendable {
+    case unavailable(String)
+    case single(String?, PropertyOrigin)
+    case mixed(applicableCount: Int, skippedCount: Int)
+}
+
+enum AccessibilityMetadataEdit: Sendable {
+    case set(CanonicalAccessibilityMetadata.Field, String?)
+    case reset
+}
+
+struct AccessibilityMetadataCommand: Sendable {
+    let identity: DesignInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let edit: AccessibilityMetadataEdit
+    let provenance: DesignInspectorProvenance
+    let cancelled: Bool
+}
+
+enum AccessibilityMetadataCommandError: Error, LocalizedError, Equatable, Sendable {
+    case stale, cancelled, invalid, unavailable(String), noApplicableTargets, noChanges
+    var errorDescription: String? {
+        switch self {
+        case .stale: "The document, selection, or canvas changed before accessibility metadata could commit."
+        case .cancelled: "The accessibility draft was cancelled; committed metadata is unchanged."
+        case .invalid: "Use a nonempty accessible name or description within the supported length."
+        case .unavailable(let reason): reason
+        case .noApplicableTargets: "The selection has no object with general accessibility metadata."
+        case .noChanges: "Accessibility metadata already has that value."
+        }
+    }
+}
+
+struct AccessibilityMetadataCommandRegistry: Sendable {
+    static func selectionValue(
+        field: CanonicalAccessibilityMetadata.Field,
+        nodes: [DocumentNode]
+    ) -> AccessibilityMetadataInspectorValue {
+        guard !nodes.isEmpty else { return .unavailable("Select an authored object to edit accessibility metadata.") }
+        let applicable = nodes.filter { CanonicalAccessibilityMetadata.supportedKinds.contains($0.kind) }
+        guard !applicable.isEmpty else {
+            return .unavailable("Image alternative text and Form accessibility use their dedicated controls.")
+        }
+        let values = applicable.map { CanonicalAccessibilityMetadata.value(field, for: $0) }
+        guard let first = values.first, values.dropFirst().allSatisfy({ $0 == first }) else {
+            return .mixed(applicableCount: applicable.count, skippedCount: nodes.count - applicable.count)
+        }
+        return .single(first.0, first.1)
+    }
+
+    func prepare(
+        _ command: AccessibilityMetadataCommand,
+        in document: CanonicalDocument,
+        context: TransformValidationContext
+    ) throws -> PreparedDesignInspectorEdit {
+        guard !command.cancelled else { throw AccessibilityMetadataCommandError.cancelled }
+        guard context.isLifecycleAvailable else {
+            throw AccessibilityMetadataCommandError.unavailable(context.lifecycleDisabledReason ?? "Accessibility editing is unavailable.")
+        }
+        guard command.identity.documentID == document.id,
+              command.identity.pageID == context.activePageID,
+              command.identity.revision == document.revision,
+              command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration,
+              command.orderedNodeIDs == context.selectedNodeIDs,
+              !command.orderedNodeIDs.isEmpty,
+              Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count,
+              let page = document.pages.first(where: { $0.id == command.identity.pageID }) else {
+            throw AccessibilityMetadataCommandError.stale
+        }
+        var applicable: [NodeID] = [], skipped: [NodeID] = [], reasons: [NodeID: String] = [:]
+        var changes: [DocumentCommand] = []
+        for id in command.orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else { throw AccessibilityMetadataCommandError.stale }
+            guard context.availableNodeIDs.contains(id), !node.selectionBooleanProperty("hidden"), !node.selectionBooleanProperty("locked") else {
+                throw AccessibilityMetadataCommandError.unavailable("A selected object is unavailable, hidden, or locked.")
+            }
+            guard CanonicalAccessibilityMetadata.supportedKinds.contains(node.kind) else {
+                skipped.append(id)
+                reasons[id] = "This object uses a dedicated accessibility schema."
+                continue
+            }
+            applicable.append(id)
+            let fields: [(CanonicalAccessibilityMetadata.Field, String?)]
+            switch command.edit {
+            case .set(let field, let raw):
+                let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let value, value.isEmpty || value.count > field.maximumLength
+                    || value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
+                    throw AccessibilityMetadataCommandError.invalid
+                }
+                fields = [(field, value)]
+            case .reset:
+                fields = CanonicalAccessibilityMetadata.Field.allCases.map { ($0, nil) }
+            }
+            for (field, value) in fields {
+                let old = node.insertionProperty(field.key)
+                if let value {
+                    guard old?.value != .string(value) || old?.origin != .authored else { continue }
+                    changes.append(.setProperty(.init(pageID: page.id, nodeID: id,
+                        property: .init(id: old?.id ?? PropertyID(), key: .init(rawValue: field.key),
+                            value: .string(value), origin: .authored))))
+                } else if let old {
+                    changes.append(.removeProperty(.init(pageID: page.id, nodeID: id, propertyID: old.id)))
+                }
+            }
+        }
+        guard !applicable.isEmpty else { throw AccessibilityMetadataCommandError.noApplicableTargets }
+        guard !changes.isEmpty else { throw AccessibilityMetadataCommandError.noChanges }
+        let batch = DocumentCommand.batch(changes)
+        guard CommandRegistry().availability(for: batch, in: document).isEnabled else {
+            throw AccessibilityMetadataCommandError.stale
+        }
+        return .init(applicableNodeIDs: applicable, skippedNodeIDs: skipped,
+                     skippedReasons: reasons, documentCommand: batch)
+    }
+}

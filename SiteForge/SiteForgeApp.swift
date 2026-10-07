@@ -6,6 +6,7 @@ final class SiteForgeApplicationDelegate: NSObject, NSApplicationDelegate {
     private var windowPresentation: WorkspaceWindowLifecycleOwner?
     let appearanceSettings = AppearanceSettingsStore()
     let canvasSettings = CanvasSettingsStore()
+    let supportSettings = SupportSettingsStore()
     lazy var applicationSettingsGroup = ApplicationSettingsGroupStore(
         appearance: appearanceSettings, canvas: canvasSettings)
 
@@ -45,6 +46,8 @@ struct SiteForgeApp: App {
                     .tabItem { Label("Canvas", systemImage: "circle.grid.2x2") }
                 ApplicationSettingsGroupView(store: applicationDelegate.applicationSettingsGroup)
                     .tabItem { Label("Reset", systemImage: "arrow.uturn.backward") }
+                SupportSettingsView(store: applicationDelegate.supportSettings)
+                    .tabItem { Label("Support", systemImage: "lifepreserver") }
             }
             .accessibilityIdentifier("settings.tabs")
         }

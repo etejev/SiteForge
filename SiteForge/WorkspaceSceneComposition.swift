@@ -40,10 +40,12 @@ final class WorkspaceDocumentContext: ObservableObject {
         recoveryDirectory: URL = DocumentLifecycleController.defaultRecoveryDirectory,
         previewScenario: LaunchPreviewScenario? = nil,
         initialWorldGridVisible: Bool = CanvasSettingsStore.committedGridVisibility(),
+        recentProjectStore: any RecentProjectPersisting = RecentProjectStore(),
+        lifecycleBackend: DocumentLifecycleBackend = DocumentLifecycleBackend(),
         autosaveDebouncer: any LifecycleAutosaveDebouncing = ContinuousLifecycleAutosaveDebouncer()
     ) {
         let lifecycle = DocumentLifecycleController(
-            session: session,
+            session: session, backend: lifecycleBackend,
             recoveryDirectory: recoveryDirectory,
             autosaveDebouncer: autosaveDebouncer
         )
@@ -53,6 +55,7 @@ final class WorkspaceDocumentContext: ObservableObject {
         )
         launchExperience = LaunchExperienceController(
             lifecycle: lifecycle,
+            recentProjectStore: recentProjectStore,
             previewScenario: previewScenario
         )
     }
@@ -73,10 +76,23 @@ struct WorkspaceSceneComposition {
             let recoveryDirectory = overrides.value(after: "-SiteForgeRecoveryDirectory")
                 .map { URL(fileURLWithPath: $0, isDirectory: true) }
                 ?? DocumentLifecycleController.productionRecoveryDirectory
+            let recentProjectStore: any RecentProjectPersisting = overrides
+                .value(after: "-SiteForgeRecentProjectsStore")
+                .map { RecentProjectStore(url: URL(fileURLWithPath: $0)) }
+                ?? RecentProjectStore()
+            let bookmarkStore: any FileBookmarkPersisting = overrides
+                .value(after: "-SiteForgeFileBookmarkStore")
+                .map { FileBookmarkStore(url: URL(fileURLWithPath: $0)) }
+                ?? FileBookmarkStore()
+            let lifecycleBackend = DocumentLifecycleBackend(
+                fileAccess: FileAccessService(bookmarks: bookmarkStore)
+            )
             let context = WorkspaceDocumentContext(
                 session: session,
                 recoveryDirectory: recoveryDirectory,
-                previewScenario: LaunchPreviewScenario.from(composition: overrides)
+                previewScenario: LaunchPreviewScenario.from(composition: overrides),
+                recentProjectStore: recentProjectStore,
+                lifecycleBackend: lifecycleBackend
             )
             if overrides.contains("-SiteForgeStartModified"),
                let homeID = session.document.pages.first?.id {

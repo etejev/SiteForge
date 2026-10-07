@@ -215,13 +215,16 @@ enum LaunchPreviewScenario: String {
 @MainActor
 final class LaunchExperienceController: ObservableObject {
     static let requirementIDs: Set<String> = [
-        "SF-0201-004", "SF-0201-006", "SF-0201-007", "SF-0201-008",
+        "SF-0201-002", "SF-0201-003", "SF-0201-004", "SF-0201-006", "SF-0201-007", "SF-0201-008",
+        "SF-0204-002", "SF-0204-003", "SF-0204-004", "SF-0204-006",
         "SF-0301-002", "SF-0301-004", "SF-0301-006", "SF-0301-007", "SF-0301-008",
         "SF-1602-004", "SF-1602-006", "SF-1602-007", "SF-1602-008",
     ]
 
     @Published private(set) var state: LaunchExperienceState
     @Published private(set) var transitionHistory: [LaunchExperienceStateKind]
+    @Published private(set) var recentProjects: [RecentProjectReference] = []
+    @Published private(set) var recentProjectsMessage: String?
     let lifecycle: DocumentLifecycleController
     let diagnostics: LaunchExperienceDiagnostics
 
@@ -231,6 +234,7 @@ final class LaunchExperienceController: ObservableObject {
     private var lastOpenURL: URL?
     private(set) var isPreviewScenario = false
     let forcesReducedMotionForTesting: Bool
+    private let recentProjectStore: any RecentProjectPersisting
 #if DEBUG
     private var didStartIntegrationOpen = false
     private var integrationRetryBase64URL: URL?
@@ -240,11 +244,13 @@ final class LaunchExperienceController: ObservableObject {
     init(
         lifecycle: DocumentLifecycleController,
         diagnostics: LaunchExperienceDiagnostics = LaunchExperienceDiagnostics(),
+        recentProjectStore: any RecentProjectPersisting = RecentProjectStore(),
         previewScenario: LaunchPreviewScenario? = LaunchPreviewScenario.from(),
         announcementPoster: AccessibilityAnnouncementPoster = .native
     ) {
         self.lifecycle = lifecycle
         self.diagnostics = diagnostics
+        self.recentProjectStore = recentProjectStore
         self.announcementPoster = announcementPoster
         let initial = Self.previewState(previewScenario) ?? .welcome
         state = initial
@@ -328,7 +334,10 @@ final class LaunchExperienceController: ObservableObject {
         lastOpenURL = url
         startOperation(.open) { [weak self] id, start in
             guard let self else { return }
-            await self.performOpen(url, userSelected: userSelected, operationID: id, start: start)
+            await self.performOpen(
+                url, userSelected: userSelected, rememberOnSuccess: userSelected,
+                operationID: id, start: start
+            )
         }
     }
 
@@ -337,7 +346,64 @@ final class LaunchExperienceController: ObservableObject {
         let id = UUID()
         operationID = id
         returnState = state == .workspace ? .workspace : .welcome
-        await performOpen(url, userSelected: false, operationID: id, start: .now)
+        await performOpen(url, userSelected: false, rememberOnSuccess: false, operationID: id, start: .now)
+    }
+
+    func loadRecentProjects() async {
+        do {
+            recentProjects = try await recentProjectStore.load()
+            recentProjectsMessage = nil
+        } catch {
+            recentProjects = []
+            recentProjectsMessage = "Recent projects are unavailable. New Site and Open Project remain available."
+        }
+    }
+
+    func openRecentProject(_ reference: RecentProjectReference) {
+        startOperation(.open) { [weak self] id, start in
+            guard let self else { return }
+            self.transition(to: .working(ProjectLoadingStatus(
+                title: "Locating recent project…",
+                detail: "Restoring authorized local access without exposing its path.",
+                progress: nil,
+                canCancel: true,
+                accessibilityLabel: "Locating recent project"
+            )))
+            do {
+                let url = try await self.lifecycle.resolveAuthorizedProject(bookmarkKey: reference.bookmarkKey)
+                guard id == self.operationID, !Task.isCancelled else {
+                    await self.finishCancelled(.open, start: start)
+                    return
+                }
+                self.lastOpenURL = url
+                await self.performOpen(
+                    url, userSelected: false, rememberOnSuccess: true,
+                    operationID: id, start: start
+                )
+            } catch let failure as DocumentLifecycleFailure {
+                guard id == self.operationID else { return }
+                self.recentProjectsMessage = "Access to \(reference.displayName) needs to be restored with Open Project."
+                self.transition(to: .welcome)
+                await self.record(.open, start: start, result: .failure, failure: failure)
+            } catch {
+                guard id == self.operationID else { return }
+                self.recentProjectsMessage = "Access to \(reference.displayName) needs to be restored with Open Project."
+                self.transition(to: .welcome)
+                await self.record(.open, start: start, result: .failure, failure: .staleSecurityScope)
+            }
+        }
+    }
+
+    func forgetRecentProject(_ reference: RecentProjectReference) {
+        let next = RecentProjectPolicy.removing(reference.id, from: recentProjects)
+        recentProjectsMessage = nil
+        Task {
+            do {
+                try await recentProjectStore.save(next)
+                recentProjects = next
+            }
+            catch { recentProjectsMessage = "The recent-project list could not be updated. Project access was not changed." }
+        }
     }
 
     func cancelCurrentOperation() {
@@ -464,6 +530,7 @@ final class LaunchExperienceController: ObservableObject {
     private func performOpen(
         _ url: URL,
         userSelected: Bool = false,
+        rememberOnSuccess: Bool,
         operationID id: UUID,
         start: ContinuousClock.Instant
     ) async {
@@ -477,6 +544,7 @@ final class LaunchExperienceController: ObservableObject {
         }
         switch result {
         case .completed:
+            if rememberOnSuccess { await rememberRecentProject(url) }
             if let candidate = lifecycle.recoveryCandidate {
                 transition(to: .recovery(LaunchRecoveryPresentation(
                     title: "Newer recovery available",
@@ -492,6 +560,18 @@ final class LaunchExperienceController: ObservableObject {
         case .failed(let failure):
             transition(to: .failure(Self.presentation(for: failure)))
             await record(.open, start: start, result: .failure, failure: failure)
+        }
+    }
+
+    private func rememberRecentProject(_ url: URL) async {
+        let next = RecentProjectPolicy.recording(url, in: recentProjects)
+        guard next != recentProjects else { return }
+        do {
+            try await recentProjectStore.save(next)
+            recentProjects = next
+            recentProjectsMessage = nil
+        } catch {
+            recentProjectsMessage = "The project opened, but the recent-project list could not be updated."
         }
     }
 
@@ -619,6 +699,7 @@ struct LaunchExperienceView: View {
                 return
             }
 #endif
+            await controller.loadRecentProjects()
             await controller.discoverInitialRecovery()
             await Task.yield()
             assignInitialFocus()
@@ -659,29 +740,31 @@ struct LaunchExperienceView: View {
 
     private var brand: some View {
         VStack(spacing: 10) {
-            Image(systemName: "hammer.fill")
-                .font(.system(size: 38, weight: .semibold))
-                .foregroundStyle(.tint)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 72, height: 72)
                 .accessibilityHidden(true)
             Text("SiteForge")
                 .font(.system(size: 30, weight: .bold, design: .rounded))
-            Text("Design native, durable web projects.")
+            Text("Design durable websites in a native Mac workspace.")
                 .foregroundStyle(.secondary)
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("SiteForge. Design durable websites in a native Mac workspace.")
         .accessibilityIdentifier("launch.brand")
     }
 
     private var welcome: some View {
         VStack(spacing: 16) {
-            Text("Start a project")
+            Text("Start building")
                 .font(.title2.weight(.semibold))
-            Text("Create the approved blank SiteForge structure or validate an existing project before it enters the workspace.")
+            Text("Create a clean local site or open and validate an existing SiteForge project.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
-                Button("New Blank Project") { controller.createBlankProject() }
+                Button("New Site") { controller.createBlankProject() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .focused($focus, equals: .newProject)
@@ -692,9 +775,101 @@ struct LaunchExperienceView: View {
                     .accessibilityHint("Choose a SiteForge project to validate before opening")
                     .accessibilityIdentifier("launch.openProject")
             }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) { launchAssurances }
+                VStack(alignment: .leading, spacing: 6) { launchAssurances }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.top, 4)
+            recentProjectsSection
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launch.welcome")
+    }
+
+    @ViewBuilder
+    private var launchAssurances: some View {
+        Label("Local projects", systemImage: "internaldrive")
+            .accessibilityLabel("Local projects")
+            .accessibilityIdentifier("launch.assurance.local")
+        Label("Private by default", systemImage: "lock")
+            .accessibilityLabel("Private by default")
+            .accessibilityIdentifier("launch.assurance.private")
+        Label("Recovery protected", systemImage: "clock.arrow.circlepath")
+            .accessibilityLabel("Recovery protected")
+            .accessibilityIdentifier("launch.assurance.recovery")
+    }
+
+    @ViewBuilder
+    private var recentProjectsSection: some View {
+        if !controller.recentProjects.isEmpty || controller.recentProjectsMessage != nil {
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                if !controller.recentProjects.isEmpty {
+                    Text("Recent Projects")
+                        .font(.headline)
+                        .accessibilityIdentifier("launch.recentProjects.title")
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(Array(controller.recentProjects.prefix(4))) { project in
+                                HStack(spacing: 8) {
+                                    Button {
+                                        controller.openRecentProject(project)
+                                    } label: {
+                                        HStack {
+                                            Image(systemName: "doc")
+                                            VStack(alignment: .leading, spacing: 1) {
+                                                Text(project.displayName)
+                                                    .lineLimit(1)
+                                                Text("Authorized local project")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            Spacer(minLength: 8)
+                                            Image(systemName: "chevron.right")
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Open \(project.displayName)")
+                                    .accessibilityLabel("Open recent project \(project.displayName)")
+                                    .accessibilityHint("Uses SiteForge’s retained macOS file authorization")
+                                    .accessibilityIdentifier("launch.recentProject.\(project.id.rawValue)")
+
+                                    Button {
+                                        controller.forgetRecentProject(project)
+                                    } label: {
+                                        Image(systemName: "xmark.circle")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help("Remove \(project.displayName) from Recent Projects")
+                                    .accessibilityLabel("Remove \(project.displayName) from Recent Projects")
+                                    .accessibilityIdentifier("launch.recentProject.remove.\(project.id.rawValue)")
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 168)
+                    .accessibilityIdentifier("launch.recentProjects.scroll")
+                }
+                if let message = controller.recentProjectsMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("launch.recentProjects.status")
+                    Button("Locate with Open Project…") { controller.presentOpenPanel() }
+                        .controlSize(.small)
+                        .accessibilityIdentifier("launch.recentProjects.locate")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private func working(_ status: ProjectLoadingStatus) -> some View {

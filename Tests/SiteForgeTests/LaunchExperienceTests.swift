@@ -43,6 +43,96 @@ final class LaunchExperienceTests: XCTestCase {
         XCTAssertEqual(controller.lifecycle.phase, .clean)
     }
 
+    // SF-AUTHORING-105 / SF-0201-002/003/004/006, SF-0204-002/003/004/006
+    func testAuthorizedRecentProjectRecordsDeduplicatesReopensAndForgetsWithoutPaths() async throws {
+        let url = fixture("Private Client.siteforge")
+        try await writePackage(to: url)
+        let bookmarks = MemoryLaunchBookmarkStore()
+        let runtime = LaunchBookmarkRuntime()
+        let recentStore = MemoryRecentProjectStore()
+        let firstBackend = DocumentLifecycleBackend(fileAccess: FileAccessService(
+            policy: .sandboxedUserSelectedReadWrite,
+            runtime: runtime,
+            bookmarks: bookmarks,
+            coordinator: LaunchFileCoordinator()
+        ))
+        let first = makeController(backend: firstBackend, recentProjectStore: recentStore)
+
+        first.openProject(url, userSelected: true)
+        try await waitUntil { first.state == .workspace }
+        let retained = try await recentStore.load()
+        XCTAssertEqual(retained.count, 1)
+        XCTAssertEqual(retained.first?.displayName, "Private Client")
+        XCTAssertFalse(String(describing: retained).contains(fixtureDirectory.path))
+
+        let relaunchedBackend = DocumentLifecycleBackend(fileAccess: FileAccessService(
+            policy: .sandboxedUserSelectedReadWrite,
+            runtime: runtime,
+            bookmarks: bookmarks,
+            coordinator: LaunchFileCoordinator()
+        ))
+        let relaunched = makeController(backend: relaunchedBackend, recentProjectStore: recentStore)
+        await relaunched.loadRecentProjects()
+        let recent = try XCTUnwrap(relaunched.recentProjects.first)
+        relaunched.openRecentProject(recent)
+        try await waitUntil { relaunched.state == .workspace }
+        XCTAssertEqual(relaunched.lifecycle.displayName, "Private Client")
+
+        relaunched.forgetRecentProject(recent)
+        try await waitUntil { relaunched.recentProjects.isEmpty }
+        let afterRemoval = try await recentStore.load()
+        let retainedAuthorization = await bookmarks.bookmark(for: FileAccessService.key(for: url))
+        XCTAssertTrue(afterRemoval.isEmpty)
+        XCTAssertNotNil(retainedAuthorization)
+    }
+
+    func testRecentProjectPolicyBoundsValidatesAndKeepsNewestStableIdentity() {
+        var projects: [RecentProjectReference] = []
+        let base = FileManager.default.temporaryDirectory
+        for index in 0..<12 {
+            projects = RecentProjectPolicy.recording(
+                base.appendingPathComponent("Project-\(index).siteforge"),
+                in: projects
+            )
+        }
+        let newest = projects[0]
+        projects = RecentProjectPolicy.recording(
+            base.appendingPathComponent("Project-4.siteforge"),
+            in: projects
+        )
+
+        XCTAssertEqual(projects.count, RecentProjectStore.capacity)
+        XCTAssertEqual(projects.first?.displayName, "Project-4")
+        XCTAssertTrue(RecentProjectPolicy.isValid(projects))
+        XCTAssertEqual(Set(projects.map(\.id)).count, projects.count)
+        XCTAssertNotEqual(projects.first?.id, newest.id)
+    }
+
+    func testRecentProjectStoreRoundTripsVersionedPathFreeRecordsAndRejectsCorruption() async throws {
+        let url = fixtureDirectory.appendingPathComponent("recent/recent-projects.json")
+        let store = RecentProjectStore(url: url)
+        let projectURL = fixture("Stored.siteforge")
+        let projects = RecentProjectPolicy.recording(projectURL, in: [])
+
+        try await store.save(projects)
+        let loaded = try await store.load()
+        XCTAssertEqual(loaded, projects)
+        let encoded = try String(contentsOf: url)
+        XCTAssertFalse(encoded.contains(projectURL.path))
+        XCTAssertEqual(
+            (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue,
+            0o600
+        )
+
+        try Data("{\"schemaVersion\":9,\"projects\":[]}".utf8).write(to: url, options: .atomic)
+        do {
+            _ = try await store.load()
+            XCTFail("Unsupported recent-project stores must be rejected")
+        } catch {
+            XCTAssertEqual(error as? RecentProjectStoreFailure, .malformed)
+        }
+    }
+
     func testCancelableAndNonCancelableStagesAreExplicit() {
         XCTAssertTrue(ProjectLoadUpdate.readingPackage.status.canCancel)
         XCTAssertTrue(ProjectLoadUpdate.validatingCanonicalDocument.status.canCancel)
@@ -253,6 +343,7 @@ final class LaunchExperienceTests: XCTestCase {
     private func makeController(
         backend: DocumentLifecycleBackend = DocumentLifecycleBackend(),
         preview: LaunchPreviewScenario? = nil,
+        recentProjectStore: any RecentProjectPersisting = MemoryRecentProjectStore(),
         autosaveDebouncer: any LifecycleAutosaveDebouncing = ContinuousLifecycleAutosaveDebouncer()
     ) -> LaunchExperienceController {
         let recoveryDirectory = fixtureDirectory.appendingPathComponent("recovery", isDirectory: true)
@@ -263,7 +354,11 @@ final class LaunchExperienceTests: XCTestCase {
             recoveryDirectory: recoveryDirectory,
             autosaveDebouncer: autosaveDebouncer
         )
-        return LaunchExperienceController(lifecycle: lifecycle, previewScenario: preview)
+        return LaunchExperienceController(
+            lifecycle: lifecycle,
+            recentProjectStore: recentProjectStore,
+            previewScenario: preview
+        )
     }
 
     private func fixture(_ name: String) -> URL { fixtureDirectory.appendingPathComponent(name) }
@@ -302,8 +397,43 @@ final class LaunchExperienceTests: XCTestCase {
     }
 
     private var expectedRequirementIDs: Set<String> {
-        ["SF-0201-004", "SF-0201-006", "SF-0201-007", "SF-0201-008",
+        ["SF-0201-002", "SF-0201-003", "SF-0201-004", "SF-0201-006", "SF-0201-007", "SF-0201-008",
+         "SF-0204-002", "SF-0204-003", "SF-0204-004", "SF-0204-006",
          "SF-0301-002", "SF-0301-004", "SF-0301-006", "SF-0301-007", "SF-0301-008",
          "SF-1602-004", "SF-1602-006", "SF-1602-007", "SF-1602-008"]
+    }
+}
+
+private actor MemoryRecentProjectStore: RecentProjectPersisting {
+    private var projects: [RecentProjectReference] = []
+    func load() -> [RecentProjectReference] { projects }
+    func save(_ projects: [RecentProjectReference]) { self.projects = projects }
+}
+
+private actor MemoryLaunchBookmarkStore: FileBookmarkPersisting {
+    private var records: [String: PersistedFileBookmark] = [:]
+    func bookmark(for key: String) -> PersistedFileBookmark? { records[key] }
+    func setBookmark(_ bookmark: PersistedFileBookmark, for key: String) { records[key] = bookmark }
+}
+
+private actor LaunchBookmarkRuntime: SecurityScopedBookmarkRuntime {
+    func makeBookmark(for url: URL) -> Data { Data(url.path.utf8) }
+    func resolveBookmark(_ data: Data) throws -> SecurityScopedBookmarkResolution {
+        guard let path = String(data: data, encoding: .utf8) else {
+            throw FileAccessFailure.corruptBookmarkStore
+        }
+        return SecurityScopedBookmarkResolution(url: URL(fileURLWithPath: path), isStale: false)
+    }
+    func startAccessing(_ url: URL) -> Bool { true }
+    func stopAccessing(_ url: URL) {}
+}
+
+private actor LaunchFileCoordinator: ProjectFileCoordinating {
+    func coordinate<T: Sendable>(
+        at url: URL,
+        intent: FileAccessIntent,
+        operation: @escaping @Sendable (URL) async throws -> T
+    ) async throws -> T {
+        try await operation(url)
     }
 }

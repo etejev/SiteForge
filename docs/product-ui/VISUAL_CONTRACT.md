@@ -36,8 +36,10 @@ policy are unchanged.
 
 The Components destination is reachable through the native navigator overflow
 menu when the horizontal tab strip cannot show every full label. Its definition
-rows retain readable names, usage counts and Insert/Edit/Delete actions at the
-1100-point practical minimum. Linked instances distinguish inherited appearance
+rows retain readable names, usage counts and Insert/Edit/Rename/Delete actions
+at the 1100-point practical minimum. Rename uses a compact native sheet and
+updates linked display names without changing stable identities or overrides.
+Linked instances distinguish inherited appearance
 from independent geometry. Editing a definition displays an explicit breadcrumb
 and Exit Definition action above the canvas. Definitions never appear as website
 pages. Destructive definition removal names its detach-uses effect and offers
@@ -118,24 +120,52 @@ CMS, export, or publishing workflows.
 
 ## Application navigation
 
+The native welcome card uses the approved packaged SiteForge AppIcon, not a
+generic tool symbol or project-provided artwork. Its first actions are the
+plain-language **New Site** and **Open Project…** choices, followed by compact
+local-project, private-by-default, and recovery-protected assurances. These
+assurances may adapt from one row to a short vertical group at narrower widths;
+they must not wrap into clipped fragments or imply cloud/template behavior
+that is not implemented.
+
+When authorized recency exists, a bounded **Recent Projects** group follows the
+primary actions. Rows show only the project display name and “Authorized local
+project,” never a path. Open uses the retained macOS authorization; Remove
+changes recency without revoking it. Missing authorization leaves the row's
+intent recoverable through a visible Locate/Open Project action. The group may
+show at most four rows on the launch card so it cannot displace primary actions
+below the practical minimum.
+
 The macOS menu bar uses native command groups and exposes the final product
 information architecture: **File**, **Edit**, **View**, **Insert**,
 **Selection**, **Preview**, **Window**, and **Help**. Current command groups
 may contain only the bounded commands implemented by the command registry;
 unimplemented commands are not represented as enabled lookalikes.
 
+The workspace toolbar keeps Select, Frame, Text, Image, and Component visible
+at the practical-minimum window. Section, Stack, Grid, Button, Link, and Form
+use the adjacent native **More Tools** menu and retain equivalent Insert-menu
+and keyboard routes. The menu reports the selected additional tool, preserves
+native focus and pointer targets, and changes only scene-local tool choice.
+Toolbar grouping never creates project data or bypasses the typed command
+registry.
+
 The left-side navigation architecture is Pages, Layers, Elements, Assets, and
 Components. Pages and Layers remain functional. Elements is a real accessible
-catalogue: Section, Stack, Grid, Frame, Form; Text, Button, Link, Divider; Navbar,
-and Footer have stable identities, icons, shortcuts/capability contracts, and
-availability state. Section, Stack, Grid, Frame, Form, and plain Text route to the
-verified canonical insertion registry today. Form is an empty 320×180 semantic
-container; its submission/destination behavior remains explicitly unavailable.
+catalogue: Section, Stack, Grid, Frame, Form; Text, Heading, Button, Link, Divider; Header,
+Navigation, Footer; and Form-only Input, Email, Text Area, Checkbox, Select,
+and Submit actions have stable identities, icons,
+shortcuts/capability contracts, and availability state. Section, Stack, Grid,
+Frame, Form, and plain Text have previously verified canonical insertion.
+Divider and semantic site templates, plus the Form-only Text-backed fields,
+are source-implemented through that same registry but visual acceptance is
+deferred. Form is a 320×180 semantic container; its submission/destination
+behavior remains explicitly unavailable.
 Section is a 960×320 structural
 container with 48-point default padding; Stack is vertical/start with 24-point
 padding and gap; Grid is two equal row-major columns with 24-point padding and
-gap. Button, Link, Divider, Navbar, and Footer remain disabled with a specific
-reason and cannot create canonical content, history, or package state. Assets
+gap. Form field actions are disabled without a selected Form; they do not
+become standalone authored nodes. Assets
 is a functional local-raster library with a direct Import Images action,
 searchable nonwrapping rows, bounded thumbnails, filename, dimensions, format,
 byte size, usage count, rename, replacement, usage reveal, safe deletion, and
@@ -143,8 +173,8 @@ selected-asset insertion. Image is a real Basic element and Insert command;
 its Design controls expose the asset, Fit/Fill/Stretch, bounded Fill focal
 point, and explicit alt/decorative semantics without duplicating Layout
 geometry. Missing bytes preserve the Image and show an in-bounds editor
-placeholder. Components remains an explicit accessible unavailable
-destination until its separate definition work exists.
+placeholder. Components is a functional project-local definition/instance
+surface; cloud libraries, marketplaces, slots, and variants remain unavailable.
 
 The inspector order is Design, Layout, Content, Interactions, and
 Accessibility. Design provides bounded ordered solid and linear-gradient fill
@@ -186,9 +216,26 @@ icon-plus-text `Hidden here` state and a route to show or reset the object.
 Hidden children do not occupy a Stack/Grid layout slot, while a hidden
 container suppresses its subtree without deleting or rewriting descendants.
 Mixed and partially applicable selections identify the exact affected subset.
+Applicable Layout selections also expose one compact Fluid Value group for
+width, height, font size, line height, padding, and gap where supported. It
+shows a property picker, nonwrapping minimum/preferred/maximum fields, the
+390/768/1440 reference widths, authored/defaulted/mixed provenance, and a
+visible Remove Fluid Value action. Incomplete values remain local drafts;
+Escape cancels and removal reveals the untouched fixed value. Fluid controls
+must remain readable in the practical-minimum scrollable Inspector and must
+not imply support for arbitrary curves or non-monotonic interpolation.
 Sizing modes, constraints, aspect ratio, automatic sizing, advanced Stack/Grid
-behavior, and broad property editing remain unavailable. Accessibility is a read-only selection
-summary. Content and
+behavior, and broad property editing remain unavailable. Accessibility exposes
+non-wrapping Accessible name and Description fields for applicable general
+objects, with native focus, Return/focus-loss commit, Escape cancellation,
+Reset, and truthful defaulted/authored/mixed status. The semantic role remains
+derived from the existing Design semantic-element control rather than becoming
+a second editable value. Image alternative text remains in Image Content. For
+a selected Form or Form field Accessibility
+expands into a non-wrapping canonical summary of control role, accessible name,
+required/help/options/bounds, defaulted/authored/mixed provenance, and the
+scene-local category-only validation result. Its Edit in Content action changes
+Inspector destination but never mutates content. Content and
 Interactions are intentionally
 selectable native unavailable surfaces: each states why it cannot operate and
 what later canonical milestone is required. They expose no simulated editable
@@ -197,13 +244,24 @@ For a Form selection, Content truthfully summarizes its unavailable submission
 workflow. A selected Text child of Form exposes non-wrapping local draft fields
 for field kind, label, machine name, help, required, and ordered Select
 options; Apply is one identity-gated canonical transaction and Cancel leaves
-the document unchanged.
+the document unchanged. Mixed fields display Mixed rather than copying the
+primary field and require explicit resolution before one shared configuration
+can be applied. The Form Accessibility surface states that submission remains
+disabled and unconfigured; it does not imply a destination or visitor-data
+workflow.
 
 ## Surface system
 
-- SiteForge's static app identity uses the approved original SF monogram: a dark
-  flat field, inset purple-to-blue rounded-square border, and no glass effect
-  inside the icon. The macOS AppIcon asset catalog owns standard Dock/Finder
+- Quick Open may reveal current-project pages, authorized Layers, image assets,
+  and component definitions. Its separate Page/Insert actions are visibly
+  named and disabled when their existing command is unavailable. Components
+  search and Assets usage filtering remain navigator-local, use readable
+  native controls, and never masquerade as authored site content.
+
+- SiteForge's static app identity uses the owner-approved purple-to-blue
+  rounded-square SF monogram from `docs/design-assets/siteforge-app-icon-sf-gradient-approved-v1.png`.
+  Only its exterior white matte is removed for packaging; the white lettering
+  and gradient field are preserved. The macOS AppIcon asset catalog owns standard Dock/Finder
   sizes; icon artwork never enters project data, authored rendering, or export.
 
 - Application Appearance Settings uses a compact native Settings window with
@@ -222,6 +280,13 @@ the document unchanged.
   staged action, Cancel leaves both values intact, and Restore Previous is
   disabled until a reversible group operation exists. Status text names the
   application-only scope and does not imply project or live-scene mutation.
+- The native Support tab groups Application & Updates, Recovery, and
+  Diagnostics in a compact scrollable Settings surface. Version/build/channel
+  and non-installing update provenance are always readable. Generate and Cancel
+  are distinct from disabled Copy/Export actions; a completed redacted report
+  is reviewable in monospaced text before either sharing action becomes
+  available. Failure and cancellation status remains visible, wraps instead of
+  clipping, and never exposes a local path or authored project value.
 
 - The title bar and toolbar are unified native macOS chrome.
 - Navigator and inspector use native sidebar material blended behind the
@@ -270,6 +335,11 @@ the document unchanged.
   still available through the real accessibility label and help. Editor Frame
   and Section content clips apply only to descendant authored content; their
   own border, radius, and selection geometry remain truthful and unobscured.
+- **Directional marquee:** a blank-canvas drag draws one bounded editor-only
+  accent rectangle above authored content and below committed selection chrome.
+  Left-to-right uses a solid containment treatment; right-to-left uses a dashed
+  intersection treatment. The marquee follows the world transform, never
+  appears in Preview/static output, and disappears on commit or cancellation.
   names choose contrasting foregrounds against their resolved surface; none
   of this chrome is authored or preview/export-facing content.
 - **Initial pasteboard policy:** a fresh or newly adopted document centers its
@@ -305,8 +375,12 @@ the document unchanged.
 - Navigator: 210–300 pt; inspector: 280–360 pt; canvas keeps a 500 pt minimum.
   The 1100 × 700 editor minimum prevents clipping/overlap in normal use.
 - The viewport header remains visible above the canvas. It contains a labeled
-  authored-breakpoint preset (Desktop 1440, Tablet 768, or Mobile 390), zoom out/current
-  percentage/zoom in, Actual Size, Fit to Canvas, and Fit to Document. At
+  authored-breakpoint preset (Desktop 1440, Tablet 768, or Mobile 390), a
+  visible Compare action, zoom out/current percentage/zoom in, Actual Size,
+  Fit to Canvas, and Fit to Document. Compare opens a native scrollable review
+  of the same resolved geometry, layout, and visibility cascade; its cards use
+  nonwrapping facts with a vertical compact fallback and never become project
+  data. At
   explicitly constrained Debug/UI-test geometry these remain real named native
   controls; an overflow affordance, when required by a later narrower layout,
   must stay visible rather than hiding functional controls behind automation.
@@ -322,6 +396,12 @@ the document unchanged.
   A hidden canvas object remains discoverable through an explicit Layers state
   but produces no authored pixels, ghost selection chrome, hit target, inline
   editor, or canvas accessibility object at that breakpoint.
+- A canonical fluid value, when present, resolves a monotonic linear
+  minimum/preferred/maximum clamp at Mobile 390, Tablet 768, and Desktop 1440.
+  Explicit Tablet/Mobile literals retain precedence. Breakpoint comparison,
+  canvas, typography, container layout, Preview planning, and closed static
+  output must show the same resolved value; the scene preset itself remains
+  noncanonical.
 - At explicitly constrained Debug/UI-test geometry, tests may expose safe
   screen edges while retaining the production metrics as the Release contract.
 
@@ -346,27 +426,25 @@ other private data.
 
 ## Implemented versus future capability
 
-Implemented now: one full-size native scene/window, project lifecycle states,
-Pages/Layers, the bounded Elements catalogue (Section, Stack, Grid, Frame,
-Form, and plain Text enabled), a bounded canvas/renderer/overlay system, selection,
-insertion, transforms, guides,
-bounded plain-text editing, local drag/reorder, bounded editable Design
-solid/linear-gradient fill controls, bounded editable Layout fixed-geometry
-controls, bounded uniform border/radius/single enabled outer-shadow plus Frame/Section
-content-padding and clipping Design controls, the
-read-only Accessibility summary, native unavailable
-Content/Interactions destinations, native materials, and the central
-command/history/persistence boundaries documented in
-`docs/IMPLEMENTATION_STATUS.md`.
+Current verified or source-implemented product surfaces include the native
+scene/window lifecycle; Pages/Layers/Elements/Assets/Components navigation;
+structural, text, image, semantic, interaction and bounded Form authoring; the
+canvas/renderer/overlay system; selection, insertion, transforms and guides;
+local assets and components; Design, Layout, Content, Interactions and
+Accessibility Inspector workflows; responsive geometry/layout/visibility;
+typography; local Preview navigation; application Settings and Support; native
+materials; and the central command/history/persistence boundaries. The exact
+verification state and exclusions of each slice are authoritative in
+`docs/IMPLEMENTATION_STATUS.md`; source-implemented work is not promoted to
+accepted merely because its visual contract is recorded here.
 
-Explicitly future: container/basic/site Element authoring beyond the currently
-enabled structural/plain-Text set, Asset storage/import, Component
-definitions/instances, general property editing beyond the bounded Design and
-Layout slices, image fills, blend/filter effects, independent borders,
-per-corner radii, multiple/inner shadows, responsive
-editing, CMS, production typography, asset import/placement, external
-drag/drop, export, publishing, plugins, and release acceptance. Naming these
-destinations in this contract does not make them implemented.
+Explicitly future beyond the bounded current slices: cloud or remote asset and
+component libraries, rich-text spans and advanced typography, arbitrary
+responsive styling/content/assets, advanced CSS grid/flex behaviors, image
+editing/renditions, broad CMS/runtime data, general interaction graphs,
+complete preview/export parity, publishing, third-party plugin execution, and
+release acceptance. Naming a destination in this contract does not make it
+implemented or enabled.
 
 ## Verification evidence
 
@@ -391,6 +469,24 @@ Reproducible visual review paths, including each inspector tab, empty, single,
 multiple, and locked selection variants, are recorded in
 `docs/evidence/product-ui-003/README.md`.
 
+`SF-PRODUCT-UI-006` adds source coverage for the approved launch identity and
+the bounded persistent/overflow authoring-tool hierarchy. Its focused test
+source is unrun, so it is not visual or accessibility acceptance evidence.
+
+## Authored-object clipboard (SF-AUTHORING-107 source contract)
+
+Cut, Copy, Paste, Paste in Place, and Duplicate use the standard macOS Edit
+menu names and shortcuts. When a native text field/editor owns first responder,
+those commands retain ordinary NSText behavior; otherwise they address the
+active SiteForge object selection. Layers and canvas contextual menus expose
+the same central routes. A material result appears as one concise status-bar
+announcement without showing clipboard content, paths, or opaque identifiers.
+Paste must never create preview chrome, ghost rectangles, or a second selection
+model: newly inserted roots adopt through the normal renderer/selection scene.
+Unavailable, malformed, oversized, stale, or unsupported dependency states
+remain document-neutral and state one bounded repair action. This source
+contract is not visual acceptance until its focused actual-app test runs.
+
 ## Testing workflow
 
 - During bounded implementation, use focused tests or `./sf test changed`.
@@ -402,3 +498,14 @@ multiple, and locked selection variants, are recorded in
   shared-shell/focus, security, or CI-tooling changes.
 - GitHub Actions remains the authoritative post-push full gate. No READY item
   is marked complete from focused or changed-only testing.
+## Local Preview navigation (SF-AUTHORING-103 source contract)
+
+Local Preview is visually and behaviorally separate from the editor. Its
+compact header keeps the current page, Back, Forward, Refresh, and Done visible
+without overlaying authored content. The page surface uses the same resolved
+artboard bounds as canvas preparation; it must not infer a false artboard from
+the union of authored objects. Internal Link activation changes only the
+Preview page/history. Editor grid, selection, guides, badges, focus chrome, and
+pasteboard never enter Preview pixels. Missing links remain visibly inert and
+announce repair guidance. External targets are not executed by this bounded
+local runtime.

@@ -66,7 +66,7 @@ struct WorkspaceShellView: View {
         .sheet(item: $state.pageEditorRequest) { request in
             PageEditorSheet(state: state, request: request)
         }
-        .sheet(isPresented: $state.isQuickOpenPresented) {
+        .sheet(isPresented: $state.isQuickOpenPresented, onDismiss: state.completeQuickOpenDismissal) {
             QuickOpenSheet(state: state)
         }
         .toolbar {
@@ -191,7 +191,7 @@ private struct WorkspaceToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
-            ForEach(CanvasTool.allCases) { tool in
+            ForEach(CanvasTool.primaryToolbarTools) { tool in
                 Button {
                     state.selectTool(tool)
                 } label: {
@@ -202,6 +202,28 @@ private struct WorkspaceToolbar: ToolbarContent {
                 .accessibilityIdentifier("toolbar.tool.\(tool.rawValue)")
                 .accessibilityValue(state.selectedTool == tool ? "Selected" : "Not selected")
             }
+
+            Menu {
+                ForEach(CanvasTool.additionalToolbarTools) { tool in
+                    Button {
+                        state.selectTool(tool)
+                    } label: {
+                        Label(tool.title, systemImage: tool.systemImage)
+                    }
+                    .accessibilityIdentifier("toolbar.moreTool.\(tool.rawValue)")
+                    .accessibilityValue(state.selectedTool == tool ? "Selected" : "Not selected")
+                }
+            } label: {
+                Label("More Tools", systemImage: "ellipsis.circle")
+            }
+            .help("Section, Stack, Grid, Button, Link, and Form tools")
+            .accessibilityLabel("More authoring tools")
+            .accessibilityValue(
+                CanvasTool.additionalToolbarTools.contains(state.selectedTool)
+                    ? "Selected: \(state.selectedTool.title)"
+                    : "No additional tool selected"
+            )
+            .accessibilityIdentifier("toolbar.moreTools")
         }
 
         ToolbarItemGroup(placement: .automatic) {
@@ -503,8 +525,18 @@ private struct QuickOpenSheet: View {
     @State private var query = ""
     @State private var scope: QuickOpenScope = .all
 
-    private var results: (pages: [DocumentPage], layers: [SelectionTargetSnapshot], actions: [QuickOpenViewAction]) {
-        QuickOpenSearchPolicy.results(pages: state.pages, layers: state.layerTargets, query: query, scope: scope)
+    private var results: (pages: [DocumentPage], layers: [SelectionTargetSnapshot], actions: [QuickOpenViewAction], insertions: [QuickOpenInsertAction], pageActions: [QuickOpenPageAction], assets: [ImageAsset], components: [DocumentPage]) {
+        QuickOpenSearchPolicy.results(
+            pages: state.pages, layers: state.layerTargets, query: query, scope: scope,
+            hasSelectedImageAsset: state.selectedAssetID != nil,
+            assets: state.documentSession.document.imageAssets,
+            components: state.componentDefinitions
+        )
+    }
+
+    private func queueNewPageEditor() {
+        guard state.queueQuickOpenNewPage() else { return }
+        dismiss()
     }
 
     private func openFirst() {
@@ -515,6 +547,19 @@ private struct QuickOpenSheet: View {
         else if let page = results.pages.first { state.selectPage(page.id) }
         else if let layer = results.layers.first { state.selectLayer(layer.id) }
         else if let action = results.actions.first { action.perform(on: state) }
+        else if results.pageActions.contains(.newPage) {
+            queueNewPageEditor()
+            return
+        }
+        else if let action = results.insertions.first(where: { $0.isAvailable(on: state) }) {
+            guard action.perform(on: state) else { return }
+        }
+        else if let asset = results.assets.first {
+            guard state.revealImageAsset(asset.id) else { return }
+        }
+        else if let component = results.components.first {
+            guard state.revealComponentDefinition(component.id) else { return }
+        }
         else { return }
         dismiss()
     }
@@ -533,7 +578,7 @@ private struct QuickOpenSheet: View {
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("quickOpen.scope")
-            Text("\(results.pages.count) pages · \(results.layers.count) current-page layers · \(results.actions.count) actions")
+            Text("\(results.pages.count) pages · \(results.layers.count) layers · \(results.assets.count) assets · \(results.components.count) components · \(results.actions.count + results.insertions.count + results.pageActions.count) actions")
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("quickOpen.status")
             ScrollView {
@@ -573,7 +618,7 @@ private struct QuickOpenSheet: View {
                             .accessibilityIdentifier("quickOpen.recentLayer.\(layer.id.description)")
                         }
                     }
-                    if results.pages.isEmpty && results.layers.isEmpty && results.actions.isEmpty {
+                    if results.pages.isEmpty && results.layers.isEmpty && results.actions.isEmpty && results.insertions.isEmpty && results.pageActions.isEmpty && results.assets.isEmpty && results.components.isEmpty {
                         ContentUnavailableView.search(text: query)
                             .accessibilityIdentifier("quickOpen.empty")
                     }
@@ -609,6 +654,64 @@ private struct QuickOpenSheet: View {
                             .accessibilityIdentifier("quickOpen.layer.\(layer.id.description)")
                         }
                     }
+                    if !results.assets.isEmpty {
+                        Text("Image Assets").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(results.assets) { asset in
+                            HStack {
+                                Button {
+                                    guard state.revealImageAsset(asset.id) else { return }
+                                    dismiss()
+                                } label: {
+                                    HStack {
+                                        Text(asset.displayName).lineLimit(1)
+                                        Spacer()
+                                        Text("Select in Assets").foregroundStyle(.secondary)
+                                    }
+                                }
+                                .accessibilityIdentifier("quickOpen.asset.\(asset.id.description)")
+                                Button("Insert Image") {
+                                    guard state.insertImageAssetFromQuickOpen(asset.id) else { return }
+                                    dismiss()
+                                }
+                                .disabled(!state.pageEditingIsAvailable)
+                                .accessibilityIdentifier("quickOpen.asset.insert.\(asset.id.description)")
+                                .accessibilityHint("Inserts this image into the current page using the existing Image command")
+                            }
+                        }
+                    }
+                    if !results.components.isEmpty {
+                        Text("Component Definitions").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(results.components) { definition in
+                            HStack {
+                                Button {
+                                    guard state.revealComponentDefinition(definition.id) else { return }
+                                    dismiss()
+                                } label: {
+                                    HStack {
+                                        Text(definition.name).lineLimit(1)
+                                        Spacer()
+                                        Text("Reveal in Components").foregroundStyle(.secondary)
+                                    }
+                                }
+                                .accessibilityIdentifier("quickOpen.component.\(definition.id.description)")
+                                Button("Insert Instance") {
+                                    guard state.insertComponentFromQuickOpen(definition.id) else { return }
+                                    dismiss()
+                                }
+                                .disabled(!state.pageEditingIsAvailable)
+                                .accessibilityIdentifier("quickOpen.component.insert.\(definition.id.description)")
+                                .accessibilityHint("Inserts a linked instance through the existing component command")
+                            }
+                        }
+                    }
+                    if !results.pageActions.isEmpty {
+                        Text("Page Actions").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(results.pageActions) { action in
+                            Button(action.title) { queueNewPageEditor() }
+                                .disabled(!state.pageEditingIsAvailable)
+                                .accessibilityIdentifier("quickOpen.pageAction.\(action.id)")
+                        }
+                    }
                     if !results.actions.isEmpty {
                         Text("View Actions").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         ForEach(results.actions) { action in
@@ -626,6 +729,26 @@ private struct QuickOpenSheet: View {
                                 }
                             }
                             .accessibilityIdentifier("quickOpen.action.\(action.id)")
+                        }
+                    }
+                    if !results.insertions.isEmpty {
+                        Text("Insert Actions").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(results.insertions) { action in
+                            Button {
+                                guard action.perform(on: state) else { return }
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(action.title)
+                                    Spacer()
+                                    if !action.isAvailable(on: state) {
+                                        Text("Unavailable").foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .disabled(!action.isAvailable(on: state))
+                            .accessibilityIdentifier("quickOpen.insert.\(action.id)")
+                            .accessibilityHint("Uses the active page and current insertion destination")
                         }
                     }
                 }
@@ -937,6 +1060,7 @@ private struct ComponentTextInstanceFields: View {
 private struct ComponentsNavigatorView: View {
     @ObservedObject var state: WorkspaceShellState
     @State private var deleting: PageID?
+    @State private var renaming: ComponentRenameRequest?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -944,31 +1068,48 @@ private struct ComponentsNavigatorView: View {
                 .disabled(!state.canCreateComponent)
                 .help("Select one authored Frame, Section, Stack or Grid. Nested components are not supported.")
                 .accessibilityIdentifier("components.create")
+            HStack {
+                TextField("Search Components", text: $state.componentSearchText)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("components.search")
+                    .onSubmit {
+                        if let first = state.filteredComponentDefinitions.first {
+                            _ = state.revealComponentDefinition(first.id)
+                        }
+                    }
+                    .onExitCommand { state.componentSearchText = "" }
+                if !state.componentSearchText.isEmpty {
+                    Button("Clear Search", systemImage: "xmark.circle.fill") {
+                        state.componentSearchText = ""
+                    }
+                    .labelStyle(.iconOnly)
+                    .accessibilityIdentifier("components.search.clear")
+                }
+            }
+            Text("\(state.filteredComponentDefinitions.count) of \(state.componentDefinitions.count) component definitions")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("components.search.status")
             if state.componentDefinitions.isEmpty {
                 Text("Turn a selected container into a reusable local component.")
                     .fixedSize(horizontal: false, vertical: true)
             }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(state.componentDefinitions) { definition in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(definition.name).fontWeight(.semibold).lineLimit(1).help(definition.name)
-                            Text("\(state.componentUsageCount(definition.id)) linked instances").font(.caption)
-                            HStack {
-                                Button("Insert") { state.insertComponent(definition.id) }
-                                    .disabled(state.editingComponentID != nil || !state.pageEditingIsAvailable)
-                                    .accessibilityIdentifier("components.insert." + definition.id.description)
-                                Button("Edit") { state.editComponentDefinition(definition.id) }
-                                    .disabled(state.editingComponentID != nil)
-                                    .accessibilityIdentifier("components.edit." + definition.id.description)
-                                Button("Delete", role: .destructive) { deleting = definition.id }
-                                    .disabled(state.editingComponentID != nil || !state.pageEditingIsAvailable)
-                                    .accessibilityIdentifier("components.delete." + definition.id.description)
-                            }
+            ScrollViewReader { scroll in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        if state.filteredComponentDefinitions.isEmpty && !state.componentDefinitions.isEmpty {
+                            ContentUnavailableView.search(text: state.componentSearchText)
+                                .accessibilityIdentifier("components.search.empty")
                         }
-                        .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("components.definition." + definition.id.description)
+                        ForEach(state.filteredComponentDefinitions) { definition in
+                            componentDefinitionRow(definition)
+                        }
                     }
+                }
+                .onAppear {
+                    if let id = state.highlightedComponentDefinitionID { scroll.scrollTo(id, anchor: .center) }
+                }
+                .onChange(of: state.highlightedComponentDefinitionID) { _, id in
+                    if let id { scroll.scrollTo(id, anchor: .center) }
                 }
             }
             if let instance = state.selectedComponent {
@@ -1002,6 +1143,104 @@ private struct ComponentsNavigatorView: View {
                 Button("Cancel", role: .cancel) { deleting = nil }
                     .accessibilityIdentifier("components.delete.cancel")
             }
+        .sheet(item: $renaming) { request in
+            ComponentRenameView(state: state, request: request) { renaming = nil }
+        }
+    }
+
+    private func componentDefinitionRow(_ definition: DocumentPage) -> some View {
+        let usageCount = state.componentUsageCount(definition.id)
+        let isRevealed = state.highlightedComponentDefinitionID == definition.id
+        let editingIsDisabled = state.editingComponentID != nil || !state.pageEditingIsAvailable
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(definition.name)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .help(definition.name)
+                .accessibilityLabel(definition.name)
+                .accessibilityValue("\(usageCount) linked instances" + (isRevealed ? "; Revealed definition" : ""))
+                .accessibilityIdentifier("components.definition." + definition.id.description)
+            Text("\(usageCount) linked instances").font(.caption)
+            if isRevealed {
+                Text("Revealed in Components")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .accessibilityIdentifier("components.definition.revealed." + definition.id.description)
+            }
+            HStack {
+                Button("Insert") { state.insertComponent(definition.id) }
+                    .disabled(editingIsDisabled)
+                    .accessibilityIdentifier("components.insert." + definition.id.description)
+                Button("Edit") { state.editComponentDefinition(definition.id) }
+                    .disabled(state.editingComponentID != nil)
+                    .accessibilityIdentifier("components.edit." + definition.id.description)
+                Button("Rename…") { renaming = .init(id: definition.id, name: definition.name) }
+                    .disabled(editingIsDisabled)
+                    .accessibilityIdentifier("components.rename." + definition.id.description)
+                Button("Delete", role: .destructive) { deleting = definition.id }
+                    .disabled(editingIsDisabled)
+                    .accessibilityIdentifier("components.delete." + definition.id.description)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .padding(5)
+        .background(isRevealed ? Color.accentColor.opacity(0.14) : .clear,
+                    in: RoundedRectangle(cornerRadius: 6))
+        .id(definition.id)
+    }
+}
+
+private struct ComponentRenameRequest: Identifiable {
+    let id: PageID
+    let name: String
+}
+
+private struct ComponentRenameView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let request: ComponentRenameRequest
+    let dismiss: () -> Void
+    @State private var name: String
+    @State private var message = ""
+    @FocusState private var focused: Bool
+
+    init(state: WorkspaceShellState, request: ComponentRenameRequest, dismiss: @escaping () -> Void) {
+        self.state = state
+        self.request = request
+        self.dismiss = dismiss
+        _name = State(initialValue: request.name)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Rename Component").font(.headline)
+            TextField("Component name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($focused)
+                .accessibilityIdentifier("components.rename.name")
+                .onSubmit(performRename)
+            Text("Linked instances keep their stable identity and update to the new definition name.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !message.isEmpty {
+                Text(message).font(.caption).foregroundStyle(.red)
+                    .accessibilityIdentifier("components.rename.validation")
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", action: dismiss).keyboardShortcut(.cancelAction)
+                Button("Rename", action: performRename).keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("components.rename.apply")
+            }
+        }
+        .padding(20).frame(width: 360)
+        .onAppear { focused = true }
+    }
+
+    private func performRename() {
+        let revision = state.documentSession.document.revision
+        state.renameComponent(request.id, to: name)
+        if state.documentSession.document.revision != revision { dismiss() }
+        else { message = state.componentAnnouncement }
     }
 }
 
@@ -1025,6 +1264,14 @@ private struct AssetsNavigatorView: View {
                 .accessibilityIdentifier("assets.search")
             Toggle("Favorites", isOn: $state.assetFavoritesOnly)
                 .accessibilityIdentifier("assets.filter.favorites")
+            Picker("Usage", selection: $state.assetUsageFilter) {
+                ForEach(AssetUsageFilter.allCases) { filter in
+                    Text(filter.title).tag(filter)
+                        .accessibilityIdentifier("assets.filter.usage.\(filter.rawValue)")
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("assets.filter.usage")
             HStack(spacing: 5) {
                 Picker("Folder", selection: $state.assetFolderFilter) {
                     Text("All folders").tag(String?.none)
@@ -1059,18 +1306,27 @@ private struct AssetsNavigatorView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(state.imageAssets) { asset in
-                            AssetRow(asset: asset, state: state) {
-                                state.selectedAssetID = asset.id
-                                editingAsset = asset
+                ScrollViewReader { scroll in
+                    ScrollView {
+                        LazyVStack(spacing: 6) {
+                            ForEach(state.imageAssets) { asset in
+                                AssetRow(asset: asset, state: state) {
+                                    state.selectedAssetID = asset.id
+                                    editingAsset = asset
+                                }
+                                .id(asset.id)
                             }
                         }
                     }
+                    .onAppear {
+                        if let id = state.selectedAssetID { scroll.scrollTo(id, anchor: .center) }
+                    }
+                    .onChange(of: state.selectedAssetID) { _, id in
+                        if let id { scroll.scrollTo(id, anchor: .center) }
+                    }
+                    .accessibilityLabel("Imported image assets")
+                    .accessibilityIdentifier("assets.list")
                 }
-                .accessibilityLabel("Imported image assets")
-                .accessibilityIdentifier("assets.list")
             }
 
             if state.isImportingImages { ProgressView().controlSize(.small) }
@@ -1280,7 +1536,7 @@ private struct ElementsCatalogView: View {
                         ContentUnavailableView.search(text: searchText)
                             .accessibilityIdentifier("navigator.elements.search.empty")
                     }
-                    ForEach(["Layout", "Basic", "Site"], id: \.self) { category in
+                    ForEach(["Layout", "Basic", "Site", "Forms"], id: \.self) { category in
                         if results.contains(where: { $0.category == category }) {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(category).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -1305,8 +1561,18 @@ private struct ElementCatalogRow: View {
 
     var body: some View {
         let availability = item.availability
+        let fieldTemplate = item.template.flatMap { $0.formFieldKind == nil ? nil : $0 }
+        let fieldAvailability = fieldTemplate.map {
+            state.insertionAvailability(.text, template: $0)
+        }
         Button {
             guard case .available(let tool) = availability else { return }
+            if fieldTemplate != nil, fieldAvailability?.isEnabled != true { return }
+            if let template = item.template {
+                state.performDefaultInsertion(template.insertionKind,
+                    provenance: .accessibility, template: template)
+                return
+            }
             // Structural catalogue rows have a useful non-pointer equivalent:
             // they commit one validated default insertion. Frame/Text retain
             // their established tool-arming workflow for canvas placement.
@@ -1330,10 +1596,15 @@ private struct ElementCatalogRow: View {
             .padding(.horizontal, 8).padding(.vertical, 6).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled({ if case .unavailable = availability { true } else { false } }())
+        .disabled({
+            if case .unavailable = availability { return true }
+            return fieldTemplate != nil && fieldAvailability?.isEnabled != true
+        }())
         .accessibilityIdentifier("navigator.elements.\(item.rawValue)")
         .accessibilityLabel(item.title)
-        .accessibilityHint(item.accessibilityDescription)
+        .accessibilityHint(fieldTemplate != nil && fieldAvailability?.isEnabled != true
+            ? "Select an unlocked Form on the active page to insert this field."
+            : item.accessibilityDescription)
     }
 }
 
@@ -1477,6 +1748,21 @@ private struct NavigatorLayerRow: View {
                 performAccessibilityNest()
             }
             .contextMenu {
+                Button("Cut") {
+                    if !isSelected { state.selectLayer(target.id) }
+                    _ = state.cutSelection(provenance: .contextualMenu)
+                }
+                .disabled(target.isLocked)
+                Button("Copy") {
+                    if !isSelected { state.selectLayer(target.id) }
+                    _ = state.copySelection(provenance: .contextualMenu)
+                }
+                Button("Duplicate") {
+                    if !isSelected { state.selectLayer(target.id) }
+                    _ = state.duplicateSelection(provenance: .contextualMenu)
+                }
+                .disabled(target.isLocked)
+                Divider()
                 Button("Move Before") {
                     guard let destination = state.dragDestination(before: target.id),
                           let source = state.selectionState.primaryID else { return }
@@ -1760,6 +2046,15 @@ private struct CanvasPlaceholderView: View {
                         .focusable()
                         .focused(focus, equals: .viewportCanvas)
                         .contextMenu {
+                            Button("Paste") {
+                                _ = state.pasteSiteForgeObjects(provenance: .contextualMenu)
+                            }
+                            .disabled(!state.canPasteSiteForgeObjects)
+                            Button("Paste in Place") {
+                                _ = state.pasteSiteForgeObjects(placement: .inPlace, provenance: .contextualMenu)
+                            }
+                            .disabled(!state.canPasteSiteForgeObjects)
+                            Divider()
                             Button("Insert Frame at Center") {
                                 state.performDefaultInsertion(.frame, provenance: .contextualMenu)
                             }
@@ -1952,6 +2247,15 @@ private struct ViewportControlsView: View {
 
                 Spacer(minLength: 4)
 
+                Button("Compare") {
+                    state.isResponsiveComparisonPresented = true
+                }
+                .buttonStyle(.bordered)
+                .fixedSize()
+                .help("Compare Desktop, Tablet, and Mobile resolved layout without changing the document")
+                .accessibilityLabel("Compare responsive breakpoints")
+                .accessibilityIdentifier("canvas.viewport.compare")
+
                 Toggle("Grid", isOn: $state.isWorldGridVisible)
                     .toggleStyle(.button)
                     .fixedSize()
@@ -2070,8 +2374,100 @@ private struct ViewportControlsView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .workspaceChrome(.viewportControls)
+        .sheet(isPresented: $state.isResponsiveComparisonPresented) {
+            ResponsiveBreakpointComparisonView(state: state)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("canvas.viewport.controls")
+    }
+}
+
+private struct ResponsiveBreakpointComparisonView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Compare Breakpoints").font(.title3.weight(.semibold))
+                    Text(state.selectionState.isEmpty
+                         ? "Reviewing all positioned objects on the active page."
+                         : "Reviewing the current \(state.selectionState.count)-object selection.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("responsive.compare.done")
+            }
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(state.responsiveBreakpointReviews) { review in
+                        responsiveReviewCard(review)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            Text("Comparison is scene-local. Review actions switch the canvas preset but never author or reset an override.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("responsive.compare.scope")
+        }
+        .padding(18)
+        .frame(width: 560, height: 520)
+        .accessibilityIdentifier("responsive.compare.sheet")
+    }
+
+    private func responsiveReviewCard(_ review: ResponsiveBreakpointReview) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Label(review.title, systemImage: review.breakpoint == .desktop ? "desktopcomputer" : "ipad.and.iphone")
+                    .font(.headline)
+                    .accessibilityLabel("\(review.title) responsive review")
+                    .accessibilityValue(review.accessibilityValue)
+                    .accessibilityIdentifier("responsive.compare.card.\(review.breakpoint.rawValue)")
+                Text("\(review.viewportWidth) px").monospacedDigit().foregroundStyle(.secondary)
+                Spacer()
+                if state.viewportPreset.responsiveBreakpoint == review.breakpoint {
+                    Text("Current").font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+                } else {
+                    Button("Review \(review.title)") { state.reviewBreakpoint(review.breakpoint) }
+                        .accessibilityIdentifier("responsive.compare.review.\(review.breakpoint.rawValue)")
+                }
+            }
+            Text(review.differenceSummary).font(.callout.weight(.medium))
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { reviewFacts(review) }
+                VStack(alignment: .leading, spacing: 3) { reviewFacts(review) }
+            }
+            if let name = review.primaryName, let geometry = review.primaryGeometry,
+               let visible = review.primaryIsVisible, let provenance = review.primaryProvenance {
+                Text("\(name) · \(visible ? "Visible" : "Hidden") · \(provenance)")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                Text("X \(number(geometry.origin.x)) · Y \(number(geometry.origin.y)) · W \(number(geometry.size.width)) · H \(number(geometry.size.height))")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            if let summary = review.primaryFluidSummary {
+                Text(summary).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 9))
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private func reviewFacts(_ review: ResponsiveBreakpointReview) -> some View {
+        Text("\(review.visibleCount)/\(review.objectCount) visible")
+        Text("Geometry \(review.geometryOverrideCount)")
+        Text("Layout \(review.containerOverrideCount)")
+        Text("Visibility \(review.visibilityOverrideCount)")
+        Text("Fluid \(review.fluidValueCount)")
+    }
+
+    private func number(_ value: Double) -> String {
+        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
     }
 }
 
@@ -2723,13 +3119,18 @@ private final class FocusableViewportPresetPopUpButton: NSPopUpButton {
 
 private struct FormInspectorFieldsView: View {
     @ObservedObject var state: WorkspaceShellState
-    @State private var kind: FormFieldKind = .text
+    @State private var kind: FormFieldKind?
     @State private var label = ""
     @State private var name = ""
     @State private var help = ""
-    @State private var required = false
+    @State private var required: Bool?
     @State private var options = "Option=option"
     @State private var maximumLength = ""
+    @State private var mixedLabel = false
+    @State private var mixedName = false
+    @State private var mixedHelp = false
+    @State private var mixedOptions = false
+    @State private var mixedMaximumLength = false
     @State private var identity: FormInspectorOperationIdentity?
     @State private var status = ""
 
@@ -2768,34 +3169,55 @@ private struct FormInspectorFieldsView: View {
                     description: Text("Select a Text child of a Form to configure its field metadata."))
             } else {
                 Text("Form Field").font(.headline)
-                Text("\(fields.count) applicable; \(state.selectionState.count - fields.count) incompatible unchanged")
+                Text(state.formFieldInspectorPresentation.configurationStatus)
                     .font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("inspector.form.applicability")
                 Picker("Field kind", selection: $kind) {
-                    ForEach(FormFieldKind.allCases, id: \.self) { Text($0.title).tag($0) }
+                    if kind == nil { Text("Mixed").tag(FormFieldKind?.none) }
+                    ForEach(FormFieldKind.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
                 }
                 .accessibilityIdentifier("inspector.form.kind")
-                TextField("Visible label", text: $label)
+                TextField("Visible label", text: Binding(get: { label }, set: { label = $0; mixedLabel = false }),
+                          prompt: Text(mixedLabel ? "Mixed labels" : "Visible label"))
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("inspector.form.label")
-                TextField("Machine name", text: $name)
+                TextField("Machine name", text: Binding(get: { name }, set: { name = $0; mixedName = false }),
+                          prompt: Text(mixedName ? "Mixed machine names" : "Machine name"))
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("inspector.form.name")
-                TextField("Help text (optional)", text: $help)
+                TextField("Help text (optional)", text: Binding(get: { help }, set: { help = $0; mixedHelp = false }),
+                          prompt: Text(mixedHelp ? "Mixed help text" : "Help text (optional)"))
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("inspector.form.help")
-                Toggle("Required", isOn: $required)
+                Picker("Requirement", selection: $required) {
+                    if required == nil { Text("Mixed").tag(Bool?.none) }
+                    Text("Optional").tag(Optional(false))
+                    Text("Required").tag(Optional(true))
+                }
                     .accessibilityIdentifier("inspector.form.required")
-                if [.text, .email, .textarea].contains(kind) {
-                    TextField("Maximum length (optional)", text: $maximumLength)
+                if kind.map({ [.text, .email, .textarea].contains($0) }) ?? false {
+                    TextField("Maximum length (optional)", text: Binding(get: { maximumLength }, set: {
+                        maximumLength = $0; mixedMaximumLength = false
+                    }),
+                              prompt: Text(mixedMaximumLength ? "Mixed limits" : "Maximum length (optional)"))
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("inspector.form.maximumLength")
                 }
                 if kind == .select {
-                    TextField("Options: Label=value, one per line", text: $options, axis: .vertical)
+                    TextField("Options: Label=value, one per line", text: Binding(get: { options }, set: {
+                        options = $0; mixedOptions = false
+                    }),
+                              prompt: Text(mixedOptions ? "Mixed ordered options" : "Label=value, one per line"),
+                              axis: .vertical)
                         .lineLimit(2...5).textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("inspector.form.options")
                 }
+                Text("Type: \(state.formFieldInspectorPresentation.kind.displayValue) · \(state.formFieldInspectorPresentation.kind.provenance)")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.form.provenance.kind")
+                Text("Accessible name: \(state.formFieldInspectorPresentation.accessibleName.displayValue) · \(state.formFieldInspectorPresentation.accessibleName.provenance)")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.form.provenance.label")
                 HStack {
                     Button("Apply", action: apply)
                         .disabled(!state.formInspectorIsEnabled)
@@ -2812,6 +3234,7 @@ private struct FormInspectorFieldsView: View {
                 Text(status.isEmpty ? state.lastFormInspectorAnnouncement : status)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Form field edit status")
+                    .accessibilityValue(status.isEmpty ? state.lastFormInspectorAnnouncement : status)
                     .accessibilityIdentifier("inspector.form.status")
             }
         }
@@ -2823,23 +3246,40 @@ private struct FormInspectorFieldsView: View {
 
     private func refresh() {
         identity = state.formInspectorIdentity
-        guard let field = fields.first else { return }
-        kind = FormFieldKind(rawValue: field.insertionStringProperty(CanonicalFormField.kindKey) ?? "text") ?? .text
-        label = field.insertionStringProperty(CanonicalFormField.labelKey) ?? field.name
-        name = field.insertionStringProperty(CanonicalFormField.nameKey) ?? "field"
-        help = field.insertionStringProperty(CanonicalFormField.helpKey) ?? ""
-        required = field.insertionBooleanProperty(CanonicalFormField.requiredKey)
-        maximumLength = field.insertionNumberProperty(CanonicalFormField.maximumLengthKey).map { String(Int($0)) } ?? ""
-        if let encoded = field.insertionStringProperty(CanonicalFormField.optionsKey),
+        guard !fields.isEmpty else { return }
+        let kinds = fields.map { FormFieldKind(rawValue: $0.insertionStringProperty(CanonicalFormField.kindKey) ?? "text") ?? .text }
+        kind = common(kinds)
+        let labels = fields.map { $0.insertionStringProperty(CanonicalFormField.labelKey) ?? $0.name }
+        label = common(labels) ?? ""; mixedLabel = common(labels) == nil
+        let names = fields.map { $0.insertionStringProperty(CanonicalFormField.nameKey) ?? "field" }
+        name = common(names) ?? ""; mixedName = common(names) == nil
+        let helps = fields.map { $0.insertionStringProperty(CanonicalFormField.helpKey) ?? "" }
+        help = common(helps) ?? ""; mixedHelp = common(helps) == nil
+        required = common(fields.map { $0.insertionBooleanProperty(CanonicalFormField.requiredKey) })
+        let limits = fields.map { $0.insertionNumberProperty(CanonicalFormField.maximumLengthKey).map { Int($0) } }
+        let commonLimit = common(limits)
+        maximumLength = commonLimit.flatMap { $0 }.map { String($0) } ?? ""
+        mixedMaximumLength = commonLimit == nil
+        let encodedOptions = fields.map { $0.insertionStringProperty(CanonicalFormField.optionsKey) }
+        if let shared = common(encodedOptions), let encoded = shared,
            let values = try? CanonicalFormSelectOptions.decode(encoded) {
             options = values.map { "\($0.label)=\($0.value)" }.joined(separator: "\n")
+            mixedOptions = false
+        } else if common(encodedOptions) == nil {
+            options = ""; mixedOptions = true
         } else {
-            options = "Option=option"
+            options = "Option=option"; mixedOptions = false
         }
         status = ""
     }
 
     private func apply() {
+        guard let kind, let required, !mixedLabel, !mixedName, !mixedHelp,
+              (!mixedOptions || kind != .select),
+              (!mixedMaximumLength || ![.text, .email, .textarea].contains(kind)) else {
+            status = "Resolve every Mixed field before applying one shared configuration; committed metadata is unchanged."
+            return
+        }
         let parsed: [CanonicalFormSelectOption]
         if kind == .select {
             // Values are the canonical uniqueness key. Preserve the existing
@@ -2854,12 +3294,18 @@ private struct FormInspectorFieldsView: View {
                 existingOptions = []
             }
             let existingByValue = Dictionary(uniqueKeysWithValues: existingOptions.map { ($0.value, $0.id) })
-            parsed = options.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            let lines = options.split(separator: "\n", omittingEmptySubsequences: true)
+            let candidates = lines.compactMap { line -> CanonicalFormSelectOption? in
                 let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-                guard parts.count == 2 else { return nil }
+                guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
                 let value = String(parts[1])
                 return .init(id: existingByValue[value] ?? FormOptionID(), label: String(parts[0]), value: value)
             }
+            guard candidates.count == lines.count else {
+                status = "Enter every Select option as a nonempty Label=value line; committed metadata is unchanged."
+                return
+            }
+            parsed = candidates
         } else {
             parsed = []
         }
@@ -2870,6 +3316,210 @@ private struct FormInspectorFieldsView: View {
             help: help.isEmpty ? nil : help, required: required, options: parsed, maximumLength: limit)
         if state.commitFormInspectorEdit(.configure(configuration), identity: identity) { refresh() }
         status = state.lastFormInspectorAnnouncement
+    }
+
+    private func common<Value: Equatable>(_ values: [Value]) -> Value? {
+        guard let first = values.first, values.dropFirst().allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+}
+
+private struct FormAccessibilityInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Form Accessibility").font(.headline)
+            if let form = state.formContainerAccessibilityPresentation {
+                Text(form.status)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.accessibility.form.status")
+                LabeledContent("Fields", value: "\(form.configuredCount) configured of \(form.fieldCount)")
+                LabeledContent("Required", value: "\(form.requiredCount)")
+                LabeledContent("Submit controls", value: "\(form.submitCount) disabled until destination approval")
+                Text(state.formValidationPreviewState.status)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(state.formValidationAccessibilitySummary.label)
+                    .accessibilityValue(state.formValidationAccessibilitySummary.value)
+                    .accessibilityHint(state.formValidationAccessibilitySummary.hint)
+                    .accessibilityIdentifier("inspector.accessibility.form.validation")
+                HStack {
+                    Button("Validate Empty Local Draft") { _ = state.validateSelectedFormLocally() }
+                        .keyboardShortcut("v", modifiers: [.command, .option])
+                        .disabled(!state.canValidateSelectedFormLocally)
+                        .accessibilityIdentifier("inspector.accessibility.form.validate")
+                    Button("Edit in Content") { state.inspectorTab = .content }
+                        .accessibilityIdentifier("inspector.accessibility.form.editContent")
+                }
+            } else if !state.selectedFormFields.isEmpty {
+                let presentation = state.formFieldInspectorPresentation
+                Text(presentation.configurationStatus)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.accessibility.formField.status")
+                accessibilityRow("Control type", presentation.kind,
+                                 identifier: "inspector.accessibility.formField.kind")
+                accessibilityRow("Accessible name", presentation.accessibleName,
+                                 identifier: "inspector.accessibility.formField.name")
+                accessibilityRow("Requirement", presentation.required,
+                                 identifier: "inspector.accessibility.formField.required")
+                accessibilityRow("Description", presentation.help,
+                                 identifier: "inspector.accessibility.formField.help")
+                accessibilityRow("Machine name", presentation.machineName,
+                                 identifier: "inspector.accessibility.formField.machineName")
+                accessibilityRow("Options", presentation.options,
+                                 identifier: "inspector.accessibility.formField.options")
+                accessibilityRow("Maximum length", presentation.maximumLength,
+                                 identifier: "inspector.accessibility.formField.maximumLength")
+                Button("Edit Field in Content") { state.inspectorTab = .content }
+                    .accessibilityHint("Opens the canonical Form field controls. Changes remain transactional and undoable.")
+                    .accessibilityIdentifier("inspector.accessibility.formField.editContent")
+            } else {
+                Text("Select a Form or one of its fields to inspect accessible names, roles, requirements, help, and local validation.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.accessibility.form.empty")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func accessibilityRow(_ label: String, _ value: FormInspectorAggregateValue,
+                                  identifier: String) -> some View {
+        LabeledContent(label) {
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(value.displayValue)
+                    .accessibilityLabel("\(label): \(value.displayValue), \(value.provenance)")
+                    .accessibilityIdentifier(identifier)
+                Text(value.provenance).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// General authored accessibility metadata. Image alt text and Form-field
+/// semantics intentionally remain in their dedicated Content workflows.
+private struct GeneralAccessibilityInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @FocusState private var focused: CanonicalAccessibilityMetadata.Field?
+    @State private var drafts: [CanonicalAccessibilityMetadata.Field: String] = [:]
+    @State private var message: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Accessibility").font(.headline)
+                Spacer()
+                Button("Reset") {
+                    if state.commitAccessibilityMetadata(.reset, operation: "reset") {
+                        drafts.removeAll(); message = nil
+                    } else { message = state.lastDesignInspectorAnnouncement }
+                }
+                .disabled(!isAvailable)
+                .accessibilityIdentifier("inspector.accessibility.reset")
+            }
+            Text(roleSummary)
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityLabel("Semantic role: \(roleSummary)")
+                .accessibilityIdentifier("inspector.accessibility.role")
+            ForEach(CanonicalAccessibilityMetadata.Field.allCases, id: \.self) { field in
+                let value = state.accessibilityMetadataInspectorValue(field)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(field.title).frame(width: 92, alignment: .leading).lineLimit(1)
+                        TextField(field.title, text: Binding(
+                            get: { drafts[field] ?? display(value) },
+                            set: { drafts[field] = $0; message = nil }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focused, equals: field)
+                        .onSubmit { commit(field) }
+                        .onChange(of: focused) { previous, current in
+                            if previous == field, current != field, drafts[field] != nil {
+                                DispatchQueue.main.async { guard focused != field else { return }; commit(field) }
+                            }
+                        }
+                        .disabled(!isEditable(value))
+                        .accessibilityLabel(field.title)
+                        .accessibilityValue(accessibilityValue(value))
+                        .accessibilityHint("Enter a concise value and press Return. Empty removes the authored override; Escape cancels the draft.")
+                        .accessibilityIdentifier("inspector.accessibility.\(field.rawValue)")
+                    }
+                    Text(provenance(value)).font(.caption2).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("inspector.accessibility.\(field.rawValue).provenance")
+                }
+            }
+            Button("Edit Semantic Element in Design") { state.inspectorTab = .design }
+                .disabled(state.selectionState.isEmpty)
+                .accessibilityIdentifier("inspector.accessibility.editSemantic")
+            if let message {
+                Text(message).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.accessibility.validation")
+            }
+            Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("inspector.accessibility.announcement")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inspector.accessibility.general")
+        .onExitCommand { drafts.removeAll(); focused = nil; message = nil }
+    }
+
+    private var isAvailable: Bool {
+        CanonicalAccessibilityMetadata.Field.allCases.contains {
+            isEditable(state.accessibilityMetadataInspectorValue($0))
+        }
+    }
+
+    private var roleSummary: String {
+        switch state.semanticElementInspectorValue() {
+        case .single(let element, let origin):
+            return "Role: <\(element.rawValue)> · \(origin == .authored ? "Authored" : "Defaulted")"
+        case .mixed(let applicable, let skipped): return "Role: Mixed · \(applicable) applicable, \(skipped) skipped"
+        case .unavailable(let reason): return "Role unavailable · \(reason)"
+        }
+    }
+
+    private func isEditable(_ value: AccessibilityMetadataInspectorValue) -> Bool {
+        if case .unavailable = value { return false }
+        return true
+    }
+
+    private func display(_ value: AccessibilityMetadataInspectorValue) -> String {
+        if case .single(let text?, _) = value { return text }
+        return ""
+    }
+
+    private func provenance(_ value: AccessibilityMetadataInspectorValue) -> String {
+        switch value {
+        case .single(nil, _): return "Defaulted · no override"
+        case .single(_, let origin): return origin == .authored ? "Authored" : "Defaulted"
+        case .mixed(let applicable, let skipped): return "Mixed · \(applicable) editable, \(skipped) skipped"
+        case .unavailable(let reason): return reason
+        }
+    }
+
+    private func accessibilityValue(_ value: AccessibilityMetadataInspectorValue) -> String {
+        switch value {
+        case .single(nil, _): return "Defaulted, no override"
+        case .single(let text?, let origin): return "\(text), \(origin == .authored ? "authored" : "defaulted")"
+        case .mixed(let applicable, let skipped): return "Mixed values, \(applicable) editable, \(skipped) skipped"
+        case .unavailable(let reason): return reason
+        }
+    }
+
+    private func commit(_ field: CanonicalAccessibilityMetadata.Field) {
+        let source = drafts[field] ?? display(state.accessibilityMetadataInspectorValue(field))
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value: String? = trimmed.isEmpty ? nil : trimmed
+        guard value?.count ?? 0 <= field.maximumLength else {
+            message = "\(field.title) must be \(field.maximumLength) characters or fewer."
+            return
+        }
+        guard state.commitAccessibilityMetadata(.set(field, value), operation: field.rawValue) else {
+            message = state.lastDesignInspectorAnnouncement
+            return
+        }
+        drafts[field] = nil; message = nil
     }
 }
 
@@ -3148,6 +3798,10 @@ private struct InspectorView: View {
                 .foregroundStyle(.secondary)
             GeometryInspectorFieldsView(state: state)
                 .id(state.geometryInspectorSelectionKey)
+            if !state.supportedFluidValueTargets.isEmpty {
+                FluidValueInspectorView(state: state)
+                    .id("fluid:" + state.geometryInspectorSelectionKey)
+            }
             SizingInspectorFieldsView(state: state)
                 .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ","))
             if state.hasContainerLayoutSelection {
@@ -3163,12 +3817,13 @@ private struct InspectorView: View {
             Divider()
             guideAndSnappingDetails
         case .accessibility:
-            Text("Accessibility summary")
-                .font(.headline)
-            Text("\(state.selectionSummary). \(state.selectionState.count == 1 ? "Primary selection is available for inspection." : "Multiple selection remains inspection-only.")")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("inspector.accessibility.summary")
+            if state.hasFormInspectorContext {
+                FormAccessibilityInspectorView(state: state)
+                    .id("form-accessibility:" + state.geometryInspectorSelectionKey)
+            } else {
+                GeneralAccessibilityInspectorView(state: state)
+                    .id("general-accessibility:" + state.geometryInspectorSelectionKey)
+            }
         case .content where state.hasComponentTextInspectorContext:
             VStack(alignment: .leading, spacing: 14) {
                 if state.selectedDefinitionText != nil || !state.componentTextProperties.isEmpty
@@ -4651,6 +5306,192 @@ private struct GeometryInspectorFieldsView: View {
     }
 }
 
+private enum FluidValueDraftField: Hashable { case minimum, preferred, maximum }
+
+/// SF-0604 drafts are scene-local strings. Only a complete, monotonic triple
+/// reaches the central identity-gated registry; Escape never changes content.
+private struct FluidValueInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @State private var target: FluidValueTarget = .width
+    @State private var minimum = ""
+    @State private var preferred = ""
+    @State private var maximum = ""
+    @State private var validation: String?
+    @FocusState private var focused: FluidValueDraftField?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Fluid Value").font(.headline)
+                Spacer()
+                Picker("Fluid property", selection: $target) {
+                    ForEach(state.supportedFluidValueTargets, id: \.self) { value in
+                        Text(value.title).tag(value)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 150)
+                .accessibilityLabel("Fluid property")
+                .accessibilityIdentifier("inspector.layout.fluid.target")
+            }
+            switch state.fluidValue(for: target) {
+            case .single(let value, let origin, let applicable, let skipped):
+                Text("Linear · \(origin == .authored ? "Authored" : "Defaulted") · \(applicable) applicable\(skipped == 0 ? "" : " · \(skipped) skipped")")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.layout.fluid.provenance")
+                fluidFields(value)
+                if let current = state.currentResolvedFluidValue(for: target) {
+                    Text("Current \(state.viewportPreset.title) \(state.viewportPreset.width) px: \(format(current))")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("inspector.layout.fluid.current")
+                }
+                Button("Remove Fluid Value") { remove() }
+                    .accessibilityHint("Restore the fixed authored value without writing an equivalent literal.")
+                    .accessibilityIdentifier("inspector.layout.fluid.remove")
+            case .mixed(let applicable, let skipped):
+                Text("Mixed fluid values · \(applicable) applicable\(skipped == 0 ? "" : " · \(skipped) skipped")")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Use One Fluid Value…") { seedDrafts() }
+                        .accessibilityIdentifier("inspector.layout.fluid.unify")
+                    Button("Remove") { remove() }
+                        .accessibilityLabel("Remove mixed fluid values")
+                        .accessibilityIdentifier("inspector.layout.fluid.removeMixed")
+                }
+                draftFields
+            case .unavailable(let reason):
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+                Button("Make Fluid") { seedDrafts() }
+                    .disabled(state.fluidFixedValue(for: target) == nil)
+                    .accessibilityIdentifier("inspector.layout.fluid.enable")
+                if !minimum.isEmpty || !preferred.isEmpty || !maximum.isEmpty { draftFields }
+            }
+            if let validation {
+                Text(validation).font(.caption).foregroundStyle(.red)
+                    .accessibilityIdentifier("inspector.layout.fluid.validation")
+            }
+            Text(state.lastFluidValueAnnouncement).font(.caption2).foregroundStyle(.secondary)
+                .accessibilityIdentifier("inspector.layout.fluid.announcement")
+        }
+        .onChange(of: target) { _, _ in resetDrafts() }
+        .onChange(of: focused) { previous, current in
+            if previous != nil, current == nil,
+               !minimum.isEmpty, !preferred.isEmpty, !maximum.isEmpty {
+                DispatchQueue.main.async { if focused == nil { commit(.focusLoss) } }
+            }
+        }
+        .onExitCommand { resetDrafts(); focused = nil; state.cancelFluidValueDraft() }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Fluid responsive value")
+        .accessibilityIdentifier("inspector.layout.fluid")
+    }
+
+    @ViewBuilder private func fluidFields(_ value: CanonicalFluidValue) -> some View {
+        let hasDraft = !minimum.isEmpty || !preferred.isEmpty || !maximum.isEmpty
+        if hasDraft { draftFields }
+        else {
+            HStack(spacing: 8) {
+                valueLabel("Min", value.minimum)
+                valueLabel("Preferred", value.preferred)
+                valueLabel("Max", value.maximum)
+            }
+            Button("Edit Fluid Value…") {
+                minimum = format(value.minimum); preferred = format(value.preferred); maximum = format(value.maximum)
+                focused = .minimum
+            }
+            .accessibilityIdentifier("inspector.layout.fluid.edit")
+        }
+        Text("390 px → 768 px → 1440 px · monotonic linear clamp")
+            .font(.caption2).foregroundStyle(.secondary)
+            .accessibilityIdentifier("inspector.layout.fluid.range")
+    }
+
+    private var draftFields: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            fluidField("Minimum", text: $minimum, focus: .minimum)
+            fluidField("Preferred", text: $preferred, focus: .preferred)
+            fluidField("Maximum", text: $maximum, focus: .maximum)
+            if let preview = draftPreview {
+                Text("Draft preview — Mobile \(format(preview.minimum)), Tablet \(format(preview.preferred)), Desktop \(format(preview.maximum)); not committed")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.layout.fluid.draftPreview")
+            }
+            HStack {
+                Button("Cancel") { resetDrafts(); state.cancelFluidValueDraft() }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("inspector.layout.fluid.cancel")
+                Spacer()
+                Button("Apply") { commit(.keyboard) }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("inspector.layout.fluid.apply")
+            }
+        }
+    }
+
+    private func fluidField(_ label: String, text: Binding<String>, focus: FluidValueDraftField) -> some View {
+        HStack {
+            Text(label).frame(width: 72, alignment: .leading)
+            TextField(label, text: text).textFieldStyle(.roundedBorder).monospacedDigit()
+                .focused($focused, equals: focus)
+                .onSubmit { commit(.keyboard) }
+                .accessibilityLabel("Fluid \(target.title) \(label.lowercased())")
+                .accessibilityIdentifier("inspector.layout.fluid.\(String(describing: focus))")
+        }
+    }
+
+    private func valueLabel(_ title: String, _ value: Double) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(format(value)).monospacedDigit()
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func seedDrafts() {
+        guard let fixed = state.fluidFixedValue(for: target) else { return }
+        minimum = format(max(target == .padding || target == .gap ? 0 : 1, fixed * 0.75))
+        preferred = format(fixed)
+        maximum = format(min(1_000_000_000, max(fixed, fixed * 1.25)))
+        focused = .minimum
+        validation = nil
+    }
+
+    private var draftPreview: CanonicalFluidValue? {
+        guard case .success(let min) = GeometryInspectorNumberParser.parse(minimum),
+              case .success(let preferred) = GeometryInspectorNumberParser.parse(preferred),
+              case .success(let max) = GeometryInspectorNumberParser.parse(maximum) else { return nil }
+        let value = CanonicalFluidValue(minimum: min, preferred: preferred, maximum: max)
+        return value.isValid && target.accepts(min) && target.accepts(preferred) && target.accepts(max)
+            ? value : nil
+    }
+
+    private func commit(_ provenance: FluidValueProvenance) {
+        let parsed = [minimum, preferred, maximum].map { GeometryInspectorNumberParser.parse($0) }
+        guard case .success(let min) = parsed[0], case .success(let preferred) = parsed[1],
+              case .success(let max) = parsed[2] else {
+            validation = "Enter three complete finite numbers."
+            return
+        }
+        let value = CanonicalFluidValue(minimum: min, preferred: preferred, maximum: max)
+        guard value.isValid, target.accepts(min), target.accepts(preferred), target.accepts(max) else {
+            validation = "Minimum must be no greater than preferred, preferred no greater than maximum, and all values must be in range."
+            return
+        }
+        guard state.commitFluidValue(value, target: target, provenance: provenance) else {
+            validation = state.fluidValueFailure?.localizedDescription; return
+        }
+        resetDrafts()
+    }
+
+    private func remove() {
+        if state.commitFluidValue(nil, target: target, provenance: .pointer) { resetDrafts() }
+        else { validation = state.fluidValueFailure?.localizedDescription }
+    }
+
+    private func resetDrafts() { minimum = ""; preferred = ""; maximum = ""; validation = nil }
+    private func format(_ value: Double) -> String { GeometryInspectorNumberParser.format(value) }
+}
+
 /// Scene-local drafts and native controls for canonical Section/Stack/Grid
 /// layout properties. Every committed path converges on the typed registry in
 /// `WorkspaceShellState`; incomplete strings never enter the document model.
@@ -5082,6 +5923,12 @@ private struct StatusBarView: View {
                 Label(state.snappingStatus, systemImage: "scope")
                     .accessibilityIdentifier("status.snapping")
             }
+            if state.lastClipboardAnnouncement != "Clipboard editing inactive" {
+                Divider().frame(height: 14)
+                Label(state.lastClipboardAnnouncement, systemImage: "doc.on.clipboard")
+                    .accessibilityLabel(state.lastClipboardAnnouncement)
+                    .accessibilityIdentifier("status.clipboard")
+            }
             Spacer()
             if lifecycle.phase == .saving || lifecycle.phase == .autosaving {
                 ProgressView().controlSize(.small).accessibilityLabel(lifecycle.statusText)
@@ -5121,6 +5968,29 @@ private struct LocalPreviewView: View {
             HStack {
                 Label("Local Preview", systemImage: "play.rectangle.fill")
                     .font(.headline)
+                Button { state.previewBack() } label: { Image(systemName: "chevron.left") }
+                    .disabled(!state.previewState.canGoBack)
+                    .accessibilityLabel("Preview Back")
+                    .accessibilityIdentifier("preview.back")
+                Button { state.previewForward() } label: { Image(systemName: "chevron.right") }
+                    .disabled(!state.previewState.canGoForward)
+                    .accessibilityLabel("Preview Forward")
+                    .accessibilityIdentifier("preview.forward")
+                if let page = state.previewState.currentPage {
+                    Menu {
+                        ForEach(state.previewState.runtime?.pages ?? []) { destination in
+                            Button(destination.name) {
+                                state.followPreviewLink(.init(
+                                    target: .page(destination.id), context: .same, isMissing: false))
+                            }
+                        }
+                    } label: {
+                        Label(page.name, systemImage: page.role == .notFound ? "exclamationmark.triangle" : "doc")
+                    }
+                    .accessibilityLabel("Preview page")
+                    .accessibilityValue("\(page.name), \(page.route.rawValue)")
+                    .accessibilityIdentifier("preview.page")
+                }
                 Spacer()
                 Text(state.previewState.snapshot.map { "Revision \($0.revision)" } ?? "Unavailable")
                     .foregroundStyle(.secondary)
@@ -5136,8 +6006,11 @@ private struct LocalPreviewView: View {
             .padding(16)
             Divider()
             if let snapshot = state.previewState.snapshot {
-                LocalPreviewCanvas(snapshot: snapshot)
-                    .accessibilityIdentifier("preview.canvas")
+                LocalPreviewCanvas(
+                    snapshot: snapshot,
+                    viewportBounds: state.previewState.currentPage?.viewportBounds,
+                    onFollow: { state.followPreviewLink($0) }
+                )
             } else {
                 ContentUnavailableView(
                     "Preview unavailable",
@@ -5152,6 +6025,8 @@ private struct LocalPreviewView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16).padding(.vertical, 10)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(state.previewState.status)
                 .accessibilityIdentifier("preview.status")
         }
         .frame(minWidth: 620, minHeight: 420)
@@ -5162,19 +6037,21 @@ private struct LocalPreviewView: View {
 
 private struct LocalPreviewCanvas: View {
     let snapshot: CanvasPreviewSceneSnapshot
+    let viewportBounds: WorldRect?
+    let onFollow: (CanvasPreviewLink) -> Void
 
     var body: some View {
         GeometryReader { proxy in
-            let bounds = previewBounds(snapshot.objects)
-            let inset: CGFloat = 28
+            let bounds = viewportBounds ?? previewBounds(snapshot.objects)
+            let inset = 28.0
             let scale = min(
-                (proxy.size.width - inset * 2) / max(1, bounds.size.width),
-                (proxy.size.height - inset * 2) / max(1, bounds.size.height)
+                max(1, Double(proxy.size.width) - inset * 2) / max(1, bounds.size.width),
+                max(1, Double(proxy.size.height) - inset * 2) / max(1, bounds.size.height)
             )
             ZStack(alignment: .topLeading) {
                 Color.white
                 ForEach(snapshot.objects.filter(\.isVisible).sorted { $0.paintOrder < $1.paintOrder }, id: \.id) { object in
-                    LocalPreviewObject(object: object)
+                    LocalPreviewObject(object: object, onFollow: onFollow)
                         .frame(width: object.frame.size.width * scale, height: object.frame.size.height * scale)
                         .position(
                             x: inset + (object.frame.origin.x - bounds.origin.x) * scale + object.frame.size.width * scale / 2,
@@ -5184,27 +6061,45 @@ private struct LocalPreviewCanvas: View {
                 }
             }
             .clipShape(Rectangle())
+            .accessibilityElement(children: .contain)
             .accessibilityLabel("Preview page, revision \(snapshot.revision), \(snapshot.objects.count) authored objects")
+            .accessibilityIdentifier("preview.canvas")
         }
         .background(Color.white)
     }
 
-    private func previewBounds(_ objects: [CanvasRenderObject]) -> CGRect {
-        guard let first = objects.first else { return CGRect(x: 0, y: 0, width: 1440, height: 900) }
-        return objects.dropFirst().reduce(CGRect(
-            x: first.frame.origin.x, y: first.frame.origin.y,
-            width: first.frame.size.width, height: first.frame.size.height
-        )) { partial, object in
-            partial.union(CGRect(x: object.frame.origin.x, y: object.frame.origin.y,
-                               width: object.frame.size.width, height: object.frame.size.height))
+    private func previewBounds(_ objects: [CanvasRenderObject]) -> WorldRect {
+        guard let first = objects.first else {
+            return .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 900))
         }
+        let minX = objects.dropFirst().reduce(first.frame.minX) { min($0, $1.frame.minX) }
+        let minY = objects.dropFirst().reduce(first.frame.minY) { min($0, $1.frame.minY) }
+        let maxX = objects.dropFirst().reduce(first.frame.maxX) { max($0, $1.frame.maxX) }
+        let maxY = objects.dropFirst().reduce(first.frame.maxY) { max($0, $1.frame.maxY) }
+        return .init(origin: .init(x: minX, y: minY),
+                     size: .init(width: maxX - minX, height: maxY - minY))
     }
 }
 
 private struct LocalPreviewObject: View {
     let object: CanvasRenderObject
+    let onFollow: (CanvasPreviewLink) -> Void
 
     var body: some View {
+        if let link = object.previewLink {
+            Button { onFollow(link) } label: { renderedContent }
+                .buttonStyle(.plain)
+                .disabled(link.isMissing)
+                .help(link.isMissing ? "Missing link target" : "Follow \(object.plainText ?? "link")")
+                .accessibilityLabel(object.accessibilityLabel)
+                .accessibilityHint(link.isMissing ? "Target missing" : "Activates the authored link in Preview")
+                .accessibilityIdentifier("preview.object.\(object.id.description)")
+        } else {
+            renderedContent
+        }
+    }
+
+    private var renderedContent: some View {
         ZStack(alignment: .topLeading) {
             previewFill
             if let text = object.plainText {
@@ -5411,6 +6306,18 @@ struct SiteForgeCommands: Commands {
         return registered ?? (WorkspaceCommandTargetRegistry.shared.hasBindings ? nil : state)
     }
 
+    private var nativeTextResponderIsActive: Bool {
+        NSApp.keyWindow?.firstResponder is NSTextView
+    }
+
+    private func routePasteboardAction(_ selector: Selector, objectAction: (WorkspaceShellState) -> Void) {
+        if nativeTextResponderIsActive {
+            NSApp.sendAction(selector, to: nil, from: nil)
+        } else if let state = commandState {
+            objectAction(state)
+        }
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New") { launchExperience?.createBlankProject() }
@@ -5456,6 +6363,40 @@ struct SiteForgeCommands: Commands {
                 .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.canRedo != true)
         }
 
+        CommandGroup(replacing: .pasteboard) {
+            Button("Cut") {
+                routePasteboardAction(#selector(NSText.cut(_:))) {
+                    _ = $0.cutSelection(provenance: .menu)
+                }
+            }
+            .keyboardShortcut("x", modifiers: .command)
+            .disabled(!nativeTextResponderIsActive && commandState?.canCutSelection != true)
+            Button("Copy") {
+                routePasteboardAction(#selector(NSText.copy(_:))) {
+                    _ = $0.copySelection(provenance: .menu)
+                }
+            }
+            .keyboardShortcut("c", modifiers: .command)
+            .disabled(!nativeTextResponderIsActive && commandState?.canCopySelection != true)
+            Button("Paste") {
+                routePasteboardAction(#selector(NSText.paste(_:))) {
+                    _ = $0.pasteSiteForgeObjects(provenance: .menu)
+                }
+            }
+            .keyboardShortcut("v", modifiers: .command)
+            .disabled(!nativeTextResponderIsActive && commandState?.canPasteSiteForgeObjects != true)
+            Button("Paste in Place") {
+                _ = commandState?.pasteSiteForgeObjects(placement: .inPlace, provenance: .menu)
+            }
+            .keyboardShortcut("v", modifiers: [.command, .shift])
+            .disabled(nativeTextResponderIsActive || commandState?.canPasteSiteForgeObjects != true)
+            Button("Duplicate") {
+                _ = commandState?.duplicateSelection(provenance: .menu)
+            }
+            .keyboardShortcut("d", modifiers: .command)
+            .disabled(nativeTextResponderIsActive || commandState?.canCopySelection != true)
+        }
+
         CommandMenu("Insert") {
             ForEach(CanvasTool.allCases) { tool in
                 Button {
@@ -5477,6 +6418,10 @@ struct SiteForgeCommands: Commands {
             }
             .keyboardShortcut("t", modifiers: [.command, .shift])
             .disabled(commandState?.insertionAvailability(.text).isEnabled != true)
+            Button("Insert Heading at Center") {
+                commandState?.performDefaultInsertion(.text, provenance: .menu, template: .heading)
+            }
+            .disabled(commandState?.insertionAvailability(.text, template: .heading).isEnabled != true)
             Button("Insert Button at Center") { commandState?.performDefaultInsertion(.button, provenance: .menu) }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
                 .disabled(commandState?.insertionAvailability(.button).isEnabled != true)
@@ -5486,6 +6431,34 @@ struct SiteForgeCommands: Commands {
             Button("Insert Form at Center") { commandState?.performDefaultInsertion(.form, provenance: .menu) }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
                 .disabled(commandState?.insertionAvailability(.form).isEnabled != true)
+            Button("Insert Input into Selected Form") {
+                commandState?.performDefaultInsertion(.text, provenance: .menu, template: .input)
+            }
+            .disabled(commandState?.insertionAvailability(.text, template: .input).isEnabled != true)
+            Button("Insert Email into Selected Form") {
+                commandState?.performDefaultInsertion(.text, provenance: .menu, template: .emailInput)
+            }
+            .disabled(commandState?.insertionAvailability(.text, template: .emailInput).isEnabled != true)
+            Button("Insert Text Area into Selected Form") {
+                commandState?.performDefaultInsertion(.text, provenance: .menu, template: .textArea)
+            }
+            .disabled(commandState?.insertionAvailability(.text, template: .textArea).isEnabled != true)
+            Button("Insert Checkbox into Selected Form") {
+                commandState?.performDefaultInsertion(.text, provenance: .menu, template: .checkbox)
+            }
+            .disabled(commandState?.insertionAvailability(.text, template: .checkbox).isEnabled != true)
+            Button("Insert Select into Selected Form") {
+                commandState?.performDefaultInsertion(.text, provenance: .menu, template: .selectField)
+            }
+            .disabled(commandState?.insertionAvailability(.text, template: .selectField).isEnabled != true)
+            Button("Insert Submit into Selected Form") {
+                commandState?.performDefaultInsertion(.text, provenance: .menu, template: .submit)
+            }
+            .disabled(commandState?.insertionAvailability(.text, template: .submit).isEnabled != true)
+            Button("Insert Divider at Center") {
+                commandState?.performDefaultInsertion(.frame, provenance: .menu, template: .divider)
+            }
+            .disabled(commandState?.insertionAvailability(.frame).isEnabled != true)
             Divider()
             Button("Insert Section at Center") {
                 commandState?.performDefaultInsertion(.section, provenance: .menu)
@@ -5502,6 +6475,18 @@ struct SiteForgeCommands: Commands {
             }
             .keyboardShortcut("3", modifiers: [.command, .option])
             .disabled(commandState?.insertionAvailability(.grid).isEnabled != true)
+            Button("Insert Header at Center") {
+                commandState?.performDefaultInsertion(.section, provenance: .menu, template: .header)
+            }
+            .disabled(commandState?.insertionAvailability(.section).isEnabled != true)
+            Button("Insert Navigation at Center") {
+                commandState?.performDefaultInsertion(.section, provenance: .menu, template: .navigation)
+            }
+            .disabled(commandState?.insertionAvailability(.section).isEnabled != true)
+            Button("Insert Footer at Center") {
+                commandState?.performDefaultInsertion(.section, provenance: .menu, template: .footer)
+            }
+            .disabled(commandState?.insertionAvailability(.section).isEnabled != true)
             Divider()
             Button("Insert Selected Image at Center") {
                 commandState?.insertSelectedImage()
@@ -5601,6 +6586,9 @@ struct SiteForgeCommands: Commands {
             Divider()
             Button("Quick Open…") { commandState?.isQuickOpenPresented = true }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+                .disabled(commandState == nil)
+            Button("Compare Breakpoints…") { commandState?.isResponsiveComparisonPresented = true }
+                .keyboardShortcut("r", modifiers: [.command, .option])
                 .disabled(commandState == nil)
             Divider()
             Button("Zoom In") { state?.performViewportCommand(CanvasViewportCommand(.zoomIn)) }
@@ -5708,6 +6696,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.viewportState = state.viewportState
         view.renderPlan = state.canvasRenderPlan
         view.selectionOverlayPlan = state.selectionOverlayPlan
+        view.selectionMarqueePresentation = state.selectionMarqueePresentation
         view.insertionPreviewOverlay = state.insertionPreviewOverlay
         view.transformOverlays = state.transformOverlays
         view.authoredGuides = state.activeGuides
@@ -5728,6 +6717,7 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.viewportState = state.viewportState
         view.renderPlan = state.canvasRenderPlan
         view.selectionOverlayPlan = state.selectionOverlayPlan
+        view.selectionMarqueePresentation = state.selectionMarqueePresentation
         view.insertionPreviewOverlay = state.insertionPreviewOverlay
         view.transformOverlays = state.transformOverlays
         view.authoredGuides = state.activeGuides
@@ -5737,7 +6727,12 @@ private struct NativeCanvasViewport: NSViewRepresentable {
         view.isWorldGridVisible = state.isWorldGridVisible
         view.textEditingPresentation = state.textEditingPresentation
         view.onInteraction = { state.noteCanvasInteraction() }
-        view.onPointerSelection = { point, modifier in state.selectCanvasPoint(point, modifier: modifier) }
+        view.onPointerSelectionStart = { point, modifier in
+            state.beginCanvasSelectionGesture(point, modifier: modifier)
+        }
+        view.onPointerSelectionUpdate = { point in state.updateCanvasSelectionMarquee(to: point) }
+        view.onPointerSelectionCommit = { state.commitCanvasSelectionMarquee() }
+        view.onPointerSelectionCancel = { state.cancelCanvasSelectionMarquee() }
         view.onPointerPreview = { point in state.previewInsertion(at: point) }
         view.onPointerTransformStart = { point in state.beginPointerTransform(at: point) }
         view.onPointerTransformUpdate = { delta, constrain, suppress in
@@ -5785,6 +6780,10 @@ private struct NativeCanvasViewport: NSViewRepresentable {
             state.performDefaultInsertion(.text, provenance: .accessibility)
             return state.documentSession.document.revision != revision
         }
+        view.onCopySelection = { state.copySelection(provenance: .accessibility) }
+        view.onCutSelection = { state.cutSelection(provenance: .accessibility) }
+        view.onPasteSelection = { state.pasteSiteForgeObjects(provenance: .accessibility) }
+        view.onDuplicateSelection = { state.duplicateSelection(provenance: .accessibility) }
         view.onBeginTextEditingAtPoint = {
             state.beginTextEditing(at: $0, provenance: .pointer)
         }
@@ -5952,6 +6951,9 @@ final class NativeCanvasViewportView: NSView {
             if let renderPlan { rebuildAccessibility(renderPlan) }
         }
     }
+    var selectionMarqueePresentation: SelectionMarqueePresentation? {
+        didSet { rebuildOverlay() }
+    }
     var insertionPreviewOverlay: CanvasEditorOverlay? {
         didSet { rebuildOverlay() }
     }
@@ -5968,7 +6970,10 @@ final class NativeCanvasViewportView: NSView {
     }
     var accessibilityViewportValue = "Zoom 100 percent"
     var onInteraction: (() -> Void)?
-    var onPointerSelection: ((WorldPoint, SelectionPointerModifier) -> Void)?
+    var onPointerSelectionStart: ((WorldPoint, SelectionPointerModifier) -> Bool)?
+    var onPointerSelectionUpdate: ((WorldPoint) -> Void)?
+    var onPointerSelectionCommit: (() -> Void)?
+    var onPointerSelectionCancel: (() -> Void)?
     var onPointerPreview: ((WorldPoint) -> Void)?
     var onPointerTransformStart: ((WorldPoint) -> Bool)?
     var onPointerTransformUpdate: ((WorldVector, Bool, Bool) -> Void)?
@@ -5981,6 +6986,10 @@ final class NativeCanvasViewportView: NSView {
     var onEscape: (() -> Void)?
     var onInsertFrame: (() -> Bool)?
     var onInsertText: (() -> Bool)?
+    var onCopySelection: (() -> Bool)?
+    var onCutSelection: (() -> Bool)?
+    var onPasteSelection: (() -> Bool)?
+    var onDuplicateSelection: (() -> Bool)?
     var onBeginTextEditingAtPoint: ((WorldPoint) -> Bool)?
     var onBeginSelectedTextEditing: (() -> Bool)?
     var onTextDraftChange: ((String, TextEditRange, TextEditRange?) -> Void)?
@@ -6021,6 +7030,7 @@ final class NativeCanvasViewportView: NSView {
     private var pointerTrackingArea: NSTrackingArea?
     private var transformPointerStart: WorldPoint?
     private var transformDidDrag = false
+    private var marqueePointerActive = false
     private var inlineTextView: InlineCanvasTextView?
     private var isApplyingTextPresentation = false
 
@@ -6070,7 +7080,11 @@ final class NativeCanvasViewportView: NSView {
     override func accessibilityRole() -> NSAccessibility.Role? { .group }
     override func accessibilityLabel() -> String? { "Canvas viewport" }
     override func accessibilityValue() -> Any? {
-        "\(accessibilityViewportValue); rendered objects \(renderPlan?.authoredObjects.count ?? 0)"
+        var value = "\(accessibilityViewportValue); rendered objects \(renderPlan?.authoredObjects.count ?? 0)"
+        if let marquee = selectionMarqueePresentation {
+            value += "; \(marquee.rule.rawValue) marquee; \(marquee.candidateCount) candidates"
+        }
+        return value
     }
     override func accessibilityChildren() -> [Any]? {
         virtualAccessibilityElements + selectionContextAccessibilityElements + TransformHandle.allCases.compactMap {
@@ -6105,6 +7119,18 @@ final class NativeCanvasViewportView: NSView {
             },
             NSAccessibilityCustomAction(name: "Insert Text at Center") { [weak self] in
                 CanvasAccessibilityActionDispatcher.perform(self?.onInsertText)
+            },
+            NSAccessibilityCustomAction(name: "Copy Selected Objects") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onCopySelection)
+            },
+            NSAccessibilityCustomAction(name: "Cut Selected Objects") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onCutSelection)
+            },
+            NSAccessibilityCustomAction(name: "Paste SiteForge Objects") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onPasteSelection)
+            },
+            NSAccessibilityCustomAction(name: "Duplicate Selected Objects") { [weak self] in
+                CanvasAccessibilityActionDispatcher.perform(self?.onDuplicateSelection)
             },
             NSAccessibilityCustomAction(name: "Edit Selected Text") { [weak self] in
                 CanvasAccessibilityActionDispatcher.perform(self?.onBeginSelectedTextEditing)
@@ -6168,6 +7194,10 @@ final class NativeCanvasViewportView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil, marqueePointerActive {
+            marqueePointerActive = false
+            onPointerSelectionCancel?()
+        }
         notifyResize()
     }
 
@@ -6228,10 +7258,19 @@ final class NativeCanvasViewportView: NSView {
         if event.modifierFlags.contains(.command) { modifier = .toggle }
         else if event.modifierFlags.contains(.shift) { modifier = .add }
         else { modifier = .replace }
-        onPointerSelection?(world, modifier)
+        marqueePointerActive = onPointerSelectionStart?(world, modifier) ?? false
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if marqueePointerActive {
+            let point = convert(event.locationInWindow, from: nil)
+            if let world = try? viewportState.transform.viewportToWorld(
+                ViewportPoint(x: point.x, y: point.y)
+            ) {
+                onPointerSelectionUpdate?(world)
+            }
+            return
+        }
         guard updateTransformGesture(with: event) else {
             super.mouseDragged(with: event)
             return
@@ -6239,6 +7278,11 @@ final class NativeCanvasViewportView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if marqueePointerActive {
+            marqueePointerActive = false
+            onPointerSelectionCommit?()
+            return
+        }
         if endTransformGesture() { return }
         super.mouseUp(with: event)
     }
@@ -6303,6 +7347,11 @@ final class NativeCanvasViewportView: NSView {
             return
         }
         if event.keyCode == 53 {
+            if marqueePointerActive {
+                marqueePointerActive = false
+                onPointerSelectionCancel?()
+                return
+            }
             onEscape?()
             return
         }
@@ -6728,6 +7777,22 @@ final class NativeCanvasViewportView: NSView {
             guard let renderPlan else { return false }
             return overlay.identity == renderPlan.identity && renderPlan.viewport == viewportState
         } ?? false
+        if let marquee = selectionMarqueePresentation,
+           let origin = try? viewportState.transform.worldToViewport(marquee.frame.origin) {
+            let layer = CAShapeLayer()
+            layer.name = "renderer.overlay.selection-marquee"
+            layer.frame = CGRect(
+                x: origin.x, y: origin.y,
+                width: marquee.frame.size.width * viewportState.zoom.value,
+                height: marquee.frame.size.height * viewportState.zoom.value
+            )
+            layer.path = CGPath(rect: layer.bounds, transform: nil)
+            layer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+            layer.strokeColor = NSColor.controlAccentColor.withAlphaComponent(0.95).cgColor
+            layer.lineWidth = 1.5
+            layer.lineDashPattern = marquee.rule == .contains ? nil : [4, 3]
+            overlayContainer.addSublayer(layer)
+        }
         if let selectionOverlayPlan, hasCurrentSelectionGeometry {
             for overlay in selectionOverlayPlan.overlays {
                 guard let origin = try? viewportState.transform.worldToViewport(overlay.frame.origin) else { continue }
@@ -6893,10 +7958,12 @@ final class NativeCanvasViewportView: NSView {
                 height: item.frame.size.height
             ))
             element.setAccessibilityLabel(item.label)
+            if let help = item.help { element.setAccessibilityHelp(help) }
             var values = item.textContent.map { ["Text: " + $0] } ?? []
             if let context = selectedOverlays[item.objectID]?.label {
                 values.append(context)
-                element.setAccessibilityHelp("Selection context: \(context)")
+                let prefix = item.help.map { $0 + " " } ?? ""
+                element.setAccessibilityHelp(prefix + "Selection context: \(context)")
             }
             if !values.isEmpty { element.setAccessibilityValue(values.joined(separator: "; ")) }
             element.setAccessibilityParent(self)

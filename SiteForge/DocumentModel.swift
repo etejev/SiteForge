@@ -701,6 +701,45 @@ enum CanonicalSemanticElement {
     }
 }
 
+// SF-AUTHORING-098, SF-0701/SF-0702/SF-1203 — authored accessibility
+// metadata is deliberately small and semantic. Roles continue to come from
+// the typed HTML element; Image alt text and Form-field labels retain their
+// established dedicated schemas rather than competing with these properties.
+enum CanonicalAccessibilityMetadata {
+    enum Field: String, CaseIterable, Sendable {
+        case name, help
+        var key: String { "accessibility.v1." + rawValue }
+        var title: String { self == .name ? "Accessible name" : "Description" }
+        var maximumLength: Int { self == .name ? 256 : 512 }
+    }
+
+    static let supportedKinds: Set<NodeKind> = [.frame, .text, .section, .stack, .grid, .button, .link]
+
+    static func value(_ field: Field, for node: DocumentNode) -> (String?, PropertyOrigin) {
+        guard let property = node.insertionProperty(field.key),
+              case .string(let value) = property.value else { return (nil, .defaulted) }
+        return (value, property.origin)
+    }
+
+    static func validate(_ node: DocumentNode) throws {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix("accessibility.v1.") }
+        guard !owned.isEmpty else { return }
+        guard supportedKinds.contains(node.kind), owned.count <= Field.allCases.count else {
+            throw ModelValidationError.invalidAccessibilityMetadataState
+        }
+        for property in owned {
+            guard property.origin == .authored,
+                  let field = Field.allCases.first(where: { $0.key == property.key.rawValue }),
+                  case .string(let value) = property.value,
+                  value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty, value.count <= field.maximumLength,
+                  !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+                throw ModelValidationError.invalidAccessibilityMetadataState
+            }
+        }
+    }
+}
+
 // SF-1204 v1 stores typed rule intent, never raw CSS text. The renderer and
 // preview derive a collision-free selector solely from the stable NodeID.
 enum CanonicalCSSRule {
@@ -782,6 +821,121 @@ enum CanonicalFormSelectOptions {
               }) else {
             throw ModelValidationError.invalidSemanticElementState
         }
+    }
+}
+
+enum FluidValueIdentifierDomain: StableIdentifierDomain {
+    static let diagnosticNamespace = "fluid-value"
+}
+typealias FluidValueID = StableIdentifier<FluidValueIdentifierDomain>
+
+enum FluidValueCurve: String, Codable, CaseIterable, Sendable { case linear }
+
+/// SF-0604 v1 canonical clamp. The value's identity remains stable across
+/// edits/history while its owning property supplies provenance and ordering.
+struct CanonicalFluidValue: Codable, Equatable, Sendable {
+    static let schemaVersion = 1
+    static let lowerViewport = 390.0
+    static let preferredViewport = 768.0
+    static let upperViewport = 1_440.0
+    let schemaVersion: Int
+    let id: FluidValueID
+    let minimum: Double
+    let preferred: Double
+    let maximum: Double
+    let curve: FluidValueCurve
+
+    init(id: FluidValueID = FluidValueID(), minimum: Double, preferred: Double,
+         maximum: Double, curve: FluidValueCurve = .linear) {
+        self.schemaVersion = Self.schemaVersion; self.id = id
+        self.minimum = minimum; self.preferred = preferred; self.maximum = maximum; self.curve = curve
+    }
+    var isValid: Bool {
+        schemaVersion == Self.schemaVersion
+            && [minimum, preferred, maximum].allSatisfy { $0.isFinite && abs($0) <= 1_000_000_000 }
+            && minimum <= preferred && preferred <= maximum
+    }
+    func resolved(viewportWidth: Double) -> Double? {
+        guard isValid, viewportWidth.isFinite else { return nil }
+        if viewportWidth <= Self.lowerViewport { return minimum }
+        if viewportWidth >= Self.upperViewport { return maximum }
+        let lower: Double, upper: Double, start: Double, end: Double
+        if viewportWidth <= Self.preferredViewport {
+            lower = Self.lowerViewport; upper = Self.preferredViewport; start = minimum; end = preferred
+        } else {
+            lower = Self.preferredViewport; upper = Self.upperViewport; start = preferred; end = maximum
+        }
+        return start + ((viewportWidth - lower) / (upper - lower)) * (end - start)
+    }
+}
+
+enum FluidValueTarget: String, Codable, CaseIterable, Hashable, Sendable {
+    case width, height, fontSize, lineHeight, padding, gap
+    var title: String {
+        switch self {
+        case .width: "Width"; case .height: "Height"; case .fontSize: "Font Size"
+        case .lineHeight: "Line Height"; case .padding: "Padding"; case .gap: "Gap"
+        }
+    }
+    var fixedPropertyKey: String {
+        switch self {
+        case .width: "layout.width"; case .height: "layout.height"
+        case .fontSize: CanonicalTypography.namespace + "size"
+        case .lineHeight: CanonicalTypography.namespace + "lineHeight"
+        case .padding: "layout.padding"; case .gap: "layout.gap"
+        }
+    }
+    func supports(_ kind: NodeKind) -> Bool {
+        switch self {
+        case .width, .height: [.frame, .text, .section, .stack, .grid, .image, .button, .link].contains(kind)
+        case .fontSize, .lineHeight: kind.isTextual
+        case .padding: [.section, .stack, .grid].contains(kind)
+        case .gap: [.stack, .grid].contains(kind)
+        }
+    }
+    func accepts(_ value: Double) -> Bool {
+        guard value.isFinite else { return false }
+        return switch self {
+        case .width, .height: (1...1_000_000_000).contains(value)
+        case .fontSize: (1...1_000).contains(value)
+        case .lineHeight: (1...2_000).contains(value)
+        case .padding, .gap: (0...10_000).contains(value)
+        }
+    }
+}
+
+enum CanonicalFluidValueCodec {
+    static let namespace = "responsive.fluid.v1"
+    static func key(_ target: FluidValueTarget) -> String { "\(namespace).\(target.rawValue)" }
+    static func encode(_ value: CanonicalFluidValue, target: FluidValueTarget) throws -> String {
+        guard value.isValid, target.accepts(value.minimum), target.accepts(value.preferred),
+              target.accepts(value.maximum) else { throw ModelValidationError.invalidFluidValueState }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
+    }
+    static func decode(_ raw: String, target: FluidValueTarget) throws -> CanonicalFluidValue {
+        let data = Data(raw.utf8)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == ["schemaVersion", "id", "minimum", "preferred", "maximum", "curve"]
+        else { throw ModelValidationError.invalidFluidValueState }
+        let value = try JSONDecoder().decode(CanonicalFluidValue.self, from: data)
+        guard value.isValid, target.accepts(value.minimum), target.accepts(value.preferred),
+              target.accepts(value.maximum) else { throw ModelValidationError.invalidFluidValueState }
+        return value
+    }
+    static func remappingStableID(in raw: String, target: FluidValueTarget) throws -> String {
+        let value = try decode(raw, target: target)
+        return try encode(.init(minimum: value.minimum, preferred: value.preferred,
+                                maximum: value.maximum, curve: value.curve), target: target)
+    }
+    static func value(for target: FluidValueTarget, node: DocumentNode) -> (CanonicalFluidValue, PropertyOrigin)? {
+        guard target.supports(node.kind), let property = node.insertionProperty(key(target)),
+              case .string(let raw) = property.value,
+              let value = try? decode(raw, target: target) else { return nil }
+        return (value, property.origin)
+    }
+    static func resolved(_ target: FluidValueTarget, node: DocumentNode, viewportWidth: Double) -> Double? {
+        value(for: target, node: node)?.0.resolved(viewportWidth: viewportWidth)
     }
 }
 
@@ -1000,7 +1154,7 @@ extension DocumentNode {
 // SF-0806-001, SF-1102-001: editor loading never follows these references.
 // Page/section identities survive naming and route changes; missing targets
 // stay representable so the Inspector can offer repair or removal.
-enum CanonicalLinkContext: String, CaseIterable, Sendable {
+enum CanonicalLinkContext: String, CaseIterable, Codable, Hashable, Sendable {
     case same, new
 }
 
@@ -1011,7 +1165,7 @@ extension DocumentNode {
     }
 }
 
-enum CanonicalLinkTarget: Equatable, Sendable {
+enum CanonicalLinkTarget: Codable, Hashable, Sendable {
     case none
     case page(PageID)
     case section(pageID: PageID, nodeID: NodeID)
@@ -1709,9 +1863,11 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case invalidBoxStyleState
     case invalidTypographyState
     case invalidSemanticElementState
+    case invalidAccessibilityMetadataState
     case invalidResponsiveGeometryState
     case invalidResponsiveContainerState
     case invalidResponsiveVisibilityState
+    case invalidFluidValueState
     case duplicateAssetID
     case duplicateAssetResourceID
     case duplicateAssetContent
@@ -1755,9 +1911,11 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .invalidBoxStyleState: "The document contains an invalid canonical border, radius, or shadow state."
         case .invalidTypographyState: "The document contains invalid canonical typography state."
         case .invalidSemanticElementState: "The document contains an invalid canonical semantic HTML element state."
+        case .invalidAccessibilityMetadataState: "The document contains invalid canonical accessibility metadata."
         case .invalidResponsiveGeometryState: "The document contains invalid responsive geometry state."
         case .invalidResponsiveContainerState: "The document contains invalid responsive container-layout state."
         case .invalidResponsiveVisibilityState: "The document contains invalid responsive visibility state."
+        case .invalidFluidValueState: "The document contains an invalid canonical fluid responsive value."
         case .duplicateAssetID: "Image asset identifiers must be unique."
         case .duplicateAssetResourceID: "Each image asset must own one stable project resource identity."
         case .duplicateAssetContent: "Duplicate image bytes must resolve to the existing asset identity."
@@ -1765,6 +1923,39 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .invalidImageReference: "An Image node must reference an existing canonical image asset."
         case .invalidColorToken: "The project contains invalid local color token state."
         case .invalidSizingConstraints: "The project contains invalid fixed sizing constraints."
+        }
+    }
+}
+
+enum CanonicalFluidValueNamespaceValidator {
+    static func validate(_ node: DocumentNode) throws {
+        let properties = node.properties.filter {
+            $0.key.rawValue.hasPrefix(CanonicalFluidValueCodec.namespace + ".")
+        }
+        guard !properties.isEmpty else { return }
+        var targets = Set<FluidValueTarget>()
+        for property in properties {
+            let suffix = String(property.key.rawValue.dropFirst(CanonicalFluidValueCodec.namespace.count + 1))
+            guard let target = FluidValueTarget(rawValue: suffix), target.supports(node.kind),
+                  targets.insert(target).inserted,
+                  case .string(let raw) = property.value,
+                  (try? CanonicalFluidValueCodec.decode(raw, target: target)) != nil else {
+                throw ModelValidationError.invalidFluidValueState
+            }
+        }
+        if node.kind.isTextual, (targets.contains(.fontSize) || targets.contains(.lineHeight)) {
+            guard let fixed = CanonicalTypography.resolved(for: node) else {
+                throw ModelValidationError.invalidFluidValueState
+            }
+            for width in [CanonicalFluidValue.lowerViewport, CanonicalFluidValue.preferredViewport,
+                          CanonicalFluidValue.upperViewport] {
+                let size = CanonicalFluidValueCodec.resolved(.fontSize, node: node, viewportWidth: width) ?? fixed.size
+                let lineHeight = CanonicalFluidValueCodec.resolved(.lineHeight, node: node, viewportWidth: width) ?? fixed.lineHeight
+                guard CanonicalTypography(family: fixed.family, weight: fixed.weight, size: size,
+                    lineHeight: lineHeight, tracking: fixed.tracking, alignment: fixed.alignment).isValid else {
+                    throw ModelValidationError.invalidFluidValueState
+                }
+            }
         }
     }
 }
@@ -2255,6 +2446,14 @@ extension CanonicalDocument {
             )
             for node in page.nodes { try LocalColorTokenBinding.validate(node) }
         }
+        let fluidValueIDs = pages.flatMap(\.nodes).flatMap { node in
+            FluidValueTarget.allCases.compactMap {
+                CanonicalFluidValueCodec.value(for: $0, node: node)?.0.id
+            }
+        }
+        guard Set(fluidValueIDs).count == fluidValueIDs.count else {
+            throw ModelValidationError.invalidFluidValueState
+        }
         guard guides.count <= 10_000 else { throw ModelValidationError.guideLimitExceeded }
         guard Set(guides.map(\.id)).count == guides.count else {
             throw ModelValidationError.duplicateGuideID
@@ -2391,6 +2590,7 @@ private extension DocumentPage {
             try CanonicalSizingNamespaceValidator.validate(node)
             try CanonicalTypographyNamespaceValidator.validate(node)
             try CanonicalSemanticElementValidator.validate(node)
+            try CanonicalAccessibilityMetadata.validate(node)
             try CanonicalCSSRuleValidator.validate(node)
             try CanonicalFormFieldValidator.validate(node)
             if node.properties.contains(where: { $0.key.rawValue.hasPrefix("form.field.v1.") }) {
@@ -2405,6 +2605,7 @@ private extension DocumentPage {
             try CanonicalResponsiveGeometryNamespaceValidator.validate(node)
             try CanonicalResponsiveContainerNamespaceValidator.validate(node)
             try CanonicalResponsiveVisibilityNamespaceValidator.validate(node)
+            try CanonicalFluidValueNamespaceValidator.validate(node)
             if node.kind == .image {
                 guard let reference = node.insertionStringProperty(CanonicalImageStyle.namespace + "assetID"),
                       let assetID = AssetID(uuidString: reference), assetIDs.contains(assetID),

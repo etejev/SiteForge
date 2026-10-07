@@ -2086,13 +2086,13 @@ final class TransformModelTests: XCTestCase {
         _ = try compatibleSession.execute(compatible.documentCommand)
         XCTAssertEqual(
             compatibleSession.document.pages[0].nodes.filter { $0.id == fixture.nodeID || $0.id == fixture.secondNodeID }
-                .compactMap(TypographyCommandRegistry.resolvedTypography).map(\.size),
+                .compactMap { TypographyCommandRegistry.resolvedTypography(for: $0) }.map(\.size),
             [19, 19]
         )
         try compatibleSession.undo()
         XCTAssertEqual(
             compatibleSession.document.pages[0].nodes.filter { $0.id == fixture.nodeID || $0.id == fixture.secondNodeID }
-                .compactMap(TypographyCommandRegistry.resolvedTypography).map(\.size),
+                .compactMap { TypographyCommandRegistry.resolvedTypography(for: $0) }.map(\.size),
             [14, 14]
         )
         try compatibleSession.redo()
@@ -2189,6 +2189,57 @@ final class TransformModelTests: XCTestCase {
         let stale = SemanticElementCommand(identity: .init(documentID: DocumentID(), pageID: fixture.pageID, revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: [fixture.nodeID], edit: .set(.article), provenance: .automation, cancelled: false)
         XCTAssertThrowsError(try registry.prepare(stale, in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))) {
             XCTAssertEqual($0 as? SemanticElementCommandError, .stale)
+        }
+    }
+
+    // SF-AUTHORING-098, SF-0701-002/004, SF-0702-002/004 — general
+    // accessibility metadata shares the identity-gated atomic Inspector path,
+    // preserves PropertyID through exact history, and skips dedicated schemas.
+    func testAccessibilityMetadataRegistryCommitsMixedSubsetAndExactHistory() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        fixture.document.pages[0].nodes[1].kind = .frame
+        fixture.document.pages[0].nodes[2].kind = .component
+        let registry = AccessibilityMetadataCommandRegistry()
+        func command(_ document: CanonicalDocument, ids: [NodeID], edit: AccessibilityMetadataEdit,
+                     cancelled: Bool = false) -> AccessibilityMetadataCommand {
+            .init(identity: .init(documentID: document.id, pageID: fixture.pageID,
+                                  revision: document.revision, sceneID: fixture.sceneID,
+                                  rendererGeneration: fixture.rendererGeneration),
+                  orderedNodeIDs: ids, edit: edit, provenance: .automation, cancelled: cancelled)
+        }
+        XCTAssertEqual(AccessibilityMetadataCommandRegistry.selectionValue(
+            field: .name, nodes: [fixture.document.pages[0].nodes[1]]), .single(nil, .defaulted))
+        let prepared = try registry.prepare(command(fixture.document,
+            ids: [fixture.nodeID, fixture.secondNodeID], edit: .set(.name, "Hero region")),
+            in: fixture.document,
+            context: fixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID]))
+        XCTAssertEqual(prepared.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(prepared.skippedNodeIDs, [fixture.secondNodeID])
+        let session = DocumentSession(document: fixture.document)
+        _ = try session.execute(prepared.documentCommand)
+        var node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+        let property = try XCTUnwrap(node.insertionProperty(CanonicalAccessibilityMetadata.Field.name.key))
+        XCTAssertEqual(property.value, .string("Hero region"))
+        XCTAssertEqual(property.origin, .authored)
+        try session.undo(); try session.redo()
+        node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.nodeID })
+        XCTAssertEqual(node.insertionProperty(CanonicalAccessibilityMetadata.Field.name.key)?.id, property.id)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+
+        let reset = try registry.prepare(command(session.document, ids: [fixture.nodeID], edit: .reset),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))
+        _ = try session.execute(reset.documentCommand)
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == fixture.nodeID }?
+            .insertionProperty(CanonicalAccessibilityMetadata.Field.name.key))
+        XCTAssertThrowsError(try registry.prepare(command(session.document, ids: [fixture.nodeID],
+            edit: .set(.help, String(repeating: "x", count: 513))), in: session.document,
+            context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? AccessibilityMetadataCommandError, .invalid)
+        }
+        XCTAssertThrowsError(try registry.prepare(command(session.document, ids: [fixture.nodeID],
+            edit: .set(.name, "Name"), cancelled: true), in: session.document,
+            context: fixture.context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? AccessibilityMetadataCommandError, .cancelled)
         }
     }
 
@@ -2733,6 +2784,57 @@ final class TransformModelTests: XCTestCase {
         XCTAssertThrowsError(try registry.prepare(input(session.document, invalid), in: session.document, context: context(session.document))) { XCTAssertEqual($0 as? FormInspectorError, .invalidConfiguration) }
     }
 
+    // SF-0701-003/004/006, SF-0702-003/004/006, SF-0705-003/004/006,
+    // SF-1006-003/004/006 — Content and Accessibility consume one truthful,
+    // read-only projection without borrowing the primary field's mixed value.
+    func testFormInspectorAccessibilityPresentationPreservesMixedValuesAndProvenance() throws {
+        let formID = NodeID(), emailID = NodeID(), selectID = NodeID(), frameID = NodeID()
+        var document = ProjectCreation.blank()
+        let rootID = document.pages[0].rootNodeIDs[0]
+        let options = try CanonicalFormSelectOptions.encode([
+            .init(label: "Starter", value: "starter"), .init(label: "Pro", value: "pro"),
+        ])
+        func property(_ key: String, _ value: PropertyValue, _ origin: PropertyOrigin) -> NodeProperty {
+            .init(key: .init(rawValue: key), value: value, origin: origin)
+        }
+        let email = DocumentNode(id: emailID, kind: .text, name: "Email", parent: .node(formID), properties: [
+            property(CanonicalFormField.kindKey, .string("email"), .defaulted),
+            property(CanonicalFormField.labelKey, .string("Email"), .defaulted),
+            property(CanonicalFormField.nameKey, .string("email"), .defaulted),
+            property(CanonicalFormField.requiredKey, .boolean(true), .authored),
+        ])
+        let select = DocumentNode(id: selectID, kind: .text, name: "Plan", parent: .node(formID), properties: [
+            property(CanonicalFormField.kindKey, .string("select"), .authored),
+            property(CanonicalFormField.labelKey, .string("Plan"), .authored),
+            property(CanonicalFormField.nameKey, .string("plan"), .authored),
+            property(CanonicalFormField.requiredKey, .boolean(true), .authored),
+            property(CanonicalFormField.optionsKey, .string(options), .authored),
+        ])
+        let form = DocumentNode(id: formID, kind: .form, name: "Contact", parent: .node(rootID),
+                                childIDs: [emailID, selectID])
+        document.pages[0].nodes[0].childIDs = [formID, frameID]
+        document.pages[0].nodes += [form, email, select,
+            .init(id: frameID, kind: .frame, name: "Incompatible", parent: .node(rootID))]
+        try document.validate()
+
+        let presentation = FormFieldInspectorPresentation.resolve(
+            fields: [email, select], totalSelectionCount: 3)
+        XCTAssertEqual(presentation.applicableCount, 2)
+        XCTAssertEqual(presentation.skippedCount, 1)
+        XCTAssertEqual(presentation.kind, .mixed)
+        XCTAssertEqual(presentation.accessibleName, .mixed)
+        XCTAssertEqual(presentation.required, .value("Required", provenance: "Authored"))
+        XCTAssertTrue(presentation.configurationStatus.contains("incompatible"))
+
+        let formPresentation = FormContainerAccessibilityPresentation.resolve(
+            form: form, page: document.pages[0])
+        XCTAssertEqual(formPresentation.fieldCount, 2)
+        XCTAssertEqual(formPresentation.configuredCount, 2)
+        XCTAssertEqual(formPresentation.requiredCount, 2)
+        XCTAssertEqual(formPresentation.submitCount, 0)
+        XCTAssertTrue(formPresentation.status.contains("canonical accessible labels"))
+    }
+
     // SF-1006-001/003/004/008 — visitor input has one local, noncanonical
     // resolver. Required, email, select membership, checkbox and text bounds
     // return only stable identities and categories, never entered values.
@@ -2851,6 +2953,191 @@ final class TransformModelTests: XCTestCase {
         }
         XCTAssertEqual(persisted, before)
         XCTAssertFalse(try DocumentSerializer.encode(persisted).contains(Data("visitor@example.test".utf8)))
+    }
+
+    // SF-AUTHORING-101, SF-0601-003/006, SF-0602-002/003/004/006/008,
+    // SF-0603-002/003/006 — review is a pure projection of the established
+    // responsive resolvers and cannot mutate canonical content.
+    func testResponsiveBreakpointReviewProjectsResolvedDifferencesWithoutMutation() throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let rootID = document.pages[0].rootNodeIDs[0]
+        let stackID = NodeID()
+        let stack = DocumentNode(id: stackID, kind: .stack, name: "Feature Stack", parent: .node(rootID), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(120), origin: .authored),
+            .init(key: .init(rawValue: "layout.y"), value: .number(80), origin: .authored),
+            .init(key: .init(rawValue: "layout.width"), value: .number(480), origin: .authored),
+            .init(key: .init(rawValue: "layout.height"), value: .number(320), origin: .authored),
+            .init(key: .init(rawValue: ResponsiveGeometryResolver.key(.x, breakpoint: .tablet)), value: .number(40), origin: .authored),
+            .init(key: .init(rawValue: ResponsiveContainerLayoutResolver.key(.gap, breakpoint: .tablet)), value: .number(12), origin: .authored),
+            .init(key: .init(rawValue: ResponsiveVisibilityResolver.key(.mobile)), value: .boolean(false), origin: .authored),
+        ])
+        document.pages[0].nodes[0].childIDs = [stackID]
+        document.pages[0].nodes.append(stack)
+        let before = document
+
+        let reviews = ResponsiveBreakpointReviewPolicy.reviews(
+            page: try XCTUnwrap(document.pages.first { $0.id == pageID }),
+            selectedNodeIDs: [stackID]
+        )
+        XCTAssertEqual(reviews.map(\.breakpoint), [.desktop, .tablet, .mobile])
+        XCTAssertEqual(reviews.map(\.viewportWidth), [1_440, 768, 390])
+        XCTAssertEqual(reviews[0].visibleCount, 1)
+        XCTAssertEqual(reviews[0].changedFromDesktopCount, 0)
+        XCTAssertEqual(reviews[1].geometryOverrideCount, 1)
+        XCTAssertEqual(reviews[1].containerOverrideCount, 1)
+        XCTAssertEqual(reviews[1].primaryGeometry?.origin.x, 40)
+        XCTAssertEqual(reviews[1].primaryProvenance, "authored geometry, inherited visibility")
+        XCTAssertEqual(reviews[2].visibilityOverrideCount, 1)
+        XCTAssertEqual(reviews[2].visibleCount, 0)
+        XCTAssertEqual(reviews[2].changedFromDesktopCount, 1)
+        XCTAssertEqual(reviews[2].primaryIsVisible, false)
+        XCTAssertEqual(document, before, "Responsive review must remain scene-local and mutation-neutral.")
+    }
+
+    // SF-AUTHORING-102, SF-0604-001/003/004/005/008 — the closed v1 payload
+    // round-trips stable identity and resolves one monotonic value at the
+    // product reference widths; malformed and inverted payloads are rejected.
+    func testFluidValueCodecResolutionValidationAndRoundTrip() throws {
+        let value = CanonicalFluidValue(minimum: 24, preferred: 36, maximum: 60)
+        let encoded = try CanonicalFluidValueCodec.encode(value, target: .padding)
+        let decoded = try CanonicalFluidValueCodec.decode(encoded, target: .padding)
+        XCTAssertEqual(decoded, value)
+        XCTAssertEqual(decoded.resolved(viewportWidth: 390), 24)
+        XCTAssertEqual(decoded.resolved(viewportWidth: 768), 36)
+        XCTAssertEqual(decoded.resolved(viewportWidth: 1_440), 60)
+        XCTAssertEqual(try XCTUnwrap(decoded.resolved(viewportWidth: 579)), 30, accuracy: 0.001)
+        XCTAssertThrowsError(try CanonicalFluidValueCodec.encode(
+            .init(minimum: 40, preferred: 20, maximum: 60), target: .padding))
+        XCTAssertThrowsError(try CanonicalFluidValueCodec.decode("{}", target: .padding))
+        var malformed = ProjectCreation.blank()
+        malformed.pages[0].nodes[0].properties.append(.init(
+            key: .init(rawValue: CanonicalFluidValueCodec.key(.width)),
+            value: .string("{\"schemaVersion\":1}"), origin: .authored))
+        XCTAssertThrowsError(try DocumentSerializer.encode(malformed)) {
+            XCTAssertEqual($0 as? DocumentSerializationError, .invalidModel(.invalidFluidValueState))
+        }
+        let legacyOmitted = ProjectCreation.blank()
+        let reopened = try DocumentSerializer.decode(try DocumentSerializer.encode(legacyOmitted))
+        XCTAssertFalse(reopened.pages.flatMap(\.nodes).flatMap(\.properties).contains {
+            $0.key.rawValue.hasPrefix(CanonicalFluidValueCodec.namespace)
+        }, "Existing fixed packages remain omitted rather than acquiring synthetic fluid values.")
+    }
+
+    // SF-0604-001...006/008 — one identity-gated transaction owns creation,
+    // exact history restoration, persistence, subset reporting, reset, and
+    // fixed-value fallback without rewriting the fallback literal.
+    func testFluidValueRegistryCommitsApplicableSubsetPersistsAndRestoresExactInverse() throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id, rootID = document.pages[0].rootNodeIDs[0]
+        let frameID = NodeID(), unsupportedID = NodeID(), sceneID = CanvasViewportSceneID()
+        document.pages[0].nodes[0].childIDs = [frameID, unsupportedID]
+        document.pages[0].nodes += [
+            .init(id: frameID, kind: .frame, name: "Fluid Frame", parent: .node(rootID), properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(0), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.y"), value: .number(0), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.width"), value: .number(240), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.height"), value: .number(160), origin: .defaulted),
+            ]),
+            .init(id: unsupportedID, kind: .form, name: "Form", parent: .node(rootID)),
+        ]
+        let selected = [frameID, unsupportedID]
+        func context(_ value: CanonicalDocument) -> TransformValidationContext {
+            .init(activePageID: pageID, currentSceneID: sceneID, rendererGeneration: 7,
+                  selectedNodeIDs: selected, availableNodeIDs: Set(value.pages[0].nodes.map(\.id)),
+                  isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        }
+        func command(_ value: CanonicalFluidValue?) -> FluidValueCommand {
+            .init(identity: .init(editID: GeometryInspectorEditID(), documentID: document.id,
+                pageID: pageID, revision: document.revision, sceneID: sceneID, rendererGeneration: 7),
+                orderedNodeIDs: selected, target: .width, value: value,
+                provenance: .keyboard, cancelled: false)
+        }
+        let registry = FluidValueCommandRegistry()
+        let fluid = CanonicalFluidValue(minimum: 180, preferred: 240, maximum: 360)
+        let prepared = try registry.prepare(command(fluid), in: document, context: context(document))
+        XCTAssertEqual(prepared.applicableNodeIDs, [frameID]); XCTAssertEqual(prepared.skippedNodeIDs, [unsupportedID])
+        let diagnostic = FluidValueDiagnosticFactory.make(
+            command: command(fluid), durationMilliseconds: 1, resultRevision: 1,
+            result: .success, failure: nil)
+        XCTAssertEqual(diagnostic.requirementIDs, FluidValueCommandRegistry.requirementIDs.sorted())
+        XCTAssertFalse(String(describing: diagnostic).contains(frameID.description))
+        XCTAssertFalse(String(describing: diagnostic).contains("180"),
+                       "Fluid content values must not enter support diagnostics.")
+        let cancelled = FluidValueCommand(identity: command(fluid).identity, orderedNodeIDs: selected,
+            target: .width, value: fluid, provenance: .keyboard, cancelled: true)
+        XCTAssertThrowsError(try registry.prepare(cancelled, in: document, context: context(document))) {
+            XCTAssertEqual($0 as? FluidValueCommandError, .cancelled)
+        }
+        let stale = FluidValueCommand(identity: .init(editID: GeometryInspectorEditID(),
+            documentID: document.id, pageID: pageID, revision: document.revision + 1,
+            sceneID: sceneID, rendererGeneration: 7), orderedNodeIDs: selected,
+            target: .width, value: fluid, provenance: .automation, cancelled: false)
+        XCTAssertThrowsError(try registry.prepare(stale, in: document, context: context(document))) {
+            XCTAssertEqual($0 as? FluidValueCommandError, .stale)
+        }
+        let session = DocumentSession(document: document)
+        try session.execute(prepared.documentCommand)
+        let property = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == frameID }?
+            .insertionProperty(CanonicalFluidValueCodec.key(.width)))
+        let propertyID = property.id
+        let reopened = try DocumentSerializer.decode(try DocumentSerializer.encode(session.document))
+        XCTAssertEqual(try CanonicalFluidValueCodec.decode(try XCTUnwrap(reopened.pages[0].nodes.first {
+            $0.id == frameID
+        }?.insertionStringProperty(CanonicalFluidValueCodec.key(.width))), target: .width), fluid)
+        try session.undo()
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == frameID }?
+            .insertionProperty(CanonicalFluidValueCodec.key(.width)))
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == frameID }?
+            .insertionProperty(CanonicalFluidValueCodec.key(.width))?.id, propertyID)
+        let reviews = ResponsiveBreakpointReviewPolicy.reviews(
+            page: session.document.pages[0], selectedNodeIDs: [frameID])
+        XCTAssertEqual(reviews.map(\.fluidValueCount), [1, 1, 1])
+        XCTAssertTrue(reviews[0].primaryFluidSummary?.contains("Width 360") == true)
+        XCTAssertTrue(reviews[2].primaryFluidSummary?.contains("Width 180") == true)
+        let remove = FluidValueCommand(identity: .init(editID: GeometryInspectorEditID(),
+            documentID: session.document.id, pageID: pageID, revision: session.document.revision,
+            sceneID: sceneID, rendererGeneration: 7), orderedNodeIDs: selected,
+            target: .width, value: nil, provenance: .pointer, cancelled: false)
+        try session.execute(try registry.prepare(remove, in: session.document,
+            context: context(session.document)).documentCommand)
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == frameID }?
+            .insertionProperty(CanonicalFluidValueCodec.key(.width)))
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == frameID }?
+            .insertionNumberProperty("layout.width"), 240)
+        try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == frameID }?
+            .insertionProperty(CanonicalFluidValueCodec.key(.width))?.id, propertyID)
+    }
+
+    // SF-0604-002/003/006/008 — renderer/layout and safe static output consume
+    // the same canonical clamp, while a breakpoint literal remains the winner.
+    func testFluidValueFeedsLayoutTypographyContainerAndSafeStaticOutputWithOverridePrecedence() throws {
+        let width = CanonicalFluidValue(minimum: 160, preferred: 240, maximum: 400)
+        let padding = CanonicalFluidValue(minimum: 12, preferred: 24, maximum: 48)
+        let encodedWidth = try CanonicalFluidValueCodec.encode(width, target: .width)
+        let encodedPadding = try CanonicalFluidValueCodec.encode(padding, target: .padding)
+        var node = DocumentNode(kind: .section, name: "Fluid Section", parent: .page(PageID()), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(0), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.y"), value: .number(0), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.width"), value: .number(240), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.height"), value: .number(160), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.padding"), value: .number(24), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalFluidValueCodec.key(.width)), value: .string(encodedWidth), origin: .authored),
+            .init(key: .init(rawValue: CanonicalFluidValueCodec.key(.padding)), value: .string(encodedPadding), origin: .authored),
+        ])
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .width, node: node, breakpoint: .tablet,
+                                                        viewportWidth: 768)?.0, 240)
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .padding, node: node, breakpoint: .mobile,
+                                                               viewportWidth: 390)?.0, .number(12))
+        node.properties.append(.init(key: .init(rawValue: ResponsiveGeometryResolver.key(.width, breakpoint: .tablet)),
+                                     value: .number(222), origin: .authored))
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .width, node: node, breakpoint: .tablet,
+                                                        viewportWidth: 768)?.0, 222)
+        let css = StaticFluidValueOutputEmitter.emit(nodes: [node])
+        XCTAssertTrue(css.contains("width: clamp(160px")); XCTAssertTrue(css.contains("padding: clamp(12px"))
+        XCTAssertTrue(css.contains("@media (min-width: 768px)"))
     }
 }
 

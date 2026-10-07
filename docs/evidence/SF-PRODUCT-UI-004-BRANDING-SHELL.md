@@ -1,5 +1,11 @@
 # SF-PRODUCT-UI-004 — Original AppIcon and adaptive native shell
 
+Historical evidence: the icon artwork described below was superseded by the
+owner-approved gradient source in `SF-PRODUCT-UI-005`. See
+`docs/evidence/SF-PRODUCT-UI-005-QUICK-OPEN-INSERTIONS.md` for current
+source-only packaging work. Its tests and fresh Finder/Dock visual review are
+still pending.
+
 Requirements: `SF-0201-009`; bounded supporting `SF-0201-003`,
 `SF-0201-006`, `SF-1505-006`, `SF-1605-002`, and `SF-1605-006`.
 

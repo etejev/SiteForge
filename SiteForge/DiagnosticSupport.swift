@@ -73,6 +73,7 @@ enum DiagnosticIdentifierDomain: String, Sendable {
     case document = "document"
     case dragDrop = "drag-drop"
     case geometryInspector = "geometry-inspector"
+    case fluidValue = "fluid-value"
     case history = "history"
     case launch = "launch"
     case lifecycleDestination = "lifecycle-destination"

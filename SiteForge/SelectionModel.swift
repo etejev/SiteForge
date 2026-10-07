@@ -10,10 +10,85 @@ enum SelectionProvenance: String, Sendable {
     case lifecycleRepair
 }
 
-enum SelectionPointerModifier: Sendable {
+enum SelectionPointerModifier: Equatable, Sendable {
     case replace
     case add
     case toggle
+}
+
+enum SelectionMarqueeRule: String, Equatable, Sendable {
+    case contains
+    case intersects
+}
+
+struct SelectionMarqueeDraft: Equatable, Sendable {
+    let identity: CanvasRenderRequestIdentity
+    let start: WorldPoint
+    var current: WorldPoint
+    let modifier: SelectionPointerModifier
+
+    var rule: SelectionMarqueeRule { current.x >= start.x ? .contains : .intersects }
+    var frame: WorldRect {
+        WorldRect(
+            origin: .init(x: min(start.x, current.x), y: min(start.y, current.y)),
+            size: .init(width: abs(current.x - start.x), height: abs(current.y - start.y))
+        )
+    }
+}
+
+struct SelectionMarqueePresentation: Equatable, Sendable {
+    let frame: WorldRect
+    let rule: SelectionMarqueeRule
+    let candidateCount: Int
+}
+
+struct SelectionMarqueeCommand: Equatable, Sendable {
+    let identity: CanvasRenderRequestIdentity
+    let frame: WorldRect
+    let rule: SelectionMarqueeRule
+    let modifier: SelectionPointerModifier
+    let cancelled: Bool
+}
+
+enum SelectionMarqueeResolver {
+    static func targetIDs(for command: SelectionMarqueeCommand,
+                          in scene: SelectionSceneSnapshot) throws -> [NodeID] {
+        guard !command.cancelled else { throw SelectionCommandError.cancelled }
+        guard command.identity == scene.identity else { throw SelectionCommandError.staleScene }
+        guard command.frame.origin.x.isFinite, command.frame.origin.y.isFinite,
+              command.frame.size.width.isFinite, command.frame.size.height.isFinite,
+              command.frame.size.width >= 0, command.frame.size.height >= 0 else {
+            throw SelectionCommandError.invalidMarquee
+        }
+        return scene.orderedSelectableTargets.compactMap { target in
+            let visible = clipped(target.frame, to: target.clipRect)
+            guard let visible else { return nil }
+            let matches = switch command.rule {
+            case .contains: contains(command.frame, visible)
+            case .intersects: intersects(command.frame, visible)
+            }
+            return matches ? target.id : nil
+        }
+    }
+
+    private static func clipped(_ frame: WorldRect, to clip: WorldRect?) -> WorldRect? {
+        guard let clip else { return frame }
+        let minX = max(frame.minX, clip.minX), minY = max(frame.minY, clip.minY)
+        let maxX = min(frame.maxX, clip.maxX), maxY = min(frame.maxY, clip.maxY)
+        guard maxX > minX, maxY > minY else { return nil }
+        return .init(origin: .init(x: minX, y: minY),
+                     size: .init(width: maxX - minX, height: maxY - minY))
+    }
+
+    private static func contains(_ outer: WorldRect, _ inner: WorldRect) -> Bool {
+        inner.minX >= outer.minX && inner.maxX <= outer.maxX
+            && inner.minY >= outer.minY && inner.maxY <= outer.maxY
+    }
+
+    private static func intersects(_ lhs: WorldRect, _ rhs: WorldRect) -> Bool {
+        lhs.maxX > rhs.minX && lhs.minX < rhs.maxX
+            && lhs.maxY > rhs.minY && lhs.minY < rhs.maxY
+    }
 }
 
 extension DocumentNode {
@@ -203,6 +278,7 @@ enum SelectionCommandError: Error, Equatable, LocalizedError, Sendable {
     case clippedTarget(NodeID)
     case unavailableTarget(NodeID)
     case outsideActiveScope(NodeID)
+    case invalidMarquee
     case invalidState
     case disabled(String)
     case cancelled
@@ -217,6 +293,7 @@ enum SelectionCommandError: Error, Equatable, LocalizedError, Sendable {
         case .clippedTarget: "The object is outside the selectable clipped region."
         case .unavailableTarget: "The object is temporarily unavailable."
         case .outsideActiveScope: "The object is outside the active page or container."
+        case .invalidMarquee: "The marquee bounds are invalid; the last valid selection is unchanged."
         case .disabled(let reason): reason
         case .cancelled: "Selection was cancelled; the last valid selection remains active."
         }
@@ -349,6 +426,39 @@ struct SelectionCommandRegistry: Sendable {
             }
         }
         guard !cancellation.isCancelled() else { throw SelectionCommandError.cancelled }
+        try validateState(draft, scene: scene)
+        let result: SelectionCommandResult = draft == state ? .unchanged : .changed
+        state = draft
+        return result
+    }
+
+    @discardableResult
+    func applyMarquee(
+        _ command: SelectionMarqueeCommand,
+        to state: inout SelectionState,
+        scene: SelectionSceneSnapshot,
+        cancellation: SelectionCancellation = .never
+    ) throws -> SelectionCommandResult {
+        guard !cancellation.isCancelled() else { throw SelectionCommandError.cancelled }
+        try validateScene(scene)
+        guard state.sceneIdentity == scene.identity,
+              command.identity == scene.identity else { throw SelectionCommandError.staleScene }
+        let targets = try SelectionMarqueeResolver.targetIDs(for: command, in: scene)
+        var ids = state.orderedIDs
+        switch command.modifier {
+        case .replace:
+            ids = targets
+        case .add:
+            ids.append(contentsOf: targets.filter { !ids.contains($0) })
+        case .toggle:
+            for id in targets {
+                if let index = ids.firstIndex(of: id) { ids.remove(at: index) }
+                else { ids.append(id) }
+            }
+        }
+        guard !cancellation.isCancelled() else { throw SelectionCommandError.cancelled }
+        var draft = state
+        draft.setSelection(ids, primary: ids.last, anchor: ids.first, provenance: .pointer)
         try validateState(draft, scene: scene)
         let result: SelectionCommandResult = draft == state ? .unchanged : .changed
         state = draft

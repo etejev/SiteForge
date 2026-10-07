@@ -1,6 +1,220 @@
 # SiteForge Implementation Status
 
-Last updated: 2026-09-30.
+## Verified authoring checkpoint — 2026-10-07
+
+The bounded implementation through `SF-AUTHORING-105`, excluding the still-
+ready `SF-AUTHORING-106`, plus `SF-AUTHORING-107` and
+`SF-PRODUCT-UI-005/006`, is integrated. The authoritative `./sf verify` passed
+repository/security/traceability/architecture checks and all 640 tests: 542
+unit/integration plus the complete 98-journey UI target. Its shared native
+text-entry helper resolves live SwiftUI replacement controls and preserves
+automatic NSTextView first-responder state. Normative modules remain Partial
+where their evidence documents list deferred product scope.
+
+Older source-only entries below are chronological detail; their “verification
+deferred” wording is superseded for the bounded slices named above.
+
+## SF-AUTHORING-107 — Source implemented, verification deferred
+
+`SF-0308-001`–`008` now have a connected bounded authored-object clipboard
+path. A strict v1 envelope captures selected subtree order and verified local
+asset/token dependencies without paths or workspace/history state. Native
+Cut/Copy/Paste/Paste in Place/Duplicate use the active window-owned workspace,
+existing document commands, exact history inverses, resource staging, stable
+identity remapping, renderer/selection adoption, and redacted diagnostics.
+Cross-project component closure remains an explicit typed rejection. New model,
+security, dependency, history, and actual-app test source is unrun, so SF-0308
+remains Partial. Evidence:
+`docs/evidence/SF-AUTHORING-107-CLIPBOARD-TRANSFER.md`.
+
+OD-016 is now approved and makes SF-AUTHORING-106 the next dependency-safe
+source slice: Blank Site plus one local neutral Starter Site containing Home
+and About only.
+
+## SF-AUTHORING-105 — Source implemented, verification deferred
+
+Bounded `SF-0201-002/003/004/006`, `SF-0204-002/003/004/006`, and supporting
+`SF-1504-001/003/004/006` now connect successful user-authorized Open to a
+path-free native Recent Projects list. Reopen resolves the existing retained
+bookmark and returns through the normal lifecycle; stale/missing access keeps
+intent and offers Locate, while recency removal leaves authorization intact.
+No project package or canonical document stores launch recency. New focused
+tests are unrun, so the modules remain Partial. Evidence:
+`docs/evidence/SF-AUTHORING-105-RECENT-PROJECTS.md`.
+
+The broader source-completeness classification and dependency-ordered gaps are
+recorded in `docs/evidence/SF-SOURCE-COMPLETENESS-AUDIT.md`; no overall source
+completion claim is made.
+
+## SF-PRODUCT-UI-006 — Source implemented, verification deferred
+
+Bounded `SF-0201-006/009` and `SF-0203-003/006` now have a reconciled launch
+and toolbar hierarchy. The
+welcome state uses the approved static AppIcon and direct New Site/Open Project
+actions. Five essential tools remain persistent; six additional implemented
+tools use one native accessible menu while preserving the central Insert and
+shortcut routes. This is scene-local command presentation, never project
+content. Updated test source has not run, so the modules remain Partial.
+Evidence: `docs/evidence/SF-PRODUCT-UI-006-LAUNCH-TOOLBAR.md`.
+
+## SF-AUTHORING-104 — Source implemented, verification deferred
+
+Bounded `SF-0206-004/006/008`, `SF-1507-003/004/006`, `SF-1602-004/006`, and
+`SF-1607-002/003/004/006/008` now have a native Support settings surface with
+truthful build/update/recovery provenance and a cancellable, stale-safe,
+content-free diagnostic report workflow. Copy and user-selected export require
+a generated reviewable report; failures disclose closed categories without
+paths or content. Test source exists but has not run under the owner pause, so
+all four normative modules remain Partial. Evidence:
+`docs/evidence/SF-AUTHORING-104-SUPPORT-DIAGNOSTICS.md`.
+
+Last updated: 2026-10-05.
+
+SF-AUTHORING-103 is source-implemented but unverified. Local Preview now builds
+an immutable all-website-page runtime through the production scene resolver,
+projects validated stable Link targets, and offers native page, Back, Forward,
+Refresh, and Done controls. Internal navigation and history are scene-local;
+the editor page, selection, canonical document, revision, and history remain
+unchanged. Missing targets are inert with recovery guidance, external targets
+do not execute, and Preview uses the resolved page artboard instead of object-
+union bounds. New focused tests are unrun, so `SF-1102`, `SF-1201`, and
+`SF-1202` remain Partial. See
+`docs/evidence/SF-AUTHORING-103-PREVIEW-NAVIGATION.md`.
+
+SF-AUTHORING-102 is source-implemented but unverified. A strict versioned
+fluid-value payload owns stable identity plus monotonic minimum, preferred,
+maximum, and linear interpolation intent. The existing responsive geometry,
+container layout, typography, immutable canvas preparation, breakpoint
+comparison, and closed static-output paths now resolve that one source for
+width/height, font size/line height, and padding/gap. Explicit breakpoint
+literals retain precedence. Native Layout controls keep drafts noncanonical
+and commit or remove one identity-gated property transaction with truthful
+mixed/inapplicable state. Focused test source is unrun; `SF-0604` remains
+Partial. See `docs/evidence/SF-AUTHORING-102-FLUID-VALUES.md`.
+
+SF-AUTHORING-101 is source-implemented but unverified. The viewport and View
+menu now open a native Desktop/Tablet/Mobile comparison sheet. Its pure policy
+projects existing resolved structural geometry, effective visibility, and
+responsive property provenance for the selection or active page. Review
+actions change only the scene preset; no canonical comparison state, command,
+history entry, or package member exists. Focused model and UI test source is
+unrun. Custom breakpoints, simultaneous canvases, orientation/safe-area
+simulation, responsive style/content/assets/components, fluid values,
+container queries, broad preview/export parity, scale/accessibility matrices,
+and release acceptance remain Partial. See
+`docs/evidence/SF-AUTHORING-101-RESPONSIVE-COMPARISON.md`.
+
+SF-AUTHORING-100 is source-implemented but unverified. Components definition
+rows now expose a native Rename workflow with scene-local draft/cancel and
+specific validation. `ComponentCommandRegistry` compiles one atomic graph
+transaction that renames the stable definition and every linked instance while
+preserving definition PageID, instance NodeIDs, overrides, geometry, child
+data, and ordering. Exact history and package round-trip are covered by new
+source tests, but none ran under the owner pause; `SF-0901`/`SF-0902` remain
+Partial. See `docs/evidence/SF-AUTHORING-100-COMPONENT-RENAME.md`.
+
+SF-AUTHORING-099 is source-implemented but unverified. Heading is now a visible
+Basic Elements item and native Insert command that creates an existing Text
+node with deterministic 360×48 geometry, `Heading` content, bold 32/38
+typography, and authored `<h2>` semantics. It reuses canonical insertion,
+Typography, Content, semantic role, renderer, selection, history, persistence,
+and accessibility paths; no parallel node or renderer was introduced. Focused
+model/actual-app test source is added but unrun, so `SF-0405`, `SF-0507`, and
+`SF-1203` remain Partial. See
+`docs/evidence/SF-AUTHORING-099-HEADING-TEMPLATE.md`.
+
+SF-AUTHORING-098 is source-implemented but unverified. Applicable Frame, Text,
+Section, Stack, Grid, Button, and Link selections now expose canonical authored
+Accessible name and Description metadata in the Accessibility Inspector, with
+defaulted/authored/mixed provenance, scene-local drafts, identity-gated atomic
+commits, exact history, stable property identity, and package round-trip. The
+same resolved values project to canvas accessibility and escaped static
+`aria-label`/`aria-description`; role remains owned by the typed semantic-
+element registry. Image and Form keep their dedicated schemas. Focused
+model/output/actual-app test source is added but unrun, so `SF-0701`, `SF-0702`,
+and `SF-1203` remain Partial. See
+`docs/evidence/SF-AUTHORING-098-GENERAL-ACCESSIBILITY.md`.
+
+SF-AUTHORING-097 is source-implemented but unverified. Blank-canvas drags now
+produce a scene-owned directional marquee through the existing selection
+registry: left-to-right contains visible clipped geometry; right-to-left
+intersects it; Shift and Command add or toggle in stable paint order. Its
+accent rectangle is editor-only, cancellation/stale identities retain the last
+valid selection, and committed IDs continue through the existing canvas,
+Layers, Inspector, status, and accessibility projections. Focused model and
+actual-app test source is added but unrun, so `SF-0402` remains Partial. See
+`docs/evidence/SF-AUTHORING-097-MARQUEE-SELECTION.md`.
+
+SF-AUTHORING-096 is source-implemented but unverified. The Form Content and
+Accessibility tabs now share a read-only projection of canonical field role,
+accessible name, machine name, required state, help, options, bounds, and
+property provenance. Mixed selections report Mixed rather than borrowing the
+primary field. Form-level accessibility exposes configuration counts, the
+existing category-only local validator, and the disabled/unconfigured submit
+boundary. Writes still use the identity-gated atomic Form registry; test source
+is added but unrun. `SF-0701`, `SF-0702`, `SF-0705`, and `SF-1006` remain
+Partial. See `docs/evidence/SF-AUTHORING-096-FORM-ACCESSIBILITY-VALIDATION.md`.
+
+SF-AUTHORING-091–095 are source-implemented but unverified. Email, Text Area,
+Checkbox, Select, and Submit are real Form-only Elements and native Insert
+actions backed by the established Text/form-field schema and atomic insertion
+registry. Deterministic geometry and metadata flow into Content Inspector,
+history, serialization, and safe static form output. Select seeds stable
+ordered options; Submit remains explicitly disabled/unconfigured in output.
+Shared model/output/UI test source is added but unrun. `SF-0405`, `SF-1006`,
+and `SF-1202` remain Partial. See the five `SF-AUTHORING-091`–`095` evidence
+notes.
+
+SF-AUTHORING-090 is source-implemented but unverified: a selected Form can
+receive a canonical Text-backed Input field from Elements or Insert, with
+defaulted `form.field.v1` metadata and one undoable insertion. Non-Form
+destinations are rejected. Model/actual-app test source is added but unrun;
+`SF-0405` and `SF-1006` remain Partial. See
+`docs/evidence/SF-AUTHORING-090-FORM-INPUT-TEMPLATE.md`.
+
+SF-AUTHORING-086–089 are source-implemented and unverified. Divider, Header,
+Navigation, and Footer are no longer disabled Elements rows; the same typed
+Frame/Section insertion path now creates distinct, deterministic authored
+templates and semantic section roles, also available from the native Insert
+menu. Model/UI test source was added but not executed under the owner pause.
+See `docs/evidence/SF-AUTHORING-086-089-ELEMENT-TEMPLATES.md`.
+
+SF-AUTHORING-085 is source-implemented, unverified. Quick Open component
+definition results now offer a distinct Insert Instance action routed through
+the existing component registry, with live PageID/parent checks and no sheet
+dismissal on command rejection. The actual-app test source covers rendered
+adoption and Undo/Redo but remains unrun. See
+`docs/evidence/SF-AUTHORING-085-QUICK-OPEN-COMPONENT-INSERT.md`.
+
+SF-AUTHORING-084 is source-implemented and unverified: Quick Open asset search
+now offers a separate direct Image insertion action that revalidates AssetID
+and uses the existing Image command, with scene-selection rollback on rejection.
+The real-app source journey covers one insertion and Undo/Redo but was not run
+under the owner pause. See `docs/evidence/SF-AUTHORING-084-QUICK-OPEN-IMAGE-INSERT.md`.
+
+SF-AUTHORING-079–083 extend the source-only ten-slice cycle. Quick Open New
+Page uses the existing native page-editor transaction after its search sheet
+dismisses. Components has native current-definition name search; Assets has
+scene-only All/Used/Unused filtering composed with its existing search; Quick
+Open can reveal current-project AssetIDs and component-definition PageIDs in
+their real navigators without inserting or modifying them. Focused model/UI
+test source is added, but has not run under the owner's five-slice execution
+restriction. The approved `SF-0201-009` wording was synchronized into the
+editable publication copy and its affected rendered pages were inspected.
+No cycle gate, commit, or hosted result is claimed yet; all cited normative
+modules remain Partial. See `docs/evidence/SF-AUTHORING-079-083-QUICK-OPEN-DISCOVERY.md`.
+
+SF-PRODUCT-UI-005 and SF-AUTHORING-075–078 are an owner-directed source-only
+half-batch, not a verified milestone. The approved gradient SF source now feeds
+all ten checked-in AppIcon variants through an offline exterior-matte removal
+script. Quick Open now projects a closed list of Frame/Text, structural,
+Button/Link/Form, and Image actions; each dispatches through the existing
+validated insertion/import boundary rather than a second document command.
+Four policy tests, one actual-app journey, and stronger AppIcon assertions were
+added as source. No tests, UI automation, `./sf verify`, local commit, or
+GitHub action ran under the explicit batch restriction. `SF-0201`, `SF-0205`,
+`SF-0405`, and `SF-0801/0802` remain Partial. See
+`docs/evidence/SF-PRODUCT-UI-005-QUICK-OPEN-INSERTIONS.md`.
 
 Batch SF-AUTHORING-065–074 local acceptance: one complete `./sf verify`
 executed 504 unit/integration tests (all passed) and 81 UI tests (79 passed,
