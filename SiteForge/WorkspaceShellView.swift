@@ -6566,21 +6566,7 @@ struct SiteForgeCommands: Commands {
             .disabled(commandState?.selectionAvailability(.clear).isEnabled != true)
         }
 
-        CommandMenu("Form") {
-            Button("Validate Selected Form Locally") {
-                _ = commandState?.validateSelectedFormLocally()
-            }
-            .keyboardShortcut("v", modifiers: [.command, .option])
-            .disabled(commandState?.canValidateSelectedFormLocally != true)
-        }
-
-        CommandMenu("Preview") {
-            Button("Open Preview") {
-                state?.openPreview()
-            }
-            .keyboardShortcut("p", modifiers: [.command, .shift])
-            .disabled(state == nil)
-        }
+        SiteForgeSupplementaryCommands(state: commandState)
 
         CommandGroup(after: .toolbar) {
             Divider()
@@ -6676,6 +6662,31 @@ struct SiteForgeCommands: Commands {
                 state.setSnappingSuppressed(!state.isSnappingSuppressed)
             }
             .keyboardShortcut("s", modifiers: [.command, .option])
+        }
+    }
+}
+
+/// Keeps the top-level command builder within the arity supported by the
+/// oldest Xcode toolchain used by hosted verification without changing the
+/// native Form or Preview menu hierarchy.
+private struct SiteForgeSupplementaryCommands: Commands {
+    let state: WorkspaceShellState?
+
+    var body: some Commands {
+        CommandMenu("Form") {
+            Button("Validate Selected Form Locally") {
+                _ = state?.validateSelectedFormLocally()
+            }
+            .keyboardShortcut("v", modifiers: [.command, .option])
+            .disabled(state?.canValidateSelectedFormLocally != true)
+        }
+
+        CommandMenu("Preview") {
+            Button("Open Preview") {
+                state?.openPreview()
+            }
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+            .disabled(state == nil)
         }
     }
 }
