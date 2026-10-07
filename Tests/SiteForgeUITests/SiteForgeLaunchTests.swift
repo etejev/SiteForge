@@ -2784,9 +2784,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.buttons["page.editor.apply"].click()
         XCTAssertTrue(waitForNonexistence(application.textFields["page.editor.name"]))
         application.activate()
-        let pages = application.buttons["navigator.tab.pages"]
-        XCTAssertTrue(waitForHittable(pages, in: application))
-        pages.click()
+        revealComponentPointerTarget("navigator.tab.pages", in: application).click()
         let created = pageRow(named: "Quick Open Page", in: application)
         XCTAssertTrue(created.waitForExistence(timeout: 5), application.debugDescription)
         attachWindowScreenshot(application, named: "SF-AUTHORING-079 Quick Open page created")
@@ -2953,7 +2951,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "quickOpen.layer.")).count, 0)
         attachWindowScreenshot(application, named: "SF-AUTHORING-074 Quick Open Actions scope")
         application.buttons["quickOpen.cancel"].click()
-        XCTAssertFalse(sheet.exists)
+        XCTAssertTrue(waitForLiveNonexistence(in: application, identifier: "quickOpen.sheet"))
     }
 
     private var fixtureLease: ApplicationOwnedTestFixture!
@@ -3223,6 +3221,25 @@ final class SiteForgeLaunchTests: XCTestCase {
                 predicate: NSPredicate(format: "exists == false"),
                 object: element
             )],
+            timeout: timeout
+        ) == .completed
+    }
+
+    /// SwiftUI can replace the native host while dismissing a sheet. Re-query
+    /// the live accessibility hierarchy so a cached proxy cannot report a
+    /// removed Quick Open surface as still present.
+    private func waitForLiveNonexistence(
+        in application: XCUIApplication,
+        identifier: String,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        let predicate = NSPredicate { [weak application] _, _ in
+            guard let application else { return false }
+            return !application.descendants(matching: .any)
+                .matching(identifier: identifier).firstMatch.exists
+        }
+        return XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
             timeout: timeout
         ) == .completed
     }
@@ -6340,6 +6357,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         ))
         application.typeKey("v", modifierFlags: [.command, .shift])
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        // Paste replaces the immutable renderer host. Re-establish selection
+        // and first responder through the live authored object before sending
+        // the real Cut shortcut; a cached tiled AX proxy is not a command
+        // target on slower hosted runners.
+        let cutTarget = canvasObject(named: "Frame", in: application)
+        XCTAssertTrue(waitForHittable(cutTarget, in: application))
+        cutTarget.click()
+        XCTAssertTrue(waitForKeyboardFocus(identifier: "canvas.interaction", in: application))
         application.typeKey("x", modifierFlags: .command)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         application.typeKey("v", modifierFlags: .command)
