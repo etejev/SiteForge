@@ -2,6 +2,59 @@ import XCTest
 @testable import SiteForge
 
 final class SelectionModelTests: XCTestCase {
+    // SF-0409-001/004/005 — isolation is one canonical marker compiled by the
+    // identity-gated registry, with exact history and stale/cancel neutrality.
+    @MainActor
+    func testIsolationRegistryMovesSingleCanonicalRootAndUndoRestoresOmission() throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let ownerID = document.pages[0].rootNodeIDs[0]
+        let rootID = NodeID()
+        document.pages[0].nodes[0].childIDs.append(rootID)
+        document.pages[0].nodes.append(DocumentNode(id: rootID, kind: .frame, name: "Card",
+            parent: .node(ownerID), properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(40)),
+                .init(key: .init(rawValue: "layout.y"), value: .number(40)),
+                .init(key: .init(rawValue: "layout.width"), value: .number(320)),
+                .init(key: .init(rawValue: "layout.height"), value: .number(240))
+            ]))
+        try document.validate()
+        let context = IsolationCommandContext(documentID: document.id, pageID: pageID,
+            revision: document.revision, sceneID: CanvasViewportSceneID(),
+            rendererGeneration: document.revision, selectionIDs: [rootID], availableNodeIDs: [rootID])
+        let session = DocumentSession(document: document)
+        let command = try IsolationCommandRegistry().prepare(rootID: rootID, document: document,
+                                                              expected: context, live: context)
+        _ = try session.execute(command)
+        XCTAssertEqual(CanonicalIsolationRoot.resolved(in: session.document)?.nodeID, rootID)
+        _ = try session.undo()
+        XCTAssertNil(CanonicalIsolationRoot.resolved(in: session.document))
+        _ = try session.redo()
+        XCTAssertEqual(CanonicalIsolationRoot.resolved(in: session.document)?.nodeID, rootID)
+        let data = try JSONEncoder().encode(session.document)
+        XCTAssertEqual(CanonicalIsolationRoot.resolved(in: try JSONDecoder().decode(CanonicalDocument.self, from: data))?.nodeID, rootID)
+    }
+
+    func testIsolationRegistryRejectsCancellationAndStaleIdentityWithoutMutation() throws {
+        let document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let context = IsolationCommandContext(documentID: document.id, pageID: pageID,
+            revision: document.revision, sceneID: CanvasViewportSceneID(),
+            rendererGeneration: document.revision, selectionIDs: [], availableNodeIDs: [])
+        XCTAssertThrowsError(try IsolationCommandRegistry().prepare(rootID: nil, document: document,
+            expected: context, live: context, cancelled: true)) {
+            XCTAssertEqual($0 as? IsolationCommandError, .cancelled)
+        }
+        let stale = IsolationCommandContext(documentID: document.id, pageID: pageID,
+            revision: document.revision + 1, sceneID: context.sceneID,
+            rendererGeneration: document.revision, selectionIDs: [], availableNodeIDs: [])
+        XCTAssertThrowsError(try IsolationCommandRegistry().prepare(rootID: nil, document: document,
+            expected: context, live: stale)) {
+            XCTAssertEqual($0 as? IsolationCommandError, .staleRevision)
+        }
+        XCTAssertNil(CanonicalIsolationRoot.resolved(in: document))
+    }
+
     // SF-0205-002/003 — Quick Open composes existing authorized projections.
     func testQuickOpenResultsKeepPageThenCurrentLayerIdentityWithoutMutation() throws {
         let fixture = try makeFixture(count: 2)
@@ -84,6 +137,99 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertEqual(ComponentSearchPolicy.results(in: definitions, query: "resume").map(\.id), [first.id])
         XCTAssertEqual(ComponentSearchPolicy.results(in: definitions, query: "").map(\.id), definitions.map(\.id))
         XCTAssertTrue(ComponentSearchPolicy.results(in: definitions, query: "missing").isEmpty)
+    }
+
+    // SF-AUTHORING-112, SF-0205-002/003/004, SF-0901-003/004/007,
+    // SF-0902-002/006, SF-0907-003/004/006/007/008 — organization is a
+    // scene-local deterministic projection over an immutable dependency index.
+    func testComponentOrganizationAndDependencySnapshotPreserveCanonicalIdentity() throws {
+        var document = ProjectCreation.blank()
+        let homeID = document.websitePages[0].id
+        let homeRootID = document.websitePages[0].rootNodeIDs[0]
+        let usedID = PageID(), unusedID = PageID(), missingID = PageID()
+        let usedRootID = NodeID(), unusedRootID = NodeID()
+        let usedRoot = DocumentNode(
+            id: usedRootID, kind: .frame, name: "Hero Card", parent: .page(usedID),
+            properties: [
+                .init(key: .init(rawValue: CanonicalImageFill.assetKey), value: .string(AssetID().description)),
+                .init(key: .init(rawValue: LocalColorTokenBinding.key), value: .string(ColorTokenID().description)),
+            ]
+        )
+        let unusedRoot = DocumentNode(id: unusedRootID, kind: .frame, name: "Footer Card", parent: .page(unusedID))
+        let used = DocumentPage(id: usedID, name: "Hero Card", route: .init(rawValue: ""),
+            role: .componentDefinition, provenance: .authored, rootNodeIDs: [usedRootID], nodes: [usedRoot])
+        let unused = DocumentPage(id: unusedID, name: "Footer Card", route: .init(rawValue: ""),
+            role: .componentDefinition, provenance: .authored, rootNodeIDs: [unusedRootID], nodes: [unusedRoot])
+        let instance = DocumentNode(kind: .component, name: "Hero Card", parent: .node(homeRootID), properties: [
+            .init(key: .init(rawValue: CanonicalComponentReference.key), value: .string(usedID.description)),
+        ])
+        let unresolved = DocumentNode(kind: .component, name: "Missing", parent: .node(homeRootID), properties: [
+            .init(key: .init(rawValue: CanonicalComponentReference.key), value: .string(missingID.description)),
+        ])
+        document.pages[0].nodes[0].childIDs += [instance.id, unresolved.id]
+        document.pages[0].nodes += [instance, unresolved]
+        document.pages += [used, unused]
+
+        let snapshot = try ComponentDependencySnapshot.build(document: document)
+        XCTAssertEqual(snapshot.documentID, document.id)
+        XCTAssertEqual(snapshot.revision, document.revision)
+        XCTAssertEqual(snapshot.entry(for: usedID)?.usages.map(\.nodeID), [instance.id])
+        XCTAssertEqual(snapshot.entry(for: unusedID)?.usages, [])
+        XCTAssertEqual(snapshot.unresolvedUsages.map(\.nodeID), [unresolved.id])
+        XCTAssertEqual(Set(snapshot.entry(for: usedID)?.issues ?? []), [.missingAsset, .missingToken])
+        XCTAssertFalse(snapshot.entry(for: usedID)?.canRemoveWithoutDetach ?? true)
+        XCTAssertTrue(snapshot.entry(for: unusedID)?.canRemoveWithoutDetach ?? false)
+        XCTAssertEqual(
+            ComponentSearchPolicy.organizedResults(in: [used, unused], snapshot: snapshot,
+                query: "", filter: .inUse, sort: .canonical).map(\.id),
+            [usedID]
+        )
+        XCTAssertEqual(
+            ComponentSearchPolicy.organizedResults(in: [used, unused], snapshot: snapshot,
+                query: "card", filter: .unused, sort: .name).map(\.id),
+            [unusedID]
+        )
+        XCTAssertEqual(
+            ComponentSearchPolicy.organizedResults(in: [unused, used], snapshot: snapshot,
+                query: "", filter: .all, sort: .usage).map(\.id),
+            [usedID, unusedID]
+        )
+        XCTAssertEqual(document.websitePages[0].id, homeID)
+    }
+
+    // SF-AUTHORING-112, SF-0901-006/007/008, SF-0902-004/006 — malformed
+    // nested definition graphs are inspectable without becoming actionable.
+    func testComponentDependencySnapshotReportsNestedCyclesAndBoundedCapacity() throws {
+        let firstID = PageID(), secondID = PageID()
+        func definition(_ id: PageID, _ dependency: PageID) -> DocumentPage {
+            let rootID = NodeID(), childID = NodeID()
+            return DocumentPage(id: id, name: "Component", route: .init(rawValue: ""),
+                role: .componentDefinition, provenance: .authored, rootNodeIDs: [rootID], nodes: [
+                    DocumentNode(id: rootID, kind: .frame, name: "Root", parent: .page(id), childIDs: [childID]),
+                    DocumentNode(id: childID, kind: .component, name: "Nested", parent: .node(rootID), properties: [
+                        .init(key: .init(rawValue: CanonicalComponentReference.key), value: .string(dependency.description)),
+                    ]),
+                ])
+        }
+        let document = CanonicalDocument(pages: [
+            DocumentPage(name: "Home", route: .init(rawValue: "/"), role: .home),
+            definition(firstID, secondID), definition(secondID, firstID),
+        ])
+        let snapshot = try ComponentDependencySnapshot.build(document: document)
+        for id in [firstID, secondID] {
+            let entry = try XCTUnwrap(snapshot.entry(for: id))
+            XCTAssertTrue(entry.issues.contains(.nestedComponent))
+            XCTAssertTrue(entry.issues.contains(.cyclicDependency))
+            XCTAssertFalse(entry.isTransferable)
+            XCTAssertFalse(entry.canRemoveWithoutDetach)
+        }
+
+        let definitions = (0...ComponentDependencySnapshot.maximumDefinitions).map {
+            DocumentPage(name: "Component \($0)", route: .init(rawValue: ""), role: .componentDefinition)
+        }
+        XCTAssertThrowsError(try ComponentDependencySnapshot.build(document: .init(pages: definitions))) {
+            XCTAssertEqual($0 as? ComponentDependencyIndexError, .capacityExceeded)
+        }
     }
 
     // SF-AUTHORING-081, SF-0205-003/004, SF-0801-003

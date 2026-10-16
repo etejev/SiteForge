@@ -8,29 +8,36 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_SLICE = [
+MODEL_FOUNDATION = [
     "SiteForge/StrictDecoding.swift",
     "SiteForge/DiagnosticSupport.swift",
     "SiteForge/DocumentModel.swift",
 ]
-ENGINE_SLICE = [
-    *MODEL_SLICE,
+# Canonical authored state now resolves responsive geometry, fills, reusable
+# appearance, and isolation through headless types implemented in the authoring
+# model files below. Type-check the real closed dependency graph instead of an
+# obsolete three-file approximation. The forbidden-import scan still applies
+# to every member, so expanding this closure cannot admit UI ownership.
+MODEL_SLICE = list(dict.fromkeys(MODEL_FOUNDATION + [
     "SiteForge/CommandKernel.swift",
     "SiteForge/IdentityBoundFileSystem.swift",
     "SiteForge/ProjectPackage.swift",
     "SiteForge/ProjectResources.swift",
     "SiteForge/PersistedHistory.swift",
-]
+    "SiteForge/CanvasViewport.swift",
+    "SiteForge/LayoutEngine.swift",
+    "SiteForge/InsertionModel.swift",
+    "SiteForge/SelectionModel.swift",
+    "SiteForge/TransformModel.swift",
+    "SiteForge/CanvasRendererCore.swift",
+]))
+ENGINE_SLICE = MODEL_SLICE
 RUNWAY_HEADLESS_SLICE = [
     "Benchmarks/AuthoringEngineRunway/RunwayCore.swift",
     "Benchmarks/AuthoringEngineRunway/RunwayHTMLExport.swift",
 ]
-CANVAS_VIEWPORT_SLICE = MODEL_SLICE + [
-    "SiteForge/CanvasViewport.swift",
-]
-LAYOUT_ENGINE_SLICE = MODEL_SLICE + [
-    "SiteForge/LayoutEngine.swift",
-]
+CANVAS_VIEWPORT_SLICE = MODEL_SLICE
+LAYOUT_ENGINE_SLICE = MODEL_SLICE
 # CanvasRendererCore now resolves typed fills, box style, components, and
 # closed-static asset references. Its headless proof must include those actual
 # dependencies, while still excluding all AppKit/SwiftUI surface files.

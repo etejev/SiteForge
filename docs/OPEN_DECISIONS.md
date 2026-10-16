@@ -1,5 +1,124 @@
 # Open Decisions
 
+## OD-021 — Recover native XCTest automation availability
+
+Status: Resolved owner action — 2026-10-15. No product requirement waiver.
+The owner quit/reopened Xcode and confirmed ready. The four exact native
+journeys subsequently passed 4/4 (399.845 seconds), with twelve original-size
+captures reviewed. No privacy reset or shared-service termination was used.
+The following records the historical failure and recovery recommendation.
+
+- Context: the latest complete attempt passed 636 model tests and 93 UI
+  journeys, recorded four concrete UI failures, then its next runner timed out
+  enabling automation mode. After bounded corrections compiled, both the normal
+  focused route and supported already-built route failed at the same 60-second
+  initialization handshake before executing any test. Console inspection shows
+  an unlocked logged-in session; no SiteForge test/app/xcodebuild process remains.
+- Recommended default: owner saves any Xcode work, quits Xcode normally and
+  reopens it with the Mac unlocked, then resumes the four exact focused journeys.
+  This is a recovery attempt, not an assurance that restarting Xcode fixes macOS.
+- Alternative: owner performs a normal system restart after saving work if the
+  native Xcode route remains unavailable. Do not reset TCC or broaden permissions.
+- Tradeoff: temporary interruption versus preserving system privacy and other
+  applications; the agent will not terminate shared testmanagerd/WindowServer.
+- Affected requirements: SF-0201-008, SF-0407-006/008, SF-0602-006/008,
+  SF-0701-006/008 and SF-1201-006/008; SF-PRODUCT-UI-010 acceptance/delivery.
+- Deadline: before the remaining native acceptance and authoritative full gate.
+- Safe temporary assumption: retain all edits and original recovery; no commit,
+  push or completion claim until focused native checks and final verification pass.
+
+## OD-020 — Dismiss outstanding macOS test-host Documents prompt
+
+Status: Resolved owner action — 2026-10-15.
+The owner answered the original permission request with "done". The subsequent
+native recording confirms that the system permission prompt is absent. No
+agent changed a privacy permission; no product-policy change was requested.
+
+- Context: the isolated test host's old raw checkout fixture read triggered a
+  macOS Documents permission prompt. A process sample and TCC logs confirm the
+  request. After fixtures moved into test resources/application-owned temporary
+  storage, the focused model checks pass without that access. The later native
+  recovery recording still shows the outstanding system prompt above the real
+  reset confirmation, preventing its accessibility query. Computer Use refuses
+  access to UserNotificationCenter for safety; no workaround is authorized.
+- Recommended default: the owner dismisses the outstanding prompt with
+  **Don't Allow**. The corrected fixture paths do not need Documents permission.
+- Alternative: owner explicitly allows Documents access for that local test
+  host; this grants broader access than the fixture checks now require.
+- Tradeoff: denial keeps the test host narrowly scoped; allowing avoids that
+  individual prompt but is unnecessary for the corrected test architecture.
+- Affected requirements: focused SF-0701-006 and SF-0308-006 acceptance;
+  SF-PRODUCT-UI-010 local verification/delivery. No requirement is waived.
+- Deadline: before resuming the recovery UI journey and final accumulated gate.
+- Safe temporary assumption: preserve all changes and genuine owner recovery;
+  no commit, installation replacement or completion claim. All focused test
+  runners exited; the owner's regular installed app remains untouched.
+
+## OD-019 — Explicit migration of retained component override conflicts
+
+Status: Open — 2026-10-13
+
+- Needed by: future retargeting/conversion beyond SF-AUTHORING-120 recovery.
+- Context: SF-0902-004/005 and SF-0905-003/004/005 require stable or migrated
+  intent but do not define candidate eligibility, value conversion, source
+  tombstones or collision resolution. Current override keys retain definition
+  and typed property IDs, not a deleted binding's original source/label.
+  Guessing a new source violates SF-AUTHORING-113's transition guards.
+- Recommended default: retain reset/restore-original/navigation only until the
+  owner approves explicit same-type target selection, collision policy and
+  preview/confirmation. Reject cross-type conversion; never select by label.
+- Alternatives: add versioned source tombstones for original-binding restore
+  (broader persistence/transfer obligations), or approve authored mappings with
+  explicit typed conversions (requires individual conversion specifications).
+- Tradeoffs: conservative recovery preserves all intent and exact history but
+  requires original project/history to restore a removed binding. Migration
+  could improve convenience but introduces ambiguity and loss/privacy risks.
+- Affected requirements: SF-0902-004/005, SF-0905-003/004/005, SF-0308-004/008.
+- Decision deadline: before enabling any retarget/convert control or serialized
+  migration metadata. No decision blocks the independent safe recovery slice.
+- Safe temporary assumption: canonical conflicts remain serializable; explicit
+  confirmed reset removes only identified authored values. Original stable IDs
+  can be restored through existing Undo or original package/definition data.
+  Available definitions/sources are inspectable; no automatic reassignment.
+
+## OD-018 — Canonical ownership of supplied component slot content
+
+Status: Open — 2026-10-13
+
+- Needed by: supplied-content authoring in `SF-AUTHORING-118` under
+  `SF-0902`, `SF-0903` and `SF-0905`.
+- Context: §9.3 requires ordered projected content, constraints, fallback and
+  stable identity but does not choose storage ownership or slot cardinality.
+  ADR-0018 and the shipped canonical rules explicitly require linked instances
+  to be childless; ordinary children have exactly one ordered canonical parent.
+  Enabling instance children changes insertion, history, transfer, selection,
+  layout and rendering boundaries and is a consequential architecture change.
+- Recommended default: approve instance-owned canonical child subtrees with
+  explicit stable slot membership and ordered roots, reusing the document graph
+  and command kernel. Supplying content replaces only that slot's fallback in
+  derived projection; the definition never acquires instance-owned nodes.
+  Slot removal must retain supplied content as a recoverable conflict until an
+  explicit migration/reset/detach transaction. Approve zero-or-more supplied
+  roots and an authored empty state separately from inheritance.
+- Alternatives: separate instance-content graphs (keeps instances childless but
+  adds graph-role/persistence/navigation complexity); or retain fallback-only
+  slots (safe and useful, but cannot complete supplied-content requirements).
+  A serialized secondary node store in a property is not recommended because
+  it duplicates the canonical graph and mutation rules.
+- Tradeoffs: canonical children reuse existing ownership/history but require
+  explicit projection-aware eligibility and conflict repair. Separate graphs
+  isolate storage but broaden lifecycle and transfer integration.
+- Affected requirements: `SF-0304-001/003/005`, `SF-0902-001`–`008`,
+  `SF-0903-001`–`008`, `SF-0905-001`–`008`, and `SF-0308-003/004/005`.
+- Decision deadline: before supplied-content mutations or any migration that
+  makes linked instances canonical parents.
+- Safe temporary assumption: SF-AUTHORING-118 exposes non-root existing
+  Frame/Section/Stack/Grid definition containers as named fallback slots.
+  Their current ordered childIDs remain the sole content/ownership source;
+  instances inherit and inspect/edit the definition fallback. Nested slots
+  and supplied-content storage are unavailable, with no fake controls or
+  silent conversion. Older packages remain readable.
+
 ## OD-016 — Initial starter-template catalogue and canonical content
 
 Status: Approved — 2026-10-05
@@ -118,6 +237,30 @@ Status: Open — non-blocking safety boundary
 - Tradeoffs: automatic reclamation limits disk use but risks deleting an artifact after ownership has changed; conservative retention preserves safety but needs a size/visibility policy.
 - Safe temporary assumption: logical retirement, typed retry, and retained staging/quarantine artifacts only. Do not claim universal protection against a hostile same-UID process racing the final macOS rename/unlink syscall.
 - Affected requirements: `SF-0301-004`, `SF-0301-005`, `SF-0306-003`, `SF-0306-004`, `SF-1504-003`, `SF-1504-004`, `SF-1603-004`, `SF-1604-004`, and `SF-1702-004`.
+
+## OD-017 — Signed update feed and installer ownership
+
+Status: Open — blocks trusted update installation, not metadata inspection
+
+- Needed by: enabling the SF-1507 installer handoff or publishing a production update feed.
+- Recommended default: Developer ID signing and notarization with Sparkle 2,
+  an EdDSA-signed appcast derived from owner-controlled GitHub Releases, stable
+  and preview feeds, monotonic upgrades, and a retained last-known-good app.
+- Owner decision: final publisher/bundle identity; Developer ID team; who owns
+  and rotates the private update-signing key; exact GitHub repository/feed URL;
+  stable/preview promotion policy; minimum supported macOS; rollback and
+  emergency-revocation policy.
+- Alternatives: Mac App Store delivery (store-owned update trust); a fully
+  SiteForge-owned signed downloader/installer (substantially larger security
+  surface); metadata-only checking with manual download (current safe state).
+- Tradeoffs: Sparkle is mature and MIT-licensed but adds a binary/package
+  dependency and key/appcast maintenance. A custom installer avoids that
+  dependency but creates a security-critical long-term maintenance burden.
+- Safe temporary assumption: public HTTPS metadata may be inspected without
+  authentication; download/install remains policy-blocked and the running app
+  is never replaced.
+- Decision deadline: before any public beta or enabling the Install action.
+- Affected requirements: `SF-1507-001`–`SF-1507-008`, plus OD-001, OD-012, and OD-013.
 
 ## OD-003 — Blank-project default page set
 

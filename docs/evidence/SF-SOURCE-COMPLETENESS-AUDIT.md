@@ -2,10 +2,11 @@
 
 Date: 2026-10-05
 
-This is a source audit, not verification evidence. The repository contains a
-large uncommitted source-only sequence; new and changed tests have not run.
-Documentation, UI labels, and test names were not treated as proof unless a
-production path was present and connected.
+This began as a source audit rather than verification evidence. Its original
+source-only classifications are historical: the accumulated checkpoint later
+passed 567 unit/integration tests and 104 actual-app UI journeys (671 total,
+zero failures). Documentation, UI labels, and test names are still not treated
+as proof unless a production path is present and connected.
 
 ## Coverage map
 
@@ -29,11 +30,15 @@ production path was present and connected.
 - SF-AUTHORING-107 now connects bounded transactional authored-object
   clipboard/duplication and supported image/token dependency transfer through
   the existing command, resource, selection, and diagnostics owners.
+- SF-AUTHORING-106 now connects the approved local Blank Site/Starter Site
+  choice, deterministic template provenance, and ordinary Home/About semantic
+  content through the existing launch, lifecycle, and canonical model owners.
 
 ### Partial production source
 
-- Onboarding has New Site/Open Project and recent projects, but no approved
-  template catalogue, walkthrough, learning-state model, or reset workflow.
+- Onboarding has explicit Blank Site/Starter Site/Open Project and recent
+  projects. Additional templates, walkthroughs, learning-state model, and reset
+  workflow remain absent.
 - Direct manipulation is substantial but focus/isolation/presentation modes
   (`SF-0409`) are absent as a coherent product surface.
 - Styling covers fills, typography, bounded border/radius/shadow and tokens,
@@ -41,9 +46,10 @@ production path was present and connected.
   broad effects remain incomplete.
 - Assets cover local raster images; audio/video, SVG/vector, font management,
   and remote/embed policy are not complete modules.
-- Components cover local definitions/instances and bounded exposed values;
-  slots, variants, libraries, documentation/examples, and full override reset
-  remain incomplete.
+- Components cover local definitions/instances plus bounded text, visibility,
+  Image-fit choice, and local-image media values; slots, actions, arbitrary
+  enums, variants, libraries, documentation/examples, and broader override
+  matrices remain incomplete.
 - Links and local Preview exist; the general event graph, animation, scroll
   triggers, overlays, runtime variables, and custom-code boundary remain
   incomplete.
@@ -53,12 +59,13 @@ production path was present and connected.
 
 ### Source missing and dependency ordered
 
-1. `SF-AUTHORING-106` — local Starter Site/onboarding model (`SF-0204`) using
-   approved OD-016: Blank Site plus exactly one neutral Home/About template.
-2. `SF-AUTHORING-108` — canvas focus/isolation/presentation modes (`SF-0409`)
+1. `SF-AUTHORING-108` — canvas focus/isolation/presentation modes (`SF-0409`)
    without creating a second selection or renderer model.
-3. `SF-AUTHORING-109` — positioning and reusable/state style foundation
-   (`SF-0504`, `SF-0510`, `SF-0511`) through existing property resolution.
+2. `SF-AUTHORING-109` — **implemented and covered by the accumulated verified checkpoint**:
+   positioning and reusable/state style foundation (`SF-0504`, `SF-0510`,
+   `SF-0511`) now uses existing property/render/output resolution.
+3. Visual-convergence pass — reconcile the native shell with the approved
+   directional renders before continuing output work.
 4. `SF-AUTHORING-110` — complete static CSS/asset build diagnostics foundation
    (`SF-1204`, `SF-1206`, `SF-1208`, `SF-1211`) before any publication work.
 5. Later dependency groups: cross-project component-definition clipboard

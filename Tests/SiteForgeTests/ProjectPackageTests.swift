@@ -57,7 +57,7 @@ final class ProjectPackageTests: XCTestCase {
         let manifest = try XCTUnwrap(members.first(where: { $0.path == "manifest.json" }))
         let text = String(decoding: manifest.data, as: UTF8.self)
         XCTAssertTrue(text.contains("\"packageVersion\":1"))
-        XCTAssertTrue(text.contains("\"documentSchemaVersion\":11"))
+        XCTAssertTrue(text.contains("\"documentSchemaVersion\":\(DocumentSerializer.currentSchemaVersion)"))
         XCTAssertTrue(text.contains(projectID.description))
         XCTAssertTrue(text.contains("\"sha256\""))
     }
@@ -1301,10 +1301,7 @@ final class ProjectPackageTests: XCTestCase {
     }
 
     private func legacyGolden(named name: String, sha256 expectedHash: String) throws -> Data {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/Legacy/\(name).siteforge.b64")
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: name, withExtension: "siteforge.b64", subdirectory: "Legacy"))
         let encoded = try Data(contentsOf: url)
         let package = try XCTUnwrap(Data(base64Encoded: encoded, options: .ignoreUnknownCharacters))
         let actualHash = SHA256.hash(data: package).map { String(format: "%02x", $0) }.joined()

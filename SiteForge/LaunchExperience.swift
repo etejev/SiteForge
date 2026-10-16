@@ -4,6 +4,24 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// A native File command can outlive the last scene. Transfer its intent once
+/// to the next scene, never to a retained controller from a closed window.
+@MainActor
+final class WorkspaceLaunchRequestQueue {
+    enum Request: Equatable { case new, open(URL) }
+    static let shared = WorkspaceLaunchRequestQueue()
+    private var pending: Request?
+    @discardableResult func enqueue(_ request: Request) -> Bool {
+        guard pending == nil else { return false }
+        pending = request
+        return true
+    }
+    func take() -> Request? {
+        defer { pending = nil }
+        return pending
+    }
+}
+
 @MainActor
 enum NativeProjectOpenPanel {
     static func chooseProject() -> URL? {
@@ -145,7 +163,7 @@ enum LaunchExperienceState: Equatable, Sendable {
     var kind: LaunchExperienceStateKind {
         switch self {
         case .welcome: .welcome
-        case .working(let status) where status.title == "Creating blank project…" && status.canCancel: .creating
+        case .working(let status) where status.title.hasPrefix("Creating ") && status.canCancel: .creating
         case .working(let status) where status.progress == nil && status.canCancel: .loadingIndeterminate
         case .working(let status) where status.canCancel: .loadingDeterminate
         case .working: .loadingNonCancelable
@@ -157,7 +175,7 @@ enum LaunchExperienceState: Equatable, Sendable {
 
     var announcement: String {
         switch self {
-        case .welcome: "SiteForge is ready. Create a blank project or open an existing project."
+        case .welcome: "SiteForge is ready. Choose Blank Site or Starter Site, or open an existing project."
         case .working(let status): status.accessibilityLabel
         case .failure(let failure): "Project loading failed. \(failure.message)"
         case .recovery(let recovery): "Recovery candidate found. \(recovery.revisionSummary)"
@@ -216,7 +234,8 @@ enum LaunchPreviewScenario: String {
 final class LaunchExperienceController: ObservableObject {
     static let requirementIDs: Set<String> = [
         "SF-0201-002", "SF-0201-003", "SF-0201-004", "SF-0201-006", "SF-0201-007", "SF-0201-008",
-        "SF-0204-002", "SF-0204-003", "SF-0204-004", "SF-0204-006",
+        "SF-0204-001", "SF-0204-002", "SF-0204-003", "SF-0204-004",
+        "SF-0204-005", "SF-0204-006", "SF-0204-007", "SF-0204-008",
         "SF-0301-002", "SF-0301-004", "SF-0301-006", "SF-0301-007", "SF-0301-008",
         "SF-1602-004", "SF-1602-006", "SF-1602-007", "SF-1602-008",
     ]
@@ -225,6 +244,8 @@ final class LaunchExperienceController: ObservableObject {
     @Published private(set) var transitionHistory: [LaunchExperienceStateKind]
     @Published private(set) var recentProjects: [RecentProjectReference] = []
     @Published private(set) var recentProjectsMessage: String?
+    @Published private(set) var recoveryAvailableAtWelcome = false
+    private var checkedInitialRecovery = false
     let lifecycle: DocumentLifecycleController
     let diagnostics: LaunchExperienceDiagnostics
 
@@ -319,7 +340,7 @@ final class LaunchExperienceController: ObservableObject {
     func createBlankProject() {
         startOperation(.new) { [weak self] id, start in
             guard let self else { return }
-            await self.performBlankCreation(operationID: id, start: start)
+            await self.performCreation(.blank, operationID: id, start: start)
         }
     }
 
@@ -327,7 +348,21 @@ final class LaunchExperienceController: ObservableObject {
         let id = UUID()
         operationID = id
         returnState = state == .workspace ? .workspace : .welcome
-        await performBlankCreation(operationID: id, start: .now)
+        await performCreation(.blank, operationID: id, start: .now)
+    }
+
+    func createStarterProject() {
+        startOperation(.new) { [weak self] id, start in
+            guard let self else { return }
+            await self.performCreation(.starter, operationID: id, start: start)
+        }
+    }
+
+    func createStarterProjectAndWait() async {
+        let id = UUID()
+        operationID = id
+        returnState = state == .workspace ? .workspace : .welcome
+        await performCreation(.starter, operationID: id, start: .now)
     }
 
     func openProject(_ url: URL, userSelected: Bool = false) {
@@ -341,12 +376,12 @@ final class LaunchExperienceController: ObservableObject {
         }
     }
 
-    func openProjectAndWait(_ url: URL) async {
+    func openProjectAndWait(_ url: URL, userSelected: Bool = false) async {
         lastOpenURL = url
         let id = UUID()
         operationID = id
         returnState = state == .workspace ? .workspace : .welcome
-        await performOpen(url, userSelected: false, rememberOnSuccess: false, operationID: id, start: .now)
+        await performOpen(url, userSelected: userSelected, rememberOnSuccess: userSelected, operationID: id, start: .now)
     }
 
     func loadRecentProjects() async {
@@ -355,7 +390,7 @@ final class LaunchExperienceController: ObservableObject {
             recentProjectsMessage = nil
         } catch {
             recentProjects = []
-            recentProjectsMessage = "Recent projects are unavailable. New Site and Open Project remain available."
+            recentProjectsMessage = "Recent projects are unavailable. Blank Site, Starter Site, and Open Project remain available."
         }
     }
 
@@ -451,6 +486,21 @@ final class LaunchExperienceController: ObservableObject {
         lifecycle.isRecoveryDetailsPresented = true
     }
 
+    func reviewWelcomeRecovery() {
+        guard recoveryAvailableAtWelcome, let candidate = lifecycle.recoveryCandidate else { return }
+        transition(to: .recovery(.init(title: "Unsaved project recovery available",
+            message: "Your earlier work is preserved. Restore it, inspect it, or return without changing it.",
+            revisionSummary: candidate.summary)))
+    }
+
+    func deferRecovery() {
+        guard case .recovery = state else { return }
+        recoveryAvailableAtWelcome = lifecycle.recoveryCandidate != nil
+        // A deliberately opened saved project is already safe to inspect.
+        // Untitled discovery returns to Welcome without consuming the bytes.
+        transition(to: lifecycle.fileURL == nil ? .welcome : .workspace)
+    }
+
     func presentOpenPanel() {
         guard let url = NativeProjectOpenPanel.chooseProject() else {
             lifecycle.noteCancellation()
@@ -472,15 +522,10 @@ final class LaunchExperienceController: ObservableObject {
     }
 
     func discoverInitialRecovery() async {
-        guard state == .welcome, !isPreviewScenario else { return }
+        guard state == .welcome, !isPreviewScenario, !checkedInitialRecovery else { return }
+        checkedInitialRecovery = true
         await lifecycle.discoverUntitledRecoveryCandidate()
-        if let candidate = lifecycle.recoveryCandidate {
-            transition(to: .recovery(LaunchRecoveryPresentation(
-                title: "Unsaved project recovery available",
-                message: "A validated recovery candidate contains unsaved work from an earlier session.",
-                revisionSummary: candidate.summary
-            )))
-        }
+        recoveryAvailableAtWelcome = lifecycle.recoveryCandidate != nil
     }
 
     private func startOperation(
@@ -495,13 +540,31 @@ final class LaunchExperienceController: ObservableObject {
         operationTask = Task { await work(id, start) }
     }
 
-    private func performBlankCreation(operationID id: UUID, start: ContinuousClock.Instant) async {
+    private enum CreationChoice: Equatable {
+        case blank, starter
+
+        var title: String { self == .blank ? "blank project" : "Starter Site" }
+        var detail: String {
+            self == .blank
+                ? "Preparing the approved Home and Not Found page baseline."
+                : "Preparing editable Home and About pages with semantic site structure."
+        }
+        var document: CanonicalDocument {
+            switch self { case .blank: ProjectCreation.blank(); case .starter: StarterSiteTemplate.document() }
+        }
+    }
+
+    private func performCreation(
+        _ choice: CreationChoice,
+        operationID id: UUID,
+        start: ContinuousClock.Instant
+    ) async {
         transition(to: .working(ProjectLoadingStatus(
-            title: "Creating blank project…",
-            detail: "Preparing the approved Home and Not Found page baseline.",
+            title: "Creating \(choice.title)…",
+            detail: choice.detail,
             progress: 0.5,
             canCancel: true,
-            accessibilityLabel: "Creating blank project, step 1 of 2"
+            accessibilityLabel: "Creating \(choice.title), step 1 of 2"
         )))
         await Task.yield()
         guard id == operationID, !Task.isCancelled else {
@@ -509,13 +572,13 @@ final class LaunchExperienceController: ObservableObject {
             return
         }
         transition(to: .working(ProjectLoadingStatus(
-            title: "Creating blank project…",
+            title: "Creating \(choice.title)…",
             detail: "Establishing one clean project history baseline.",
             progress: 1,
             canCancel: false,
-            accessibilityLabel: "Creating blank project, final non-cancelable step"
+            accessibilityLabel: "Creating \(choice.title), final non-cancelable step"
         )))
-        switch await lifecycle.requestNewDocument() {
+        switch await lifecycle.requestNewDocument(choice.document) {
         case .completed:
             transition(to: .workspace)
             await record(.new, start: start, result: .success, failure: nil)
@@ -586,6 +649,7 @@ final class LaunchExperienceController: ObservableObject {
     }
 
     private func transition(to newState: LaunchExperienceState) {
+        if lifecycle.recoveryCandidate == nil { recoveryAvailableAtWelcome = false }
         state = newState
         if transitionHistory.last != newState.kind { transitionHistory.append(newState.kind) }
     }
@@ -661,7 +725,7 @@ final class LaunchExperienceController: ObservableObject {
 }
 
 private enum LaunchFocus: Hashable {
-    case newProject, openProject, cancel, primaryFailure, chooseAnother
+    case newProject, starterProject, openProject, cancel, primaryFailure, chooseAnother
     case restoreRecovery, discardRecovery, inspectRecovery
 }
 
@@ -677,8 +741,8 @@ struct LaunchExperienceView: View {
             Color(nsColor: .windowBackgroundColor)
                 .ignoresSafeArea()
             launchCard
-                .frame(maxWidth: 560)
-                .padding(48)
+                .frame(maxWidth: 600)
+                .padding(SiteForgeVisualSystem.launchOuterPadding)
         }
         .frame(
             // A named constrained UI-test placement is the one non-product
@@ -700,7 +764,14 @@ struct LaunchExperienceView: View {
             }
 #endif
             await controller.loadRecentProjects()
-            await controller.discoverInitialRecovery()
+            if let request = WorkspaceLaunchRequestQueue.shared.take() {
+                switch request {
+                case .new: await controller.createBlankProjectAndWait()
+                case .open(let url): await controller.openProjectAndWait(url, userSelected: true)
+                }
+            } else {
+                await controller.discoverInitialRecovery()
+            }
             await Task.yield()
             assignInitialFocus()
         }
@@ -713,7 +784,7 @@ struct LaunchExperienceView: View {
 
     @ViewBuilder
     private var launchCard: some View {
-        VStack(spacing: 26) {
+        VStack(spacing: SiteForgeVisualSystem.launchSectionSpacing) {
             brand
             switch controller.state {
             case .welcome:
@@ -728,26 +799,29 @@ struct LaunchExperienceView: View {
                 EmptyView()
             }
         }
-        .padding(36)
+        .padding(SiteForgeVisualSystem.launchInnerPadding)
         .workspaceChrome(.launchCard)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: SiteForgeVisualSystem.launchCardCornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: SiteForgeVisualSystem.launchCardCornerRadius, style: .continuous)
                 .strokeBorder(.primary.opacity(contrast == .increased ? 0.45 : 0.13))
         }
-        .shadow(color: .black.opacity(reduceTransparency ? 0.08 : 0.14), radius: 24, y: 10)
+        .shadow(color: .black.opacity(reduceTransparency ? 0.08 : 0.16),
+                radius: SiteForgeVisualSystem.launchShadowRadius,
+                y: SiteForgeVisualSystem.launchShadowOffset)
     }
 
     private var brand: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: SiteForgeVisualSystem.standardSpacing) {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 72, height: 72)
                 .accessibilityHidden(true)
             Text("SiteForge")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .font(.largeTitle.bold())
             Text("Design durable websites in a native Mac workspace.")
+                .font(.callout)
                 .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .ignore)
@@ -756,36 +830,84 @@ struct LaunchExperienceView: View {
     }
 
     private var welcome: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: SiteForgeVisualSystem.standardSpacing) {
             Text("Start building")
-                .font(.title2.weight(.semibold))
-            Text("Create a clean local site or open and validate an existing SiteForge project.")
+                .font(.title3.weight(.semibold))
+            Text("Start blank, begin with a local editable structure, or open an existing SiteForge project.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 12) {
-                Button("New Site") { controller.createBlankProject() }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .focused($focus, equals: .newProject)
-                    .accessibilityHint("Creates Home and Not Found pages as one clean baseline")
-                    .accessibilityIdentifier("launch.newBlankProject")
-                Button("Open Project…") { controller.presentOpenPanel() }
-                    .focused($focus, equals: .openProject)
-                    .accessibilityHint("Choose a SiteForge project to validate before opening")
-                    .accessibilityIdentifier("launch.openProject")
-            }
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 16) { launchAssurances }
-                VStack(alignment: .leading, spacing: 6) { launchAssurances }
+                HStack(spacing: SiteForgeVisualSystem.standardSpacing) { creationChoices }
+                VStack(spacing: SiteForgeVisualSystem.compactSpacing + 4) { creationChoices }
+            }
+            Button("Open Project…") { controller.presentOpenPanel() }
+                .focused($focus, equals: .openProject)
+                .accessibilityHint("Choose a SiteForge project to validate before opening")
+                .accessibilityIdentifier("launch.openProject")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: SiteForgeVisualSystem.sectionSpacing) { launchAssurances }
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) { launchAssurances }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
             .padding(.top, 4)
             recentProjectsSection
+            if controller.recoveryAvailableAtWelcome {
+                GroupBox("Recoverable work") {
+                    VStack(spacing: SiteForgeVisualSystem.compactSpacing) {
+                        Text("An earlier unsaved project is safely retained.")
+                            .font(.caption).multilineTextAlignment(.center)
+                        Button("Review Recovery…", action: controller.reviewWelcomeRecovery)
+                            .accessibilityIdentifier("launch.recovery.review")
+                    }.frame(maxWidth: .infinity)
+                }.accessibilityIdentifier("launch.recovery.available")
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launch.welcome")
+    }
+
+    @ViewBuilder
+    private var creationChoices: some View {
+        Button {
+            controller.createBlankProject()
+        } label: {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+                Label("Blank Site", systemImage: "doc")
+                    .font(.headline)
+                Text("Home and Not Found, ready to shape from scratch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .frame(width: 210, alignment: .leading)
+        }
+        .buttonStyle(.borderedProminent)
+        .keyboardShortcut(.defaultAction)
+        .focused($focus, equals: .newProject)
+        .accessibilityLabel("Blank Site")
+        .accessibilityHint("Creates Home and Not Found pages as one clean baseline")
+        .accessibilityIdentifier("launch.newBlankProject")
+
+        Button {
+            controller.createStarterProject()
+        } label: {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+                Label("Starter Site", systemImage: "rectangle.3.group")
+                    .font(.headline)
+                Text("Editable Home and About pages with a semantic structure")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .frame(width: 210, alignment: .leading)
+        }
+        .buttonStyle(.bordered)
+        .focused($focus, equals: .starterProject)
+        .accessibilityLabel("Starter Site")
+        .accessibilityHint("Creates editable Home and About pages with Header, Main, and Footer sections")
+        .accessibilityIdentifier("launch.newStarterProject")
     }
 
     @ViewBuilder
@@ -805,21 +927,21 @@ struct LaunchExperienceView: View {
     private var recentProjectsSection: some View {
         if !controller.recentProjects.isEmpty || controller.recentProjectsMessage != nil {
             Divider()
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
                 if !controller.recentProjects.isEmpty {
                     Text("Recent Projects")
                         .font(.headline)
                         .accessibilityIdentifier("launch.recentProjects.title")
                     ScrollView {
-                        LazyVStack(spacing: 8) {
+                        LazyVStack(spacing: SiteForgeVisualSystem.controlInset) {
                             ForEach(Array(controller.recentProjects.prefix(4))) { project in
-                                HStack(spacing: 8) {
+                                HStack(spacing: SiteForgeVisualSystem.controlInset) {
                                     Button {
                                         controller.openRecentProject(project)
                                     } label: {
                                         HStack {
                                             Image(systemName: "doc")
-                                            VStack(alignment: .leading, spacing: 1) {
+                                            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.hairlineSpacing) {
                                                 Text(project.displayName)
                                                     .lineLimit(1)
                                                 Text("Authorized local project")
@@ -848,9 +970,9 @@ struct LaunchExperienceView: View {
                                     .accessibilityLabel("Remove \(project.displayName) from Recent Projects")
                                     .accessibilityIdentifier("launch.recentProject.remove.\(project.id.rawValue)")
                                 }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+                                .padding(.horizontal, SiteForgeVisualSystem.panePadding)
+                                .padding(.vertical, SiteForgeVisualSystem.compactSpacing)
+                                .background(SiteForgeVisualSystem.elevatedSurface, in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius, style: .continuous))
                             }
                         }
                     }
@@ -873,7 +995,7 @@ struct LaunchExperienceView: View {
     }
 
     private func working(_ status: ProjectLoadingStatus) -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: SiteForgeVisualSystem.toolbarGroupSpacing) {
             if let progress = status.progress {
                 ProgressView(value: progress)
                     .accessibilityValue("\(Int(progress * 100)) percent")
@@ -922,10 +1044,10 @@ struct LaunchExperienceView: View {
     }
 
     private func failureView(_ failure: LaunchFailurePresentation) -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: SiteForgeVisualSystem.toolbarGroupSpacing) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 30))
-                .foregroundStyle(.orange)
+                .foregroundStyle(SiteForgeVisualSystem.warning)
                 .accessibilityHidden(true)
             Text(failure.title)
                 .font(.title3.weight(.semibold))
@@ -935,7 +1057,7 @@ struct LaunchExperienceView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("launch.failure.message")
-            HStack(spacing: 12) {
+            HStack(spacing: SiteForgeVisualSystem.standardSpacing) {
                 if failure.primaryAction == .retry {
                     Button("Retry") { controller.retry() }
                         .buttonStyle(.borderedProminent)
@@ -956,7 +1078,7 @@ struct LaunchExperienceView: View {
     }
 
     private func recoveryView(_ recovery: LaunchRecoveryPresentation) -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: SiteForgeVisualSystem.toolbarGroupSpacing) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 30))
                 .foregroundStyle(.tint)
@@ -969,7 +1091,7 @@ struct LaunchExperienceView: View {
             Text(recovery.revisionSummary)
                 .font(.callout.monospacedDigit())
                 .accessibilityIdentifier("launch.recovery.summary")
-            HStack(spacing: 12) {
+            HStack(spacing: SiteForgeVisualSystem.standardSpacing) {
                 Button("Inspect Recovery") { controller.inspectRecovery() }
                     .focused($focus, equals: .inspectRecovery)
                     .accessibilityIdentifier("launch.recovery.inspect")
@@ -981,6 +1103,10 @@ struct LaunchExperienceView: View {
                     .keyboardShortcut(.defaultAction)
                     .focused($focus, equals: .restoreRecovery)
                     .accessibilityIdentifier("launch.recovery.restore")
+                Button("Later", action: controller.deferRecovery)
+                    .keyboardShortcut(.cancelAction)
+                    .help("Keep all recovery data and return without restoring or discarding it")
+                    .accessibilityIdentifier("launch.recovery.later")
             }
         }
         .accessibilityElement(children: .contain)

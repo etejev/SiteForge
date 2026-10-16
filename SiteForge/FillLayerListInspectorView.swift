@@ -104,7 +104,21 @@ struct FillLayerListInspectorView: View {
         .accessibilityIdentifier("inspector.design.layers")
         .onChange(of: focusedNumericField) { previous, current in
             guard let previous, previous != current else { return }
-            commitDraft(for: previous)
+            let documentID = state.documentSession.document.id
+            let revision = state.documentSession.document.revision
+            let pageID = state.selectedPageID
+            let selection = state.selectionState.orderedIDs
+            DispatchQueue.main.async {
+                guard focusedNumericField != previous else { return }
+                guard state.documentSession.document.id == documentID,
+                      state.documentSession.document.revision == revision,
+                      state.selectedPageID == pageID,
+                      state.selectionState.orderedIDs == selection else {
+                    validationMessages[previous] = "Selection or document changed. Re-enter this value to apply."
+                    return
+                }
+                commitDraft(for: previous)
+            }
         }
         .onExitCommand { discardNumericDrafts() }
     }
@@ -190,6 +204,7 @@ struct FillLayerListInspectorView: View {
                         HStack(spacing: 6) {
                             Text("Stop \(stopIndex + 1)")
                                 .font(.caption.weight(.medium))
+                                .lineLimit(1).fixedSize()
                             NativeDesignColorWell(
                                 color: stop.color,
                                 isEnabled: layer.isEnabled,
@@ -211,6 +226,10 @@ struct FillLayerListInspectorView: View {
                                 .accessibilityHint("Enter 0 through 100. Return or moving focus commits; Escape restores the authored value.")
                                 .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).stop.\(stop.id.description).position")
                             Text("%")
+                            Spacer(minLength: 0)
+                        }
+                        HStack(spacing: 6) {
+                            Spacer(minLength: 0)
                             Button("Move Up", systemImage: "arrow.up") {
                                 moveStop(stop, in: layer, from: stopIndex, by: -1)
                             }

@@ -4,6 +4,29 @@ import XCTest
 @testable import SiteForge
 
 final class WorkspaceMaterialPolicyTests: XCTestCase {
+    func testSelectedReferencePaneAllocationKeepsCanvasDominantAtMinimumAndMaximizedWidths() {
+        for width in [CGFloat(1100), 1280, 1536, 1710, 2560] {
+            let navigator = WorkspaceMetrics.navigatorMaximumWidth(for: width)
+            let inspector = WorkspaceMetrics.inspectorMaximumWidth(for: width)
+            XCTAssertTrue(WorkspaceMetrics.navigatorWidth.contains(navigator))
+            XCTAssertTrue(WorkspaceMetrics.inspectorWidth.contains(inspector))
+            XCTAssertGreaterThanOrEqual(width - navigator - inspector - 2, WorkspaceMetrics.minimumCanvasWidth)
+            XCTAssertGreaterThanOrEqual(inspector, navigator)
+        }
+        XCTAssertEqual(WorkspaceMetrics.navigatorMaximumWidth(for: 1536), 314.88, accuracy: 0.001)
+        XCTAssertEqual(WorkspaceMetrics.inspectorMaximumWidth(for: 1536), 399.36, accuracy: 0.001)
+    }
+    func testConceptAlignedSettingsHasOneSidebarIncludingInheritedAccessibility() {
+        XCTAssertEqual(SettingsDestination.allCases.map(\.rawValue),
+                       ["appearance", "canvas", "accessibility", "defaults", "updates", "support", "advanced"])
+        XCTAssertEqual(Set(SettingsDestination.allCases.map(\.title)).count,
+                       SettingsDestination.allCases.count)
+        XCTAssertTrue(SettingsDestination.allCases.allSatisfy { !$0.symbol.isEmpty })
+        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 256)
+        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 400)
+        XCTAssertGreaterThanOrEqual(SiteForgeVisualSystem.inspectorBottomClearance, 80)
+    }
+
     private let standard = WorkspaceMaterialEnvironment(
         reduceTransparency: false,
         contrast: .standard,
@@ -94,6 +117,65 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceMaterialPolicy.preferredColorScheme(arguments: ["SiteForge", "-SiteForgeAppearance", "dark"]),
             .dark
+        )
+    }
+
+    // SF-0201-006, SF-0203-006, SF-1505-006, SF-1605-006 — the editor
+    // workspace is deliberately distinct from its authored artboard in both
+    // appearances, and normal pane widths can present five one-line labels.
+    @MainActor
+    func testVisualSystemSeparatesPasteboardArtboardAndSingleRowPaneDestinations() throws {
+        func luminance(_ color: NSColor, appearance: NSAppearance.Name) throws -> CGFloat {
+            let nativeAppearance = try XCTUnwrap(NSAppearance(named: appearance))
+            var resolved: NSColor?
+            nativeAppearance.performAsCurrentDrawingAppearance {
+                resolved = color.usingColorSpace(.deviceRGB)
+            }
+            let rgb = try XCTUnwrap(resolved)
+            return 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+        }
+
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let nativeAppearance = try XCTUnwrap(NSAppearance(named: appearance))
+            var fallbackAlphas: [CGFloat] = []
+            nativeAppearance.performAsCurrentDrawingAppearance {
+                fallbackAlphas = [SiteForgeVisualSystem.chromeSurfaceNSColor,
+                                  SiteForgeVisualSystem.elevatedSurfaceNSColor].compactMap {
+                    $0.usingColorSpace(.deviceRGB)?.alphaComponent
+                }
+            }
+            XCTAssertEqual(fallbackAlphas, [1, 1],
+                           "Reduce Transparency fallback surfaces must be opaque in each appearance")
+            let chrome = try luminance(SiteForgeVisualSystem.chromeSurfaceNSColor, appearance: appearance)
+            let pasteboard = try luminance(SiteForgeVisualSystem.canvasPasteboardNSColor, appearance: appearance)
+            let artboard = try luminance(SiteForgeVisualSystem.artboardSurfaceNSColor, appearance: appearance)
+            XCTAssertGreaterThan(abs(chrome - pasteboard), 0.03)
+            XCTAssertGreaterThan(abs(artboard - pasteboard), 0.06)
+        }
+        XCTAssertEqual(SiteForgeVisualSystem.hairlineSpacing, 2)
+        XCTAssertEqual(SiteForgeVisualSystem.tabStripInset, 3)
+        XCTAssertEqual(SiteForgeVisualSystem.microSpacing, 4)
+        XCTAssertEqual(SiteForgeVisualSystem.compactSpacing, 6)
+        XCTAssertEqual(SiteForgeVisualSystem.controlInset, 8)
+        XCTAssertEqual(SiteForgeVisualSystem.standardSpacing, 12)
+        XCTAssertEqual(SiteForgeVisualSystem.sectionSpacing, 18)
+        XCTAssertEqual(SiteForgeVisualSystem.panePadding, SiteForgeVisualSystem.standardSpacing)
+        XCTAssertEqual(SiteForgeVisualSystem.gridUnit, 8)
+        XCTAssertEqual(SiteForgeVisualSystem.launchInnerPadding, 32)
+        XCTAssertEqual(SiteForgeVisualSystem.launchOuterPadding, 40)
+        XCTAssertEqual(SiteForgeVisualSystem.settingsSidebarWidth, 250)
+        XCTAssertGreaterThan(SiteForgeVisualSystem.settingsContentMaxWidth,
+                             SiteForgeVisualSystem.settingsSidebarWidth)
+        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 256)
+        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 400)
+        XCTAssertLessThan(SiteForgeVisualSystem.navigatorIdealWidth, SiteForgeVisualSystem.inspectorIdealWidth)
+        XCTAssertTrue(WorkspaceMetrics.navigatorWidth.contains(SiteForgeVisualSystem.navigatorIdealWidth))
+        XCTAssertTrue(WorkspaceMetrics.inspectorWidth.contains(SiteForgeVisualSystem.inspectorIdealWidth))
+        XCTAssertLessThanOrEqual(
+            SiteForgeVisualSystem.navigatorIdealWidth
+                + SiteForgeVisualSystem.inspectorIdealWidth
+                + WorkspaceMetrics.minimumCanvasWidth,
+            WorkspaceMetrics.defaultWindowSize.width
         )
     }
 

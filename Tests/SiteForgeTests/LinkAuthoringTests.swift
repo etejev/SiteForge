@@ -78,9 +78,9 @@ final class LinkAuthoringTests: XCTestCase {
         }
         let encoded = try DocumentSerializer.encode(session.document)
         XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
-        let oldWithNewKinds = String(decoding: encoded, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":11", with: "\"schemaVersion\":5")
+        let oldWithNewKinds = String(decoding: encoded, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":5")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(oldWithNewKinds.utf8)))
-        let old = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures/Legacy/schema-v5-blank-document.json"))
+        let old = try Data(contentsOf: XCTUnwrap(Bundle(for: Self.self).url(forResource: "schema-v5-blank-document", withExtension: "json", subdirectory: "Legacy")))
         let migrated = try DocumentSerializer.decode(old)
         XCTAssertEqual(migrated.pages.map(\.name), ["Home", "Not Found"])
         XCTAssertFalse(migrated.pages.flatMap(\.nodes).contains { $0.kind.isLinkControl })

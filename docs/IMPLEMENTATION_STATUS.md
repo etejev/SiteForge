@@ -1,9 +1,419 @@
 # SiteForge Implementation Status
 
+## Current owner correction — SF-PRODUCT-UI-010
+
+Final bounded acceptance — 2026-10-15: DONE. Final `./sf verify` passes
+636/636 model/integration +119/119 UI (755 tests, zero failures/skips), with
+repository/security/traceability/architecture/evidence/build checks green.
+Final focused interaction acceptance is 4/4 +1/1 compact overflow, fourteen
+captures reviewed. Installed-app evidence and 69 unchanged recovery hashes
+are retained. Normative requirement modules remain Partial, not release-ready.
+The following is historical repair chronology, superseded by this final result.
+
+Focused checkpoint — 2026-10-15: all four interaction repairs pass native focused
+acceptance (4/4, 399.845 seconds); twelve original-resolution captures reviewed.
+Owner restart resolved OD-021. Final full gate/local commit remain pending;
+earlier blocker/failure descriptions below are historical.
+
+Current acceptance boundary: 636 model + 93 UI passes in the latest full attempt;
+four UI assertions failed, then XCTest could not initialize its next runner.
+The four interaction corrections compile but focused UI execution is blocked by
+the same native automation timeout (normal and prebuilt routes). OD-021 requires
+owner action; final gate and reviewed local commit are not complete.
+
+Nested connected-layout acceptance passes 1/1 (105.140 seconds), four captures
+reviewed. Exact render counts reflect editable chrome children and deliberate
+Mobile menu exclusions without changing product geometry. Final gate pending.
+
+The next final attempt passed 636/636 model tests, then found root Settings AX
+identity propagation. Explicit root containment repairs distinct native pane
+identities; the unchanged focused journey passes 1/1 (24.021 seconds), all seven
+destination captures visually reviewed. Interrupted full attempt is not a pass.
+
+Latest observed acceptance: installed production smoke passes 1/1 (222.566
+seconds), covering own blank Header/body/Footer authoring, native Save/Close/Open,
+Preview, actual static output and normal Quit without product test arguments.
+Six final captures were visually inspected. Preview title truncation found during
+that review is corrected by the shared native text-layer factory; three focused
+metric/ink/navigation checks pass. Instance inset acceptance also passes all
+three affected journeys. Installed Settings/Header/Footer/owned recovery fixture
+checks passed 3/3, with all 17 captures inspected at original resolution. Only
+the final complete gate and reviewed local commit remain pending. The chronological results
+below retain earlier failed/interrupted evidence, not current blockers.
+
+IN PROGRESS, 2026-10-15. Completed collector: repository/build passed,
+614/623 non-UI and 108/118 UI passed. Nineteen failed selectors were retained;
+the nine non-UI baseline failures subsequently passed focused repair coverage.
+The native geometry/keyboard/history journey and current Header/Footer menu
+insertion/history journey passed. All ten originally failing native selectors
+now pass focused acceptance, including retained recovery (211.793 seconds) and
+expanded Header/Footer title/pages/Preview/reopen (263.736 seconds). Fixed Settings
+passed with all eight captures reviewed; the four final recovery captures were
+also inspected at original resolution. The updated regular app built/installed
+with recoverable backup. Installed interactive smoke is pending a closed native
+Computer Use pipe. A later full attempt passed 635/635 unit/integration tests
+and fourteen UI journeys before a component-instance search-field containment
+failure. That group now shares the existing inset section; discovery and retained
+recovery pass 2/2 with five original-resolution captures reviewed. Two-instance
+history/reopen focused acceptance is running before installed-artifact acceptance
+and the final complete gate. No accumulated green gate,
+installed-delivery completion or local commit is claimed.
+
+Shared changes include balanced sidebar segments, contextual Inspector groups,
+non-destructive recovery Review/Later, fixed Settings/common card sizing, and
+schema-17 editable Header/Footer Stack/Text/Link contents. New command tests
+cover title/inclusion/custom/reset, exact history, legacy conversion, persistence,
+duplication and output identity. Modules remain Partial; see
+`evidence/SF-PRODUCT-UI-010-OWNER-CORRECTION.md` and ADR-0020.
+
+## Current regular-app delivery evidence
+
+Advanced owner-local testing and regular installation have focused acceptance:
+19 collector checks, eleven distinct model checks, nine affected UI journeys and
+two bounded installed-app checks passed. Native Close Window, exact configured
+test identity, canonical blank-state recognition and minimum gradient-label
+layout defects were corrected. Reports remain partial/cancelled where deliberately
+cancelled; no accumulated full gate or release completion is inferred.
+Remaining delivery acceptance: connected website/Preview/export installed-app
+smoke and complete reachable-surface review. See
+`evidence/SF-LOCAL-TESTING-002-OWNER-LOCAL.md` and UI-009 evidence.
+
+## Current owner-local delivery correction — IN PROGRESS
+
+Owner supersedes separate experimental copies: deliver the regular SiteForge app
+with an installation-provisioned Advanced > Testing harness. No source-folder
+chooser, Experimental Options switch, Settings scope/provenance badge or release-
+channel selector. Keep global preference data and genuine authoring provenance.
+Bounded SF-0201-003/006/008, SF-0206-002/003/004/005/006/008 and
+SF-1607-002/004/006/008; normative modules remain Partial.
+
+Plan: integrate regular Settings/harness; test automatic provisioning, persistent
+reports, duplicates/cancellation and isolated test identity; compile; package with
+source fingerprint; safely replace only the inactive regular installed bundle
+with recoverable backup; inspect that installed app and affected UI captures.
+Compact native icon toolbar, viewport-centered bounded empty hint, paired geometry
+fields and inline ordinary Inspector controls are part of this correction.
+No commits, pushes, GitHub, publication, distribution signing or notarization.
+Local ad-hoc owner packaging/install is authorized. Counter remains 2/10.
+Focused acceptance is running; no completed delivery or full gate is claimed.
+Earlier experimental/owner-away instructions below are historical and superseded.
+
+## 2026-10-13 selected-reference visual acceptance (add-on, counter 2/10)
+
+01 main editor, 05 responsive and 12 Settings inspected in full; shared palettes,
+proportional shell, flat Inspector and card Settings source integrated. Separate
+experimental builds succeeded; three exact model checks and two Settings/grid
+journeys passed. Original app-only captures reviewed; live split allocation and
+toolbar clipping were corrected rather than inferred from ideals. Later compact
+controls refinement is under focused visual matrix acceptance, not fully verified.
+Native computer-use disconnected; experimental/manual remaining states await
+restored connection. Full accumulated acceptance remains pending/failed.
+Exact scope/evidence: `evidence/SF-PRODUCT-UI-009-SELECTED-REFERENCES.md`.
+
+## 2026-10-13 SF-AUTHORING-124 practical Inspector package (Prompt 2/10)
+
+Source implemented, not verified: bounded SF-0701/0702/0703/0704 discovery,
+scene-local section pins/navigation and strict typed geometry-value clipboard
+through existing identity/history/responsive registries. Mixed copy is disabled;
+paste edits only applicable targets with explicit status and one atomic edit.
+Schema unchanged. Four deterministic tests and one native journey written,
+none executed. Exact requirement IDs/limits: `evidence/SF-AUTHORING-124-INSPECTOR-WORKFLOW.md`.
+Local-builder-first package roadmap replaces micro-slicing; service-heavy scope
+remains Partial/deferred, not removed. Failed accumulated acceptance remains open.
+
+## 2026-10-13 SF-AUTHORING-123 component-property discovery (new cycle Prompt 1/10)
+
+Source implemented; verification deferred. Bounded SF-0902-006/007 and
+SF-0701-002/003/004/006/007/008 gain ordered name/type/group/provenance search,
+result counts, clear/no-results recovery and keyboard reveal. Conflicts remain
+discoverable outside the filter; reset discloses whole-instance scope. Existing
+six typed editors/transactions remain authoritative, schema v16 unchanged.
+Three deterministic tests and one native keyboard/AX journey added, unrun.
+Manual source review only; no build/test/check/automation or GitHub action.
+Evidence: `evidence/SF-AUTHORING-123-COMPONENT-DISCOVERY.md`; planning inventory:
+`REMAINING_DEVELOPMENT_ROADMAP.md`. All cited normative modules remain Partial.
+
+The earlier accumulated collector finished with exit 1: build passed,
+repository/code stages failed, UI initialization timed out enabling automation.
+Its report is retained; source-era unrun statements below are historical, not
+an assertion that the attempted gate passed. Acceptance/repair awaits owner.
+
+## 2026-10-13 SF-AUTHORING-122 connected containment/output (Prompt 9/10)
+
+Source implemented; acceptance unrun. Shared container policy/geometry now
+supplies nested connected output without old absolute rules or repeated origins.
+Root padding/height, bounded minima, visible markers, semantic ownership and
+navigation visibility/sizing/current/context/focus/recovery are integrated.
+Schema remains v16; legacy data, identities/history and testing add-ons remain.
+Seven new unit/integration selectors and one native journey are unrun; no
+build/check/test/automation/install/signing/hosted operation occurred. All cited
+modules stay Partial. Positioned/fluid/multiple-root/clipped-menu output and
+broad browser/style/visual certification remain explicit limitations. Evidence:
+`evidence/SF-AUTHORING-122-CONNECTED-OUTPUT-INTEGRATION.md`. Prompt 10 owns
+the single detached accumulated gate and original-resolution visual review.
+
+## 2026-10-13 SF-AUTHORING-121 connected page structure (Prompt 8/10)
+
+SOURCE IMPLEMENTED, not verified. Optional schema-v16 Section roles and one
+structural projection own connected Header/body/Footer placement, dedicated
+native settings, stable PageID navigation and Mobile Preview menu.
+Existing unmarked content is unchanged; explicit conversion retains authored
+geometry and exact history. Unsupported static containing layouts fail closed.
+All cited modules remain Partial. Six new selectors plus one updated selector
+are unrun. Test-target compilation, visuals, DOCX synchronization and verification await
+Prompt 10. Evidence: `evidence/SF-AUTHORING-121-CONNECTED-PAGE-STRUCTURE.md`.
+
+The independent testing add-on has a staged detached collector, real code/UI
+counts, persistent native progress and experimental-only Settings launch/report
+controls. The expressly authorized experimental app/helper build passed,
+including connected-page source. Test-target compilation and actual testing/
+visual acceptance remain deferred. SF-0206/SF-1607 stay Partial; see
+`evidence/SF-LOCAL-TESTING-001-EXPERIMENTAL.md`.
+
+## 2026-10-13 SF-AUTHORING-120 retained override recovery (Prompt 7/10)
+
+Bounded SF-0902-004/005/006/008 and SF-0905-003/004/005/006/008 gain source-only
+confirmed reset-one/reset-conflicts, original definition/source navigation,
+retained typed-value inspection and original-identity restoration through
+existing Undo/project data. One derived projection feeds Inspector, dependency
+details, transfer/output and serializer retention validation; missing authored
+action destinations are explicit conflicts. Schema stays v15. Valid conflicts
+remain loadable; Preview/static output/transfer fail closed without discarding
+values. Seven new selectors are unrun. OD-019 defers guessed retargeting and
+conversion; OD-018 still blocks supplied slots. No runtime/visual/gate result
+is claimed. Evidence: `evidence/SF-AUTHORING-120-COMPONENT-OVERRIDE-RECOVERY.md`.
+
+## 2026-10-13 SF-AUTHORING-119 property organization (Development Prompt 6/10)
+
+SF-0902-001–008 and SF-0905-003/004/005/006 gain bounded source-only flat
+property grouping and ordered presentation. Definition-owned schema-v15
+metadata references existing text/visibility/choice/media/action/slot bindings;
+atomic central commands preserve values, override intent, geometry and ownership.
+Native fields provide group/position Apply/Return, Cancel/Escape and Reset;
+instances reuse typed editors in shared groups, with retained conflict reset.
+Transfer/dependency inspection and expansion cleanup share the same metadata.
+Six new selectors are unrun. No build/check/test/automation/visual/gate result
+is claimed; all modules remain Partial. OD-018 is unresolved and supplied
+content remains unavailable. Evidence: `evidence/SF-AUTHORING-119-COMPONENT-PROPERTY-ORGANIZATION.md`.
+
+## 2026-10-13 SF-AUTHORING-118 fallback slice (Development Prompt 5 of 10)
+
+Bounded `SF-0902`, `SF-0903`, `SF-0905` now have source-only named definition
+fallback slots. Stable typed bindings use existing ordered canonical childIDs;
+native definition Apply/Cancel/remove and linked inherited-content inspection/
+edit routes reuse the component registry, graph, history and visual system.
+Transfer remaps fallback identities and rejects unsupported supplied/nested
+payloads; detach/output retain the existing ordered graph. Schema v14 strictly
+gates new metadata while reading supported older documents. Six new test
+selectors are unrun. All cited modules remain Partial: OD-018 blocks supplied
+instance content/cardinality/ownership, and Prompt 10 owns compilation,
+tests, recovery, runtime and visual acceptance. Evidence:
+`docs/evidence/SF-AUTHORING-118-COMPONENT-SLOT-FALLBACK.md`.
+
+## 2026-10-13 SF-AUTHORING-117 source integration (Development Prompt 4 of 10)
+
+Bounded `SF-0902-001`–`008` / `SF-0905-001`–`008` action properties now have
+native definition and instance Content controls, shared destination fields,
+explicit Apply/Cancel/Reset/provenance/conflict handling, and complete atomic
+binding transition guards. Supporting `SF-0308-003/004/005/008`,
+`SF-0806-002/003/004/006`, `SF-1201-003/004` and `SF-1203-003/004` have source
+coverage for destination transfer/equivalence, page intent retention and
+duplication, dependency inspection, and resolved Link Preview/static output.
+Nine new tests are written but unrun under the owner override. Schema remains
+v13; no migration beyond the existing adapters is added. Source/diff review
+found and corrected None decoding, missing retarget protection, virtual-section
+Preview availability and stale v12 test expectations. All cited modules remain
+Partial. Actual compilation, tests, native/visual acceptance, recovery and the
+accumulated gate belong to Prompt 10. Evidence:
+`docs/evidence/SF-AUTHORING-117-COMPONENT-ACTION-INTEGRATION.md`.
+
+## 2026-10-13 SF-PRODUCT-UI-008 source correction (owner add-on)
+
+The follow-up migrates the production consumers: `SiteForgeInspectorGroupStyle` governs every Inspector/Settings group; `SiteForgeRowSurface` governs Pages/Layers/Assets/Components/tab selection, hover and inactive states; shared spacing/field/status tokens govern remaining ordinary chrome. Accessibility Settings reports inherited macOS display preferences without adding canonical or preference state. The evidence file contains the complete surface/concept matrix and exact unrun acceptance source. Source/diff review did not alter component work, authored geometry, renderer transforms, AppIcon or updater policy. The feature counter remains 3 of 10.
+
+Bounded `SF-0201`, `SF-0203`, `SF-0205`, `SF-0206`, `SF-0407`, `SF-1505`, and `SF-1605` visual-system requirements now share explicit spacing, radii, pane, Settings, launch, surface, selection, and status roles. Key shell/launch/Settings consumers use those roles without changing document geometry or enabling concept-only features. Existing visual-policy and actual-app coverage has source assertions for the refined measurements. Execution and original-resolution review are deferred to Prompt 10, so no new verification claim is made.
+
+## 2026-10-13 SF-AUTHORING-116 source slice (Development Prompt 3 of 10)
+
+Bounded `SF-0902-001`–`008`, supporting `SF-0905-001`–`008`, now have a source-implemented Button/Link action-property model, strict destination codec, identity-gated commands, schema-v13 persistence, override provenance, and immutable graph resolution. Test source exists but was not run under owner policy. Native action controls, internal-target transfer, and the Prompt-10 accumulated gate remain pending, so both normative modules remain Partial.
+
+## 2026-10-12 SF-AUTHORING-115 source slice (Development Prompt 2 of 10)
+
+Bounded `SF-0902-001`–`008`, supporting `SF-0905-001`–`008` and
+`SF-0801-004/005/008`, now have a source-complete local-image component media
+property. A stable versioned binding exposes the definition Image's canonical
+AssetID; instances store only a typed stable-ID override, render through the
+existing immutable component expansion, and expose a native project-asset
+picker with inherited/authored provenance and exact Reset. The same resource
+identity participates in safe deletion, dependency inspection, package
+persistence, and cross-project transfer remapping.
+
+Unit/integration and actual-app test source was added or extended for atomic
+history, schema-v12 round-trip, missing/cancelled input, renderer projection,
+native accessibility, and the local-image authoring journey. Per the temporary
+owner-directed cadence, no test, build, verifier, linter, repository script, or
+automation command was executed in Development Prompt 2 of 10. This slice is
+**SOURCE IMPLEMENTED — VERIFICATION DEFERRED**, and the normative modules
+remain Partial.
+
+## 2026-10-12 verified checkpoint and SF-AUTHORING-114 focused slice
+
+The previously blocked accumulated gate completed: repository, security,
+traceability (409 records), architecture, AppIcon, retained evidence, 567
+unit/integration tests, and 104 actual-app UI journeys passed (671 total, zero
+failures). The source-only/unrun wording below is historical for that batch.
+
+Bounded `SF-0902-001`–`008` and supporting `SF-0905-001`–`008` now also include
+one production enum property: an Image definition exposes its canonical
+Fit/Fill/Stretch value, and linked instances author or reset a stable typed
+override through the Content Inspector. The focused command/history/
+persistence/render-resolution test passes 1/1. Both normative modules remain
+**Partial** because other property types, variants, slots, broad acceptance,
+and release evidence remain deferred.
+
+## 2026-10-08 accumulated source-batch verification
+
+Repository/security/traceability/architecture/evidence gates pass, including
+the repaired headless architecture closure. The complete non-UI run executed
+566 tests and exposed three bounded contract failures; SF-0409 traceability,
+canonical update-version normalization, and token-resolved static-fill output
+were corrected, and those exact regressions now pass 3/3. A representative
+34-selector model/integration set is green after its corrections.
+
+The current macOS XCTest service cannot enable UI automation. Fresh focused
+result bundles executed zero SiteForge journeys and timed out during runner
+initialization; the full gate subsequently stalled before its first UI event.
+Therefore this batch remains **verification in progress**, not DONE, and no
+new normative requirement is promoted beyond Partial on this evidence.
+
+## SF-AUTHORING-113 — Source implemented, verification in progress
+
+Bounded `SF-0905-001`–`008` now has one stable override-path projection for
+the currently supported plain-text and Boolean-visibility properties. It uses
+the existing canonical definition reference, source `NodeID`, typed property
+ID, and authored `PropertyID`; inherited/authored/conflict provenance is
+computed from immutable project state rather than serialized twice. Definition
+binding removal retains authored intent as a resettable conflict, while source
+retargeting under the same stable property ID remains invalid. Central exact-
+inverse commands own reset-one/reset-all scopes, native Inspector and
+dependency surfaces expose recovery/counts, transfer requires complete mapping,
+and static output emits a redacted blocking finding for unresolved intent.
+
+Affected production/test sources parse, and the universal arm64/x86_64 app
+build passes. Focused tests and the full gate remain unrun under the owner
+testing pause. The module therefore remains Partial. See
+`docs/evidence/SF-AUTHORING-113-COMPONENT-OVERRIDES.md`.
+
+## SF-AUTHORING-112 — Source implemented, verification deferred
+
+Bounded `SF-0205-002/003/004/006/007/008`, `SF-0901-003`–`008`,
+`SF-0902-002/004/006`, and inspection-oriented `SF-0907-003/004/006/007/008`
+now provide scene-local component filtering/sorting and one immutable,
+cancellable, revision-gated dependency snapshot. The native Component Details
+surface reports Where Used, current local dependency classes, exposed
+properties, typed issues, transfer readiness, Build Diagnostics routing, and
+safe removal/detach availability. Where Used preserves canonical content and
+opens hidden instances in Layers without canvas ghosts. Compatible replacement
+and persistent organization metadata remain unavailable because the
+specification does not define them. Parser checks and one universal app build
+passed; two model tests and one actual-app journey are present but unrun, and
+the full gate is deferred. Evidence:
+`docs/evidence/SF-AUTHORING-112-COMPONENT-DEPENDENCIES.md`.
+
+## SF-AUTHORING-111 — Source implemented, verification deferred
+
+`SF-0308-001`–`008` and bounded `SF-0901`/`SF-0902`/`SF-0905` now extend the
+strict authored-object clipboard to complete supported local component
+definitions. Envelope v2 closes image, token, reusable-style, exposed text and
+visibility dependencies; validates bounded hostile graphs; reuses only
+structurally equivalent destination definitions; deterministically remaps and
+renames all imported identities otherwise; and compiles definition plus
+instance insertion into one exact-inverse command batch. A native accessible
+preflight discloses imported/reused/renamed definitions and remains neutral on
+cancel or stale confirmation. One universal app build passed. Added focused
+model and actual-app tests are unrun and the full gate is deferred, so the
+normative modules remain Partial. Evidence:
+`docs/evidence/SF-AUTHORING-111-COMPONENT-TRANSFER.md`.
+
+## SF-AUTHORING-110 — Source implemented, verification deferred
+
+Bounded `SF-1204-001`–`008`, `SF-1206-001`–`008`, `SF-1208-001`–`008`, and
+`SF-1211-001`–`008` now share one immutable static-build compilation boundary.
+It projects the established closed HTML/CSS plan, exports only referenced
+content-verified image bytes, supports explicit Development and Static Release
+profiles, stages contained output atomically, and reports typed redacted
+compatibility findings through a native Build Diagnostics sheet. Request and
+revision identity reject stale work; profiles/results remain scene-local and
+noncanonical. Parser checks and one universal app build passed. Added focused
+tests are unrun and the full gate is deferred, so all four normative modules
+remain Partial. Evidence:
+`docs/evidence/SF-AUTHORING-110-STATIC-BUILD-DIAGNOSTICS.md`.
+
+## SF-PRODUCT-UI-007 — Verified bounded visual convergence
+
+Bounded `SF-0201-002/003/006/008`, `SF-0203-006/008`, `SF-1505-006`–`008`,
+and `SF-1605-002/006`–`008` now share one semantic visual token set across
+launch, adaptive shell navigation, viewport controls, empty state, and
+Settings. Navigator and Inspector destinations now remain one row, using
+horizontal scroll/overflow only when constrained. A shared dynamic
+blue-neutral pasteboard/grid/artboard palette replaces the flat gray wash, and
+the blank canvas uses a compact header hint instead of a centered card;
+canonical geometry/rendering is unchanged. The affected sources passed parser
+inspection and a universal macOS build. Original-resolution dark, blank,
+selected, practical-minimum, light, increased-contrast, and Reduce Transparency
+captures were manually reviewed. Focused keyboard, responsive,
+structural-layout, and Form accessibility journeys are green; the complete
+actual-app target passed 104/104. The first full gate exposed one stale
+native-tab traversal expectation, whose exact focused regression now passes.
+The final documentation-inclusive `./sf verify` passed 567 unit/integration
+tests plus 104 actual-app UI journeys (671 total, zero failures). The normative
+modules remain Partial only for the explicitly deferred broad acceptance.
+Evidence:
+`docs/evidence/SF-PRODUCT-UI-007-VISUAL-CONVERGENCE.md`.
+
+## SF-PLATFORM-UPDATE-001 — Source implemented, signing decision and verification deferred
+
+`SF-1507-001`–`008` now have a bounded native Settings surface and typed
+service boundary for public HTTPS metadata, Stable/Preview selection,
+monotonic version resolution, cancellation/stale-result rejection, actionable
+offline/malformed/incompatible/policy-blocked states, and content-free
+diagnostics. A pure trust policy fails closed across owner authorization,
+channel, rollback, HTTPS artifact, signature, integrity, bundle identity, and
+system compatibility. No feed URL or installer is enabled. Automatic checking
+is stored only as a local preference and is truthfully unscheduled while the
+trusted feed is unconfigured. `OD-017` blocks signed install enablement. The
+universal app build passed; test source is present but unrun, so the normative
+module remains Partial. Evidence:
+`docs/evidence/SF-PLATFORM-UPDATE-001-SAFE-UPDATES.md`.
+
+## SF-AUTHORING-109 — Source implemented, verification deferred
+
+`SF-0504-001`–`008`, `SF-0510-001`–`008`, and `SF-0511-001`–`008` now have a
+bounded canonical positioning/reusable-style/interaction-state foundation,
+one identity-gated exact-inverse registry, immutable canvas and closed static
+output adoption, native Inspector controls, scene-local forced preview, and
+privacy-preserving diagnostics. Focused source tests and a parser-only syntax
+check are present; runtime verification is deferred, so all three normative
+modules remain Partial. Evidence:
+`docs/evidence/SF-AUTHORING-109-POSITIONING-REUSABLE-STATES.md`.
+
+## SF-PRODUCT-UI-005 — AppIcon v2 source implemented, verification deferred
+
+`SF-0201-009` now names the exact owner-supplied v2 source at
+`docs/design-assets/siteforge-app-icon-sf-gradient-approved-v2.png`. The
+offline packaging boundary removes only edge-connected exterior matte and
+regenerates the complete ten-rendition macOS catalog. Static validation binds
+the source SHA-256, compares every rendition with the deterministic transform,
+checks RGBA dimensions and exterior alpha, proves enclosed white SF pixels are
+retained, and confirms AppIcon selection in Debug and Release. The native
+welcome surface reads `NSApp.applicationIconImage`; standard About and
+Dock/Finder identity use the same packaged asset. App-host and visual runtime
+review are unrun under the owner pause, so the bounded requirement remains
+Partial. Evidence: `docs/evidence/SF-PRODUCT-UI-005-APP-ICON-V2.md`.
+
 ## Verified authoring checkpoint — 2026-10-07
 
-The bounded implementation through `SF-AUTHORING-105`, excluding the still-
-ready `SF-AUTHORING-106`, plus `SF-AUTHORING-107` and
+The bounded implementation through `SF-AUTHORING-105`, plus `SF-AUTHORING-107` and
 `SF-PRODUCT-UI-005/006`, is integrated. The authoritative `./sf verify` passed
 repository/security/traceability/architecture checks and all 640 tests: 542
 unit/integration plus the complete 98-journey UI target. Its shared native
@@ -13,6 +423,28 @@ where their evidence documents list deferred product scope.
 
 Older source-only entries below are chronological detail; their “verification
 deferred” wording is superseded for the bounded slices named above.
+
+## SF-AUTHORING-108 — Source implemented, verification deferred
+
+`SF-0409-001`–`008` now have one canonical isolation-root marker, a central
+identity-gated exact-inverse command, immutable subtree projection, native
+breadcrumb/exits, and scene-local Focus and read-only Presentation modes.
+Selection, viewport, and pane context restore where still valid. Focused test
+source is present but unrun, so SF-0409 remains Partial. Evidence:
+`docs/evidence/SF-AUTHORING-108-CANVAS-MODES.md`.
+
+## SF-AUTHORING-106 — Source implemented, verification deferred
+
+Bounded `SF-0204-001`–`008` now has the approved OD-016 local creation choice.
+Blank Site retains its existing Home/Not Found baseline; Starter Site is one
+deterministic canonical template with stable provenance and identities, exactly
+ordinary Home/About pages, semantic Header/Main/Footer Sections, System-family
+Text, neutral editable copy, and no assets or visible 404 starter content. The
+native welcome surface exposes both choices, and the lifecycle validates the
+complete selection before installing one clean history baseline. Focused model,
+lifecycle, accessibility, serialization/history, responsive-geometry, and
+actual-app test source is present but unrun, so SF-0204 remains Partial. Evidence:
+`docs/evidence/SF-AUTHORING-106-STARTER-SITE.md`.
 
 ## SF-AUTHORING-107 — Source implemented, verification deferred
 
@@ -26,10 +458,6 @@ Cross-project component closure remains an explicit typed rejection. New model,
 security, dependency, history, and actual-app test source is unrun, so SF-0308
 remains Partial. Evidence:
 `docs/evidence/SF-AUTHORING-107-CLIPBOARD-TRANSFER.md`.
-
-OD-016 is now approved and makes SF-AUTHORING-106 the next dependency-safe
-source slice: Blank Site plus one local neutral Starter Site containing Home
-and About only.
 
 ## SF-AUTHORING-105 — Source implemented, verification deferred
 

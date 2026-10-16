@@ -149,12 +149,26 @@ struct PageCommandRegistry {
                 }
                 let properties = try node.properties.map { property in
                     var value = property.value
+                    if CanonicalPageChrome.referenceKeys.contains(property.key.rawValue),
+                       case .string(let raw) = value, let old = NodeID(uuidString: raw), let replacement = ids[old] {
+                        value = .string(replacement.description)
+                    }
                     if property.key.rawValue == CanonicalLinkTarget.namespace + "pageID",
                        value == .string(page.id.description) { value = .string(newID.description) }
                     if property.key.rawValue == CanonicalLinkTarget.namespace + "nodeID",
                        node.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == page.id.description,
                        case .string(let raw) = value, let old = NodeID(uuidString: raw), let replacement = ids[old] {
                         value = .string(replacement.description)
+                    }
+                    if CanonicalComponentAction.overrideID(property.key.rawValue) != nil,
+                       case .string(let raw) = value, let target = CanonicalComponentAction.decode(raw) {
+                        switch target {
+                        case .page(let targetPage) where targetPage == page.id:
+                            value = .string(CanonicalComponentAction.encode(.page(newID)))
+                        case .section(let targetPage, let targetNode) where targetPage == page.id:
+                            value = .string(CanonicalComponentAction.encode(.section(pageID: newID, nodeID: ids[targetNode] ?? targetNode)))
+                        default: break
+                        }
                     }
                     if property.key.rawValue == CanonicalFormField.optionsKey,
                        case .string(let encoded) = value {
@@ -184,9 +198,16 @@ struct PageCommandRegistry {
     }
 
     func inboundLinkCount(to pageID: PageID, in document: CanonicalDocument) -> Int {
-        document.pages.filter { $0.id != pageID }.flatMap(\.nodes).filter {
-            $0.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == pageID.description
-        }.count
+        document.pages.filter { $0.id != pageID }.flatMap(\.nodes).reduce(0) { count, node in
+            let direct = node.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == pageID.description ? 1 : 0
+            let overrides = CanonicalComponentAction.overrides(on: node).values.filter {
+                switch $0 {
+                case .page(let id), .section(let id, _): return id == pageID
+                case .none, .external: return false
+                }
+            }.count
+            return count + direct + overrides
+        }
     }
 }
 
@@ -262,6 +283,9 @@ struct InsertNodeCommand: Codable, Equatable, Sendable {
     let pageID: PageID
     let node: DocumentNode
     let index: Int
+    // Ownership order and canonical storage order are independent. An inverse
+    // must restore both; historical commands omit this optional position.
+    var storageIndex: Int? = nil
 }
 
 struct RemoveNodeCommand: Codable, Equatable, Sendable {
@@ -548,6 +572,9 @@ struct CommandRegistry {
                 return .disabled(reason: "The owning page no longer exists.")
             }
             let page = document.pages[pageIndex]
+            if let storageIndex = value.storageIndex, !(0...page.nodes.count).contains(storageIndex) {
+                return .disabled(reason: "The node storage position is no longer valid.")
+            }
             guard !document.pages.flatMap(\.nodes).contains(where: { $0.id == value.node.id }) else {
                 return .disabled(reason: "A node with this stable identifier already exists.")
             }
@@ -750,6 +777,10 @@ struct CommandRegistry {
             try draft.validate()
             try CanonicalComponentText.validateTransition(from: document, to: draft)
             try CanonicalComponentVisibility.validateTransition(from: document, to: draft)
+            try CanonicalComponentChoice.validateTransition(from: document, to: draft)
+            try CanonicalComponentMedia.validateTransition(from: document, to: draft)
+            try CanonicalComponentAction.validateTransition(from: document, to: draft)
+            try CanonicalComponentSlot.validateTransition(from: document, to: draft)
             return .enabled
         } catch let error as ModelValidationError {
             return .disabled(reason: error.localizedDescription)
@@ -807,7 +838,11 @@ struct CommandRegistry {
             guard let pageIndex = document.pageIndex(for: value.pageID) else {
                 throw CommandExecutionError.disabled("The owning page no longer exists.")
             }
-            document.pages[pageIndex].nodes.append(value.node)
+            let storageIndex = value.storageIndex ?? document.pages[pageIndex].nodes.count
+            guard (0...document.pages[pageIndex].nodes.count).contains(storageIndex) else {
+                throw CommandExecutionError.disabled("The node storage position is no longer valid.")
+            }
+            document.pages[pageIndex].nodes.insert(value.node, at: storageIndex)
             switch value.node.parent {
             case .page:
                 document.pages[pageIndex].rootNodeIDs.insert(value.node.id, at: value.index)
@@ -849,7 +884,7 @@ struct CommandRegistry {
             }
             document.pages[location.page].nodes.remove(at: location.node)
             return CommandMutation(
-                inverse: .insertNode(InsertNodeCommand(pageID: value.pageID, node: node, index: index))
+                inverse: .insertNode(InsertNodeCommand(pageID: value.pageID, node: node, index: index, storageIndex: location.node))
             )
 
         case .moveNode(let value):
@@ -1090,6 +1125,12 @@ final class CommandDiagnostics {
             durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
             failureCategory: succeeded ? nil : .validation))
     }
+    func recordPageStructureOperation(pageID: PageID, nodeIDs: [NodeID], succeeded: Bool, durationMilliseconds: Double) {
+        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0501-008", "SF-0502-005", "SF-0806-008", "SF-0304-005"],
+            commandName: .batch, sanitizedIdentifiers: ([pageID.commandTarget] + nodeIDs.map(\.commandTarget)).map(sanitize),
+            durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
+            failureCategory: succeeded ? nil : .validation))
+    }
 
     fileprivate func record(
         commandName: CommandName,
@@ -1275,6 +1316,10 @@ final class DocumentSession: ObservableObject {
                 try draft.validate()
                 try CanonicalComponentText.validateTransition(from: committedDocument, to: draft)
                 try CanonicalComponentVisibility.validateTransition(from: committedDocument, to: draft)
+                try CanonicalComponentChoice.validateTransition(from: committedDocument, to: draft)
+                try CanonicalComponentMedia.validateTransition(from: committedDocument, to: draft)
+                try CanonicalComponentAction.validateTransition(from: committedDocument, to: draft)
+                try CanonicalComponentSlot.validateTransition(from: committedDocument, to: draft)
             } catch let error as ModelValidationError {
                 throw CommandExecutionError.invalidResult(error)
             }

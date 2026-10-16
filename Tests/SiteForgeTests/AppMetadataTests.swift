@@ -3,11 +3,47 @@ import XCTest
 @testable import SiteForge
 
 final class AppMetadataTests: XCTestCase {
+    func testSidebarSegmentsFillBothPaneWidthsWithoutClippingSelectedLabels() {
+        for labels in [[42.0, 44, 64, 48, 90], [50.0, 50, 62, 86, 98]] {
+            for scale in [1.0, 1.5, 2.0] {
+                let minimum = labels.map { $0 * scale }
+                for width in [220.0, 300, 352, 416, 600, 900] {
+                    for selected in minimum.indices {
+                        let plan = ShellTabLayoutPolicy.allocate(width: width, minimumWidths: minimum, selected: selected)
+                        XCTAssertTrue(plan.indices.contains(selected) || (plan.overflow && plan.indices.isEmpty))
+                        XCTAssertEqual(plan.indices, plan.indices.sorted())
+                        XCTAssertEqual(Set(plan.indices).count, plan.indices.count)
+                        XCTAssertEqual(plan.widths.count, plan.indices.count)
+                        for (offset, index) in plan.indices.enumerated() {
+                            XCTAssertGreaterThanOrEqual(plan.widths[offset], minimum[index])
+                        }
+                        let gaps = max(0, plan.indices.count - 1) + (plan.overflow && !plan.indices.isEmpty ? 1 : 0)
+                        let occupied = plan.widths.reduce(0, +) + Double(gaps) + plan.menuWidth
+                        XCTAssertEqual(occupied, width, accuracy: 0.001)
+                    }
+                }
+            }
+        }
+        XCTAssertTrue(ShellTabLayoutPolicy.allocate(width: .nan, minimumWidths: [40], selected: 0).indices.isEmpty)
+    }
+    func testInspectorSectionDiscoveryPinsOrderAndSceneLocalNeutrality() {
+        XCTAssertEqual(InspectorSectionDiscovery.sections(matching: "", pinned: []), InspectorTab.allCases)
+        XCTAssertEqual(InspectorSectionDiscovery.sections(matching: "PADDING responsive", pinned: []), [.layout])
+        XCTAssertEqual(InspectorSectionDiscovery.sections(matching: "media", pinned: []), [.content])
+        XCTAssertEqual(InspectorSectionDiscovery.sections(matching: "does-not-exist", pinned: [.layout]), [])
+        XCTAssertEqual(InspectorSectionDiscovery.sections(matching: "", pinned: [.layout]).first, .layout)
+        XCTAssertEqual(InspectorSectionDiscovery.sections(matching: "", pinned: []).first, .design)
+        // Pins/search are presentation inputs, not canonical property mutations.
+        XCTAssertEqual(InspectorSectionDiscovery.sections(matching: "label", pinned: [.accessibility]), [.accessibility])
+    }
     // SF-1501-008, SF-1902-008
     func testLocalApplicationIdentityIsStableAndReversible() {
         XCTAssertEqual(AppMetadata.productName, "SiteForge")
         XCTAssertEqual(AppMetadata.localBundleIdentifier, "app.siteforge.SiteForge")
-        XCTAssertEqual(Bundle.main.bundleIdentifier, AppMetadata.localBundleIdentifier)
+        let configured = Bundle.main.object(forInfoDictionaryKey: "SiteForgeTestApplicationIdentifier") as? String
+            ?? AppMetadata.localBundleIdentifier
+        XCTAssertTrue([AppMetadata.localBundleIdentifier, "app.siteforge.SiteForge.OwnerTesting"].contains(configured))
+        XCTAssertEqual(Bundle.main.bundleIdentifier, configured)
     }
 
     // SF-0201-009: source catalog integrity is checked by check-app-icon.py;
@@ -15,6 +51,9 @@ final class AppMetadataTests: XCTestCase {
     func testAppIconCatalogCoversEveryMacSizeAndIsSelectedByBothAppConfigurations() throws {
         XCTAssertNotNil(Bundle.main.url(forResource: "Assets", withExtension: "car"))
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleIconName") as? String, "AppIcon")
+        XCTAssertTrue(NSApp.applicationIconImage.isValid)
+        XCTAssertGreaterThan(NSApp.applicationIconImage.size.width, 0)
+        XCTAssertGreaterThan(NSApp.applicationIconImage.size.height, 0)
     }
 
     // SF-1902-008
@@ -79,7 +118,8 @@ final class AppMetadataTests: XCTestCase {
         let order = ShellFocusTraversal.order(pageIDs: [first, second])
         XCTAssertEqual(order, [
             .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents, .navigatorPage(first),
-            .navigatorPage(second), .viewportPreset, .viewportZoomOut, .viewportZoomIn,
+            .navigatorPage(second), .viewportPreset, .viewportCompare, .viewportGrid,
+            .viewportZoomOut, .viewportZoomIn,
             .viewportReset, .viewportFitCanvas, .viewportFit, .viewportCanvas,
             .inspectorDesign, .inspectorLayout, .inspectorContent, .inspectorInteractions, .inspectorAccessibility,
         ])
@@ -266,11 +306,11 @@ final class AppMetadataTests: XCTestCase {
                 pageIDs: [home, notFound],
                 context: context
             ),
-            .route(.viewportZoomOut)
+            .route(.viewportCompare)
         )
         XCTAssertEqual(
             WorkspaceTabRoutingPolicy.decision(
-                from: .viewportZoomOut,
+                from: .viewportCompare,
                 direction: .reverse,
                 pageIDs: [home, notFound],
                 context: context
@@ -285,6 +325,15 @@ final class AppMetadataTests: XCTestCase {
                 context: context
             ),
             .route(.navigatorPage(notFound))
+        )
+        XCTAssertEqual(
+            WorkspaceTabRoutingPolicy.decision(
+                from: .viewportZoomOut,
+                direction: .reverse,
+                pageIDs: [home, notFound],
+                context: context
+            ),
+            .passThrough(.notMixedFrameworkBoundary)
         )
         XCTAssertEqual(
             WorkspaceTabRoutingPolicy.decision(
@@ -416,6 +465,8 @@ final class AppMetadataTests: XCTestCase {
                 "SF-0405-005", "SF-0405-006", "SF-0405-007", "SF-0405-008",
                 "SF-0406-001", "SF-0406-002", "SF-0406-003", "SF-0406-004",
                 "SF-0406-005", "SF-0406-006", "SF-0406-007", "SF-0406-008",
+                "SF-0409-001", "SF-0409-002", "SF-0409-003", "SF-0409-004",
+                "SF-0409-005", "SF-0409-006", "SF-0409-007", "SF-0409-008",
                 "SF-1102-002", "SF-1102-003", "SF-1102-004", "SF-1102-006",
                 "SF-1201-001", "SF-1201-002", "SF-1201-003", "SF-1201-004",
                 "SF-1201-006",

@@ -12,8 +12,10 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "docs/design-assets/siteforge-app-icon-sf-gradient-approved-v1.png"
+SOURCE = ROOT / "docs/design-assets/siteforge-app-icon-sf-gradient-approved-v2.png"
 DESTINATION = ROOT / "SiteForge/Assets.xcassets/AppIcon.appiconset"
+POINT_SIZES = (16, 32, 128, 256, 512)
+SCALES = (1, 2)
 
 
 def transparent_exterior(source: Image.Image) -> Image.Image:
@@ -46,8 +48,8 @@ def transparent_exterior(source: Image.Image) -> Image.Image:
 def main() -> None:
     with Image.open(SOURCE) as source:
         cutout = transparent_exterior(source)
-    for points in (16, 32, 128, 256, 512):
-        for scale in (1, 2):
+    for points in POINT_SIZES:
+        for scale in SCALES:
             size = points * scale
             suffix = "@2x" if scale == 2 else ""
             cutout.resize((size, size), Image.Resampling.LANCZOS).save(

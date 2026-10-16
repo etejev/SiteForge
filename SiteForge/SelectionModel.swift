@@ -1,4 +1,116 @@
 import Foundation
+import Dispatch
+
+enum IsolationCommandProvenance: String, Sendable {
+    case pointer, keyboard, menu, contextualMenu, accessibility, lifecycleRepair
+}
+
+struct IsolationCommandContext: Equatable, Sendable {
+    let documentID: DocumentID
+    let pageID: PageID
+    let revision: UInt64
+    let sceneID: CanvasViewportSceneID
+    let rendererGeneration: UInt64
+    let selectionIDs: [NodeID]
+    let availableNodeIDs: Set<NodeID>
+}
+
+enum IsolationCommandError: Error, Equatable, LocalizedError, Sendable {
+    case cancelled, noSelection, incompatible, unavailable
+    case staleDocument, stalePage, staleRevision, staleScene, staleRenderer, staleSelection
+
+    var errorDescription: String? {
+        switch self {
+        case .cancelled: "Isolation cancelled; the document is unchanged."
+        case .noSelection: "Select a container to isolate."
+        case .incompatible: "Only an authored Frame, Section, Stack, Grid, or Form can be isolated."
+        case .unavailable: "The selected container is unavailable. Reveal it and try again."
+        case .staleDocument, .stalePage, .staleRevision, .staleScene, .staleRenderer, .staleSelection:
+            "The canvas changed. Review the current selection and try again."
+        }
+    }
+}
+
+/// The only write boundary for SF-0409 isolation. The marker is moved or
+/// removed in one batch so history always has an exact inverse.
+struct IsolationCommandRegistry {
+    func prepare(
+        rootID: NodeID?, document: CanonicalDocument,
+        expected: IsolationCommandContext, live: IsolationCommandContext,
+        cancelled: Bool = false, requiresSelection: Bool = true
+    ) throws -> DocumentCommand {
+        guard !cancelled else { throw IsolationCommandError.cancelled }
+        guard expected.documentID == live.documentID, document.id == live.documentID else { throw IsolationCommandError.staleDocument }
+        guard expected.pageID == live.pageID else { throw IsolationCommandError.stalePage }
+        guard expected.revision == live.revision, document.revision == live.revision else { throw IsolationCommandError.staleRevision }
+        guard expected.sceneID == live.sceneID else { throw IsolationCommandError.staleScene }
+        guard expected.rendererGeneration == live.rendererGeneration else { throw IsolationCommandError.staleRenderer }
+        guard expected.selectionIDs == live.selectionIDs else { throw IsolationCommandError.staleSelection }
+
+        var commands: [DocumentCommand] = []
+        if let existing = CanonicalIsolationRoot.resolved(in: document) {
+            commands.append(.removeProperty(.init(pageID: existing.pageID, nodeID: existing.nodeID,
+                                                  propertyID: existing.property.id)))
+        }
+        if let rootID {
+            if requiresSelection {
+                guard expected.selectionIDs.contains(rootID) else { throw IsolationCommandError.staleSelection }
+                guard expected.availableNodeIDs.contains(rootID) else { throw IsolationCommandError.unavailable }
+            }
+            guard let page = document.pages.first(where: { $0.id == expected.pageID }),
+                  let node = page.nodes.first(where: { $0.id == rootID }),
+                  CanonicalIsolationRoot.supportedKinds.contains(node.kind),
+                  node.insertionGeometry != nil else { throw IsolationCommandError.incompatible }
+            if CanonicalIsolationRoot.resolved(in: document)?.nodeID != rootID {
+                let id = PropertyID(DocumentPage.deterministicUUID(
+                    namespace: rootID.rawValue, label: CanonicalIsolationRoot.key
+                ))
+                commands.append(.setProperty(.init(pageID: page.id, nodeID: rootID,
+                    property: .init(id: id, key: .init(rawValue: CanonicalIsolationRoot.key),
+                                    value: .boolean(true), origin: .authored))))
+            }
+        }
+        return .batch(commands)
+    }
+}
+
+struct IsolationDiagnosticRecord: Codable, Equatable, Sendable {
+    let requirementID: String
+    let operation: String
+    let sanitizedNodeID: String?
+    let durationMilliseconds: Double
+    let result: String
+    let failureCategory: String?
+}
+
+actor IsolationDiagnostics {
+    private var buffer = BoundedDiagnosticBuffer<IsolationDiagnosticRecord>(
+        capacity: DiagnosticRetentionPolicy.defaultCapacity
+    )
+    func append(_ record: IsolationDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [IsolationDiagnosticRecord] { buffer.snapshot() }
+}
+
+enum IsolationDiagnosticFactory {
+    static func make(operation: String, nodeID: NodeID?, started: UInt64,
+                     result: String, error: IsolationCommandError? = nil) -> IsolationDiagnosticRecord {
+        .init(requirementID: "SF-0409-008", operation: String(operation.prefix(32)),
+              sanitizedNodeID: nodeID.map {
+                  DiagnosticStableIdentifier.sanitize($0.description, domain: .selection, kind: "node")
+              },
+              durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000,
+              result: result,
+              failureCategory: error.map {
+                  switch $0 {
+                  case .cancelled: "cancelled"
+                  case .incompatible: "incompatible"
+                  case .unavailable: "unavailable"
+                  case .noSelection: "no-selection"
+                  default: "stale-identity"
+                  }
+              })
+    }
+}
 
 enum SelectionProvenance: String, Sendable {
     case pointer

@@ -1,5 +1,259 @@
 # SiteForge Visual Contract
 
+## Owner correction — 2026-10-15
+
+These clarifications supersede conflicting earlier adaptations. Navigator and
+Inspector destination segments fill their available pane width with balanced
+centered labels. Keep complete selected labels, native overflow when required,
+and no clipped/two-line destination fragments. Inspector sections have quiet,
+distinct inset boundaries and readable headings. Show ordinary Text editing
+first; component exposure/recovery/slot controls appear only in context, with
+advanced property tools collapsed until requested. Real operation/error status
+remains accessible; implementation narration is not routine instructional UI.
+
+Settings is a non-resizable secondary window with native titlebar clearance,
+no sidebar-collapse toolbar and a persistent 250-point sidebar. Preferred content
+is 970×740 points; all destinations share a 680-point form and 632-point cards.
+On smaller screens one bounded policy fits the content without destination-
+dependent resizing. Production document windows retain their existing policy.
+
+Header/Footer titles and navigation are actual authored Text/Stack/Link content,
+not editor fixture rectangles or duplicated labels. Included-page controls hide
+links without deleting pages. The Mobile menu is one genuine native control on
+the resolved Navigation surface, not duplicate menus on Header and child Stack.
+Missing content retains its identity and offers truthful recovery. Welcome
+Review Recovery/Later preserves genuine owner data without a startup loop.
+
+Fitted local Preview uses the same native authored-text metrics as the canvas,
+including scale, font, insets, baseline and foreground. Ordinary Text must not
+inherit the Inspector font or gain an invented background/border. The enclosing
+authored group applies opacity once; text drawing does not intercept link input.
+The genuine Preview link button owns its complete authored rectangle, including
+transparent text space, as its content/hit shape. The latest explicit-shape
+correction has focused metric coverage and native navigation acceptance:
+the real pointer journey opens Contact and Back/Forward without document
+mutation. Its original-resolution capture was reviewed after OD-021 recovery.
+
+SF-PRODUCT-UI-010 now has original-resolution visual review and accumulated
+verification acceptance (636 model/integration +119 UI tests). Native adaptive
+tab overflow at practical minimum remains the readable alternative to clipping
+or abbreviating full Inspector destination names. This bounded acceptance does
+not imply broad preview/export or release parity.
+
+### Current native title and bounded empty hint
+
+The document title follows the owning lifecycle directly, including native Save
+As and clean/Edited transitions. The centered empty-page hint uses an opaque
+native window-background surface so primary/secondary text remains readable
+over either light artboard or dark pasteboard. Its footprint remains bounded;
+canvas input outside the visible hint is not intercepted. Compact tab bars
+reveal the full selected label and retain a native all-destinations overflow
+menu rather than compressing selected labels or adding a second row.
+Automatic website text uses neutral dark paper ink in both editor appearances;
+explicit authored foreground remains authoritative. This shared committed/inline
+resolution must not change authored geometry or tint glyphs with selection blue.
+Native File New/Open remain available after closing the last document window.
+
+## Owner-local delivery overrides — 2026-10-13
+
+These overrides supersede conflicting reference adaptations below. Use compact
+native icon toolbar actions, not tall stacked tool cards. Keep Elements, Insert
+and shortcuts available. Center the compact empty-page hint in the actual usable
+viewport with only its visible content accepting input. Pair geometry fields;
+ordinary Inspector actions remain inline. Normal-width side panes may widen to
+keep destinations readable; practical-minimum/dynamic content may scroll.
+
+Settings are application-wide: no App/Project/Workspace selector or authored/
+inherited/local-only badges. Preserve genuine authoring provenance in Inspector.
+Advanced contains self-service testing. The regular owner-local installed app
+provisions its development harness automatically; official distributions without
+that provision show an honest unavailable state. No Experimental Options switch
+or separate experimental app is required. Updates uses one internal stable policy,
+not a release-channel selector; signed/integrity/compatibility/owner installation
+boundaries remain fail-closed. Reports persist across app relaunch. Testing runs
+in a distinct app identity and never consumes the owner's website documents.
+
+## Owner-selected references — 2026-10-13 (supersedes render 04)
+
+Primary editor: **01-editorial-canvas.png**. Responsive/other editor direction:
+**05-responsive-mobile-canvas.png**. Settings: **12-settings-canvas-accessibility.png**.
+All three actual full images were inspected before implementation. Loading's
+approved direction is unchanged. This is a visual add-on, not Prompt 3.
+
+01: light neutral paper/matte chrome; narrower navigator (~17% of reference
+width), slightly wider Inspector (~19%), dominant canvas; compact icon-over-label
+tools, persistent secondary viewport strip, small search rows, thin pane dividers,
+flat Inspector section headers and controls rather than repeated rounded cards.
+05: the same hierarchy in charcoal chrome, clear medium-gray pasteboard, white
+bounded website surfaces, bright native blue selection, restrained separators;
+responsive ownership is explicit, not copied content. 12: vertical icon/text
+Settings sidebar, roomy content area, white rounded groups with dividing headers,
+consistent native rows and reset/apply actions. Website copy, photos, store cards,
+rotation/effects controls, speculative setting scopes and decorative preview
+objects are not editor features and must not appear in blank projects.
+
+Production roles: 256-point navigator/288-point Inspector ideals with adjustable
+250–360/280–360 ranges; 12-point pane inset; 36-point status role. Settings uses
+250-point sidebar, 1040-point content maximum and 1180×780 ideal content sizing,
+retaining native minimum adaptation. Inspector groups are flat/divided; Settings
+groups use 14-point radii and 18-point padding. Matte native material tint is
+shared by all editor regions; light/dark semantic palettes separate pasteboard,
+paper artboard and boundaries. Increased contrast strengthens edges; Reduce
+Transparency uses opaque surfaces. Launch material fallback retains its prior
+approved palette. Authored values/coordinates, clipping, grid policy and exports
+are unchanged. References guide adaptable native layouts, not fixed screen pixels.
+
+Runtime inspection is newly authorized, with focused checks only. Source mapping,
+captures/results and remaining deviations belong in
+`../evidence/SF-PRODUCT-UI-009-SELECTED-REFERENCES.md`; no visual pass is claimed
+until original-resolution app-only captures are inspected.
+
+## SF-AUTHORING-122 connected integration — source acceptance pending
+
+Owning content/cell bounds determine nested Section width and fitted height;
+authored height remains separately inspectable. Padding and parent-local origin
+conversion apply once. Hidden and non-renderable geometry-less nodes consume
+no marker/render space. Page height includes root padding; Footer follows
+connected content, not the screen bottom. Navigation uses one bounded row and
+truthful current/missing labels; only visible links produce an operable menu.
+Visitor expanded/focus state is noncanonical. Existing UI-008 groups, spacing,
+native menu and explanatory captions remain. No screenshots/native/browser
+visual acceptance exist for this prompt; Prompt 10 owns the complete matrix.
+
+## Connected page flow and experimental testing — source-only, 2026-10-13
+
+New connected Sections span their containing content width; Header is first,
+Footer follows body content, and old unmarked content never silently moves.
+Solid insertion/reorder markers are transient editor chrome, not authored
+rectangles. Dedicated native settings show derived width/position, editable
+height and padding, stable page links and explicit legacy conversion. Mobile
+hamburger Preview is a native keyboard-operable menu; empty navigation has none.
+Prompt 10 owns actual screenshots and visual acceptance for this source.
+
+Experimental Testing requires an explicit experimental binary plus an off-by-
+default application preference. Ordinary distributions have no Testing route
+or launcher/resources. Progress has separate Code testing/UI automation
+sections, real completed counts and indeterminate unknown inventories. It
+never activates over the tested app, never closes automatically at completion,
+and closing progress does not cancel. Explicit confirmed cancellation affects
+only collector-owned process groups. Tests/visuals for these controls are unrun.
+
+## SF-AUTHORING-120 source-only recovery addendum — 2026-10-13
+
+Component conflict recovery uses a shared native GroupBox, non-color-only warning
+summary, typed retained values, concise reason/recovery text and original-source
+navigation. Missing sources are explicitly unavailable rather than guessed.
+Reset-one/reset-conflicts disclose loss/default consequences before a native
+confirmation alert with Cancel/Escape. Healthy values and organization are not
+part of Reset Conflicts. Original restoration uses existing Undo/project data.
+No runtime screenshot, accessibility or visual acceptance is claimed before
+Prompt 10; inspect maximized/compact and light/dark states then.
+
+## SF-AUTHORING-119 source-only organization addendum — 2026-10-13
+
+Component Content Inspector groups known properties under flat definition-owned
+names and orders them by explicit positions; groups appear at their first
+property and retain property order within each group. Existing definitions use
+property type plus canonical ownership order, independent of remapped UUIDs.
+Ungrouped is explicit. Headers/labels are one-line with full help/accessibility
+information. Existing typed native fields retain provenance/reset; conflicts
+remain separate and never borrow another property's value. Definition group
+and position drafts use captured identity, Apply/Return, Cancel/Escape and Reset.
+No visual acceptance or executed accessibility result is claimed before Prompt 10.
+
+## Coherent native design system
+
+Directional renders are concept evidence, not independent pixel contracts.
+Conflicts resolve in this order: the published SiteForge specification,
+patterns repeated across the render family, native macOS conventions, then a
+scalable accessible implementation. SiteForge does not add per-screen offsets,
+hard-coded light/dark colors, or fake controls to imitate one image.
+
+The selected 01/05/12 references above replace the prior render-04 direction.
+The product uses one calm three-region shell:
+cohesive gray-blue navigator and Inspector surfaces around an opaque blue-neutral pasteboard, an unmistakable bounded
+artboard, and authored content. The pasteboard, subordinate world grid,
+artboard surface, and artboard boundary use one shared dynamic semantic
+palette that adapts to light/dark appearance, increased contrast, window
+activity, and Reduce Transparency. Material side panes remain visibly distinct
+from that editor workspace. The macOS accent color is reserved for primary
+actions, current selection, and keyboard focus.
+
+Navigator/Inspector use the asymmetric 256/288-point ideals and
+250–360/280–360-point supported ranges recorded above. This ownership is visual only and does
+not change the center viewport's canonical geometry. Settings uses a native
+vertical sidebar for Appearance, Canvas, Accessibility, Defaults, Updates, and Support; each
+destination uses the same readable content inset and card width.
+
+Spacing uses one semantic scale: 2 points for hairline separation, 3 for tab
+strip insets, 4 for micro spacing, 6 for compact peers, 8 for control insets,
+12 for ordinary groups and pane insets, and 18 for sections. Controls use a
+7-point corner radius, ordinary cards 14 points, and the launch card 20 points.
+Typography uses native semantic roles (`largeTitle`, `title2`, `title3`,
+`headline`, `callout`, `caption`) so increased text retains the hierarchy.
+
+The canonical token source is `SiteForgeVisualSystem`. Its base grid is 8
+points; compact native chrome may use the named 2/3/4/6 point subdivisions,
+while ordinary control insets, groups, panes, cards, and launch composition use
+8/12/18/32/40 point roles rather than view-local literals. Row, control, card,
+and launch radii are 6/7/14/20 points. Navigator and Inspector share a 320
+point ideal width. Settings uses a 240 point native sidebar and a bounded 760
+point detail column so forms remain readable instead of stretching across the
+window.
+
+Light and dark appearances each resolve separate semantic chrome, elevated,
+pasteboard, grid, artboard, boundary, selection, hover, disabled, success,
+warning, and danger colors. These colors are not authored content. Reduced
+Transparency replaces material sampling with the corresponding opaque chrome
+surface; Increased Contrast strengthens boundaries without changing layout,
+identity, or control meaning. Inactive windows retain structure while using
+the inactive selection role. Branded gradients remain confined to approved
+identity artwork.
+
+Navigator and Inspector destinations must each remain on exactly one line.
+When every label cannot fit, the strip uses horizontal scrolling plus the
+native overflow menu; it never wraps into a second row or clips a final label.
+The viewport header
+does the inverse: it prefers one compact persistent row in a maximized window
+and falls back to multiple rows only when the center pane is genuinely narrow.
+Empty/off-artboard recovery actions may occupy a separate context row.
+
+The titlebar, navigator, viewport header, Inspector, and status bar align as
+one column system. Tab strips use the elevated chrome surface and a quiet
+one-pixel boundary; selected tabs use restrained accent tint plus a focus-safe
+boundary. Lists, search fields, cards, provenance, validation, and recovery
+states consume the same semantic row/field/status roles. A feature destination
+must not introduce a private gray, corner radius, or spacing scale.
+
+All native Inspector and Settings groups inherit `SiteForgeInspectorGroupStyle`:
+headline, separator, 12-point content inset, semantic elevated surface,
+7-point radius, and a non-interactive contrast-aware boundary. Native controls
+retain intrinsic sizes and accessibility children. Pages, Layers, Assets,
+Components and destination tabs share `SiteForgeRowSurface`: a 28-point
+minimum target, 6-point radius, semantic hover and active/inactive selection
+treatment, with keyboard focus owned by the native control. Asset thumbnails
+are 48 points; Inspector bottom clearance is 80 points; Settings form padding
+is 24 points. Chrome/elevated fallback colors are opaque for Reduce Transparency.
+
+Accessibility Settings reports inherited macOS Reduce Transparency, Increase
+Contrast and Reduce Motion and explains native keyboard/VoiceOver behavior.
+These read-only values are not application overrides and never enter a project
+or preference transaction. The source coverage matrix for every concept and
+production surface is in `docs/evidence/SF-PRODUCT-UI-008-CONCEPT-CONVERGENCE.md`;
+actual-app visual acceptance remains reserved for Prompt 10.
+
+A genuinely blank artboard keeps its canvas center quiet. Its state appears as
+a compact header message, “Your canvas is empty,” beside the real Frame and
+Text insertion actions, never
+as a large centered card that resembles authored website content. The hint and
+controls have bounded hit regions and do not intercept the remaining canvas.
+
+Launch, loading, recovery, failure, Settings, empty selection, and unavailable
+states share the same semantic header/card hierarchy. They state what is
+available and the next safe action; they never imply future capabilities.
+Evidence and the render-by-render decisions are recorded in
+`docs/evidence/SF-PRODUCT-UI-007-VISUAL-CONVERGENCE.md`.
+
 ## Short-display Inspector reachability
 
 At the supported production minimum window size, selected-object Inspector
@@ -22,6 +276,17 @@ The empty project remains genuinely empty until the user commits insertion.
 
 ## Exposed component text (SF-AUTHORING-024)
 
+The source-implemented component action controls (SF-AUTHORING-117) use the
+same native groups, padding, destination pickers and validation palette as
+Interactions. Content retains visible definition name/exposure/removal,
+instance destination drafts, inherited/authored/conflict provenance,
+Apply/Cancel/Reset and missing-target recovery. Mixed selection is explicitly
+inspection-only for this bounded component-property slice. Drafts remain
+scene-local; invalid or stale submissions do not replace committed intent.
+No editor click follows authored navigation. Existing Link Preview/output is
+supported; Button destination execution is explicitly unavailable. Native
+focus, minimum-width layout and screenshots await Prompt-10 acceptance.
+
 Content Inspector names plain-text properties on one linked instance and
 distinguishes inherited definition content from authored values, including
 empty strings. Native draft fields provide Apply/Return, Cancel/Escape, Reset
@@ -33,6 +298,16 @@ glyphs. Component badges, clipping, practical-minimum panes and maximized-window
 policy are unchanged.
 
 ## Local components (SF-AUTHORING-022)
+
+Named fallback slots (SF-AUTHORING-118 source slice) reuse the native Content
+group, field and validation treatment. Definition controls name/expose/remove
+non-root supported containers; linked instances show inherited provenance,
+ordered child names and an Edit Definition Fallback action. Empty and mixed
+states are explicit. Binding removal leaves real fallback content intact;
+Cancel/Escape restores only the scene draft. Supplied instance content is
+truthfully unavailable pending its ownership decision, with no fake enabled
+insertion/reset interface. Runtime/minimum-layout/accessibility screenshots
+remain deferred to Prompt 10.
 
 The Components destination is reachable through the native navigator overflow
 menu when the horizontal tab strip cannot show every full label. Its definition
@@ -121,12 +396,14 @@ CMS, export, or publishing workflows.
 ## Application navigation
 
 The native welcome card uses the approved packaged SiteForge AppIcon, not a
-generic tool symbol or project-provided artwork. Its first actions are the
-plain-language **New Site** and **Open Project…** choices, followed by compact
-local-project, private-by-default, and recovery-protected assurances. These
-assurances may adapt from one row to a short vertical group at narrower widths;
-they must not wrap into clipped fragments or imply cloud/template behavior
-that is not implemented.
+generic tool symbol or project-provided artwork. Its first actions clearly
+distinguish **Blank Site** and the sole local **Starter Site**, followed by
+**Open Project…** and compact local-project, private-by-default, and
+recovery-protected assurances. Blank Site remains the default keyboard action;
+both creation choices include short readable descriptions and must remain
+usable in the card's vertical fallback. These assurances may adapt from one row
+to a short vertical group at narrower widths; they must not wrap into clipped
+fragments or imply cloud or downloaded-template behavior that is not implemented.
 
 When authorized recency exists, a bounded **Recent Projects** group follows the
 primary actions. Rows show only the project display name and “Authorized local
@@ -258,11 +535,13 @@ workflow.
   search and Assets usage filtering remain navigator-local, use readable
   native controls, and never masquerade as authored site content.
 
-- SiteForge's static app identity uses the owner-approved purple-to-blue
-  rounded-square SF monogram from `docs/design-assets/siteforge-app-icon-sf-gradient-approved-v1.png`.
-  Only its exterior white matte is removed for packaging; the white lettering
-  and gradient field are preserved. The macOS AppIcon asset catalog owns standard Dock/Finder
-  sizes; icon artwork never enters project data, authored rendering, or export.
+- SiteForge's static app identity uses the owner-approved blue-to-purple
+  rounded-square SF monogram from `docs/design-assets/siteforge-app-icon-sf-gradient-approved-v2.png`.
+  Only its edge-connected exterior white matte is removed for packaging; the
+  enclosed white lettering and gradient field are preserved exactly. The
+  packaged AppIcon is the single native identity source for Dock/Finder,
+  launch/welcome, and the standard About presentation. Icon artwork never
+  enters project data, authored rendering, documents, test fixtures, or export.
 
 - Application Appearance Settings uses a compact native Settings window with
   readable radio choices for Follow macOS, Light and Dark. Scope, provenance,
@@ -486,6 +765,57 @@ model: newly inserted roots adopt through the normal renderer/selection scene.
 Unavailable, malformed, oversized, stale, or unsupported dependency states
 remain document-neutral and state one bounded repair action. This source
 contract is not visual acceptance until its focused actual-app test runs.
+
+## Canvas isolation, Focus, and Presentation (SF-AUTHORING-108 source contract)
+
+Isolation retains normal artboard/pasteboard geometry but projects only the
+chosen canonical subtree. A compact native breadcrumb names the isolated
+ancestry and keeps Exit visible; unrelated Layers, pixels, hit targets,
+selection chrome, and accessibility objects do not leak into the scene. Focus
+mode removes navigator, Inspector, and status chrome without entering a native
+full-screen Space or removing its menu exit. Presentation uses immutable local
+Preview, so grid, selection, guides, badges, panes, and editing controls never
+enter authored pixels. Returning restores valid viewport, selection, and pane
+context without moving authored geometry. This source contract awaits focused
+visual and accessibility execution.
+
+## Cross-project component transfer (SF-AUTHORING-111 source contract)
+
+A cross-project paste that carries component definitions presents one compact
+native review sheet before mutation. The sheet names each definition and uses
+text plus symbol to distinguish Import, Reuse, and Rename; its summary remains
+readable at the practical minimum without exposing opaque identifiers or
+dependency payloads. Cancel is the leading neutral action and Import and Paste
+is the explicit default action. The sheet does not move canvas content, create
+selection chrome, or imply remote-library support. This source contract awaits
+focused actual-app visual and accessibility execution.
+
+## Component organization and dependency inspection (SF-AUTHORING-112 source contract)
+
+The Components pane keeps search, organization, and maintenance visually
+secondary to the definition list. Filter and sort are native compact controls;
+they stay scene-local and never imply project folders or tags. Each definition
+keeps its full accessible name, stable linked-use count, and two bounded rows
+of actions at practical minimum width rather than wrapping or clipping labels.
+Component Details is a native scrolling sheet with explicit Where Used,
+Dependencies, Compatibility, transfer readiness, and safe maintenance states.
+Hidden usages open Layers without canvas ghosts. Issues and disabled removal
+use text plus symbols, never color alone. Static-output readiness links
+conceptually to Build Diagnostics, and unavailable compatible replacement is
+stated rather than shown as a nonfunctional control. This source contract
+awaits focused actual-app visual and accessibility execution.
+
+## Build Diagnostics (SF-AUTHORING-110 source contract)
+
+Build Diagnostics is a compact native sheet, not a deployment dashboard. Its
+profile, preflight, progress, findings, repair actions, redacted summary, and
+explicit destination action remain readable without covering or altering the
+canvas. Severity is conveyed by text and symbol rather than color alone.
+Cancel remains visible while work is active; write is unavailable until a
+current revision has a nonblocking plan. Findings may reveal a safe affected
+object but never display authored content, resource bytes, original paths, or
+credentials. This source contract awaits focused visual and accessibility
+execution.
 
 ## Testing workflow
 

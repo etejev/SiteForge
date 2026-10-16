@@ -16,6 +16,7 @@ write_fake() {
 
 write_fake xcodebuild '#!/bin/zsh
 print -- "xcodebuild invoked" >> "$SITEFORGE_HARNESS_MARKER"
+print -rl -- "$@" >> "$SITEFORGE_HARNESS_MARKER"
 exit "${SITEFORGE_FAKE_XCODE_STATUS:-0}"'
 
 write_fake ps '#!/bin/zsh
@@ -63,4 +64,21 @@ denied=$(run_case denied 19)
 grep -q "process enumeration is unavailable" "${denied#*:}"
 [[ $(grep -c "process enumeration is unavailable" "${denied#*:}") == 1 ]]
 
-print "sf UI-test harness regression checks passed"
+# The optional isolated identity reaches both preparation and test execution
+# without changing ordinary command defaults or allowing arbitrary app IDs.
+isolated=$(
+  export SITEFORGE_APP_BUNDLE_IDENTIFIER=app.siteforge.SiteForge.OwnerTesting
+  export SITEFORGE_APP_INFO_PLIST="$ROOT/SiteForge/Info.plist"
+  run_case isolated 0
+)
+[[ ${isolated%%:*} == 0 ]]
+grep -q '^SITEFORGE_APP_BUNDLE_IDENTIFIER=app.siteforge.SiteForge.OwnerTesting$' "$TMP/isolated.marker"
+grep -q '^SITEFORGE_APP_INFO_PLIST=' "$TMP/isolated.marker"
+set +e
+SITEFORGE_APP_BUNDLE_IDENTIFIER=app.unrelated.Application "$ROOT/sf" test quick > "$TMP/rejected.output" 2>&1
+rejected_status=$?
+set -e
+[[ $rejected_status == 2 ]]
+grep -q 'Unsupported SiteForge test application identity' "$TMP/rejected.output"
+
+print "sf UI-test harness regression checks passed (4 scenarios)"

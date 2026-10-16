@@ -192,23 +192,28 @@ struct CanvasSettingsView: View {
     @ObservedObject var store: CanvasSettingsStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Canvas").font(.title2).bold()
-            Text("Application default · This Mac").font(.headline)
-            Text("Use the Grid button in each workspace to change that window. This setting chooses how new workspaces start.")
-                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Toggle("Show grid in new workspaces", isOn: Binding(
-                get: { store.choice }, set: { store.choose($0) }
-            ))
-            .accessibilityIdentifier("settings.canvas.gridDefault")
-            Text(store.provenance)
-                .accessibilityIdentifier("settings.canvas.provenance")
-            Text(store.status).font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("settings.canvas.status")
-            Divider()
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
+            SiteForgeSettingsHeader(
+                title: "Canvas",
+                scope: "Application default · This Mac",
+                detail: "Choose how new workspaces begin. Each open workspace keeps its own Grid state.",
+                systemImage: "square.grid.3x3"
+            )
+            GroupBox("New workspace") {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                    Toggle("Show grid in new workspaces", isOn: Binding(
+                        get: { store.choice }, set: { store.choose($0) }
+                    ))
+                    .accessibilityIdentifier("settings.canvas.gridDefault")
+                    Text(store.status).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings.canvas.status")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             HStack {
                 Button("Reset to Default") { store.reset() }
+                    .accessibilityValue(store.draft == nil ? "Already default" : "Reset available")
                     .accessibilityIdentifier("settings.canvas.reset")
                 Button("Restore Previous") { store.restorePrevious() }
                     .disabled(!store.canRestore)
@@ -224,8 +229,8 @@ struct CanvasSettingsView: View {
                     .accessibilityIdentifier("settings.canvas.apply")
             }
         }
-        .padding(24)
-        .frame(width: 460)
+        .padding(SiteForgeVisualSystem.settingsFormPadding)
+        .frame(maxWidth: SiteForgeVisualSystem.settingsContentMaxWidth, alignment: .topLeading)
         .background(CanvasSettingsWindowHost(store: store).frame(width: 0, height: 0))
         .onChange(of: store.status) { _, status in
             NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
@@ -241,11 +246,21 @@ private struct CanvasSettingsWindowHost: NSViewRepresentable {
 
     final class Host: NSView {
         private let store: CanvasSettingsStore
+        private var attachmentGeneration: UInt64 = 0
         init(store: CanvasSettingsStore) { self.store = store; super.init(frame: .zero) }
         required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let window { store.attach(to: window) }
+            guard attachmentGeneration < UInt64.max else { return }
+            attachmentGeneration += 1
+            let generation = attachmentGeneration
+            guard let targetWindow = window else { return }
+            Task { @MainActor [weak self, weak targetWindow] in
+                guard let self, let targetWindow,
+                      self.attachmentGeneration == generation,
+                      self.window === targetWindow else { return }
+                self.store.attach(to: targetWindow)
+            }
         }
     }
 }
@@ -417,17 +432,23 @@ struct ApplicationSettingsGroupView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Application Defaults").font(.title2).bold()
-            Text("This Mac · Not stored in projects").font(.headline)
-            Text("Reset the Appearance and new-workspace Grid defaults together. Open workspaces keep their Grid state.")
-                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            LabeledContent("Appearance", value: store.appearanceSummary)
-            LabeledContent("New workspace Grid", value: store.canvasSummary)
-            Text(store.status).font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("settings.group.status")
-            Divider()
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
+            SiteForgeSettingsHeader(
+                title: "Application Defaults",
+                scope: "This Mac · Not stored in projects",
+                detail: "Review or reset the Appearance and new-workspace Grid defaults together.",
+                systemImage: "gearshape.2"
+            )
+            GroupBox("Current defaults") {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                    LabeledContent("Appearance", value: store.appearanceSummary)
+                    LabeledContent("New workspace Grid", value: store.canvasSummary)
+                    Text(store.status).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings.group.status")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             HStack {
                 Button("Restore Previous") { store.restorePrevious() }
                     .disabled(!store.canRestore || store.isPending)
@@ -446,8 +467,8 @@ struct ApplicationSettingsGroupView: View {
                 }
             }
         }
-        .padding(24)
-        .frame(width: 460)
+        .padding(SiteForgeVisualSystem.settingsFormPadding)
+        .frame(maxWidth: SiteForgeVisualSystem.settingsContentMaxWidth, alignment: .topLeading)
         .onChange(of: store.status) { _, status in
             NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
                 userInfo: [.announcement: status, .priority: NSAccessibilityPriorityLevel.medium.rawValue])

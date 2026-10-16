@@ -6,8 +6,8 @@ UI attempt stopped before test launch when XCTest timed out enabling automation.
 
 ## Bounded requirements and work
 
-- `SF-PRODUCT-UI-005` — `SF-0201-009`: preserve the approved gradient artwork at
-  `docs/design-assets/siteforge-app-icon-sf-gradient-approved-v1.png`; remove
+- `SF-PRODUCT-UI-005` — `SF-0201-009`: preserve the approved v2 gradient artwork at
+  `docs/design-assets/siteforge-app-icon-sf-gradient-approved-v2.png`; remove
   only its edge-connected exterior white matte and package the ten standard
   macOS catalog PNGs with `scripts/package_app_icon.py`. The static artwork is
   not canonical project content or a runtime-generated image.

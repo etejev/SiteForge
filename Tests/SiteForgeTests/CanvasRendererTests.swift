@@ -293,6 +293,122 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("index.html")), "ok")
         XCTAssertThrowsError(try LocalStaticBuildWriter.write(plan, to: destination, expectedRevision: 3))
     }
+
+    // SF-1204-003/004/008, SF-1208-003/004/008, SF-1211-003/004/008
+    func testStaticBuildCompilerProfilesAreDeterministicRedactedAndCancellationNeutral() throws {
+        let pageID = PageID(), nodeID = NodeID()
+        let node = DocumentNode(id: nodeID, kind: .frame, name: "Private authored name",
+            parent: .page(pageID), properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(12), origin: .authored),
+                .init(key: .init(rawValue: "layout.y"), value: .number(24), origin: .authored),
+                .init(key: .init(rawValue: "layout.width"), value: .number(200), origin: .authored),
+                .init(key: .init(rawValue: "layout.height"), value: .number(100), origin: .authored),
+            ])
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [nodeID], nodes: [node])
+        let document = CanonicalDocument(pages: [page])
+        let first = StaticBuildCompiler.compile(document: document,
+            profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        let second = StaticBuildCompiler.compile(document: document,
+            profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        XCTAssertEqual(first, second)
+        XCTAssertTrue(first.canWrite)
+        XCTAssertEqual(first.plan?.integrityDigest, second.plan?.integrityDigest)
+        XCTAssertFalse(first.redactedSummary.contains("Private authored name"))
+        XCTAssertFalse(first.redactedSummary.contains(nodeID.description))
+        XCTAssertTrue(first.findings.contains { $0.code == "publishing-excluded" })
+
+        let release = StaticBuildCompiler.compile(document: document,
+            profileSelection: .init(profile: .staticRelease), resourceDescriptors: [:], resourceData: [:])
+        XCTAssertTrue(release.canWrite)
+        XCTAssertEqual(release.report?.profile, .staticRelease)
+        let releasePaths = try XCTUnwrap(release.plan?.files.map(\.path))
+        XCTAssertEqual(releasePaths, releasePaths.sorted())
+
+        let cancelled = StaticBuildCompiler.compile(document: document,
+            profileSelection: .init(profile: .development), resourceDescriptors: [:],
+            resourceData: [:], cancelled: true)
+        XCTAssertNil(cancelled.plan)
+        XCTAssertEqual(cancelled.findings.map(\.code), ["cancelled"])
+    }
+
+    // SF-1206-003/004/008, SF-1208-004 — only referenced verified bytes enter
+    // nested output; paths and orphaned resources never do.
+    func testStaticBuildCompilerExportsOnlyReferencedVerifiedAssetsAndWriterContainsPaths() throws {
+        let bytes = Data("verified-image".utf8)
+        let hash = ProjectResourceStore.digest(bytes)
+        let resourceID = ResourceID(), orphanID = ResourceID(), pageID = PageID(), nodeID = NodeID()
+        let asset = ImageAsset(resourceID: resourceID, displayName: "Hero", originalFilename: "secret.png",
+            format: .png, pixelWidth: 20, pixelHeight: 10, byteCount: bytes.count, contentHash: hash)
+        let node = DocumentNode(id: nodeID, kind: .image, name: "Hero", parent: .page(pageID), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(0), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.y"), value: .number(0), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.width"), value: .number(20), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.height"), value: .number(10), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "assetID"), value: .string(asset.id.description), origin: .authored),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "fit"), value: .string(ImageFitMode.fit.rawValue), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.x"), value: .number(0.5), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.y"), value: .number(0.5), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "alt"), value: .string("Hero"), origin: .authored),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "decorative"), value: .boolean(false), origin: .defaulted),
+        ])
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+                                rootNodeIDs: [nodeID], nodes: [node])
+        let document = CanonicalDocument(pages: [page], imageAssets: [asset])
+        let descriptor = ProjectResourceDescriptor(id: resourceID, filename: "secret.png", mediaType: "image/png",
+                                                   byteCount: bytes.count, sha256: hash)
+        let orphan = ProjectResourceDescriptor(id: orphanID, filename: "orphan.png", mediaType: "image/png",
+                                               byteCount: bytes.count, sha256: hash)
+        let compilation = StaticBuildCompiler.compile(document: document,
+            profileSelection: .init(profile: .development),
+            resourceDescriptors: [resourceID: descriptor, orphanID: orphan],
+            resourceData: [resourceID: bytes, orphanID: bytes])
+        let plan = try XCTUnwrap(compilation.plan)
+        XCTAssertEqual(plan.binaryFiles.map(\.path), ["assets/\(hash).png"])
+        XCTAssertFalse(plan.files.map(\.contents).joined().contains("secret.png"))
+        XCTAssertFalse(plan.files.map(\.contents).joined().contains("orphan.png"))
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let destination = root.appendingPathComponent("site")
+        try LocalStaticBuildWriter.write(plan, to: destination, expectedRevision: document.revision)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("assets/\(hash).png")), bytes)
+
+        let unsafe = LocalStaticBuildPlan(revision: 1, files: [.init(path: "../escape", contents: "bad")])
+        XCTAssertThrowsError(try LocalStaticBuildWriter.write(unsafe, to: root.appendingPathComponent("bad"), expectedRevision: 1))
+    }
+
+    // SF-AUTHORING-113, SF-0905-003/004/008, SF-1204-004/008 — static
+    // output must fail closed when retained instance intent no longer has a
+    // definition binding, without placing authored content in diagnostics.
+    func testStaticBuildCompilerReportsRedactedComponentOverrideConflict() throws {
+        let definitionID = PageID(), sourceID = NodeID(), pageID = PageID(), instanceID = NodeID()
+        let missingBindingID = ComponentTextPropertyID()
+        let definition = DocumentPage(id: definitionID, name: "Card", route: .init(rawValue: ""),
+            role: .componentDefinition, provenance: .authored, rootNodeIDs: [sourceID], nodes: [
+                DocumentNode(id: sourceID, kind: .frame, name: "Root", parent: .page(definitionID))
+            ])
+        let instance = DocumentNode(id: instanceID, kind: .component, name: "Card", parent: .page(pageID),
+            properties: [
+                .init(key: .init(rawValue: CanonicalComponentReference.key), value: .string(definitionID.description)),
+                .init(key: .init(rawValue: CanonicalComponentText.overrideKey(missingBindingID)),
+                      value: .string("Private retained content"), origin: .authored),
+                .init(key: .init(rawValue: "layout.x"), value: .number(0), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.y"), value: .number(0), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.width"), value: .number(240), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.height"), value: .number(160), origin: .defaulted),
+            ])
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+            rootNodeIDs: [instanceID], nodes: [instance])
+        let document = CanonicalDocument(pages: [page, definition])
+        let result = StaticBuildCompiler.compile(document: document,
+            profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        XCTAssertNil(result.plan)
+        XCTAssertEqual(result.findings.map(\.code), ["component-override-conflict"])
+        XCTAssertFalse(result.redactedSummary.contains("Private retained content"))
+        XCTAssertFalse(result.redactedSummary.contains(instanceID.description))
+    }
     // SF-0802-001, SF-0802-004, SF-0802-008 — Fit/Fill/Stretch share one
     // top-left/Y-down geometry contract and focal points never change bounds.
     func testImageLayoutFitFillStretchFocalAndInvalidInputsAreDeterministic() throws {
@@ -964,6 +1080,68 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(state.primaryID, textID)
     }
 
+    // SF-0504-003/SF-0510-003/SF-0511-003 — one immutable preparation
+    // snapshot owns z-order, positioned geometry, reusable appearance, state
+    // preview, selection geometry, hit testing, and accessibility geometry.
+    func testAdvancedStyleProjectionAdoptsPositionZOrderAndForcedStateAtomically() async throws {
+        var document = ProjectCreation.blank()
+        var page = try XCTUnwrap(document.pages.first)
+        let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+        let rootIndex = try XCTUnwrap(page.nodes.firstIndex { $0.id == rootID })
+        let backID = NodeID(UUID(uuidString: "97100000-0000-4000-8000-000000000001")!)
+        let frontID = NodeID(UUID(uuidString: "97100000-0000-4000-8000-000000000002")!)
+        let styleID = ReusableStyleID(UUID(uuidString: "97100000-0000-4000-8000-000000000003")!)
+        let hoverID = UUID(uuidString: "97100000-0000-4000-8000-000000000004")!
+        func geometry(_ x: Double, _ y: Double) -> [NodeProperty] {
+            let values: [(String, Double)] = [
+                ("layout.x", x), ("layout.y", y), ("layout.width", 120), ("layout.height", 80),
+            ]
+            return values.map {
+                .init(key: .init(rawValue: $0.0), value: .number($0.1), origin: .authored)
+            }
+        }
+        let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(styleID.description)."
+        page.nodes[rootIndex].properties += [
+            .init(key: .init(rawValue: prefix + "name"), value: .string("Card"), origin: .authored),
+            .init(key: .init(rawValue: prefix + "fill"), value: .string("#CC1933FF"), origin: .authored),
+            .init(key: .init(rawValue: prefix + "opacity"), value: .number(0.75), origin: .authored),
+        ]
+        page.nodes[rootIndex].childIDs += [frontID, backID]
+        page.nodes.append(.init(id: frontID, kind: .frame, name: "Front", parent: .node(rootID), properties:
+            geometry(20, 30) + [
+                .init(key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(styleID.description), origin: .authored),
+                .init(key: .init(rawValue: CanonicalPositioning.namespace + "mode"), value: .string("relative"), origin: .authored),
+                .init(key: .init(rawValue: CanonicalPositioning.namespace + "left"), value: .number(10), origin: .authored),
+                .init(key: .init(rawValue: CanonicalPositioning.namespace + "top"), value: .number(12), origin: .authored),
+                .init(key: .init(rawValue: CanonicalPositioning.namespace + "zIndex"), value: .number(5), origin: .authored),
+                .init(key: .init(rawValue: CanonicalReusableStyleIndex.stateNamespace + "hover.id"), value: .string(hoverID.uuidString.lowercased()), origin: .authored),
+                .init(key: .init(rawValue: CanonicalReusableStyleIndex.stateNamespace + "hover.fill"), value: .string("#1933CCFF"), origin: .authored),
+            ]))
+        page.nodes.append(.init(id: backID, kind: .frame, name: "Back", parent: .node(rootID), properties: geometry(20, 30)))
+        document.pages[0] = page
+        let viewport = try CanvasViewportState(viewportSize: .init(width: 800, height: 600),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 900)),
+            pixelRatio: .init(2))
+        let prepared = try await WorkspaceScenePreparationWorker().prepare(.init(
+            document: document, activePageID: page.id, activeContainerID: nil,
+            forcedStyleState: .hover, viewport: viewport, surfaceID: CanvasRenderSurfaceID()))
+        XCTAssertEqual(prepared.renderScene.objects.map(\.id), [backID, frontID])
+        let object = try XCTUnwrap(prepared.renderScene.objects.first { $0.id == frontID })
+        XCTAssertEqual(object.frame.origin, .init(x: 30, y: 42))
+        XCTAssertNil(object.fillRGBA, "Layered fill data is the single authored paint source.")
+        XCTAssertEqual(object.fillLayers.count, 1)
+        XCTAssertEqual(object.fillLayers.first?.kind, .solid)
+        XCTAssertEqual(object.fillLayers.first?.rgba, [25.0 / 255, 51.0 / 255, 204.0 / 255, 1])
+        XCTAssertEqual(object.opacity, 0.75)
+        let target = try XCTUnwrap(prepared.selectionScene?.targets.first { $0.id == frontID })
+        XCTAssertEqual(target.frame, object.frame)
+        let plan = try CanvasRendererCore().prepare(scene: prepared.renderScene,
+            overlays: prepared.overlays, viewport: viewport)
+        XCTAssertEqual(plan.accessibilityElements.first { $0.objectID == frontID }?.frame.origin,
+                       try viewport.transform.worldToViewport(object.frame.origin))
+        XCTAssertEqual(CanvasRendererCore().hitTest(.init(x: 35, y: 47), in: plan), frontID)
+    }
+
     // SF-0601-003, SF-0602-002/003/005/008
     func testResponsiveProjectionSharesResolvedGeometryWithRendererSelectionAndAccessibility() async throws {
         var document = ProjectCreation.blank()
@@ -1302,6 +1480,22 @@ final class CanvasRendererTests: XCTestCase {
                        .init(target: .page(targetID), context: .same, isMissing: false))
     }
 
+    func testPreviewNavigationScalesLayoutAndHitBoundsInsideAuthoredOwner() throws {
+        let frame = WorldRect(origin: .init(x: 40, y: 120), size: .init(width: 1440, height: 120))
+        for scale in [0.25, 0.35, 1, 2, 8] {
+            let geometry = try XCTUnwrap(CanvasPreviewNavigationGeometry(frame: frame, padding: 48, rowHeight: 24, scale: scale))
+            XCTAssertEqual(geometry.worldSize, .init(width: 1344, height: 24))
+            XCTAssertEqual(geometry.displaySize.width, 1344 * scale, accuracy: 0.000_001)
+            XCTAssertEqual(geometry.displayOrigin.x, 48 * scale, accuracy: 0.000_001)
+            XCTAssertLessThanOrEqual(geometry.displayOrigin.x + geometry.displaySize.width, frame.size.width * scale)
+            XCTAssertLessThanOrEqual(geometry.displayOrigin.y + geometry.displaySize.height, frame.size.height * scale)
+        }
+        XCTAssertNil(CanvasPreviewNavigationGeometry(frame: frame, padding: 80, rowHeight: 24, scale: 1))
+        XCTAssertNil(CanvasPreviewNavigationGeometry(frame: frame, padding: 48, rowHeight: 24, scale: .nan))
+        XCTAssertNil(CanvasPreviewNavigationGeometry(frame: frame, padding: 48, rowHeight: 24, scale: 0))
+        XCTAssertEqual(frame.origin, .init(x: 40, y: 120))
+    }
+
     // SF-1006-001/003/004/008 — Inspector-facing local validation adopts only
     // a current identity-tagged category snapshot; it retains no visitor value
     // and self-invalidates on a later canonical revision.
@@ -1390,6 +1584,37 @@ final class CanvasRendererTests: XCTestCase {
             objects: objects
         )
         return Fixture(scene: scene, overlays: CanvasEditorOverlaySnapshot(identity: identity, overlays: []), viewport: viewport)
+    }
+
+    // SF-0409-003/007 — one immutable preparation projects only the canonical
+    // isolated subtree; unrelated authored siblings cannot leak into render,
+    // hit-test, Layers, or accessibility snapshots.
+    func testWorkspacePreparationProjectsOnlyIsolatedCanonicalSubtree() async throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let ownerID = document.pages[0].rootNodeIDs[0]
+        let isolatedID = NodeID(), childID = NodeID(), siblingID = NodeID()
+        func frame(_ id: NodeID, _ name: String, _ parent: NodeParent, _ children: [NodeID], _ x: Double) -> DocumentNode {
+            .init(id: id, kind: .frame, name: name, parent: parent, childIDs: children, properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(x)),
+                .init(key: .init(rawValue: "layout.y"), value: .number(40)),
+                .init(key: .init(rawValue: "layout.width"), value: .number(160)),
+                .init(key: .init(rawValue: "layout.height"), value: .number(120))
+            ])
+        }
+        document.pages[0].nodes[0].childIDs = [isolatedID, siblingID]
+        document.pages[0].nodes.append(frame(isolatedID, "Isolated", .node(ownerID), [childID], 40))
+        document.pages[0].nodes.append(frame(childID, "Child", .node(isolatedID), [], 60))
+        document.pages[0].nodes.append(frame(siblingID, "Sibling", .node(ownerID), [], 420))
+        try document.validate()
+        let viewport = try CanvasViewportState(viewportSize: .init(width: 900, height: 700),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 1_000)))
+        let result = try await WorkspaceScenePreparationWorker().prepare(.init(
+            document: document, activePageID: pageID, activeContainerID: isolatedID,
+            isolationRootID: isolatedID, viewport: viewport, surfaceID: CanvasRenderSurfaceID()))
+        XCTAssertEqual(Set(result.renderScene.objects.map(\.id)), [isolatedID, childID])
+        XCTAssertEqual(Set(result.selectionScene?.targets.map(\.id) ?? []), [isolatedID, childID])
+        XCTAssertFalse(result.renderScene.objects.contains { $0.id == siblingID })
     }
 
     private func makeWorkspacePreparationRequest(count: Int) throws -> WorkspaceScenePreparationRequest {

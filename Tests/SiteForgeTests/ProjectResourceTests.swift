@@ -467,6 +467,7 @@ final class ProjectResourceTests: XCTestCase {
         let second = try RepositoryTestFixture.create("cleanup")
         XCTAssertNotEqual(first.url, second.url)
         XCTAssertTrue(first.url.path.hasPrefix(RepositoryTestFixture.root.path + "/"))
+        XCTAssertTrue(RepositoryTestFixture.root.path.hasPrefix(ApplicationOwnedTestFixture.root.path + "/"))
         try Data("fixture".utf8).write(to: first.url.appendingPathComponent("nested.txt"))
         try first.cleanup()
         XCTAssertFalse(FileManager.default.fileExists(atPath: first.url.path))
@@ -739,7 +740,7 @@ final class ProjectResourceTests: XCTestCase {
         legacyObject["document"] = legacyDocument
         let migrated = try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacyObject))
         XCTAssertTrue(migrated.imageAssets.isEmpty)
-        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":11"))
+        XCTAssertTrue(String(decoding: try DocumentSerializer.encode(migrated), as: UTF8.self).contains("\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)"))
     }
 
     func testImageInspectorRejectsInvalidStaleAndInapplicableEditsWithoutMutation() throws {

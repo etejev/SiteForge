@@ -67,6 +67,7 @@ struct BoundedDiagnosticBuffer<Record: Sendable>: Sendable {
 /// Closed domain labels prevent the same stable identifier from producing the
 /// same support token in unrelated subsystems.
 enum DiagnosticIdentifierDomain: String, Sendable {
+    case advancedStyle = "advanced-style"
     case canvasRender = "canvas-render"
     case command = "command"
     case containerLayout = "container-layout"
@@ -85,6 +86,7 @@ enum DiagnosticIdentifierDomain: String, Sendable {
     case responsiveVisibility = "responsive-visibility"
     case selection = "selection"
     case snapping = "snapping"
+    case staticBuild = "static-build"
     case textEditing = "text-editing"
     case transform = "transform"
     case viewport = "viewport"

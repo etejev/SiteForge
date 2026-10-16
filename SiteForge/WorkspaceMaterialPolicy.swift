@@ -45,6 +45,299 @@ enum WorkspaceWindowActivity: String, CaseIterable, Sendable {
     case inactive
 }
 
+/// Shared editor presentation tokens distilled from the approved SiteForge
+/// direction. They describe native semantic roles rather than a fixed mockup,
+/// so light/dark appearance, increased contrast, and larger text continue to
+/// be owned by AppKit and SwiftUI.
+enum SiteForgeVisualSystem {
+    // One 8-point-derived rhythm. Half/quarter steps exist only for compact
+    // native chrome; feature views should consume these semantic roles.
+    static let gridUnit: CGFloat = 8
+    static let hairlineSpacing: CGFloat = 2
+    static let tabStripInset: CGFloat = 3
+    static let microSpacing: CGFloat = 4
+    static let compactSpacing: CGFloat = 6
+    static let controlInset: CGFloat = 8
+    static let standardSpacing: CGFloat = 12
+    static let sectionSpacing: CGFloat = 18
+    static let panePadding: CGFloat = 12
+    static let cardPadding: CGFloat = 18
+    static let controlCornerRadius: CGFloat = 7
+    static let cardCornerRadius: CGFloat = 14
+    static let launchCardCornerRadius: CGFloat = 20
+    static let rowCornerRadius: CGFloat = 6
+    static let fieldCornerRadius: CGFloat = 7
+    static let settingsSidebarWidth: CGFloat = 250
+    static let settingsContentMaxWidth: CGFloat = 680
+    static let launchOuterPadding: CGFloat = 40
+    static let launchInnerPadding: CGFloat = 32
+    static let launchSectionSpacing: CGFloat = 24
+    static let toolbarGroupSpacing: CGFloat = 16
+    static let settingsFormPadding: CGFloat = 24
+    static let rowInset: CGFloat = 8
+    static let inspectorBottomClearance: CGFloat = 80
+    static let thumbnailSize: CGFloat = 48
+    static let statusBarHeight: CGFloat = 36
+    static let settingsHeaderIconSize: CGFloat = 32
+    static let emptyHintMaximumWidth: CGFloat = 220
+    static let launchShadowRadius: CGFloat = 24
+    static let launchShadowOffset: CGFloat = 8
+    static let compactControlHeight: CGFloat = 28
+    static let tabStripHeight: CGFloat = 32
+    static let sidePaneIdealWidth: CGFloat = 288
+    static let navigatorIdealWidth: CGFloat = 256
+    static let inspectorIdealWidth: CGFloat = 400
+    static let settingsSidebarRowHeight: CGFloat = 44
+    static let settingsIdealWidth: CGFloat = 970
+    static let settingsIdealHeight: CGFloat = 740
+    static let launchSurfaceNSColor = NSColor(name: "SiteForgeApprovedLaunchSurface") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedRed: 0.105, green: 0.12, blue: 0.16, alpha: 1)
+            : NSColor(calibratedRed: 0.91, green: 0.93, blue: 0.97, alpha: 1)
+    }
+
+    static let chromeSurfaceNSColor = NSColor(name: "SiteForgeChromeSurface") { appearance in
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return dark
+            ? NSColor(calibratedRed: 0.105, green: 0.12, blue: 0.13, alpha: 1)
+            : NSColor(calibratedWhite: 0.965, alpha: 1)
+    }
+    static let elevatedSurfaceNSColor = NSColor(name: "SiteForgeElevatedSurface") { appearance in
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return dark
+            ? NSColor(calibratedRed: 0.135, green: 0.15, blue: 0.165, alpha: 1)
+            : NSColor(calibratedWhite: 0.995, alpha: 1)
+    }
+    static let chromeSelectionNSColor = NSColor(name: "SiteForgeChromeSelection") { appearance in
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return dark ? NSColor.controlAccentColor.withAlphaComponent(0.78)
+            : NSColor.controlAccentColor.withAlphaComponent(0.10)
+    }
+
+    /// Opaque editor workspace colors deliberately separate the infinite
+    /// pasteboard from native chrome. Materials remain reserved for panes and
+    /// headers, avoiding the gray-on-gray wash produced by nesting the same
+    /// translucent surface throughout the shell.
+    static let canvasPasteboardNSColor = NSColor(
+        name: NSColor.Name("SiteForgeCanvasPasteboard")
+    ) { appearance in
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let increased = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        if dark {
+            return NSColor(
+                calibratedRed: increased ? 0.25 : 0.34,
+                green: increased ? 0.26 : 0.35,
+                blue: increased ? 0.27 : 0.36,
+                alpha: 1
+            )
+        }
+        return NSColor(
+            calibratedRed: increased ? 0.87 : 0.91,
+            green: increased ? 0.87 : 0.91,
+            blue: increased ? 0.88 : 0.915,
+            alpha: 1
+        )
+    }
+    static let artboardSurfaceNSColor = NSColor(
+        name: NSColor.Name("SiteForgeArtboardSurface")
+    ) { appearance in
+        // The editor page surface is neutral paper in either chrome appearance;
+        // authored page backgrounds remain the canonical renderer's responsibility.
+        return NSColor(calibratedWhite: 0.995, alpha: 1)
+    }
+    static let artboardBoundaryNSColor = NSColor(
+        name: NSColor.Name("SiteForgeArtboardBoundary")
+    ) { appearance in
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let increased = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        return dark ? NSColor(calibratedWhite: 0.12, alpha: increased ? 1 : 0.75)
+            : NSColor(calibratedWhite: 0.45, alpha: increased ? 1 : 0.45)
+    }
+    static let gridMinorNSColor = NSColor(
+        name: NSColor.Name("SiteForgeGridMinor")
+    ) { appearance in
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return dark ? NSColor(calibratedWhite: 0.75, alpha: 0.10) : NSColor(calibratedWhite: 0.16, alpha: 0.11)
+    }
+    static let gridMajorNSColor = NSColor(
+        name: NSColor.Name("SiteForgeGridMajor")
+    ) { appearance in
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return dark ? NSColor(calibratedWhite: 0.88, alpha: 0.22) : NSColor(calibratedWhite: 0.10, alpha: 0.24)
+    }
+
+    static var canvasPasteboard: Color { Color(nsColor: canvasPasteboardNSColor) }
+    static var chromeSurface: Color { Color(nsColor: chromeSurfaceNSColor) }
+    static var elevatedSurface: Color { Color(nsColor: elevatedSurfaceNSColor) }
+    static var subduedSurface: Color { elevatedSurface.opacity(0.78) }
+    static var selectionTint: Color { Color(nsColor: chromeSelectionNSColor) }
+    static var selectionBoundary: Color { Color.accentColor.opacity(0.62) }
+    static var quietBoundary: Color { Color(nsColor: .separatorColor).opacity(0.34) }
+    static var tabStripSurface: Color { elevatedSurface.opacity(0.68) }
+    static var fieldSurface: Color { Color(nsColor: .controlBackgroundColor) }
+    static var hoverSurface: Color { Color.primary.opacity(0.055) }
+    static var inactiveSelectionTint: Color { Color.secondary.opacity(0.13) }
+    static var success: Color { Color(nsColor: .systemGreen) }
+    static var warning: Color { Color(nsColor: .systemOrange) }
+    static var danger: Color { Color(nsColor: .systemRed) }
+}
+
+struct SiteForgeSettingsHeader: View {
+    let title: String
+    let scope: String
+    let detail: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: SiteForgeVisualSystem.standardSpacing) {
+            Image(systemName: systemImage)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(width: SiteForgeVisualSystem.settingsHeaderIconSize, height: SiteForgeVisualSystem.settingsHeaderIconSize)
+                .background(SiteForgeVisualSystem.selectionTint, in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+                Text(title).font(.title2.bold())
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title). \(detail)")
+    }
+}
+
+/// Owner clarification keeps Inspector groups compact and distinguishable;
+/// Settings retains its separate, wider form-card role from render 12.
+struct SiteForgeInspectorGroupStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+            configuration.label
+                .font(.system(size: 13, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            Divider().accessibilityHidden(true)
+            configuration.content
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .modifier(SiteForgeInspectorSectionSurface())
+    }
+}
+
+struct SiteForgeInspectorSectionSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content
+        .padding(SiteForgeVisualSystem.panePadding)
+        .background(SiteForgeVisualSystem.elevatedSurface.opacity(reduceTransparency ? 1 : 0.55),
+                    in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius)
+                .strokeBorder(contrast == .increased ? Color.primary.opacity(0.5) : SiteForgeVisualSystem.quietBoundary, lineWidth: 1)
+                .allowsHitTesting(false).accessibilityHidden(true)
+        }
+    }
+}
+
+/// A native Button makes the entire visible disclosure row its real pointer,
+/// keyboard and accessibility action. The default macOS triangle's reported
+/// frame can include an outdented gutter that is not actually clickable.
+struct SiteForgeInspectorDisclosureStyle: DisclosureGroupStyle {
+    let identifier: String
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+            Button { configuration.isExpanded.toggle() } label: {
+                HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold)).frame(width: 12).accessibilityHidden(true)
+                    configuration.label
+                    Spacer(minLength: 0)
+                }.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint("Show or hide this section")
+            .accessibilityIdentifier(identifier)
+            if configuration.isExpanded {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                    configuration.content
+                }
+                    .disclosureGroupStyle(.automatic)
+                    .modifier(SiteForgeInspectorSectionSurface())
+            }
+        }
+    }
+}
+
+struct SiteForgeSettingsGroupStyle: GroupBoxStyle {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+            configuration.label.font(.headline).fixedSize(horizontal: false, vertical: true)
+            Divider().accessibilityHidden(true)
+            configuration.content.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(SiteForgeVisualSystem.cardPadding)
+        .background(reduceTransparency ? SiteForgeVisualSystem.elevatedSurface : SiteForgeVisualSystem.elevatedSurface.opacity(0.96),
+                    in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.cardCornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: SiteForgeVisualSystem.cardCornerRadius, style: .continuous)
+                .strokeBorder(contrast == .increased ? Color.primary.opacity(0.5) : SiteForgeVisualSystem.quietBoundary)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Preference group")
+        .accessibilityIdentifier("settings.card")
+    }
+}
+
+struct SiteForgeRowSurface: ViewModifier {
+    let selected: Bool
+    @Environment(\.controlActiveState) private var activity
+    @Environment(\.colorSchemeContrast) private var contrast
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .frame(minHeight: SiteForgeVisualSystem.compactControlHeight)
+            .background(selected ? (activity == .inactive ? SiteForgeVisualSystem.inactiveSelectionTint : SiteForgeVisualSystem.selectionTint)
+                        : (hovering ? SiteForgeVisualSystem.hoverSurface : .clear),
+                        in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.rowCornerRadius, style: .continuous))
+            .overlay {
+                if selected {
+                    RoundedRectangle(cornerRadius: SiteForgeVisualSystem.rowCornerRadius, style: .continuous)
+                        .strokeBorder(contrast == .increased ? Color.primary.opacity(0.6) : SiteForgeVisualSystem.selectionBoundary)
+                        .allowsHitTesting(false)
+                }
+            }
+            .onHover { hovering = $0 }
+    }
+}
+
+private struct SiteForgeCardModifier: ViewModifier {
+    let emphasized: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content
+            .padding(SiteForgeVisualSystem.cardPadding)
+            .background(
+                emphasized && !reduceTransparency ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(SiteForgeVisualSystem.elevatedSurface),
+                in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.cardCornerRadius, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: SiteForgeVisualSystem.cardCornerRadius, style: .continuous)
+                    .strokeBorder(contrast == .increased ? Color.primary.opacity(0.5) : SiteForgeVisualSystem.quietBoundary, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+    }
+}
+
 struct WorkspaceMaterialEnvironment: Equatable, Sendable {
     var reduceTransparency: Bool
     var contrast: WorkspaceContrastMode
@@ -168,7 +461,14 @@ private struct WorkspaceChromeModifier: ViewModifier {
         )
         let style = WorkspaceMaterialPolicy.resolve(region: region, environment: environment)
         content
-            .background(WorkspaceNativeMaterialView(style: style))
+            .background {
+                ZStack {
+                    WorkspaceNativeMaterialView(style: style)
+                    if region != .launchCard {
+                        SiteForgeVisualSystem.chromeSurface.opacity(style.presentation == .opaque ? 1 : 0.84)
+                    }
+                }.allowsHitTesting(false)
+            }
             .overlay {
                 Rectangle()
                     .stroke(Color(nsColor: .separatorColor).opacity(style.separatorOpacity), lineWidth: 1)
@@ -181,6 +481,10 @@ private struct WorkspaceChromeModifier: ViewModifier {
 extension View {
     func workspaceChrome(_ region: WorkspaceChromeRegion) -> some View {
         modifier(WorkspaceChromeModifier(region: region))
+    }
+
+    func siteForgeCard(emphasized: Bool = false) -> some View {
+        modifier(SiteForgeCardModifier(emphasized: emphasized))
     }
 }
 
@@ -202,7 +506,7 @@ private struct WorkspaceNativeMaterialView: NSViewRepresentable {
         view.isEmphasized = style.isEmphasized
         view.wantsLayer = true
         view.layer?.backgroundColor = style.presentation == .opaque
-            ? NSColor.controlBackgroundColor.cgColor
+            ? (style.region == .launchCard ? SiteForgeVisualSystem.launchSurfaceNSColor : SiteForgeVisualSystem.chromeSurfaceNSColor).cgColor
             : NSColor.clear.cgColor
     }
 }

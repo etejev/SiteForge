@@ -3,8 +3,47 @@ import AppKit
 import os
 import SwiftUI
 
+/// Allocate complete labels, never cropped scroll fragments. Surplus width is
+/// shared across visible segments; destinations that cannot fit use More.
+enum ShellTabLayoutPolicy {
+    struct Allocation: Equatable {
+        let indices: [Int]
+        let widths: [Double]
+        let overflow: Bool
+        var menuWidth: Double = 0
+    }
+    static func allocate(width: Double, minimumWidths: [Double], selected: Int,
+                         gap: Double = 1, overflowWidth: Double = 28) -> Allocation {
+        guard width.isFinite, width > 0, gap.isFinite, gap >= 0,
+              overflowWidth.isFinite, overflowWidth > 0, !minimumWidths.isEmpty,
+              minimumWidths.allSatisfy({ $0.isFinite && $0 > 0 }),
+              minimumWidths.indices.contains(selected) else {
+            return .init(indices: [], widths: [], overflow: false)
+        }
+        let all = Array(minimumWidths.indices)
+        let fits = minimumWidths.reduce(0, +) + gap * Double(all.count - 1) <= width
+        if !fits && minimumWidths[selected] + gap + overflowWidth > width {
+            return .init(indices: [], widths: [], overflow: true, menuWidth: width)
+        }
+        var indices = fits ? all : [selected]
+        if !fits {
+            for index in all where index != selected {
+                let candidate = (indices + [index]).sorted()
+                if candidate.map({ minimumWidths[$0] }).reduce(0, +)
+                    + gap * Double(candidate.count) + overflowWidth <= width { indices = candidate }
+            }
+        }
+        let occupied = indices.map { minimumWidths[$0] }.reduce(0, +)
+        let spaces = gap * Double(max(0, indices.count - 1) + (fits ? 0 : 1))
+        let spare = max(0, width - occupied - spaces - (fits ? 0 : overflowWidth)) / Double(indices.count)
+        return .init(indices: indices, widths: indices.map { minimumWidths[$0] + spare }, overflow: !fits,
+                     menuWidth: fits ? 0 : overflowWidth)
+    }
+}
+
 extension NSPasteboard.PasteboardType {
     static let siteForgeObjects = Self("com.siteforge.authored-objects.v1")
+    static let siteForgeInspectorGeometry = Self("com.siteforge.inspector-geometry.v1")
 }
 
 /// Scene-local immutable ownership for the currently open preview. It never
@@ -161,6 +200,10 @@ struct LocalPreviewState: Equatable, Sendable {
             ? "Preview could not be prepared. Return to the editor and try Refresh Preview."
             : "Multi-page Preview could not be prepared. The last valid page remains visible; try Refresh Preview."
     }
+    mutating func rejectComponentRecovery() {
+        status = "Preview blocked by retained component intent. Restore original definitions/bindings or explicitly reset unresolved overrides."
+            + (snapshot == nil ? "" : " The previous valid snapshot is unchanged.")
+    }
 
     mutating func close() {
         snapshot = nil
@@ -201,6 +244,27 @@ struct LocalFormValidationPreviewState: Equatable, Sendable {
         guard let snapshot, (snapshot.identity.documentID != document.id || snapshot.identity.revision != document.revision) else { return }
         self.snapshot = nil
         status = "Local validation is stale. Review the live form and validate again."
+    }
+}
+
+enum StaticBuildWorkspacePhase: Equatable, Sendable {
+    case idle, preflighting, ready, writing, succeeded(URL), cancelled, stale, failed(String)
+}
+
+actor StaticBuildWorker {
+    func compile(document: CanonicalDocument, profile: LocalBuildProfileSelection,
+                 descriptors: [ResourceID: ProjectResourceDescriptor], data: [ResourceID: Data]) -> StaticBuildCompilation {
+        StaticBuildCompiler.compile(document: document, profileSelection: profile,
+                                    resourceDescriptors: descriptors, resourceData: data,
+                                    cancelled: Task.isCancelled)
+    }
+
+    func write(plan: LocalStaticBuildPlan, destination: URL, expectedRevision: UInt64,
+               replacingExisting: Bool) throws {
+        try Task.checkCancellation()
+        try LocalStaticBuildWriter.write(plan, to: destination, expectedRevision: expectedRevision,
+                                         replacingExisting: replacingExisting,
+                                         cancelled: Task.isCancelled)
     }
 }
 
@@ -452,7 +516,7 @@ enum ElementCatalogSearchPolicy {
     }
 }
 
-enum InspectorTab: String, CaseIterable, Identifiable {
+enum InspectorTab: String, CaseIterable, Identifiable, Hashable, Sendable {
     case design
     case layout
     case content
@@ -476,6 +540,24 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case let .unavailable(reason, nextStep):
             "\(title) inspector tab. Not available yet. \(reason) \(nextStep)"
         }
+    }
+}
+
+enum InspectorSectionDiscovery {
+    static func sections(matching query: String, pinned: Set<InspectorTab>) -> [InspectorTab] {
+        let terms = String(query.prefix(256)).folding(options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")).split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        let matches = InspectorTab.allCases.filter { tab in
+            let keywords: String = switch tab {
+            case .design: "design fill color opacity layers gradient border radius shadow typography font tracking alignment"
+            case .layout: "layout geometry x y width height padding gap columns direction breakpoint inherited override responsive"
+            case .content: "content text image asset component property group choice media action slot fallback form"
+            case .interactions: "interactions link destination page navigation context button"
+            case .accessibility: "accessibility label description alt decorative role focus"
+            }
+            return terms.allSatisfy(keywords.contains)
+        }
+        return matches.filter { pinned.contains($0) } + matches.filter { !pinned.contains($0) }
     }
 }
 
@@ -660,6 +742,8 @@ enum ShellFocus: Hashable {
     case navigatorPage(PageID)
     case navigatorLayer(NodeID)
     case viewportPreset
+    case viewportCompare
+    case viewportGrid
     case viewportZoomOut
     case viewportZoomIn
     case viewportReset
@@ -683,7 +767,7 @@ enum ShellFocusTraversal {
         [
             .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents,
         ] + pageIDs.map(ShellFocus.navigatorPage) + layerIDs.map(ShellFocus.navigatorLayer) + [
-            .viewportPreset, .viewportZoomOut, .viewportZoomIn,
+            .viewportPreset, .viewportCompare, .viewportGrid, .viewportZoomOut, .viewportZoomIn,
             .viewportReset, .viewportFitCanvas, .viewportFit, .viewportCanvas,
             .inspectorDesign, .inspectorLayout, .inspectorContent, .inspectorInteractions, .inspectorAccessibility,
         ]
@@ -716,6 +800,8 @@ extension ShellFocus {
         case let .navigatorPage(id): NavigatorPageAccessibility.identifier(for: id)
         case let .navigatorLayer(id): "navigator.layer.\(id.description)"
         case .viewportPreset: "canvas.viewport.preset"
+        case .viewportCompare: "canvas.viewport.compare"
+        case .viewportGrid: "canvas.grid.toggle"
         case .viewportZoomOut: "canvas.zoom.out"
         case .viewportZoomIn: "canvas.zoom.in"
         case .viewportReset: "canvas.zoom.reset"
@@ -803,10 +889,16 @@ enum NavigatorPageAccessibility {
 enum WorkspaceMetrics {
     static let minimumWindowSize = CGSize(width: 1_100, height: 700)
     static let defaultWindowSize = CGSize(width: 1_280, height: 800)
-    static let navigatorWidth: ClosedRange<CGFloat> = 210...300
-    static let inspectorWidth: ClosedRange<CGFloat> = 280...360
+    static let navigatorWidth: ClosedRange<CGFloat> = 250...360
+    static let inspectorWidth: ClosedRange<CGFloat> = 280...420
     static let minimumCanvasWidth: CGFloat = 500
     static let uiTestScreenEdgeInset: CGFloat = 16
+    static func navigatorMaximumWidth(for windowWidth: CGFloat) -> CGFloat {
+        max(navigatorWidth.lowerBound, min(navigatorWidth.upperBound, max(0, windowWidth) * 0.205))
+    }
+    static func inspectorMaximumWidth(for windowWidth: CGFloat) -> CGFloat {
+        max(inspectorWidth.lowerBound, min(inspectorWidth.upperBound, max(0, windowWidth) * 0.26))
+    }
 
     static func supportsLayout(at size: CGSize) -> Bool {
         size.width >= minimumWindowSize.width
@@ -1066,6 +1158,8 @@ struct WorkspaceScenePreparationRequest: Sendable {
     let document: CanonicalDocument
     let activePageID: PageID?
     let activeContainerID: NodeID?
+    let isolationRootID: NodeID?
+    let forcedStyleState: CanonicalInteractionStyleState
     let viewport: CanvasViewportState
     let surfaceID: CanvasRenderSurfaceID
     let breakpoint: ResponsiveBreakpoint
@@ -1073,11 +1167,15 @@ struct WorkspaceScenePreparationRequest: Sendable {
     let imageResourceData: [AssetID: Data]
 
     init(document: CanonicalDocument, activePageID: PageID?, activeContainerID: NodeID?,
+         isolationRootID: NodeID? = nil,
+         forcedStyleState: CanonicalInteractionStyleState = .default,
          viewport: CanvasViewportState, surfaceID: CanvasRenderSurfaceID,
          breakpoint: ResponsiveBreakpoint = .desktop,
          viewportWidth: Double? = nil,
          imageResourceData: [AssetID: Data] = [:]) {
         self.document = document; self.activePageID = activePageID; self.activeContainerID = activeContainerID
+        self.isolationRootID = isolationRootID
+        self.forcedStyleState = forcedStyleState
         self.viewport = viewport; self.surfaceID = surfaceID; self.breakpoint = breakpoint
         self.viewportWidth = viewportWidth ?? Double(ViewportPreset.allCases.first {
             $0.responsiveBreakpoint == breakpoint
@@ -1137,11 +1235,50 @@ actor WorkspaceScenePreparationWorker {
                 maximumNodes: CanvasRendererPolicy.maximumObjects,
                 checkpoint: { if Task.isCancelled { throw WorkspaceScenePreparationError.cancelled } })
         }
-        let orderedActiveNodes = activePage?.canonicalDepthFirstNodes() ?? []
+        let allActiveNodes = activePage?.canonicalDepthFirstNodes() ?? []
+        // Virtual component section identities exist in the resolved graph,
+        // not the canonical package. Resolve each linked page once in this
+        // immutable request before deciding whether Preview can follow it.
+        var sectionIDsByPage: [PageID: Set<NodeID>] = [:]
+        if let activePage {
+            sectionIDsByPage[activePage.id] = Set(activePage.nodes.filter { $0.kind == .section }.map(\.id))
+        }
+        func resolvedLinkIsMissing(_ target: CanonicalLinkTarget) throws -> Bool {
+            switch target {
+            case .none, .external: return false
+            case .page(let id): return !request.document.websitePages.contains { $0.id == id }
+            case .section(let pageID, let nodeID):
+                guard let destination = request.document.websitePages.first(where: { $0.id == pageID }) else { return true }
+                if sectionIDsByPage[pageID] == nil {
+                    let resolved = try ComponentGraphResolver.resolvedPage(destination, in: request.document,
+                        breakpoint: request.breakpoint, maximumNodes: CanvasRendererPolicy.maximumObjects,
+                        checkpoint: { if Task.isCancelled { throw WorkspaceScenePreparationError.cancelled } })
+                    sectionIDsByPage[pageID] = Set(resolved.nodes.filter { $0.kind == .section }.map(\.id))
+                }
+                return sectionIDsByPage[pageID]?.contains(nodeID) != true
+            }
+        }
+        let isolatedNodeIDs: Set<NodeID>? = request.isolationRootID.flatMap { rootID in
+            guard let page = activePage, page.nodes.contains(where: { $0.id == rootID }) else { return nil }
+            let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            var result = Set<NodeID>(), pending = [rootID]
+            while let id = pending.popLast(), result.insert(id).inserted {
+                pending.append(contentsOf: byID[id]?.childIDs ?? [])
+            }
+            return result
+        }
+        let orderedActiveNodes = isolatedNodeIDs.map { ids in allActiveNodes.filter { ids.contains($0.id) } }
+            ?? allActiveNodes
         let resolvedGeometry = activePage?.resolvedStructuralGeometry(
             breakpoint: request.breakpoint, viewportWidth: request.viewportWidth) ?? [:]
         let effectivelyVisible = activePage?.effectiveVisibleNodeIDs(breakpoint: request.breakpoint) ?? []
         let activeNodesByID = Dictionary(uniqueKeysWithValues: (activePage?.nodes ?? []).map { ($0.id, $0) })
+        let reusableStyleIndex = try CanonicalReusableStyleIndex(document: request.document)
+        let paintOrderedNodes = orderedActiveNodes.enumerated().sorted { lhs, rhs in
+            let lhsZ = CanonicalPositioning.resolve(lhs.element)?.zIndex ?? 0
+            let rhsZ = CanonicalPositioning.resolve(rhs.element)?.zIndex ?? 0
+            return lhsZ == rhsZ ? lhs.offset < rhs.offset : lhsZ < rhsZ
+        }.map(\.element)
         func intersection(_ lhs: WorldRect, _ rhs: WorldRect) -> WorldRect? {
             let minX = max(lhs.minX, rhs.minX), minY = max(lhs.minY, rhs.minY)
             let maxX = min(lhs.maxX, rhs.maxX), maxY = min(lhs.maxY, rhs.maxY)
@@ -1167,16 +1304,43 @@ actor WorkspaceScenePreparationWorker {
             return clip
         }
         var renderObjects: [CanvasRenderObject] = []
+        let chromeLayoutIDs = Set((activePage?.nodes ?? []).flatMap { owner in
+            [CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner),
+             CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner)].compactMap { $0 }
+        })
+        let navigationSurfaceIDs = Set((activePage?.nodes ?? []).compactMap { CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: $0) })
+        let managedChromeFrameIDs = Set((activePage?.nodes ?? []).flatMap { owner in
+            [CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner),
+             CanonicalPageChrome.isCustom(owner) ? nil : CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner)]
+                .compactMap { $0 }
+        })
+        let navigationSnapshots: [NodeID: PageNavigationSnapshot] = Dictionary(uniqueKeysWithValues:
+            (activePage?.nodes ?? []).compactMap { node in
+                guard navigationSurfaceIDs.contains(node.id) ||
+                    (CanonicalPageFlow.role(node) != nil && CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: node) == nil),
+                      let page = activePage, let snapshot = CanonicalPageFlow.navigation(owner: node, page: page,
+                        document: request.document, breakpoint: request.breakpoint, width: request.viewportWidth) else { return nil }
+                return (node.id, snapshot)
+            })
+        // A closed responsive menu is one authored navigation surface. Its
+        // retained links remain inspectable in Layers, but must not paint or
+        // create invisible canvas hit/accessibility targets behind the menu.
+        let collapsedNavigationMembers = Set(navigationSnapshots.values.filter(\.usesHamburger).flatMap { $0.links.map(\.id) })
         renderObjects.reserveCapacity(orderedActiveNodes.count)
 
-        for node in orderedActiveNodes {
+        for node in paintOrderedNodes {
             try checkpoint()
             guard effectivelyVisible.contains(node.id) else { continue }
+            guard !collapsedNavigationMembers.contains(node.id) else { continue }
             // Structural roots intentionally have no authored geometry and
             // never receive a fabricated fallback rectangle.
             guard let authoredGeometry = node.insertionGeometry else { continue }
             guard let inheritedClip = inheritedContentClip(for: node) else { continue }
-            let frame = (resolvedGeometry[node.id] ?? authoredGeometry).frame
+            let baseFrame = (resolvedGeometry[node.id] ?? authoredGeometry).frame
+            let frame = managedChromeFrameIDs.contains(node.id) ? baseFrame : positionedFrame(
+                node: node, base: baseFrame, resolvedGeometry: resolvedGeometry,
+                nodesByID: activeNodesByID, viewport: request.viewport.visibleWorldRect
+            )
             let style: CanvasPaintStyle = switch node.kind {
             case .frame:
                 if case .page(let pageID) = node.parent, pageID == request.activePageID {
@@ -1196,7 +1360,20 @@ actor WorkspaceScenePreparationWorker {
             case .form: .container
             case .component: .container
             }
-            let fillLayers = LocalColorTokenResolver.resolvedLayers(for: node, in: request.document).map { layer in
+            let canonicalAppearance = try CanonicalResolvedAppearance.resolve(
+                node: node, index: reusableStyleIndex, state: request.forcedStyleState
+            )
+            let hasForcedFill = request.forcedStyleState != .default
+                && node.insertionProperty(CanonicalReusableStyleIndex.stateNamespace
+                    + request.forcedStyleState.rawValue + ".fill") != nil
+            let resolvedCanonicalLayers: [CanonicalFillLayer] = if hasForcedFill, let color = canonicalAppearance.fill {
+                [.solid(id: FillLayerID(node.insertionProperty(
+                    CanonicalReusableStyleIndex.stateNamespace + request.forcedStyleState.rawValue + ".id"
+                )?.id.rawValue ?? UUID()), color: color)]
+            } else {
+                LocalColorTokenResolver.resolvedLayers(for: node, in: request.document)
+            }
+            let fillLayers = resolvedCanonicalLayers.map { layer in
                 switch layer.kind {
                 case .solid:
                     return CanvasAuthoredFillLayer(
@@ -1294,7 +1471,7 @@ actor WorkspaceScenePreparationWorker {
             let previewLink: CanvasPreviewLink? = if node.kind == .link,
                 let target = try? CanonicalLinkTarget.resolve(node), target != .none {
                 .init(target: target, context: node.controlContext,
-                      isMissing: target.isMissing(in: request.document))
+                      isMissing: try resolvedLinkIsMissing(target))
             } else { nil }
             renderObjects.append(CanvasRenderObject(
                 id: node.id,
@@ -1304,13 +1481,18 @@ actor WorkspaceScenePreparationWorker {
                 style: style,
                 isVisible: !node.selectionBooleanProperty("hidden"),
                 accessibilityLabel: authoredAccessibilityName
-                    ?? (node.kind == .text ? "Text object" : (imageAccessibilityLabel ?? node.name)),
-                accessibilityHelp: authoredAccessibilityHelp,
-                plainText: node.kind.isLinkControl ? node.controlLabel : (node.kind == .text ? node.insertionStringProperty("content.text") : nil),
-                displayName: node.kind.isTextual ? nil : node.name,
-                fillRGBA: nil,
+                    ?? (CanonicalPageFlow.isNavigationLink(node) ? node.controlLabel + " page link"
+                        : node.kind == .text ? "Text object" : (imageAccessibilityLabel ?? node.name)),
+                accessibilityHelp: authoredAccessibilityHelp ?? (CanonicalPageFlow.isNavigationLink(node)
+                    ? (previewLink?.isMissing == true ? "Missing original page. Open Header/Footer settings to repair this reference."
+                       : "Authored page-navigation link. Select its Header/Footer owner to edit the destination.") : nil),
+                plainText: navigationSnapshots[node.id]?.usesHamburger == true ? "☰ Menu"
+                    : (node.kind.isLinkControl ? node.controlLabel : (node.kind == .text ? node.insertionStringProperty("content.text") : nil)),
+                displayName: node.kind.isTextual || chromeLayoutIDs.contains(node.id) ? nil : node.name,
+                fillRGBA: fillLayers.isEmpty ? (canonicalAppearance.fill.map { [$0.red, $0.green, $0.blue, $0.alpha] }
+                    ?? (node.insertionProperty(CanonicalFillLayerCodec.orderKey) != nil ? [0, 0, 0, 0] : nil)) : nil,
                 fillLayers: fillLayers,
-                opacity: DesignInspectorCommandRegistry.resolvedOpacity(for: node)?.0 ?? 1,
+                opacity: canonicalAppearance.opacity,
                 border: border,
                 cornerRadius: boxStyle?.cornerRadius ?? 0,
                 shadow: shadow,
@@ -1323,7 +1505,9 @@ actor WorkspaceScenePreparationWorker {
                 imageFocalX: imageFocalX,
                 imageFocalY: imageFocalY,
                 semanticElement: SemanticElementCommandRegistry.resolvedElement(for: node)?.0.rawValue,
-                previewLink: previewLink
+                previewLink: previewLink,
+                navigation: navigationSnapshots[node.id],
+                navigationOwnerID: CanonicalPageFlow.isNavigationLink(node) ? { if case .node(let id) = node.parent { id } else { nil } }() : nil
             ))
         }
 
@@ -1336,7 +1520,7 @@ actor WorkspaceScenePreparationWorker {
             let structuralRootIDs = Set(page.rootNodeIDs.filter { rootID in
                 page.nodes.first(where: { $0.id == rootID })?.insertionGeometry == nil
             })
-            for node in page.canonicalDepthFirstNodes() {
+            for node in page.canonicalDepthFirstNodes() where isolatedNodeIDs?.contains(node.id) ?? true {
                 try checkpoint()
                 let object = rendered[node.id]
                 // The implicit ownership root remains available to Layers once
@@ -1402,11 +1586,50 @@ actor WorkspaceScenePreparationWorker {
             selectionScene: selectionScene
         )
     }
+
+    private func positionedFrame(
+        node: DocumentNode,
+        base: WorldRect,
+        resolvedGeometry: [NodeID: InsertionGeometry],
+        nodesByID: [NodeID: DocumentNode],
+        viewport: WorldRect
+    ) -> WorldRect {
+        guard !CanonicalPageFlow.isManaged(node), let positioning = CanonicalPositioning.resolve(node), positioning.mode != .static else { return base }
+        func shifted(_ rect: WorldRect) -> WorldRect {
+            .init(origin: .init(
+                x: rect.origin.x + (positioning.left ?? 0) - (positioning.right ?? 0),
+                y: rect.origin.y + (positioning.top ?? 0) - (positioning.bottom ?? 0)
+            ), size: rect.size)
+        }
+        switch positioning.mode {
+        case .static: return base
+        case .relative: return shifted(base)
+        case .absolute:
+            let containing: WorldRect = if case .node(let parentID) = node.parent,
+                nodesByID[parentID] != nil, let frame = resolvedGeometry[parentID]?.frame { frame } else { viewport }
+            let x = positioning.left.map { containing.minX + $0 }
+                ?? positioning.right.map { containing.maxX - $0 - base.size.width } ?? base.origin.x
+            let y = positioning.top.map { containing.minY + $0 }
+                ?? positioning.bottom.map { containing.maxY - $0 - base.size.height } ?? base.origin.y
+            return .init(origin: .init(x: x, y: y), size: base.size)
+        case .fixed:
+            let x = positioning.left.map { viewport.minX + $0 }
+                ?? positioning.right.map { viewport.maxX - $0 - base.size.width } ?? base.origin.x
+            let y = positioning.top.map { viewport.minY + $0 }
+                ?? positioning.bottom.map { viewport.maxY - $0 - base.size.height } ?? base.origin.y
+            return .init(origin: .init(x: x, y: y), size: base.size)
+        case .sticky:
+            let shifted = shifted(base)
+            let top = positioning.top.map { viewport.minY + $0 } ?? shifted.origin.y
+            return .init(origin: .init(x: shifted.origin.x, y: max(shifted.origin.y, top)), size: shifted.size)
+        }
+    }
 }
 
 enum LocalPreviewRuntimeError: Error, Equatable, Sendable {
     case cancelled
     case noWebsitePages
+    case componentRecoveryRequired
 }
 
 /// Builds every website page through the same immutable scene resolver used
@@ -1423,13 +1646,20 @@ actor LocalPreviewRuntimeCompiler {
     ) async throws -> LocalPreviewRuntimeSnapshot {
         let pages = document.pages.filter { $0.role != .componentDefinition }
         guard !pages.isEmpty else { throw LocalPreviewRuntimeError.noWebsitePages }
+        for instance in pages.flatMap(\.nodes) where instance.kind == .component {
+            guard !Task.isCancelled else { throw LocalPreviewRuntimeError.cancelled }
+            guard try !CanonicalComponentOverrides.requiresRecovery(instance: instance, document: document) else {
+                throw LocalPreviewRuntimeError.componentRecoveryRequired
+            }
+        }
         var snapshots: [LocalPreviewPageSnapshot] = []
         snapshots.reserveCapacity(pages.count)
         let width = Double(ViewportPreset.allCases.first { $0.responsiveBreakpoint == breakpoint }?.width
                            ?? ViewportPreset.desktop.width)
         for page in pages {
             guard !Task.isCancelled else { throw LocalPreviewRuntimeError.cancelled }
-            let bounds = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: width, height: 900))
+            let bounds = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: width,
+                height: CanonicalPageFlow.contentHeight(page, breakpoint: breakpoint, width: width)))
             let viewport = try CanvasViewportState(
                 viewportSize: .init(width: width, height: 900),
                 contentBounds: bounds,
@@ -1542,6 +1772,271 @@ enum ComponentSearchPolicy {
         let source = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(256))
         guard !source.isEmpty else { return definitions }
         return definitions.filter { titleMatches(source, title: $0.name) }
+    }
+
+    static func organizedResults(
+        in definitions: [DocumentPage],
+        snapshot: ComponentDependencySnapshot?,
+        query: String,
+        filter: ComponentCollectionFilter,
+        sort: ComponentCollectionSort
+    ) -> [DocumentPage] {
+        var matches = results(in: definitions, query: query)
+        guard let snapshot else { return matches }
+        matches = matches.filter { definition in
+            guard let entry = snapshot.entry(for: definition.id) else { return filter == .all }
+            switch filter {
+            case .all: return true
+            case .inUse: return !entry.usages.isEmpty
+            case .unused: return entry.usages.isEmpty
+            case .issues: return !entry.issues.isEmpty
+            }
+        }
+        switch sort {
+        case .canonical:
+            break
+        case .name:
+            matches.sort {
+                let comparison = $0.name.localizedStandardCompare($1.name)
+                return comparison == .orderedAscending
+                    || (comparison == .orderedSame && $0.id.description < $1.id.description)
+            }
+        case .usage:
+            matches.sort {
+                let lhs = snapshot.entry(for: $0.id)?.usages.count ?? 0
+                let rhs = snapshot.entry(for: $1.id)?.usages.count ?? 0
+                return lhs == rhs ? $0.id.description < $1.id.description : lhs > rhs
+            }
+        }
+        return matches
+    }
+}
+
+enum ComponentCollectionFilter: String, CaseIterable, Identifiable, Sendable {
+    case all, inUse, unused, issues
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .all: "All"; case .inUse: "In Use"; case .unused: "Unused"; case .issues: "Issues" }
+    }
+}
+
+enum ComponentCollectionSort: String, CaseIterable, Identifiable, Sendable {
+    case canonical, name, usage
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .canonical: "Project Order"; case .name: "Name"; case .usage: "Most Used" }
+    }
+}
+
+struct ComponentDependencySnapshot: Equatable, Sendable {
+    static let maximumDefinitions = 1_000
+    static let maximumNodes = 10_000
+
+    struct Usage: Identifiable, Equatable, Sendable {
+        var id: NodeID { nodeID }
+        let definitionID: PageID
+        let pageID: PageID
+        let pageName: String
+        let nodeID: NodeID
+        let containerID: NodeID?
+        let containerName: String?
+        let isHidden: Bool
+
+        var locationLabel: String {
+            containerName.map { "\(pageName) › \($0)" } ?? pageName
+        }
+    }
+
+    enum Issue: String, Equatable, Sendable {
+        case missingDefinition = "Missing component definition"
+        case missingAsset = "Missing image asset"
+        case missingToken = "Missing color token"
+        case missingStyle = "Missing reusable style"
+        case nestedComponent = "Nested component dependency is unsupported"
+        case cyclicDependency = "Component dependency cycle"
+        case overrideConflict = "Unresolved component override"
+        case missingActionDestination = "Missing component action destination"
+        case capacityExceeded = "Component dependency index capacity exceeded"
+    }
+
+    struct Entry: Identifiable, Equatable, Sendable {
+        var id: PageID { definitionID }
+        let definitionID: PageID
+        let name: String
+        let usages: [Usage]
+        let directDefinitionIDs: [PageID]
+        let transitiveDefinitionIDs: [PageID]
+        let assetIDs: [AssetID]
+        let tokenIDs: [ColorTokenID]
+        let styleIDs: [ReusableStyleID]
+        let textProperties: [ExposedComponentTextProperty]
+        let visibilityProperties: [ExposedComponentVisibilityProperty]
+        let choiceProperties: [ExposedComponentChoiceProperty]
+        let mediaProperties: [ExposedComponentMediaProperty]
+        let actionProperties: [ExposedComponentActionProperty]
+        let actionPageIDs: [PageID]
+        let slotProperties: [ExposedComponentSlotProperty]
+        let propertyOrganization: [CanonicalComponentOrganization.Entry]
+        let overrideConflicts: [ComponentOverrideConflictFinding]
+        let authoredOverrideCount: Int
+        let overrideConflictCount: Int
+        let issues: [Issue]
+        let dependentDefinitionIDs: [PageID]
+
+        var canRemoveWithoutDetach: Bool {
+            usages.isEmpty && dependentDefinitionIDs.isEmpty && issues.isEmpty
+        }
+        var canDetachUses: Bool { !usages.isEmpty && issues.isEmpty && dependentDefinitionIDs.isEmpty }
+        var isTransferable: Bool { issues.isEmpty && directDefinitionIDs.isEmpty }
+        var transferStatus: String {
+            isTransferable
+                ? "Transferable with supported local dependencies"
+                : "Transfer blocked: " + issues.map(\.rawValue).joined(separator: ", ")
+        }
+    }
+
+    let documentID: DocumentID
+    let revision: UInt64
+    let entries: [Entry]
+    let unresolvedUsages: [Usage]
+
+    func entry(for id: PageID) -> Entry? { entries.first { $0.definitionID == id } }
+
+    static func build(document: CanonicalDocument) throws -> Self {
+        guard document.componentDefinitions.count <= maximumDefinitions,
+              document.pages.reduce(0, { $0 + $1.nodes.count }) <= maximumNodes else {
+            throw ComponentDependencyIndexError.capacityExceeded
+        }
+        let definitions = document.componentDefinitions
+        let definitionsByID = Dictionary(uniqueKeysWithValues: definitions.map { ($0.id, $0) })
+        let assetIDs = Set(document.imageAssets.map(\.id))
+        let tokenIDs = Set(document.colorTokens.map(\.id))
+        let styleIndex = try CanonicalReusableStyleIndex(document: document)
+        let styleIDs = Set(styleIndex.byID.keys)
+        let websiteNodes = Dictionary(uniqueKeysWithValues: document.websitePages.flatMap(\.nodes).map { ($0.id, $0) })
+        var usages: [PageID: [Usage]] = [:]
+        var unresolved: [Usage] = []
+        for page in document.websitePages {
+            let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            for node in page.nodes where node.kind == .component {
+                guard let definitionID = CanonicalComponentReference.definitionID(for: node) else { continue }
+                let containerID: NodeID? = if case .node(let id) = node.parent { id } else { nil }
+                let usage = Usage(
+                    definitionID: definitionID, pageID: page.id, pageName: page.name, nodeID: node.id,
+                    containerID: containerID, containerName: containerID.flatMap { nodesByID[$0]?.name },
+                    isHidden: node.selectionBooleanProperty("hidden")
+                )
+                if definitionsByID[definitionID] == nil { unresolved.append(usage) }
+                else { usages[definitionID, default: []].append(usage) }
+            }
+        }
+        let direct = Dictionary(uniqueKeysWithValues: definitions.map { definition in
+            (definition.id, Set(definition.nodes.compactMap(CanonicalComponentReference.definitionID)))
+        })
+        var dependents: [PageID: Set<PageID>] = [:]
+        for (owner, dependencies) in direct {
+            for dependency in dependencies { dependents[dependency, default: []].insert(owner) }
+        }
+        var entries: [Entry] = []
+        for definition in definitions {
+            if Task.isCancelled { throw CancellationError() }
+            let referencedAssets = Set(definition.nodes.flatMap { node in
+                [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].compactMap {
+                    node.insertionStringProperty($0).flatMap(AssetID.init(uuidString:))
+                }
+            })
+            let referencedTokens = Set(definition.nodes.flatMap { node in
+                LocalColorTarget.allCases.compactMap { LocalColorTokenBinding.id(for: node, target: $0) }
+            })
+            let referencedStyles = Set(try definition.nodes.flatMap(CanonicalReusableStyleIndex.strictlyDecodedAppliedIDs))
+            var issues: Set<Issue> = []
+            if definition.nodes.filter({ $0.kind.isLinkControl }).contains(where: {
+                (try? CanonicalLinkTarget.resolve($0).isMissing(in: document)) == true
+            }) { issues.insert(.missingActionDestination) }
+            if !referencedAssets.isSubset(of: assetIDs) { issues.insert(.missingAsset) }
+            if !referencedTokens.isSubset(of: tokenIDs) { issues.insert(.missingToken) }
+            if !referencedStyles.isSubset(of: styleIDs) { issues.insert(.missingStyle) }
+            let directIDs = direct[definition.id, default: []]
+            if directIDs.contains(where: { definitionsByID[$0] == nil }) { issues.insert(.missingDefinition) }
+            if !directIDs.isEmpty { issues.insert(.nestedComponent) }
+            var transitive = Set<PageID>(), visiting = Set<PageID>()
+            func visit(_ id: PageID) {
+                guard visiting.insert(id).inserted else { issues.insert(.cyclicDependency); return }
+                for next in direct[id, default: []] {
+                    if next == definition.id { issues.insert(.cyclicDependency) }
+                    if transitive.insert(next).inserted, definitionsByID[next] != nil { visit(next) }
+                }
+                visiting.remove(id)
+            }
+            visit(definition.id); transitive.remove(definition.id)
+            var authoredOverrideCount = 0
+            var overrideConflictCount = 0
+            var overrideConflicts: [ComponentOverrideConflictFinding] = []
+            var actionTargets = Set(definition.nodes.filter { $0.kind.isLinkControl }.compactMap { try? CanonicalLinkTarget.resolve($0) })
+            for usage in usages[definition.id, default: []] {
+                guard let instance = websiteNodes[usage.nodeID] else { continue }
+                let resolved = try CanonicalComponentOverrides.resolve(instance: instance, document: document)
+                overrideConflicts += try CanonicalComponentOverrides.conflicts(instance: instance, document: document)
+                for entry in resolved {
+                    if case .action(let target) = entry.effectiveValue {
+                        actionTargets.insert(target)
+                        if target.isMissing(in: document) { issues.insert(.missingActionDestination) }
+                    }
+                    switch entry.resolution {
+                    case .inherited: break
+                    case .authored: authoredOverrideCount += 1
+                    case .conflict: authoredOverrideCount += 1; overrideConflictCount += 1
+                    }
+                }
+            }
+            if overrideConflictCount > 0 { issues.insert(.overrideConflict) }
+            entries.append(Entry(
+                definitionID: definition.id, name: definition.name,
+                usages: usages[definition.id, default: []].sorted { lhs, rhs in
+                    if lhs.pageName != rhs.pageName { return lhs.pageName < rhs.pageName }
+                    if lhs.locationLabel != rhs.locationLabel { return lhs.locationLabel < rhs.locationLabel }
+                    return lhs.nodeID.description < rhs.nodeID.description
+                },
+                directDefinitionIDs: directIDs.sorted { $0.description < $1.description },
+                transitiveDefinitionIDs: transitive.sorted { $0.description < $1.description },
+                assetIDs: referencedAssets.sorted { $0.description < $1.description },
+                tokenIDs: referencedTokens.sorted { $0.description < $1.description },
+                styleIDs: referencedStyles.sorted { $0.description < $1.description },
+                textProperties: CanonicalComponentText.properties(in: definition),
+                visibilityProperties: CanonicalComponentVisibility.properties(in: definition),
+                choiceProperties: CanonicalComponentChoice.properties(in: definition),
+                mediaProperties: CanonicalComponentMedia.properties(in: definition),
+                actionProperties: CanonicalComponentAction.properties(in: definition),
+                actionPageIDs: Set(actionTargets.compactMap { target -> PageID? in
+                    switch target {
+                    case .page(let id), .section(let id, _): return id
+                    case .none, .external: return nil
+                    }
+                }).sorted { $0.description < $1.description },
+                slotProperties: CanonicalComponentSlot.properties(in: definition),
+                propertyOrganization: CanonicalComponentOrganization.entries(in: definition),
+                overrideConflicts: overrideConflicts.sorted { $0.id < $1.id },
+                authoredOverrideCount: authoredOverrideCount,
+                overrideConflictCount: overrideConflictCount,
+                issues: issues.sorted { $0.rawValue < $1.rawValue },
+                dependentDefinitionIDs: dependents[definition.id, default: []].sorted { $0.description < $1.description }
+            ))
+        }
+        return .init(documentID: document.id, revision: document.revision, entries: entries,
+                     unresolvedUsages: unresolved.sorted { $0.nodeID.description < $1.nodeID.description })
+    }
+}
+
+enum ComponentDependencyIndexError: Error, Equatable, LocalizedError, Sendable {
+    case capacityExceeded
+    var errorDescription: String? {
+        "Component dependency inspection exceeds the bounded local index. Narrow the project before retrying."
+    }
+}
+
+actor ComponentDependencyIndexWorker {
+    func build(document: CanonicalDocument) throws -> ComponentDependencySnapshot {
+        try ComponentDependencySnapshot.build(document: document)
     }
 }
 
@@ -1721,12 +2216,18 @@ final class WorkspaceShellState: ObservableObject {
         "SF-0405-005", "SF-0405-006", "SF-0405-007", "SF-0405-008",
         "SF-0406-001", "SF-0406-002", "SF-0406-003", "SF-0406-004",
         "SF-0406-005", "SF-0406-006", "SF-0406-007", "SF-0406-008",
+        "SF-0409-001", "SF-0409-002", "SF-0409-003", "SF-0409-004",
+        "SF-0409-005", "SF-0409-006", "SF-0409-007", "SF-0409-008",
     ]
 
     @Published var selectedTool: CanvasTool = .select
     @Published var navigatorTab: NavigatorTab = .pages
     @Published var selectedPageID: PageID?
     @Published var inspectorTab: InspectorTab = .layout
+    @Published var inspectorSectionQuery = ""
+    @Published var pinnedInspectorSections: Set<InspectorTab> = []
+    @Published var inspectorTransferField: GeometryInspectorField = .width
+    @Published private(set) var inspectorWorkflowAnnouncement = "Inspector discovery is local to this window."
     @Published var viewportPreset: ViewportPreset = .desktop {
         didSet {
             guard viewportPreset != oldValue else { return }
@@ -1740,6 +2241,15 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var canvasRendererFailure: CanvasRendererError?
     @Published private(set) var selectionState = SelectionState()
     @Published private(set) var selectionOverlayPlan: SelectionOverlayPlan?
+    @Published private(set) var pageFlowMarker: WorldRect?
+    private struct PageFlowGesture {
+        let nodeID: NodeID
+        let identity: DesignInspectorOperationIdentity
+        let frame: WorldRect
+        let resizesHeight: Bool
+        var target: Double
+    }
+    private var pageFlowGesture: PageFlowGesture?
     @Published private(set) var selectionMarqueePresentation: SelectionMarqueePresentation?
     @Published private(set) var selectionFailure: SelectionCommandError?
     @Published private(set) var lastSelectionAnnouncement = "No object selected"
@@ -1750,6 +2260,8 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var dragDropFailure: DragDropError?
     @Published private(set) var lastDragDropAnnouncement = "Drag and drop inactive"
     @Published private(set) var lastClipboardAnnouncement = "Clipboard editing inactive"
+    @Published var isClipboardComponentPreflightPresented = false
+    @Published private(set) var pendingClipboardComponentSummary: ClipboardComponentTransferSummary?
     @Published private(set) var textEditingSession = InlineTextEditingSession()
     @Published private(set) var textEditingFailure: TextEditError?
     @Published private(set) var lastTextEditingAnnouncement = "Text editing inactive"
@@ -1769,6 +2281,15 @@ final class WorkspaceShellState: ObservableObject {
     private var responsiveVisibilityAnnouncementContext: InspectorAnnouncementContext?
     @Published private(set) var designInspectorFailure: DesignInspectorError?
     @Published private(set) var lastDesignInspectorAnnouncement = "Design Inspector inactive"
+    @Published var forcedStyleState: CanonicalInteractionStyleState = .default {
+        didSet {
+            guard forcedStyleState != oldValue else { return }
+            lastDesignInspectorAnnouncement = forcedStyleState == .default
+                ? "Previewing the default authored state"
+                : "Previewing the \(forcedStyleState.rawValue) authored state"
+            scheduleScenePreparation()
+        }
+    }
     @Published var pageSearchText = ""
     @Published var layerSearchText = ""
     @Published var layerKindFilter: NodeKind?
@@ -1795,6 +2316,10 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var pageAnnouncement = ""
     @Published private(set) var componentAnnouncement = ""
     @Published var componentSearchText = ""
+    @Published var componentCollectionFilter: ComponentCollectionFilter = .all
+    @Published var componentCollectionSort: ComponentCollectionSort = .canonical
+    @Published private(set) var componentDependencySnapshot: ComponentDependencySnapshot?
+    @Published private(set) var isComponentDependencyIndexing = false
     @Published var highlightedComponentDefinitionID: PageID?
     @Published private(set) var editingComponentID: PageID?
     private var componentReturnContext: (PageID, NodeID?)?
@@ -1810,6 +2335,10 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var viewportFailure: CanvasViewportError?
     @Published private(set) var lastViewportAnnouncement = "Canvas viewport at 100 percent"
     @Published private(set) var canvasInteractionCount = 0
+    @Published private(set) var isolationRootID: NodeID?
+    @Published private(set) var lastIsolationAnnouncement = "Canvas isolation inactive"
+    @Published var isFocusModeEnabled = false
+    @Published private(set) var isPresentationMode = false
     @Published var isPreviewPresented = false {
         didSet {
             if isPreviewPresented {
@@ -1823,6 +2352,11 @@ final class WorkspaceShellState: ObservableObject {
     }
     @Published private(set) var previewState = LocalPreviewState()
     @Published private(set) var formValidationPreviewState = LocalFormValidationPreviewState()
+    @Published var isBuildDiagnosticsPresented = false
+    @Published var staticBuildProfile: LocalBuildProfile = .development
+    @Published private(set) var staticBuildPhase: StaticBuildWorkspacePhase = .idle
+    @Published private(set) var staticBuildCompilation: StaticBuildCompilation?
+    @Published private(set) var staticBuildStatus = "Run preflight to inspect local static output."
     let documentSession: DocumentSession
     let lifecycle: DocumentLifecycleController
     private var documentSessionObservation: AnyCancellable?
@@ -1830,8 +2364,10 @@ final class WorkspaceShellState: ObservableObject {
     private let viewportPreparer: CanvasViewportScenePreparer
     private let scenePreparationWorker = WorkspaceScenePreparationWorker()
     private let previewRuntimeCompiler = LocalPreviewRuntimeCompiler()
+    private let staticBuildWorker = StaticBuildWorker()
     private let renderWorker = CanvasRenderWorker()
     private let selectionRegistry = SelectionCommandRegistry()
+    private let isolationRegistry = IsolationCommandRegistry()
     private let selectionOverlayPlanner = SelectionOverlayPlanner()
     private let insertionRegistry = InsertionCommandRegistry()
     private let dragDropRegistry = DragDropCommandRegistry()
@@ -1844,6 +2380,7 @@ final class WorkspaceShellState: ObservableObject {
     private let fluidValueRegistry = FluidValueCommandRegistry()
     private let responsiveVisibilityRegistry = ResponsiveVisibilityCommandRegistry()
     private let designInspectorRegistry = DesignInspectorCommandRegistry()
+    private let advancedStyleRegistry = AdvancedStyleCommandRegistry()
     private let designBoxStyleRegistry = DesignBoxStyleCommandRegistry()
     private let typographyRegistry = TypographyCommandRegistry()
     private let semanticElementRegistry = SemanticElementCommandRegistry()
@@ -1857,6 +2394,7 @@ final class WorkspaceShellState: ObservableObject {
     private let renderSurfaceID = CanvasRenderSurfaceID()
     let canvasRenderDiagnostics = CanvasRenderDiagnostics()
     let selectionDiagnostics = SelectionDiagnostics()
+    let isolationDiagnostics = IsolationDiagnostics()
     let insertionDiagnostics = InsertionDiagnostics()
     let dragDropDiagnostics = DragDropDiagnostics()
     let clipboardDiagnostics = ClipboardDiagnostics()
@@ -1866,17 +2404,26 @@ final class WorkspaceShellState: ObservableObject {
     let containerLayoutDiagnostics = ContainerLayoutDiagnostics()
     let fluidValueDiagnostics = FluidValueDiagnostics()
     let responsiveVisibilityDiagnostics = ResponsiveVisibilityDiagnostics()
+    let advancedStyleDiagnostics = AdvancedStyleDiagnostics()
     let snapDiagnostics = SnapDiagnostics()
     let viewportDiagnostics: CanvasViewportDiagnostics
     private let announcementPoster: AccessibilityAnnouncementPoster
     private var viewportDocumentID: DocumentID
     private var preparationTask: Task<Void, Never>?
     private var previewPreparationTask: Task<Void, Never>?
+    private var staticBuildTask: Task<Void, Never>?
+    private let componentDependencyWorker = ComponentDependencyIndexWorker()
+    private var componentDependencyTask: Task<Void, Never>?
+    private var componentDependencyRequestedDocumentID: DocumentID?
+    private var componentDependencyRequestedRevision: UInt64?
+    private var componentDependencyRequestID: UInt64 = 0
+    private var staticBuildRequestID: UInt64 = 0
     private var previousRenderScene: CanvasRenderSceneSnapshot?
     private var selectionScene: SelectionSceneSnapshot?
     private var pendingSelectionLifecycleBoundary: SelectionLifecycleBoundary?
     private var pendingSelectionAfterInsertion: NodeID?
     private var pendingSelectionAfterClipboard: [NodeID]?
+    private var pendingSelectionAfterInspectorEdit: SelectionState?
     private var selectionMarqueeDraft: SelectionMarqueeDraft?
     private var retainedTextEditingFrame: WorldRect?
     // A viewport is editor convenience state. Fit a fresh/adopted document
@@ -1887,6 +2434,16 @@ final class WorkspaceShellState: ObservableObject {
     private var activePointerDropCallback: LocalLayerDragCallbackToken?
     private var pointerDragCallbackGeneration: UInt64 = 0
     private var thumbnailTasks: [AssetID: Task<Void, Never>] = [:]
+    private struct IsolationRestorationSnapshot {
+        let documentID: DocumentID
+        let pageID: PageID?
+        let selection: SelectionState
+        let viewport: CanvasViewportState
+        let navigatorTab: NavigatorTab
+        let inspectorTab: InspectorTab
+        let isolationRootID: NodeID?
+    }
+    private var isolationRestorationStack: [IsolationRestorationSnapshot] = []
 
     init(
         documentSession: DocumentSession = DocumentSession(),
@@ -1904,6 +2461,7 @@ final class WorkspaceShellState: ObservableObject {
         self.viewportDiagnostics = viewportDiagnostics
         self.announcementPoster = announcementPoster
         selectedPageID = documentSession.document.pages.first?.id
+        isolationRootID = CanonicalIsolationRoot.resolved(in: documentSession.document)?.nodeID
         let lifecycle = lifecycle ?? DocumentLifecycleController(session: documentSession)
         precondition(lifecycle.session === documentSession, "Workspace state and lifecycle must own the same session")
         self.lifecycle = lifecycle
@@ -1921,6 +2479,7 @@ final class WorkspaceShellState: ObservableObject {
                     return
                 }
                 self.formValidationPreviewState.invalidate(for: document)
+                self.synchronizeIsolationRoot(document)
                 self.synchronizeViewportDocumentBoundary(document)
             }
         }
@@ -1930,13 +2489,136 @@ final class WorkspaceShellState: ObservableObject {
     /// Preview snapshots are deliberately captured at an explicit user action.
     /// Subsequent editor changes do not mutate an open preview until Refresh.
     func openPreview() {
+        guard componentOutputIsAvailable else {
+            previewState.rejectComponentRecovery(); announcementPoster.post(previewState.status); return
+        }
         previewState.open(plan: canvasRenderPlan)
         isPreviewPresented = true
         announcementPoster.post(previewState.status)
         preparePreviewRuntime()
     }
 
+    var canIsolateSelection: Bool {
+        guard selectionState.count == 1, let id = selectionState.primaryID,
+              let page = activeAuthoringPage,
+              let node = page.nodes.first(where: { $0.id == id }) else { return false }
+        return CanonicalIsolationRoot.supportedKinds.contains(node.kind) && node.insertionGeometry != nil
+    }
+
+    var isolationBreadcrumb: [DocumentNode] {
+        guard let rootID = isolationRootID, let page = activeAuthoringPage else { return [] }
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        var result: [DocumentNode] = [], current: NodeID? = rootID, visited = Set<NodeID>()
+        while let id = current, visited.insert(id).inserted, let node = byID[id] {
+            result.append(node)
+            if case .node(let parentID) = node.parent { current = parentID } else { current = nil }
+        }
+        return result.reversed()
+    }
+
+    @discardableResult
+    func enterIsolation(provenance: IsolationCommandProvenance) -> Bool {
+        let started = DispatchTime.now().uptimeNanoseconds
+        guard canIsolateSelection, let rootID = selectionState.primaryID,
+              let pageID = effectiveSelectedPageID, let context = isolationContext(pageID: pageID) else {
+            lastIsolationAnnouncement = IsolationCommandError.noSelection.localizedDescription
+            return false
+        }
+        let snapshot = IsolationRestorationSnapshot(documentID: documentSession.document.id,
+            pageID: selectedPageID, selection: selectionState, viewport: viewportState,
+            navigatorTab: navigatorTab, inspectorTab: inspectorTab,
+            isolationRootID: isolationRootID)
+        do {
+            let command = try isolationRegistry.prepare(rootID: rootID, document: documentSession.document,
+                                                        expected: context, live: context)
+            _ = try documentSession.execute(command)
+            isolationRestorationStack.append(snapshot)
+            isolationRootID = rootID
+            selectionState.setContainer(rootID)
+            selectionState.setSelection([], primary: nil, anchor: nil, provenance: .lifecycleRepair)
+            lastIsolationAnnouncement = "Isolated \(activeAuthoringPage?.nodes.first(where: { $0.id == rootID })?.name ?? "container")"
+            announcementPoster.post(lastIsolationAnnouncement)
+            scheduleScenePreparation()
+            Task { await isolationDiagnostics.append(IsolationDiagnosticFactory.make(
+                operation: "enter-\(provenance.rawValue)", nodeID: rootID, started: started, result: "success")) }
+            return true
+        } catch let error as IsolationCommandError {
+            lastIsolationAnnouncement = error.localizedDescription
+            announcementPoster.post(lastIsolationAnnouncement)
+            Task { await isolationDiagnostics.append(IsolationDiagnosticFactory.make(
+                operation: "enter-\(provenance.rawValue)", nodeID: rootID, started: started,
+                result: "failure", error: error)) }
+            return false
+        } catch { return false }
+    }
+
+    func exitIsolation(all: Bool = false) {
+        guard isolationRootID != nil, let pageID = effectiveSelectedPageID,
+              let context = isolationContext(pageID: pageID) else { return }
+        do {
+            let snapshot = all ? isolationRestorationStack.first : isolationRestorationStack.last
+            let restoredRootID = all ? nil : snapshot?.isolationRootID
+            let command = try isolationRegistry.prepare(rootID: restoredRootID,
+                                                        document: documentSession.document,
+                                                        expected: context, live: context,
+                                                        requiresSelection: false)
+            _ = try documentSession.execute(command)
+            isolationRootID = restoredRootID
+            selectionState.setContainer(restoredRootID)
+            if let snapshot {
+                selectionState = snapshot.selection
+                viewportState = snapshot.viewport
+                navigatorTab = snapshot.navigatorTab
+                inspectorTab = snapshot.inspectorTab
+            }
+            if all { isolationRestorationStack.removeAll() }
+            else if !isolationRestorationStack.isEmpty { isolationRestorationStack.removeLast() }
+            lastIsolationAnnouncement = all ? "Exited all canvas isolation" : "Exited canvas isolation"
+            announcementPoster.post(lastIsolationAnnouncement)
+            scheduleScenePreparation()
+        } catch {
+            lastIsolationAnnouncement = error.localizedDescription
+            announcementPoster.post(lastIsolationAnnouncement)
+        }
+    }
+
+    func toggleFocusMode() {
+        isFocusModeEnabled.toggle()
+        lastIsolationAnnouncement = isFocusModeEnabled ? "Focus mode enabled" : "Focus mode disabled"
+        announcementPoster.post(lastIsolationAnnouncement)
+    }
+
+    func openPresentationMode() {
+        isPresentationMode = true
+        openPreview()
+    }
+
+    func closePresentationMode() {
+        isPresentationMode = false
+        closePreview()
+    }
+
+    private func isolationContext(pageID: PageID) -> IsolationCommandContext? {
+        guard let plan = canvasRenderPlan else { return nil }
+        return .init(documentID: documentSession.document.id, pageID: pageID,
+                     revision: documentSession.document.revision,
+                     sceneID: plan.identity.sceneID,
+                     rendererGeneration: plan.identity.sceneGeneration,
+                     selectionIDs: selectionState.orderedIDs,
+                     availableNodeIDs: Set(selectionScene?.targets.filter(\.isAvailable).map(\.id) ?? []))
+    }
+
+    private func synchronizeIsolationRoot(_ document: CanonicalDocument) {
+        let resolved = CanonicalIsolationRoot.resolved(in: document)?.nodeID
+        isolationRootID = resolved
+        selectionState.setContainer(resolved)
+        if resolved == nil, !isolationRestorationStack.isEmpty { isolationRestorationStack.removeAll() }
+    }
+
     func refreshPreview() {
+        guard componentOutputIsAvailable else {
+            previewState.rejectComponentRecovery(); announcementPoster.post(previewState.status); return
+        }
         if previewState.runtime?.documentID == documentSession.document.id,
            previewState.runtime?.revision == documentSession.document.revision {
             previewState.noteAlreadyCurrent(revision: documentSession.document.revision)
@@ -1948,12 +2630,152 @@ final class WorkspaceShellState: ObservableObject {
         preparePreviewRuntime()
     }
 
+    private var componentOutputIsAvailable: Bool {
+        do {
+            for instance in documentSession.document.websitePages.flatMap(\.nodes) where instance.kind == .component {
+                if try CanonicalComponentOverrides.requiresRecovery(instance: instance, document: documentSession.document) { return false }
+            }
+            return true
+        } catch { return false }
+    }
+
     func closePreview() {
         previewPreparationTask?.cancel()
         previewPreparationTask = nil
         isPreviewPresented = false
+        isPresentationMode = false
         previewState.close()
         announcementPoster.post(previewState.status)
+    }
+
+    func openBuildDiagnostics() {
+        isBuildDiagnosticsPresented = true
+        if staticBuildCompilation?.revision != documentSession.document.revision {
+            runStaticBuildPreflight()
+        }
+    }
+
+    func runStaticBuildPreflight() {
+        cancelStaticBuild(silent: true)
+        guard staticBuildRequestID < UInt64.max else {
+            staticBuildPhase = .failed("request-exhausted")
+            staticBuildStatus = "Build diagnostics are unavailable until this workspace is reopened."
+            return
+        }
+        staticBuildRequestID += 1
+        let request = staticBuildRequestID
+        let document = documentSession.document
+        let profile = LocalBuildProfileSelection(profile: staticBuildProfile)
+        var descriptors: [ResourceID: ProjectResourceDescriptor] = [:]
+        var data: [ResourceID: Data] = [:]
+        for resourceID in Set(document.imageAssets.map(\.resourceID)) {
+            descriptors[resourceID] = try? lifecycle.projectResourceDescriptor(for: resourceID)
+            data[resourceID] = try? lifecycle.projectResourceData(for: resourceID)
+        }
+        staticBuildPhase = .preflighting
+        staticBuildStatus = "Checking the immutable revision \(document.revision) snapshot…"
+        staticBuildTask = Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let result = await staticBuildWorker.compile(document: document, profile: profile,
+                                                         descriptors: descriptors, data: data)
+            guard !Task.isCancelled, staticBuildRequestID == request else { return }
+            guard documentSession.document.id == result.documentID,
+                  documentSession.document.revision == result.revision else {
+                staticBuildPhase = .stale
+                staticBuildStatus = "The project changed during preflight. Run it again for the current revision."
+                return
+            }
+            staticBuildCompilation = result
+            staticBuildPhase = result.canWrite ? .ready : .failed("preflight-blocked")
+            let blocking = result.findings.filter { $0.severity == .error }.count
+            staticBuildStatus = blocking == 0
+                ? "Preflight ready: \(result.report?.filePaths.count ?? 0) files, \(result.findings.count) finding(s)."
+                : "Preflight found \(blocking) blocking issue(s). Repair them before building."
+            announcementPoster.post(staticBuildStatus)
+            staticBuildTask = nil
+        }
+    }
+
+    func cancelStaticBuild(silent: Bool = false) {
+        guard staticBuildTask != nil else { return }
+        staticBuildTask?.cancel(); staticBuildTask = nil
+        if staticBuildRequestID < UInt64.max { staticBuildRequestID += 1 }
+        if !silent {
+            staticBuildPhase = .cancelled
+            staticBuildStatus = "Static build cancelled. The last valid output is unchanged."
+            announcementPoster.post(staticBuildStatus)
+        }
+    }
+
+    func writeStaticBuild(to destination: URL, replacingExisting: Bool) {
+        guard case .ready = staticBuildPhase,
+              let compilation = staticBuildCompilation,
+              let plan = compilation.plan,
+              compilation.documentID == documentSession.document.id,
+              compilation.revision == documentSession.document.revision else {
+            staticBuildPhase = .stale
+            staticBuildStatus = "Run preflight for the current project revision before building."
+            return
+        }
+        cancelStaticBuild(silent: true)
+        guard staticBuildRequestID < UInt64.max else { return }
+        staticBuildRequestID += 1
+        let request = staticBuildRequestID
+        staticBuildPhase = .writing
+        staticBuildStatus = "Writing staged local output…"
+        staticBuildTask = Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            do {
+                try await staticBuildWorker.write(plan: plan, destination: destination,
+                                                  expectedRevision: compilation.revision,
+                                                  replacingExisting: replacingExisting)
+                guard !Task.isCancelled, staticBuildRequestID == request,
+                      documentSession.document.id == compilation.documentID,
+                      documentSession.document.revision == compilation.revision else {
+                    staticBuildPhase = .stale
+                    staticBuildStatus = "The project changed before output adoption. The staged result was not adopted."
+                    return
+                }
+                staticBuildPhase = .succeeded(destination)
+                staticBuildStatus = "Local static output created successfully. Nothing was published."
+            } catch let error as LocalStaticBuildWriteError {
+                let message: String = switch error {
+                case .unsafeDestination: "Choose a safe local folder outside the project package."
+                case .destinationExists: "Choose a new folder or explicitly approve replacement."
+                case .stale: "The project changed. Run preflight again."
+                case .cancelled: "Static build cancelled. The last valid output is unchanged."
+                case .insufficientSpace: "The destination does not have enough available space."
+                case .permissionDenied: "SiteForge does not have permission to write that destination."
+                case .writeFailed: "Static output could not be written safely. Choose another destination."
+                }
+                staticBuildPhase = error == .cancelled ? .cancelled : .failed(String(describing: error))
+                staticBuildStatus = message
+            } catch {
+                staticBuildPhase = .failed("unexpected")
+                staticBuildStatus = "Static output failed safely. The project and last valid output are unchanged."
+            }
+            announcementPoster.post(staticBuildStatus)
+            staticBuildTask = nil
+        }
+    }
+
+    func copyStaticBuildSummary() {
+        guard let summary = staticBuildCompilation?.redactedSummary else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(summary, forType: .string)
+        staticBuildStatus = "Copied a redacted build summary."
+        announcementPoster.post(staticBuildStatus)
+    }
+
+    func revealStaticBuildFinding(_ finding: StaticBuildFinding) {
+        guard let nodeID = finding.affectedNodeID,
+              let page = documentSession.document.pages.first(where: { page in
+                  page.nodes.contains(where: { $0.id == nodeID })
+              }) else { return }
+        selectPage(page.id)
+        navigatorTab = .layers
+        selectLayer(nodeID)
+        staticBuildStatus = "Selected the affected object in Layers."
     }
 
     func followPreviewLink(_ link: CanvasPreviewLink) {
@@ -2055,6 +2877,11 @@ final class WorkspaceShellState: ObservableObject {
             documentSession.document.pages.flatMap(\.nodes).flatMap { node in
                 [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey]
                     .compactMap { node.insertionStringProperty($0).flatMap(AssetID.init(uuidString:)) }
+                    + node.properties.compactMap { property in
+                        guard CanonicalComponentMedia.overrideID(property.key.rawValue) != nil,
+                              case .string(let raw) = property.value else { return nil }
+                        return AssetID(uuidString: raw)
+                    }
             }
         )
         return documentSession.document.imageAssets.filter { asset in
@@ -2164,6 +2991,10 @@ final class WorkspaceShellState: ObservableObject {
         return documentSession.document.pages.flatMap(\.nodes).filter {
             $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
                 || $0.insertionStringProperty(CanonicalImageFill.assetKey) == reference
+                || $0.properties.contains(where: {
+                    CanonicalComponentMedia.overrideID($0.key.rawValue) != nil
+                        && $0.value == .string(reference)
+                })
         }.count
     }
 
@@ -2369,7 +3200,7 @@ final class WorkspaceShellState: ObservableObject {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Delete this image and its uses?"
-            alert.informativeText = "This asset has \(uses) Image or image-fill use\(uses == 1 ? "" : "s"). SiteForge can detach those uses and remove the asset in one undoable edit, or leave the project unchanged."
+            alert.informativeText = "This asset has \(uses) Image, image-fill, or component-property use\(uses == 1 ? "" : "s"). SiteForge can detach those uses and remove the asset in one undoable edit, or leave the project unchanged."
             alert.addButton(withTitle: "Cancel")
             alert.addButton(withTitle: "Detach Uses and Delete")
             guard alert.runModal() == .alertSecondButtonReturn else {
@@ -2401,7 +3232,14 @@ final class WorkspaceShellState: ObservableObject {
                     }
                 }
         }
-        let removals = nodeRemovals + fillRemovals
+        let mediaOverrideRemovals: [DocumentCommand] = documentSession.document.pages.flatMap { page in
+            page.nodes.flatMap { node in node.properties.compactMap { property in
+                guard CanonicalComponentMedia.overrideID(property.key.rawValue) != nil,
+                      property.value == .string(reference) else { return nil }
+                return .removeProperty(.init(pageID: page.id, nodeID: node.id, propertyID: property.id))
+            } }
+        }
+        let removals = nodeRemovals + fillRemovals + mediaOverrideRemovals
         let command: DocumentCommand = removals.isEmpty
             ? .removeImageAsset(.init(assetID: assetID))
             : .batch(removals + [.removeImageAsset(.init(assetID: assetID))])
@@ -2456,9 +3294,11 @@ final class WorkspaceShellState: ObservableObject {
     func commitFormInspectorEdit(_ edit: FormInspectorEdit, identity: FormInspectorOperationIdentity?, cancelled: Bool = false) -> Bool {
         do {
             guard let identity, formInspectorIdentity != nil else { throw FormInspectorError.stale }
+            let priorSelection = selectionState
             let prepared = try formInspectorRegistry.prepare(.init(identity: identity, edit: edit, cancelled: cancelled),
                 in: documentSession.document, context: transformValidationContext)
             _ = try documentSession.execute(prepared.command)
+            pendingSelectionAfterInspectorEdit = priorSelection
             lastFormInspectorAnnouncement = "Form field metadata committed for \(prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s"); skipped \(prepared.skippedNodeIDs.count) incompatible object\(prepared.skippedNodeIDs.count == 1 ? "" : "s")."
             announcementPoster.post(lastFormInspectorAnnouncement)
             return true
@@ -2638,7 +3478,110 @@ final class WorkspaceShellState: ObservableObject {
     }
     var componentDefinitions: [DocumentPage] { documentSession.document.componentDefinitions }
     var filteredComponentDefinitions: [DocumentPage] {
-        ComponentSearchPolicy.results(in: componentDefinitions, query: componentSearchText)
+        ComponentSearchPolicy.organizedResults(
+            in: componentDefinitions, snapshot: currentComponentDependencySnapshot,
+            query: componentSearchText, filter: componentCollectionFilter, sort: componentCollectionSort
+        )
+    }
+
+    var currentComponentDependencySnapshot: ComponentDependencySnapshot? {
+        guard let snapshot = componentDependencySnapshot,
+              snapshot.documentID == documentSession.document.id,
+              snapshot.revision == documentSession.document.revision else { return nil }
+        return snapshot
+    }
+
+    func componentDependencyEntry(_ id: PageID) -> ComponentDependencySnapshot.Entry? {
+        currentComponentDependencySnapshot?.entry(for: id)
+    }
+
+    func componentDefinitionName(_ id: PageID) -> String {
+        componentDefinitions.first(where: { $0.id == id })?.name ?? "Missing component"
+    }
+
+    func revealComponentUsage(_ usage: ComponentDependencySnapshot.Usage) {
+        guard let snapshot = currentComponentDependencySnapshot,
+              snapshot.entry(for: usage.definitionID)?.usages.contains(usage) == true,
+              let page = documentSession.document.websitePages.first(where: { $0.id == usage.pageID }),
+              let node = page.nodes.first(where: { $0.id == usage.nodeID }),
+              CanonicalComponentReference.definitionID(for: node) == usage.definitionID else {
+            componentAnnouncement = "That usage changed. Refresh Component Dependencies and try again."
+            announcementPoster.post(componentAnnouncement)
+            return
+        }
+        selectPage(page.id)
+        navigatorTab = .layers
+        if node.selectionBooleanProperty("hidden") {
+            componentAnnouncement = "Opened \(usage.locationLabel). The instance is hidden and remains unselected; show it in Layers to reveal it on canvas."
+        } else {
+            pendingSelectionAfterInsertion = node.id
+            scheduleScenePreparation()
+            componentAnnouncement = "Opened \(usage.locationLabel) and selected the linked instance."
+        }
+        announcementPoster.post(componentAnnouncement)
+    }
+
+    func removeUnusedComponent(_ id: PageID) {
+        guard componentDependencyEntry(id)?.canRemoveWithoutDetach == true else {
+            componentAnnouncement = "This component still has usages, dependents, or unresolved dependencies. Review Where Used before removing it."
+            announcementPoster.post(componentAnnouncement)
+            return
+        }
+        deleteComponent(id, detachUses: false)
+    }
+
+    func detachUsesAndDeleteComponent(_ id: PageID) {
+        guard componentDependencyEntry(id)?.canDetachUses == true else {
+            componentAnnouncement = "Detach is unavailable until every dependency is valid and no component definition depends on this component."
+            announcementPoster.post(componentAnnouncement)
+            return
+        }
+        deleteComponent(id, detachUses: true)
+    }
+
+    func refreshComponentDependencies() { scheduleComponentDependencyPreparation() }
+
+    private func scheduleComponentDependencyPreparation() {
+        let document = documentSession.document
+        if componentDependencySnapshot?.documentID == document.id,
+           componentDependencySnapshot?.revision == document.revision { return }
+        if componentDependencyTask != nil,
+           componentDependencyRequestedDocumentID == document.id,
+           componentDependencyRequestedRevision == document.revision { return }
+        componentDependencyTask?.cancel()
+        guard componentDependencyRequestID < UInt64.max else { return }
+        componentDependencyRequestID += 1
+        let requestID = componentDependencyRequestID
+        componentDependencyRequestedDocumentID = document.id
+        componentDependencyRequestedRevision = document.revision
+        isComponentDependencyIndexing = true
+        componentDependencyTask = Task(priority: .utility) { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let snapshot = try await componentDependencyWorker.build(document: document)
+                guard !Task.isCancelled, componentDependencyRequestID == requestID,
+                      documentSession.document.id == snapshot.documentID,
+                      documentSession.document.revision == snapshot.revision else { return }
+                componentDependencySnapshot = snapshot
+                isComponentDependencyIndexing = false
+            } catch is CancellationError {
+                if componentDependencyRequestID == requestID,
+                   documentSession.document.id == document.id,
+                   documentSession.document.revision == document.revision { isComponentDependencyIndexing = false }
+            } catch {
+                guard componentDependencyRequestID == requestID,
+                      documentSession.document.id == document.id,
+                      documentSession.document.revision == document.revision else { return }
+                componentDependencySnapshot = nil
+                isComponentDependencyIndexing = false
+                componentAnnouncement = error.localizedDescription
+            }
+            if componentDependencyRequestID == requestID {
+                componentDependencyTask = nil
+                componentDependencyRequestedDocumentID = nil
+                componentDependencyRequestedRevision = nil
+            }
+        }
     }
 
     func revealImageAsset(_ id: AssetID) -> Bool {
@@ -2704,8 +3647,147 @@ final class WorkspaceShellState: ObservableObject {
               !definition.rootNodeIDs.contains(node.id) else { return nil }
         return node
     }
+    var selectedDefinitionChoiceImage: DocumentNode? {
+        guard editingComponentID != nil, selectedCanonicalNodes.count == 1,
+              selectedCanonicalNodes[0].kind == .image else { return nil }
+        return selectedCanonicalNodes[0]
+    }
+    var selectedDefinitionMediaImage: DocumentNode? { selectedDefinitionChoiceImage }
+    var selectedDefinitionActionControl: DocumentNode? {
+        guard editingComponentID != nil, selectedCanonicalNodes.count == 1,
+              selectedCanonicalNodes[0].kind.isLinkControl else { return nil }
+        return selectedCanonicalNodes[0]
+    }
+    var selectedDefinitionSlotContainer: DocumentNode? {
+        guard let definitionID = editingComponentID, selectedCanonicalNodes.count == 1,
+              let node = selectedCanonicalNodes.first, CanonicalComponentSlot.supportedKinds.contains(node.kind),
+              let definition = componentDefinitions.first(where: { $0.id == definitionID }),
+              !definition.rootNodeIDs.contains(node.id) else { return nil }
+        return node
+    }
     var hasComponentTextInspectorContext: Bool {
         editingComponentID != nil || selectedCanonicalNodes.contains { $0.kind == .component }
+    }
+    var componentOrganizationDefinition: DocumentPage? {
+        let id = editingComponentID ?? selectedComponent.flatMap { CanonicalComponentReference.definitionID(for: $0) }
+        return componentDefinitions.first { $0.id == id }
+    }
+    var componentOrganizationEntries: [CanonicalComponentOrganization.Entry] {
+        componentOrganizationDefinition.map { CanonicalComponentOrganization.entries(in: $0) } ?? []
+    }
+    var componentAuthoredPropertyIdentities: Set<ComponentOverridePropertyIdentity> {
+        guard let instance = selectedComponent else { return [] }
+        var result = Set<ComponentOverridePropertyIdentity>()
+        result.formUnion(CanonicalComponentText.overrides(on: instance).keys.map { .text($0) })
+        result.formUnion(CanonicalComponentVisibility.overrides(on: instance).keys.map { .visibility($0) })
+        result.formUnion(CanonicalComponentChoice.overrides(on: instance).keys.map { .choice($0) })
+        result.formUnion(CanonicalComponentMedia.overrides(on: instance).keys.map { .media($0) })
+        result.formUnion(CanonicalComponentAction.overrides(on: instance).keys.map { .action($0) })
+        return result
+    }
+    var selectedPageStructureNode: DocumentNode? {
+        guard editingComponentID == nil, selectedCanonicalNodes.count == 1, let node = selectedCanonicalNodes.first,
+              node.kind == .section else { return nil }
+        return node
+    }
+    var hasMixedPageStructureSelection: Bool { selectedCanonicalNodes.count > 1 && selectedCanonicalNodes.contains(where: CanonicalPageFlow.isManaged) }
+    var hasManagedPageStructureSelection: Bool {
+        selectedCanonicalNodes.contains { node in
+            CanonicalPageFlow.isManaged(node) || activeAuthoringPage.map { CanonicalPageChrome.ownsFrame(of: node, in: $0) } == true
+        }
+    }
+    var selectedPageChromeOwner: DocumentNode? {
+        guard selectedCanonicalNodes.count == 1, let node = selectedCanonicalNodes.first, let page = activeAuthoringPage else { return nil }
+        return CanonicalPageChrome.owner(of: node, in: page)
+    }
+    func revealPageChromeOwner() {
+        guard let owner = selectedPageChromeOwner else { return }
+        selectLayer(owner.id); inspectorTab = .content
+    }
+    var hasPageNavigationSelection: Bool { selectedCanonicalNodes.contains(where: CanonicalPageFlow.isNavigationLink) }
+    func revealPageNavigationOwner() {
+        guard pageEditingIsAvailable, selectedCanonicalNodes.count == 1,
+              let child = selectedCanonicalNodes.first, CanonicalPageFlow.isNavigationLink(child),
+              let page = activeAuthoringPage,
+              let owner = CanonicalPageChrome.navigationOwner(of: child, in: page) else { return }
+        selectLayer(owner.id)
+        inspectorTab = .content
+    }
+    var pageStructureNavigation: PageNavigationSnapshot? {
+        guard let node = selectedPageStructureNode, let page = activeAuthoringPage else { return nil }
+        let surface = CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: node)
+            .flatMap { id in page.nodes.first { $0.id == id } } ?? node
+        return CanonicalPageFlow.navigation(owner: surface, page: page, document: documentSession.document,
+            breakpoint: viewportPreset.responsiveBreakpoint, width: viewportState.contentBounds.size.width)
+    }
+    @discardableResult
+    func commitPageStructure(_ edit: PageStructureEdit, identity: DesignInspectorOperationIdentity) -> Bool {
+        let started = DispatchTime.now().uptimeNanoseconds
+        var succeeded = false
+        defer {
+            documentSession.diagnostics.recordPageStructureOperation(pageID: identity.pageID, nodeIDs: selectionState.orderedIDs,
+                succeeded: succeeded, durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+        }
+        do {
+            let command = try PageStructureCommandRegistry().prepare(edit, identity: identity, document: documentSession.document,
+                context: transformValidationContext, viewportWidth: viewportState.contentBounds.size.width, breakpoint: viewportPreset.responsiveBreakpoint)
+            if case .batch(let commands) = command, commands.isEmpty {
+                succeeded = true; componentAnnouncement = "No page structure value changed."
+                announcementPoster.post(componentAnnouncement); return true
+            }
+            _ = try documentSession.execute(command)
+            succeeded = true
+            componentAnnouncement = "Page structure committed. Canonical identity and geometry intent are preserved."
+            announcementPoster.post(componentAnnouncement); scheduleScenePreparation(); return true
+        } catch {
+            componentAnnouncement = error.localizedDescription; announcementPoster.post(componentAnnouncement); return false
+        }
+    }
+    var componentOverrideConflicts: [ComponentOverrideConflictFinding] {
+        guard let instance = selectedComponent else { return [] }
+        return (try? CanonicalComponentOverrides.conflicts(instance: instance, document: documentSession.document)) ?? []
+    }
+    @discardableResult
+    func resetComponentOverrideConflicts(instanceID: NodeID, expectedPropertyIDs: [PropertyID],
+                                        identity: DesignInspectorOperationIdentity) -> Bool {
+        let revision = documentSession.document.revision
+        performComponentEdit(.resetOverrideConflicts(instanceID: instanceID, expectedPropertyIDs: expectedPropertyIDs,
+            confirmed: true), draftIdentity: identity)
+        guard documentSession.document.revision != revision else { return false }
+        componentAnnouncement = "Reset \(expectedPropertyIDs.count) retained override(s). Undo restores their exact authored values and identities."
+        announcementPoster.post(componentAnnouncement)
+        return true
+    }
+    func revealComponentRecoverySource(instanceID: NodeID, property: ComponentOverridePropertyIdentity?,
+                                       identity: DesignInspectorOperationIdentity) {
+        guard identity == componentTextDraftIdentity, selectionState.orderedIDs == [instanceID],
+              let instance = selectedComponent, instance.id == instanceID,
+              let definitionID = CanonicalComponentReference.definitionID(for: instance),
+              let definition = componentDefinitions.first(where: { $0.id == definitionID }) else {
+            componentAnnouncement = "The original definition is unavailable or the selection changed. Restore the original project data and retry."
+            announcementPoster.post(componentAnnouncement); return
+        }
+        let sourceID: NodeID
+        if let property {
+            guard let entry = CanonicalComponentOrganization.entries(in: definition).first(where: { $0.id == property }) else {
+                componentAnnouncement = "The original binding source is unavailable. No replacement was selected."
+                announcementPoster.post(componentAnnouncement); return
+            }
+            sourceID = entry.sourceNodeID
+        } else {
+            guard let root = definition.rootNodeIDs.first else { return }; sourceID = root
+        }
+        editComponentDefinition(definitionID)
+        pendingSelectionAfterInsertion = sourceID
+        navigatorTab = .layers; inspectorTab = .content
+        componentAnnouncement = "Inspecting original component definition. Use Undo or restore original binding data to recover its stable identity."
+        announcementPoster.post(componentAnnouncement)
+    }
+    @discardableResult
+    func commitComponentOrganization(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity) -> Bool {
+        let revision = documentSession.document.revision
+        performComponentEdit(edit, draftIdentity: identity)
+        return documentSession.document.revision != revision
     }
     var componentTextEditingAvailable: Bool {
         guard selectedCanonicalNodes.count == 1, let node = selectedCanonicalNodes.first else { return false }
@@ -2721,6 +3803,26 @@ final class WorkspaceShellState: ObservableObject {
         guard let node = selectedComponent, let id = CanonicalComponentReference.definitionID(for: node),
               let definition = componentDefinitions.first(where: { $0.id == id }) else { return [] }
         return CanonicalComponentVisibility.properties(in: definition)
+    }
+    var componentChoiceProperties: [ExposedComponentChoiceProperty] {
+        guard let node = selectedComponent, let id = CanonicalComponentReference.definitionID(for: node),
+              let definition = componentDefinitions.first(where: { $0.id == id }) else { return [] }
+        return CanonicalComponentChoice.properties(in: definition)
+    }
+    var componentMediaProperties: [ExposedComponentMediaProperty] {
+        guard let node = selectedComponent, let id = CanonicalComponentReference.definitionID(for: node),
+              let definition = componentDefinitions.first(where: { $0.id == id }) else { return [] }
+        return CanonicalComponentMedia.properties(in: definition)
+    }
+    var componentActionProperties: [ExposedComponentActionProperty] {
+        guard let node = selectedComponent, let id = CanonicalComponentReference.definitionID(for: node),
+              let definition = componentDefinitions.first(where: { $0.id == id }) else { return [] }
+        return CanonicalComponentAction.properties(in: definition)
+    }
+    var componentSlotProperties: [ExposedComponentSlotProperty] {
+        guard let node = selectedComponent, let id = CanonicalComponentReference.definitionID(for: node),
+              let definition = componentDefinitions.first(where: { $0.id == id }) else { return [] }
+        return CanonicalComponentSlot.properties(in: definition)
     }
     var componentVisibilityEditingAvailable: Bool {
         guard selectedCanonicalNodes.count == 1, let node = selectedCanonicalNodes.first else { return false }
@@ -2744,6 +3846,40 @@ final class WorkspaceShellState: ObservableObject {
     }
     func commitComponentVisibility(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity) {
         performComponentEdit(edit, draftIdentity: identity)
+    }
+    func commitComponentChoice(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity) {
+        performComponentEdit(edit, draftIdentity: identity)
+    }
+    func commitComponentMedia(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity) {
+        performComponentEdit(edit, draftIdentity: identity)
+    }
+    @discardableResult
+    func commitComponentAction(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity) -> Bool {
+        let revision = documentSession.document.revision
+        performComponentEdit(edit, draftIdentity: identity)
+        return documentSession.document.revision != revision
+    }
+    @discardableResult
+    func commitComponentSlot(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity) -> Bool {
+        let revision = documentSession.document.revision
+        performComponentEdit(edit, draftIdentity: identity)
+        return documentSession.document.revision != revision
+    }
+    func editComponentSlotFallback(_ propertyID: ComponentSlotPropertyID, instanceID: NodeID,
+                                   identity: DesignInspectorOperationIdentity) {
+        guard componentTextEditingAvailable, componentTextDraftIdentity == identity,
+              let instance = selectedComponent, instance.id == instanceID,
+              let definitionID = CanonicalComponentReference.definitionID(for: instance),
+              let slot = componentSlotProperties.first(where: { $0.id == propertyID }) else {
+            componentAnnouncement = "The slot context changed. Select the current instance and try again."
+            announcementPoster.post(componentAnnouncement)
+            return
+        }
+        editComponentDefinition(definitionID)
+        pendingSelectionAfterInsertion = slot.sourceNodeID
+        inspectorTab = .content
+        componentAnnouncement = "Editing definition fallback; changes apply to every inheriting instance."
+        announcementPoster.post(componentAnnouncement)
     }
     var canCreateComponent: Bool {
         editingComponentID == nil && pageEditingIsAvailable && selectedCanonicalNodes.count == 1
@@ -3058,6 +4194,15 @@ final class WorkspaceShellState: ObservableObject {
             }
     }
 
+    var isCurrentPageGenuinelyEmpty: Bool {
+        guard let page = documentSession.document.pages.first(where: { $0.id == effectiveSelectedPageID }) else { return false }
+        // Hidden, clipped and temporarily unavailable elements are still
+        // authored content; renderer virtualization must not redefine blank.
+        guard page.rootNodeIDs.count == 1, page.nodes.count == 1, let root = page.nodes.first else { return false }
+        return root.id == page.rootNodeIDs[0] && root.kind == .frame
+            && root.parent == .page(page.id) && root.childIDs.isEmpty && root.properties.isEmpty
+    }
+
     var filteredLayerTargets: [SelectionTargetSnapshot] {
         LayerSearchPolicy.results(in: layerTargets, query: layerSearchText, kind: layerKindFilter)
     }
@@ -3163,6 +4308,22 @@ final class WorkspaceShellState: ObservableObject {
         )
     }
 
+    /// Computed flow/container geometry is the adopted immutable render frame,
+    /// not the stored insertion default. Never label a stale frame as resolved.
+    var resolvedSelectedGeometrySummary: String? {
+        guard let primaryID = selectionState.primaryID, let plan = canvasRenderPlan,
+              plan.identity.documentID == documentSession.document.id,
+              plan.identity.revision == documentSession.document.revision,
+              plan.identity.sceneID == viewportState.sceneID,
+              plan.identity.viewportGeneration == viewportState.generation,
+              documentSession.document.pages.first(where: { $0.id == effectiveSelectedPageID })?
+                .nodes.contains(where: { $0.id == primaryID }) == true,
+              let object = plan.authoredObjects.first(where: { $0.id == primaryID }) else { return nil }
+        return String(format: "X %.0f, Y %.0f, Width %.0f, Height %.0f",
+                      object.frame.origin.x, object.frame.origin.y,
+                      object.frame.size.width, object.frame.size.height)
+    }
+
     /// Fixed Inspector fields read the same authored values consumed by the
     /// transform, renderer, selection, and package pipelines. Draft strings
     /// remain in the view and never enter this state or the canonical model.
@@ -3173,6 +4334,52 @@ final class WorkspaceShellState: ObservableObject {
             context: transformValidationContext,
             breakpoint: viewportPreset.responsiveBreakpoint
         )
+    }
+
+    var discoveredInspectorSections: [InspectorTab] {
+        InspectorSectionDiscovery.sections(matching: inspectorSectionQuery, pinned: pinnedInspectorSections)
+    }
+    func toggleInspectorPin() {
+        if pinnedInspectorSections.contains(inspectorTab) { pinnedInspectorSections.remove(inspectorTab) }
+        else { pinnedInspectorSections.insert(inspectorTab) }
+        inspectorWorkflowAnnouncement = pinnedInspectorSections.contains(inspectorTab)
+            ? "\(inspectorTab.title) pinned in this window." : "\(inspectorTab.title) unpinned."
+        announcementPoster.post(inspectorWorkflowAnnouncement)
+    }
+    var canCopyInspectorGeometry: Bool {
+        if case .single = geometryInspectorValue(for: inspectorTransferField) { return true }
+        return false
+    }
+    func copyInspectorGeometry() {
+        guard case .single(let value, _) = geometryInspectorValue(for: inspectorTransferField),
+              let data = try? InspectorGeometryTransfer(field: inspectorTransferField, value: value).encoded() else {
+            inspectorWorkflowAnnouncement = "Copy requires one consistent applicable value; mixed values are not borrowed from the primary object."
+            announcementPoster.post(inspectorWorkflowAnnouncement); return
+        }
+        NSPasteboard.general.clearContents()
+        let written = NSPasteboard.general.setData(data, forType: .siteForgeInspectorGeometry)
+        inspectorWorkflowAnnouncement = written
+            ? "Copied resolved \(inspectorTransferField.title) in points. Paste authors this value at the destination breakpoint."
+            : "Property clipboard unavailable. Copy again when clipboard access is available."
+        announcementPoster.post(inspectorWorkflowAnnouncement)
+    }
+    func pasteInspectorGeometry() {
+        guard pageEditingIsAvailable, canvasRenderPlan != nil, effectiveSelectedPageID != nil else {
+            inspectorWorkflowAnnouncement = "Layout paste unavailable until the active document and canvas are ready. No value changed."
+            announcementPoster.post(inspectorWorkflowAnnouncement); return
+        }
+        guard let data = NSPasteboard.general.data(forType: .siteForgeInspectorGeometry),
+              let transfer = try? InspectorGeometryTransfer.decode(data) else {
+            inspectorWorkflowAnnouncement = "No valid SiteForge geometry value. Copy X, Y, Width or Height first; other clipboard formats are not executed."
+            announcementPoster.post(inspectorWorkflowAnnouncement); return
+        }
+        // The same typed registry owns native fields and paste. It captures the
+        // current scene/selection/revision synchronously, before canonical edits.
+        if commitGeometryInspectorValue(transfer.value, field: transfer.field, provenance: .keyboard) {
+            inspectorTransferField = transfer.field
+            inspectorWorkflowAnnouncement = "Pasted \(transfer.field.title) at \(viewportPreset.responsiveBreakpoint.title). " + lastGeometryInspectorAnnouncement
+        } else { inspectorWorkflowAnnouncement = lastGeometryInspectorAnnouncement }
+        announcementPoster.post(inspectorWorkflowAnnouncement)
     }
 
     func sizingConstraintValue(for field: SizingConstraintField) -> SizingConstraintPresentation {
@@ -3505,10 +4712,12 @@ final class WorkspaceShellState: ObservableObject {
             removesOverride: value == nil && viewportPreset.responsiveBreakpoint != .desktop
         )
         do {
+            let priorSelection = selectionState
             let prepared = try containerLayoutRegistry.prepare(
                 command, in: documentSession.document, context: transformValidationContext
             )
             _ = try documentSession.execute(prepared.documentCommand)
+            pendingSelectionAfterInspectorEdit = priorSelection
             containerLayoutFailure = nil
             let reset = value == nil
                 ? (viewportPreset.responsiveBreakpoint == .desktop ? " reset to default" : " override removed")
@@ -3518,8 +4727,8 @@ final class WorkspaceShellState: ObservableObject {
                 : "; \(prepared.skippedNodeIDs.count) incompatible selection\(prepared.skippedNodeIDs.count == 1 ? "" : "s") unchanged"
             lastContainerLayoutAnnouncement = "\(field.title)\(reset) for \(prepared.applicableNodeIDs.count) container\(prepared.applicableNodeIDs.count == 1 ? "" : "s")\(skipped)"
             containerLayoutAnnouncementContext = .init(
-                breakpoint: viewportPreset.responsiveBreakpoint,
-                orderedNodeIDs: selectionState.orderedIDs
+                breakpoint: command.breakpoint,
+                orderedNodeIDs: command.orderedNodeIDs
             )
             announcementPoster.post(lastContainerLayoutAnnouncement)
             recordContainerLayoutDiagnostic(command, started: started, result: .success, failure: nil)
@@ -3528,8 +4737,8 @@ final class WorkspaceShellState: ObservableObject {
             containerLayoutFailure = error
             lastContainerLayoutAnnouncement = error.localizedDescription
             containerLayoutAnnouncementContext = .init(
-                breakpoint: viewportPreset.responsiveBreakpoint,
-                orderedNodeIDs: selectionState.orderedIDs
+                breakpoint: command.breakpoint,
+                orderedNodeIDs: command.orderedNodeIDs
             )
             announcementPoster.post(lastContainerLayoutAnnouncement)
             let result: ContainerLayoutDiagnosticResult = error == .cancelled ? .cancelled
@@ -3540,8 +4749,8 @@ final class WorkspaceShellState: ObservableObject {
             containerLayoutFailure = .staleRevision
             lastContainerLayoutAnnouncement = ContainerLayoutError.staleRevision.localizedDescription
             containerLayoutAnnouncementContext = .init(
-                breakpoint: viewportPreset.responsiveBreakpoint,
-                orderedNodeIDs: selectionState.orderedIDs
+                breakpoint: command.breakpoint,
+                orderedNodeIDs: command.orderedNodeIDs
             )
             announcementPoster.post(lastContainerLayoutAnnouncement)
             recordContainerLayoutDiagnostic(command, started: started, result: .stale, failure: .staleRevision)
@@ -3671,7 +4880,8 @@ final class WorkspaceShellState: ObservableObject {
         Task { await responsiveVisibilityDiagnostics.append(record) }
     }
 
-    private var selectedCanonicalNodes: [DocumentNode] {
+    // Read-only projection shared with native Inspector groups, never a write path.
+    var selectedCanonicalNodes: [DocumentNode] {
         guard let pageID = effectiveSelectedPageID,
               let page = documentSession.document.pages.first(where: { $0.id == pageID }) else { return [] }
         return selectionState.orderedIDs.compactMap { id in page.nodes.first(where: { $0.id == id }) }
@@ -3859,6 +5069,13 @@ final class WorkspaceShellState: ObservableObject {
                 : "Typography \(operation) committed for \(applied) object\(applied == 1 ? "" : "s"); skipped \(skipped) incompatible object\(skipped == 1 ? "" : "s")"
             announcementPoster.post(lastDesignInspectorAnnouncement)
             return true
+        } catch TypographyCommandError.noChanges {
+            // Native focus loss may reconcile an already committed draft.
+            // It is a successful no-op, not a red validation failure or a
+            // second history entry.
+            lastDesignInspectorAnnouncement = "Typography unchanged"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
         } catch let error as TypographyCommandError {
             lastDesignInspectorAnnouncement = error.localizedDescription
             announcementPoster.post(lastDesignInspectorAnnouncement)
@@ -3907,6 +5124,105 @@ final class WorkspaceShellState: ObservableObject {
             announcementPoster.post(lastDesignInspectorAnnouncement)
             return false
         }
+    }
+
+    var reusableStyleDefinitions: [CanonicalReusableStyleDefinition] {
+        (try? CanonicalReusableStyleIndex(document: documentSession.document).orderedDefinitions) ?? []
+    }
+
+    var selectedPositioning: CanonicalPositioning? {
+        let values = selectedCanonicalNodes.compactMap(CanonicalPositioning.resolve)
+        guard values.count == selectedCanonicalNodes.count, let first = values.first,
+              values.dropFirst().allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+
+    var selectedPositioningContainingBlock: String {
+        guard let node = selectedCanonicalNodes.first else { return "No selection" }
+        switch node.parent {
+        case .page: return "Page artboard"
+        case .node(let id): return activeAuthoringPage?.nodes.first(where: { $0.id == id })?.name ?? "Unavailable container"
+        }
+    }
+
+    var selectedReusableStyleIDs: [ReusableStyleID]? {
+        let values = selectedCanonicalNodes.compactMap { try? CanonicalReusableStyleIndex.strictlyDecodedAppliedIDs($0) }
+        guard values.count == selectedCanonicalNodes.count, let first = values.first,
+              values.dropFirst().allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+
+    func selectedStateVariant(
+        _ state: CanonicalInteractionStyleState
+    ) -> (id: UUID, fill: CanonicalSolidColor?, opacity: Double?)? {
+        guard state != .default else { return nil }
+        let prefix = CanonicalReusableStyleIndex.stateNamespace + state.rawValue + "."
+        let values = selectedCanonicalNodes.compactMap { node -> (UUID, CanonicalSolidColor?, Double?)? in
+            guard let raw = node.insertionStringProperty(prefix + "id"), let id = UUID(uuidString: raw) else { return nil }
+            return (id, node.insertionStringProperty(prefix + "fill").flatMap { CanonicalSolidColor.parse(hexadecimal: $0) },
+                    node.insertionNumberProperty(prefix + "opacity"))
+        }
+        guard values.count == selectedCanonicalNodes.count, let first = values.first,
+              values.dropFirst().allSatisfy({ $0.0 == first.0 && $0.1 == first.1 && $0.2 == first.2 }) else { return nil }
+        return (id: first.0, fill: first.1, opacity: first.2)
+    }
+
+    @discardableResult
+    func commitAdvancedStyle(
+        _ edit: AdvancedStyleEdit,
+        operation: String,
+        provenance: DesignInspectorProvenance = .keyboard,
+        cancelled: Bool = false
+    ) -> Bool {
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan,
+              plan.identity.documentID == documentSession.document.id,
+              plan.identity.revision == documentSession.document.revision else {
+            lastDesignInspectorAnnouncement = AdvancedStyleCommandError.stale.localizedDescription
+            return false
+        }
+        let command = AdvancedStyleCommand(
+            identity: .init(documentID: documentSession.document.id, pageID: pageID,
+                revision: documentSession.document.revision, sceneID: plan.identity.sceneID,
+                rendererGeneration: plan.identity.sceneGeneration),
+            orderedNodeIDs: selectionState.orderedIDs, edit: edit,
+            provenance: provenance, cancelled: cancelled
+        )
+        do {
+            let prepared = try advancedStyleRegistry.prepare(
+                command, in: documentSession.document, context: transformValidationContext)
+            _ = try documentSession.execute(prepared.documentCommand)
+            let record = AdvancedStyleDiagnosticFactory.make(
+                command: command, resultRevision: documentSession.document.revision,
+                result: .success, failure: nil)
+            Task { await advancedStyleDiagnostics.append(record) }
+            let skipped = prepared.skippedNodeIDs.count
+            lastDesignInspectorAnnouncement = skipped == 0
+                ? "\(operation) committed for \(prepared.applicableNodeIDs.count) object\(prepared.applicableNodeIDs.count == 1 ? "" : "s")"
+                : "\(operation) committed; \(skipped) incompatible object\(skipped == 1 ? " was" : "s were") unchanged"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
+        } catch let error as AdvancedStyleCommandError {
+            let result: AdvancedStyleDiagnosticResult = switch error {
+            case .cancelled: .cancelled
+            case .stale: .stale
+            default: .failure
+            }
+            let record = AdvancedStyleDiagnosticFactory.make(
+                command: command, resultRevision: nil, result: result, failure: error)
+            Task { await advancedStyleDiagnostics.append(record) }
+            lastDesignInspectorAnnouncement = error.localizedDescription
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        } catch {
+            lastDesignInspectorAnnouncement = "\(operation) could not commit; positioning and styles are unchanged"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return false
+        }
+    }
+
+    func cancelAdvancedStyleDraft() {
+        lastDesignInspectorAnnouncement = "Style draft cancelled; committed positioning and styles are unchanged"
+        announcementPoster.post(lastDesignInspectorAnnouncement)
     }
 
     /// A scene-facing projection of canonical v1 layers across the complete
@@ -4970,7 +6286,12 @@ final class WorkspaceShellState: ObservableObject {
             renderPlan: plan,
             preview: preview,
             handleWorldSize: 8 / viewportState.zoom.value
-        )
+        ).filter { overlay in
+            guard overlay.kind.hasPrefix("transform-handle-"), let node = selectedCanonicalNodes.first(where: { $0.id == overlay.objectID }) else { return true }
+            if let page = activeAuthoringPage, CanonicalPageChrome.ownsFrame(of: node, in: page) { return false }
+            guard CanonicalPageFlow.isManaged(node) else { return true }
+            return CanonicalPageFlow.role(node) != nil && overlay.kind == "transform-handle-bottom"
+        }
     }
 
     func transformAvailability(_ operation: TransformOperation) -> TransformAvailability {
@@ -5009,6 +6330,17 @@ final class WorkspaceShellState: ObservableObject {
             return false
         }
         let radius = TransformPolicy.handleHitRadius / viewportState.zoom.value
+        if let node = selectedPageStructureNode, let role = CanonicalPageFlow.role(node), node.id == primaryID {
+            guard let identity = componentTextDraftIdentity else { return false }
+            let resizing = TransformOverlayPlanner.hitHandle(at: point, frame: frame, worldRadius: radius) == .bottom
+            guard resizing || role == .body else {
+                lastTransformAnnouncement = "Header/Footer are page anchors. Edit Height; they cannot be freely moved."; return false
+            }
+            pageFlowGesture = .init(nodeID: node.id, identity: identity, frame: frame, resizesHeight: resizing,
+                target: resizing ? frame.size.height : frame.minY + frame.size.height / 2)
+            return true
+        }
+        if selectedCanonicalNodes.contains(where: CanonicalPageFlow.isNavigationLink) { return false }
         let operation: TransformOperation
         if let handle = TransformOverlayPlanner.hitHandle(
             at: point,
@@ -5037,6 +6369,23 @@ final class WorkspaceShellState: ObservableObject {
         constrainAxis: Bool,
         suppressSnapping: Bool = false
     ) {
+        if var gesture = pageFlowGesture, let page = activeAuthoringPage,
+           let node = page.nodes.first(where: { $0.id == gesture.nodeID }) {
+            guard delta.dy.isFinite else { return }
+            if gesture.resizesHeight {
+                gesture.target = max(1, min(LayoutPolicy.maximumDimension, gesture.frame.size.height + delta.dy))
+                pageFlowMarker = .init(origin: gesture.frame.origin, size: .init(width: gesture.frame.size.width, height: gesture.target))
+            } else if case .node(let parentID) = node.parent, let parent = page.nodes.first(where: { $0.id == parentID }) {
+                gesture.target = gesture.frame.minY + gesture.frame.size.height / 2 + delta.dy
+                let index = CanonicalPageFlow.insertionIndex(role: .body, parent: parent, page: page, pointerY: gesture.target,
+                    breakpoint: viewportPreset.responsiveBreakpoint, width: viewportState.contentBounds.size.width, excluding: node.id)
+                let boundary = CanonicalPageFlow.boundaryFrame(parent: parent, page: page, index: index,
+                    breakpoint: viewportPreset.responsiveBreakpoint, width: viewportState.contentBounds.size.width, excluding: node.id)
+                pageFlowMarker = .init(origin: boundary.origin,
+                    size: .init(width: boundary.size.width, height: 3 / viewportState.zoom.value))
+            }
+            pageFlowGesture = gesture; return
+        }
         let operation: TransformOperation
         let constraint: TransformAxisConstraint = constrainAxis
             ? (abs(delta.dx) >= abs(delta.dy) ? .horizontal : .vertical)
@@ -5062,6 +6411,13 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func commitPointerTransform() {
+        if let gesture = pageFlowGesture {
+            pageFlowGesture = nil; pageFlowMarker = nil
+            _ = commitPageStructure(gesture.resizesHeight
+                ? .height(gesture.nodeID, gesture.target, viewportPreset.responsiveBreakpoint)
+                : .reorder(gesture.nodeID, pointerY: gesture.target), identity: gesture.identity)
+            return
+        }
         commitTransform(provenance: .pointer)
     }
 
@@ -5071,6 +6427,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func cancelTransform() {
+        if pageFlowGesture != nil { pageFlowGesture = nil; pageFlowMarker = nil; lastTransformAnnouncement = "Page-flow edit cancelled; document unchanged." }
         let active: Bool
         switch transformSession.phase {
         case .drafting, .previewing, .committing, .failed: active = true
@@ -5397,10 +6754,29 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     var insertionPreviewOverlay: CanvasEditorOverlay? {
+        if let gesture = pageFlowGesture, let frame = pageFlowMarker {
+            return .init(id: .init(gesture.nodeID.rawValue), objectID: gesture.nodeID, frame: frame,
+                         kind: gesture.resizesHeight ? "flow-height-preview" : "flow-insertion-boundary")
+        }
         let preview: InsertionPreview
         switch insertionSession.phase {
         case .previewing(let value), .committing(let value): preview = value
         default: return nil
+        }
+        if preview.kind == .section, let page = activeAuthoringPage, page.role != .componentDefinition,
+           let requestedID = insertionParentID, let requested = page.nodes.first(where: { $0.id == requestedID }) {
+            let redirect = CanonicalPageFlow.role(requested).map { $0 != .body } ?? false
+            let parentID = redirect ? page.rootNodeIDs.first : requestedID
+            if let parent = page.nodes.first(where: { $0.id == parentID }) {
+                let index = CanonicalPageFlow.insertionIndex(role: .body, parent: parent, page: page,
+                    pointerY: preview.geometry.origin.y, breakpoint: viewportPreset.responsiveBreakpoint,
+                    width: viewportState.contentBounds.size.width)
+                let boundary = CanonicalPageFlow.boundaryFrame(parent: parent, page: page, index: index,
+                    breakpoint: viewportPreset.responsiveBreakpoint, width: viewportState.contentBounds.size.width)
+                return .init(id: .init(preview.nodeID.rawValue), objectID: preview.nodeID,
+                    frame: .init(origin: boundary.origin, size: .init(width: boundary.size.width, height: 3 / viewportState.zoom.value)),
+                    kind: "flow-insertion-boundary")
+            }
         }
         return CanvasEditorOverlay(
             id: CanvasOverlayID(preview.nodeID.rawValue),
@@ -5425,9 +6801,10 @@ final class WorkspaceShellState: ObservableObject {
                                template: AuthoringElementTemplate? = nil) -> InsertionAvailability {
         guard let command = makeInsertionCommand(
             kind,
-            at: defaultInsertionPoint,
+            at: defaultInsertionPoint(for: kind),
             provenance: .menu,
-            nodeID: NodeID()
+            nodeID: NodeID(),
+            useCurrentIdentity: true
         ) else { return .disabled("The active page has no valid frame destination.") }
         return insertionRegistry.availability(
             for: command,
@@ -5454,13 +6831,11 @@ final class WorkspaceShellState: ObservableObject {
                 y: visible.origin.y + max(0, (visible.size.height - template.size.height) / 2)
             )
         } else {
-            insertionPoint = defaultInsertionPoint
+            insertionPoint = defaultInsertionPoint(for: kind)
         }
         let tool = CanvasTool(rawValue: kind.rawValue) ?? .select
-        if selectedTool != tool {
-            selectedTool = tool
-            armInsertion(kind)
-        }
+        selectedTool = tool
+        armInsertion(kind)
         // Named header/menu/accessibility actions are one-shot commands. Do
         // not leave an armed tool behind to create a ghost preview on a later
         // pointer move; explicit canvas tools retain repeat insertion below.
@@ -5639,6 +7014,17 @@ final class WorkspaceShellState: ObservableObject {
                 envelope: envelope, identity: identity, document: documentSession.document,
                 context: clipboardValidationContext, placement: placement
             )
+            if let summary = prepared.componentSummary, !summary.entries.isEmpty {
+                pendingClipboardTransfer = prepared
+                pendingClipboardEnvelopeNodeCount = envelope.nodes.count
+                pendingClipboardOperation = placement == .inPlace ? "paste-in-place" : "paste"
+                pendingClipboardStarted = started
+                pendingClipboardComponentSummary = summary
+                isClipboardComponentPreflightPresented = true
+                lastClipboardAnnouncement = summary.accessibilitySummary + " Review before importing."
+                announcementPoster.post(lastClipboardAnnouncement)
+                return true
+            }
             try executeClipboardTransfer(prepared)
             pendingSelectionAfterClipboard = prepared.insertedRootIDs
             refreshSelectionScene(boundary: .rendererGeneration)
@@ -5704,6 +7090,52 @@ final class WorkspaceShellState: ObservableObject {
         )
     }
 
+    private var pendingClipboardTransfer: PreparedClipboardTransfer?
+    private var pendingClipboardEnvelopeNodeCount = 0
+    private var pendingClipboardOperation = "paste"
+    private var pendingClipboardStarted: UInt64 = 0
+
+    func confirmCrossProjectComponentPaste() {
+        guard let prepared = pendingClipboardTransfer else {
+            cancelCrossProjectComponentPaste(); return
+        }
+        do {
+            try executeClipboardTransfer(prepared)
+            pendingSelectionAfterClipboard = prepared.insertedRootIDs
+            refreshSelectionScene(boundary: .rendererGeneration)
+            lastClipboardAnnouncement = "Imported component dependencies and pasted \(prepared.insertedRootIDs.count) object\(prepared.insertedRootIDs.count == 1 ? "" : "s")"
+            announcementPoster.post(lastClipboardAnnouncement)
+            recordClipboard(operation: pendingClipboardOperation, ids: prepared.insertedRootIDs,
+                            count: pendingClipboardEnvelopeNodeCount, failure: nil, started: pendingClipboardStarted)
+            clearPendingComponentPaste()
+        } catch let error as ClipboardTransferError {
+            rejectClipboard(error, operation: pendingClipboardOperation, count: pendingClipboardEnvelopeNodeCount,
+                            started: pendingClipboardStarted)
+            clearPendingComponentPaste()
+        } catch {
+            rejectClipboard(.invalidDependency, operation: pendingClipboardOperation,
+                            count: pendingClipboardEnvelopeNodeCount, started: pendingClipboardStarted)
+            clearPendingComponentPaste()
+        }
+    }
+
+    func cancelCrossProjectComponentPaste() {
+        if pendingClipboardTransfer != nil {
+            lastClipboardAnnouncement = ClipboardTransferError.cancelled.localizedDescription
+            announcementPoster.post(lastClipboardAnnouncement)
+        }
+        clearPendingComponentPaste()
+    }
+
+    private func clearPendingComponentPaste() {
+        pendingClipboardTransfer = nil
+        pendingClipboardComponentSummary = nil
+        pendingClipboardEnvelopeNodeCount = 0
+        pendingClipboardOperation = "paste"
+        pendingClipboardStarted = 0
+        isClipboardComponentPreflightPresented = false
+    }
+
     private var clipboardValidationContext: ClipboardValidationContext {
         let reason: String?
         if isPreviewPresented { reason = "Close Preview before editing clipboard content."
@@ -5751,6 +7183,10 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private func executeClipboardTransfer(_ prepared: PreparedClipboardTransfer) throws {
+        guard prepared.documentID == documentSession.document.id,
+              prepared.revision == documentSession.document.revision else {
+            throw ClipboardTransferError.stale
+        }
         func install(_ index: Int) throws {
             guard index < prepared.resources.count else {
                 _ = try documentSession.execute(prepared.command)
@@ -6132,13 +7568,12 @@ final class WorkspaceShellState: ObservableObject {
         Task { await dragDropDiagnostics.append(record) }
     }
 
-    private var defaultInsertionPoint: WorldPoint {
+    private func defaultInsertionPoint(for kind: InsertionKind) -> WorldPoint {
         let visible = viewportState.visibleWorldRect
         // Default insertion is a canonical command input, so its placement
         // must use the same v1 dimensions as the eventual node. In
         // particular, a Section is 960×320 rather than the legacy Frame
         // fallback; otherwise the apparent "centre" is its top-left corner.
-        let kind = InsertionKind(rawValue: selectedTool.rawValue) ?? .frame
         let size = InsertionGeometry.defaultValue(for: kind, at: .init(x: 0, y: 0)).size
         return WorldPoint(
             x: visible.origin.x + max(0, (visible.size.width - size.width) / 2),
@@ -6198,7 +7633,9 @@ final class WorkspaceShellState: ObservableObject {
             operationGeneration: insertionSession.generation,
             availableNodeIDs: available,
             isLifecycleAvailable: lifecycleAvailable,
-            lifecycleDisabledReason: reason
+            lifecycleDisabledReason: reason,
+            breakpoint: viewportPreset.responsiveBreakpoint,
+            viewportWidth: viewportState.contentBounds.size.width
         )
     }
 
@@ -6228,7 +7665,8 @@ final class WorkspaceShellState: ObservableObject {
         _ kind: InsertionKind,
         at point: WorldPoint,
         provenance: InsertionProvenance,
-        nodeID: NodeID
+        nodeID: NodeID,
+        useCurrentIdentity: Bool = false
     ) -> AuthoringInsertionCommand? {
         guard let pageID = effectiveSelectedPageID,
               let parentID = insertionParentID,
@@ -6238,7 +7676,7 @@ final class WorkspaceShellState: ObservableObject {
         // the same current document/page/revision boundary as the eventual
         // session, without mutating editor state or falsely disabling a real
         // visible insertion action on an empty canvas.
-        let identity = insertionSession.identity ?? InsertionOperationIdentity(
+        let identity = (useCurrentIdentity ? nil : insertionSession.identity) ?? InsertionOperationIdentity(
             documentID: documentSession.document.id,
             pageID: pageID,
             revision: documentSession.document.revision,
@@ -6415,25 +7853,83 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func undo() {
+        let priorSelection = selectionForHistoryOperation
         cancelDragDrop()
         cancelTextEditing()
         cancelInsertion(resetTool: true)
         cancelTransform()
         cancelGuideEditing()
         try? documentSession.undo()
+        restoreSurvivingSelection(priorSelection)
+        pendingSelectionAfterInspectorEdit = selectionState.isEmpty ? priorSelection : selectionState
         repairSelectedGuide()
         refreshSelectionScene(boundary: .undo)
     }
 
     func redo() {
+        let priorSelection = selectionForHistoryOperation
         cancelDragDrop()
         cancelTextEditing()
         cancelInsertion(resetTool: true)
         cancelTransform()
         cancelGuideEditing()
         try? documentSession.redo()
+        restoreSurvivingSelection(priorSelection)
+        pendingSelectionAfterInspectorEdit = selectionState.isEmpty ? priorSelection : selectionState
         repairSelectedGuide()
         refreshSelectionScene(boundary: .redo)
+    }
+
+    /// Undo and redo publish a new document revision synchronously, before the
+    /// matching immutable renderer scene can adopt. Preserve the user's exact
+    /// selection during that gap only when every selected node still exists in
+    /// the same canonical selection container and remains selectable. Undoing
+    /// an insertion, hiding/locking a node, or changing pages therefore still
+    /// repairs selection instead of reviving stale identity.
+    private func restoreSurvivingSelection(_ prior: SelectionState) {
+        guard !prior.isEmpty,
+              let activePageID = effectiveSelectedPageID,
+              let page = documentSession.document.pages.first(where: { $0.id == activePageID }) else {
+            return
+        }
+        let structuralRootIDs = Set(page.rootNodeIDs.filter { rootID in
+            page.nodes.first(where: { $0.id == rootID })?.insertionGeometry == nil
+        })
+        let normalizedPriorContainer = prior.activeContainerID.flatMap {
+            structuralRootIDs.contains($0) ? nil : $0
+        }
+        let retained = prior.orderedIDs.filter { id in
+            guard let node = page.nodes.first(where: { $0.id == id }) else { return false }
+            let canonicalParentID: NodeID? = if case .node(let value) = node.parent { value } else { nil }
+            let parentID = canonicalParentID.flatMap {
+                structuralRootIDs.contains($0) ? nil : $0
+            }
+            return parentID == normalizedPriorContainer
+                && !node.selectionBooleanProperty("hidden")
+                && !node.selectionBooleanProperty("locked")
+        }
+        guard retained == prior.orderedIDs else { return }
+        selectionState.setContainer(normalizedPriorContainer)
+        selectionState.setSelection(
+            retained,
+            primary: prior.primaryID,
+            anchor: prior.anchorID,
+            provenance: prior.provenance,
+            repair: .none
+        )
+    }
+
+    /// A rapid Undo followed by Redo can arrive before the renderer scene for
+    /// Undo adopts. During that bounded transition `selectionState` may be
+    /// empty even though the prior canonical selection is still eligible for
+    /// restoration. Reuse the guarded pending snapshot instead of replacing
+    /// it with an empty transient state.
+    private var selectionForHistoryOperation: SelectionState {
+        if !selectionState.isEmpty { return selectionState }
+        if let pendingSelectionAfterInspectorEdit, !pendingSelectionAfterInspectorEdit.isEmpty {
+            return pendingSelectionAfterInspectorEdit
+        }
+        return selectionState
     }
 
     private func repairSelectedGuide() {
@@ -6454,7 +7950,8 @@ final class WorkspaceShellState: ObservableObject {
         selectionOverlayPlan = nil
         let bounds = WorldRect(
             origin: WorldPoint(x: 0, y: 0),
-            size: WorldSize(width: Double(viewportPreset.width), height: 900)
+            size: WorldSize(width: Double(viewportPreset.width), height: CanonicalPageFlow.contentHeight(activeAuthoringPage,
+                breakpoint: viewportPreset.responsiveBreakpoint, width: Double(viewportPreset.width)))
         )
         try? viewportState.setContentBounds(bounds)
         // A preset is presentation state. Fit with a pasteboard gutter so the
@@ -6499,6 +7996,10 @@ final class WorkspaceShellState: ObservableObject {
         }
         repairSelectedGuide()
         guard document.id != viewportDocumentID else {
+            let bounds = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: Double(viewportPreset.width),
+                height: CanonicalPageFlow.contentHeight(activeAuthoringPage, breakpoint: viewportPreset.responsiveBreakpoint,
+                    width: Double(viewportPreset.width))))
+            if bounds != viewportState.contentBounds { try? viewportState.setContentBounds(bounds) }
             scheduleScenePreparation()
             return
         }
@@ -6508,7 +8009,8 @@ final class WorkspaceShellState: ObservableObject {
             viewportSize: viewportState.viewportSize,
             contentBounds: WorldRect(
                 origin: WorldPoint(x: 0, y: 0),
-                size: WorldSize(width: Double(viewportPreset.width), height: 900)
+                size: WorldSize(width: Double(viewportPreset.width), height: CanonicalPageFlow.contentHeight(activeAuthoringPage,
+                    breakpoint: viewportPreset.responsiveBreakpoint, width: Double(viewportPreset.width)))
             ),
             pixelRatio: viewportState.pixelRatio
         )
@@ -6534,6 +8036,7 @@ final class WorkspaceShellState: ObservableObject {
         selectedGuideID = nil
         pendingSelectionAfterInsertion = nil
         pendingSelectionAfterClipboard = nil
+        pendingSelectionAfterInspectorEdit = nil
         pendingSelectionLifecycleBoundary = nil
         editingComponentID = nil
         componentReturnContext = nil
@@ -6546,6 +8049,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private func scheduleScenePreparation() {
+        scheduleComponentDependencyPreparation()
         preparationTask?.cancel()
         let imageResources: [AssetID: Data] = Dictionary(uniqueKeysWithValues: documentSession.document.imageAssets.compactMap { asset -> (AssetID, Data)? in
             guard let data = try? lifecycle.projectResourceData(for: asset.resourceID) else { return nil }
@@ -6555,6 +8059,8 @@ final class WorkspaceShellState: ObservableObject {
             document: documentSession.document,
             activePageID: effectiveSelectedPageID,
             activeContainerID: selectionState.activeContainerID,
+            isolationRootID: isolationRootID,
+            forcedStyleState: forcedStyleState,
             viewport: viewportState,
             surfaceID: renderSurfaceID,
             breakpoint: viewportPreset.responsiveBreakpoint,
@@ -6740,6 +8246,30 @@ final class WorkspaceShellState: ObservableObject {
                     pendingSelectionAfterClipboard = nil
                     rebuildSelectionOverlay()
                     announceSelection()
+                }
+            }
+            if let pending = pendingSelectionAfterInspectorEdit {
+                defer { pendingSelectionAfterInspectorEdit = nil }
+                let currentIDs = selectionState.orderedIDs
+                if currentIDs.isEmpty || currentIDs == pending.orderedIDs {
+                    let targets = Dictionary(uniqueKeysWithValues: scene.targets.map { ($0.id, $0) })
+                    let retained = pending.orderedIDs.filter { id in
+                        guard let target = targets[id], target.pageID == scene.activePageID,
+                              target.parentID == pending.activeContainerID,
+                              target.isAvailable, !target.isLocked else { return false }
+                        return target.isVisible || pending.provenance == .layersNavigator
+                    }
+                    if retained == pending.orderedIDs {
+                        selectionState.setContainer(pending.activeContainerID)
+                        selectionState.setSelection(
+                            retained,
+                            primary: pending.primaryID,
+                            anchor: pending.anchorID,
+                            provenance: pending.provenance,
+                            repair: .none
+                        )
+                        rebuildSelectionOverlay()
+                    }
                 }
             }
             if selectionState != prior || repair != .none {

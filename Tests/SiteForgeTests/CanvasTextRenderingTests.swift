@@ -5,6 +5,105 @@ import XCTest
 
 @MainActor
 final class CanvasTextRenderingTests: XCTestCase {
+    func testFittedPreviewTextSharesCanvasMetricsWithoutNativeFontTruncationOrChrome() throws {
+        @MainActor func assertSameRect(_ actual: CGRect, _ expected: CGRect) {
+            // CALayer stores position/anchor separately: reconstructing a
+            // frame may differ at floating-point epsilon, not a device pixel.
+            XCTAssertEqual(actual.minX, expected.minX, accuracy: 0.000_000_01)
+            XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.000_000_01)
+            XCTAssertEqual(actual.width, expected.width, accuracy: 0.000_000_01)
+            XCTAssertEqual(actual.height, expected.height, accuracy: 0.000_000_01)
+        }
+        let object = CanvasRenderObject(id: NodeID(),
+            frame: .init(origin: .init(x: 48, y: 48), size: .init(width: 360, height: 24)),
+            clipRect: nil, paintOrder: 0, style: .textPlaceholder, isVisible: true,
+            accessibilityLabel: "Site title", plainText: "Installed Owner Site", opacity: 0.5)
+        for zoom in [0.125, 0.25, 0.58, 1.0, 8.0] {
+            let rect = CGRect(x: 0, y: 0, width: 360 * zoom, height: 24 * zoom)
+            let layout = CanvasTextLayout(viewportObjectRect: rect, zoom: zoom,
+                text: try XCTUnwrap(object.plainText), typography: object.typography)
+            for backing in [1.0, 2.0] {
+                let preview = try XCTUnwrap(CanvasAuthoredTextLayerFactory.makeLayer(for: object,
+                    viewportObjectRect: rect, zoom: zoom, contentsScale: backing))
+                assertSameRect(preview.frame, layout.glyphBounds)
+                XCTAssertEqual(preview.fontSize, layout.fontSize)
+                XCTAssertEqual(preview.contentsScale, backing)
+                XCTAssertEqual(preview.opacity, 0.5)
+                let string = try XCTUnwrap(preview.string as? NSAttributedString)
+                XCTAssertEqual(string.string, object.plainText)
+                XCTAssertEqual(string.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, layout.font)
+                XCTAssertTrue(layout.isInsideObjectRect)
+                let pixels = rasterizedTextLayerBytes(preview,
+                    width: Int(ceil(rect.width)), height: Int(ceil(rect.height)))
+                XCTAssertTrue(pixels.contains { $0 != 0 }, "Fitting must not erase glyphs at \(zoom)×")
+            }
+            let view = CanvasPreviewTextView(frame: rect)
+            view.configure(object: object, scale: zoom)
+            view.layout()
+            let layer = try XCTUnwrap(view.layer?.sublayers?.first as? CATextLayer)
+            assertSameRect(layer.frame, layout.glyphBounds)
+            XCTAssertEqual(layer.opacity, 1, "The enclosing authored group applies opacity exactly once")
+            XCTAssertNil(layer.backgroundColor)
+            XCTAssertEqual(layer.borderWidth, 0, "Preview must not fabricate a box around plain text")
+            XCTAssertEqual(view.layer?.sublayers?.count, 1)
+            XCTAssertNil(view.hitTest(.zero), "The real Preview link/button retains pointer ownership")
+        }
+        XCTAssertNil(CanvasAuthoredTextLayerFactory.makeLayer(for: object,
+            viewportObjectRect: .zero, zoom: 1, contentsScale: 2))
+        XCTAssertNil(CanvasAuthoredTextLayerFactory.makeLayer(for: object,
+            viewportObjectRect: .init(x: 0, y: 0, width: 360, height: 24), zoom: .nan, contentsScale: 2))
+    }
+
+    func testTypographyRepeatedFocusReconciliationIsNeutralAndNotValidationFailure() async throws {
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 900, height: 600), pixelRatio: 2)
+        @MainActor func waitForAdoption() async throws {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while state.canvasRenderPlan?.identity.revision != session.document.revision, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        try await waitForAdoption()
+        state.performDefaultInsertion(.text, provenance: .menu)
+        try await waitForAdoption()
+        XCTAssertNotNil(state.selectionState.primaryID)
+        let before = session.document
+        XCTAssertTrue(state.commitTypography(.weight(.bold), operation: "weight", provenance: .picker))
+        try await waitForAdoption()
+        let committed = session.document
+        XCTAssertTrue(state.commitTypography(.weight(.bold), operation: "weight", provenance: .focusLoss))
+        XCTAssertEqual(session.document, committed)
+        XCTAssertEqual(state.lastDesignInspectorAnnouncement, "Typography unchanged")
+        try session.undo()
+        XCTAssertEqual(session.document.pages, before.pages, "A repeated focus commit must not add another undo entry")
+    }
+
+    func testDefaultWebsiteTextInkIgnoresEditorAppearanceAndMatchesInlineLayout() throws {
+        let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0), viewportSize: .init(width: 300, height: 120))
+        let object = CanvasRenderObject(id: NodeID(),
+            frame: .init(origin: .init(x: 20, y: 24), size: .init(width: 120, height: 24)),
+            clipRect: nil, paintOrder: 0, style: .textPlaceholder, isVisible: true,
+            accessibilityLabel: "Text", plainText: "About")
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            let appearance = try XCTUnwrap(NSAppearance(named: name))
+            appearance.performAsCurrentDrawingAppearance {
+                let layer = CanvasAuthoredTextLayerFactory.makeLayer(for: object, viewport: viewport, contentsScale: 2)
+                XCTAssertNotNil(layer)
+                XCTAssertEqual(layer?.foregroundColor, NSColor.black.cgColor)
+                let layout = CanvasTextLayout(viewportObjectRect: .init(x: 20, y: 24, width: 120, height: 24), zoom: 1, text: "About")
+                let editor = InlineCanvasTextView()
+                editor.string = "About"
+                editor.applyCanvasTextLayout(layout)
+                XCTAssertEqual(editor.textColor, NSColor.black)
+                if let layer {
+                    let pixels = rasterizedTextLayerBytes(layer, width: 300, height: 120)
+                    XCTAssertTrue(pixels.contains { $0 != 0 }, "Logical frame equality must not hide absent glyphs")
+                }
+            }
+        }
+    }
+
     func testFrameImageFillPaintsInsideAuthoredBoundsAtNativeScale() throws {
         let provider = try XCTUnwrap(CGDataProvider(data: Data(Array(repeating: [UInt8(255), 0, 0, 255], count: 4).flatMap { $0 }) as CFData))
         let redImage = try XCTUnwrap(CGImage(width: 2, height: 2,

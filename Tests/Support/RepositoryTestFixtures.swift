@@ -1,10 +1,9 @@
 import Foundation
 
 struct RepositoryTestFixture: Sendable {
-    static let root: URL = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
+    // A rebuild changes the ad-hoc test host's identity. Temporary test data
+    // must never require renewed permission to the developer's Documents folder.
+    static let root: URL = ApplicationOwnedTestFixture.root
         .appendingPathComponent(".siteforge-test-fixtures", isDirectory: true)
 
     let url: URL

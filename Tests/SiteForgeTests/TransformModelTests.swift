@@ -1073,6 +1073,76 @@ final class TransformModelTests: XCTestCase {
     }
 
     // SF-0403-001, SF-0403-002, SF-0403-004, SF-0403-005, SF-0403-008
+    func testInspectorPropertyClipboardStrictTypedRoundTripAndInvalidNeutrality() throws {
+        for field in GeometryInspectorField.allCases {
+            let value = InspectorGeometryTransfer(field: field, value: field.requiresPositiveValue ? 120 : -24)
+            XCTAssertEqual(try InspectorGeometryTransfer.decode(value.encoded()), value)
+        }
+        for text in ["{}", "[]", "{\"version\":2,\"field\":\"width\",\"value\":120}",
+                     "{\"version\":1,\"field\":\"script\",\"value\":120}",
+                     "{\"field\":\"width\",\"value\":true,\"version\":1}",
+                     "{\"field\":\"width\",\"value\":0,\"version\":1}",
+                     "{\"field\":\"width\",\"value\":120,\"value\":200,\"version\":1}",
+                     "{\"field\":\"width\",\"value\":120,\"version\":1,\"command\":\"execute\"}"] {
+            XCTAssertThrowsError(try InspectorGeometryTransfer.decode(Data(text.utf8)))
+        }
+        XCTAssertThrowsError(try InspectorGeometryTransfer.decode(Data(repeating: 32, count: 2049)))
+        for invalid in [Double.nan, Double.infinity, -1, LayoutPolicy.maximumDimension + 1] {
+            XCTAssertThrowsError(try InspectorGeometryTransfer(field: .width, value: invalid).encoded())
+        }
+    }
+
+    func testInspectorPropertyPasteAtomicHistoryPersistenceAndResponsiveIsolation() throws {
+        var fixture = makeFixture()
+        fixture.selectedIDs = [fixture.nodeID, fixture.secondNodeID]
+        let live = DocumentSession(document: fixture.document)
+        let copied = InspectorGeometryTransfer(field: .x, value: 42)
+        let prepared = try copied.prepare(identity: fixture.inspectorCommand(field: .x, value: 42).identity,
+            orderedNodeIDs: fixture.selectedIDs, document: fixture.document, context: fixture.context, breakpoint: .desktop)
+        try live.execute(prepared.documentCommand)
+        XCTAssertEqual(live.document.nodeGeometry(fixture.nodeID)?.frame.origin.x, 42)
+        XCTAssertEqual(live.document.nodeGeometry(fixture.secondNodeID)?.frame.origin.x, 42)
+        XCTAssertEqual(live.historySnapshot().undoEntries.count, 1)
+        let authored = live.document
+        try live.undo(); XCTAssertEqual(live.document.pages, fixture.document.pages)
+        try live.redo(); XCTAssertEqual(live.document.pages, authored.pages)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(live.document)), live.document)
+        let tablet = try copied.prepare(identity: fixture.inspectorCommand(field: .x, value: 42).identity,
+            orderedNodeIDs: fixture.selectedIDs, document: fixture.document, context: fixture.context, breakpoint: .tablet)
+        let responsive = DocumentSession(document: fixture.document)
+        try responsive.execute(tablet.documentCommand)
+        XCTAssertEqual(responsive.document.nodeGeometry(fixture.nodeID)?.frame.origin.x, 10)
+        XCTAssertEqual(ResponsiveGeometryResolver.value(for: .x, node: try XCTUnwrap(responsive.document.pages.first?.nodes.first { $0.id == fixture.nodeID }), breakpoint: .tablet)?.0, 42)
+    }
+
+    func testInspectorPropertyPasteRejectsStaleCancelledAndSelectionMismatch() throws {
+        var fixture = makeFixture()
+        fixture.selectedIDs = [fixture.nodeID, fixture.secondNodeID]
+        let copied = InspectorGeometryTransfer(field: .x, value: 42)
+        let identity = fixture.inspectorCommand(field: .x, value: 42).identity
+        XCTAssertThrowsError(try copied.prepare(identity: identity, orderedNodeIDs: fixture.selectedIDs,
+            document: fixture.document, context: fixture.context, breakpoint: .desktop,
+            cancellation: .init(isCancelled: { true })))
+        XCTAssertThrowsError(try copied.prepare(identity: fixture.inspectorCommand(field: .x, value: 42, revision: fixture.document.revision + 1).identity,
+            orderedNodeIDs: fixture.selectedIDs, document: fixture.document, context: fixture.context, breakpoint: .desktop))
+        XCTAssertThrowsError(try copied.prepare(identity: identity, orderedNodeIDs: [fixture.nodeID],
+            document: fixture.document, context: fixture.context, breakpoint: .desktop))
+        XCTAssertEqual(GeometryInspectorCommandRegistry().value(for: .x, in: fixture.document, context: fixture.context), .mixed)
+        var subset = makeFixture(selectedIDs: [])
+        subset.document.pages[0].nodes[2].kind = .form
+        subset.document.pages[0].nodes[2].properties.removeAll { $0.key.rawValue == "layout.y" }
+        subset.selectedIDs = [subset.nodeID, subset.secondNodeID]
+        let partial = try InspectorGeometryTransfer(field: .y, value: 55).prepare(
+            identity: subset.inspectorCommand(field: .y, value: 55).identity,
+            orderedNodeIDs: subset.selectedIDs, document: subset.document, context: subset.context, breakpoint: .desktop)
+        XCTAssertEqual(partial.skippedNodeIDs, [subset.secondNodeID])
+        let session = DocumentSession(document: subset.document)
+        let untouched = subset.document.pages[0].nodes[2]
+        try session.execute(partial.documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[2], untouched)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+    }
+
     func testGeometryInspectorCommitsApplicableSubsetAtomicallyWithUndoAndPersistence() throws {
         var fixture = makeFixture(selectedIDs: [])
         fixture.document.pages[0].nodes[2].kind = .text
@@ -2198,7 +2268,7 @@ final class TransformModelTests: XCTestCase {
     func testAccessibilityMetadataRegistryCommitsMixedSubsetAndExactHistory() throws {
         var fixture = makeFixture(selectedIDs: [])
         fixture.document.pages[0].nodes[1].kind = .frame
-        fixture.document.pages[0].nodes[2].kind = .component
+        fixture.document.pages[0].nodes[2].kind = .form
         let registry = AccessibilityMetadataCommandRegistry()
         func command(_ document: CanonicalDocument, ids: [NodeID], edit: AccessibilityMetadataEdit,
                      cancelled: Bool = false) -> AccessibilityMetadataCommand {
@@ -3138,6 +3208,110 @@ final class TransformModelTests: XCTestCase {
         let css = StaticFluidValueOutputEmitter.emit(nodes: [node])
         XCTAssertTrue(css.contains("width: clamp(160px")); XCTAssertTrue(css.contains("padding: clamp(12px"))
         XCTAssertTrue(css.contains("@media (min-width: 768px)"))
+    }
+
+    // SF-0504/SF-0510/SF-0511 — positioning, reusable appearance, and the
+    // bounded state vocabulary share one identity-gated transactional path.
+    func testAdvancedStyleRegistryHistoryPersistenceAndSafeStaticProjection() throws {
+        let fixture = makeFixture()
+        let session = DocumentSession(document: fixture.document)
+        let styleID = ReusableStyleID(UUID(uuidString: "97000000-0000-4000-8000-000000000001")!)
+        let stateID = UUID(uuidString: "97000000-0000-4000-8000-000000000002")!
+        let red = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#CC1A33FF"))
+        let blue = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#1A33CCFF"))
+        let registry = AdvancedStyleCommandRegistry()
+        func node() -> DocumentNode { session.document.pages[0].nodes.first { $0.id == fixture.nodeID }! }
+        func prepare(_ edit: AdvancedStyleEdit, cancelled: Bool = false) throws -> PreparedDesignInspectorEdit {
+            let command = AdvancedStyleCommand(identity: .init(
+                documentID: session.document.id, pageID: fixture.pageID,
+                revision: session.document.revision, sceneID: fixture.sceneID,
+                rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: [fixture.nodeID], edit: edit,
+                provenance: .automation, cancelled: cancelled)
+            return try registry.prepare(command, in: session.document,
+                context: fixture.context(selectedIDs: [fixture.nodeID]))
+        }
+
+        try session.execute(try prepare(.createReusableStyle(
+            id: styleID, name: "Card", fill: red, opacity: 0.75)).documentCommand)
+        try session.execute(try prepare(.applyReusableStyles([styleID])).documentCommand)
+        let appliedID = try XCTUnwrap(node().insertionProperty(CanonicalReusableStyleIndex.appliedKey)?.id)
+        try session.execute(try prepare(.positionMode(.absolute)).documentCommand)
+        try session.execute(try prepare(.positionInset(.top, 24)).documentCommand)
+        try session.execute(try prepare(.zIndex(7)).documentCommand)
+        try session.execute(try prepare(.setState(
+            state: .hover, id: stateID, fill: blue, opacity: 0.5)).documentCommand)
+
+        let index = try CanonicalReusableStyleIndex(document: session.document)
+        XCTAssertEqual(index.byID[styleID]?.name, "Card")
+        XCTAssertEqual(try CanonicalResolvedAppearance.resolve(node: node(), index: index).fill, red)
+        XCTAssertEqual(try CanonicalResolvedAppearance.resolve(node: node(), index: index, state: .hover).fill, blue)
+        XCTAssertEqual(CanonicalPositioning.resolve(node())?.top, 24)
+        XCTAssertEqual(CanonicalPositioning.resolve(node())?.zIndex, 7)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+
+        let css = try XCTUnwrap(MultiPageStaticBuildPlanner.plan(document: session.document)
+            .files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("position: absolute"), css)
+        XCTAssertTrue(css.contains("top: 24.0px"), css)
+        XCTAssertTrue(css.contains("z-index: 7"), css)
+        XCTAssertTrue(css.contains(":hover"), css)
+        XCTAssertTrue(css.contains("background-color: rgba(26.0, 51.0, 204.0, 1.0)"), css)
+        XCTAssertFalse(css.contains("Card"), css)
+
+        try session.undo()
+        XCTAssertNil(node().insertionProperty(CanonicalReusableStyleIndex.stateNamespace + "hover.id"))
+        try session.redo()
+        XCTAssertEqual(node().insertionStringProperty(CanonicalReusableStyleIndex.stateNamespace + "hover.id"),
+                       stateID.uuidString.lowercased())
+        XCTAssertEqual(node().insertionProperty(CanonicalReusableStyleIndex.appliedKey)?.id, appliedID)
+        XCTAssertThrowsError(try prepare(.positionInset(.left, .infinity)))
+        XCTAssertThrowsError(try prepare(.applyReusableStyles([styleID]), cancelled: true))
+    }
+
+    func testAdvancedStyleMixedSelectionStaleValidationAndRedactedDiagnostics() throws {
+        var fixture = makeFixture(selectedIDs: [])
+        fixture.document.pages[0].nodes[2].kind = .text
+        let styleID = ReusableStyleID(UUID(uuidString: "97000000-0000-4000-8000-000000000003")!)
+        let session = DocumentSession(document: fixture.document)
+        let registry = AdvancedStyleCommandRegistry()
+        func command(_ edit: AdvancedStyleEdit, revision: UInt64? = nil) -> AdvancedStyleCommand {
+            .init(identity: .init(documentID: session.document.id, pageID: fixture.pageID,
+                revision: revision ?? session.document.revision, sceneID: fixture.sceneID,
+                rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: [fixture.nodeID, fixture.secondNodeID], edit: edit,
+                provenance: .automation, cancelled: false)
+        }
+        let create = AdvancedStyleCommand(identity: command(.zIndex(0)).identity,
+            orderedNodeIDs: [fixture.nodeID], edit: .createReusableStyle(
+                id: styleID, name: "Surface", fill: .legacySurface, opacity: 1),
+            provenance: .automation, cancelled: false)
+        try session.execute(try registry.prepare(create, in: session.document,
+            context: fixture.context(selectedIDs: [fixture.nodeID])).documentCommand)
+        let mixed = command(.applyReusableStyles([styleID]))
+        let prepared = try registry.prepare(mixed, in: session.document,
+            context: fixture.context(selectedIDs: mixed.orderedNodeIDs))
+        XCTAssertEqual(prepared.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(prepared.skippedNodeIDs, [fixture.secondNodeID])
+        try session.execute(prepared.documentCommand)
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == fixture.secondNodeID }?
+            .insertionProperty(CanonicalReusableStyleIndex.appliedKey))
+        XCTAssertThrowsError(try registry.prepare(command(.zIndex(1), revision: 0),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID, fixture.secondNodeID])))
+
+        var malformed = session.document
+        let rootIndex = try XCTUnwrap(malformed.pages[0].nodes.firstIndex { $0.id == fixture.rootID })
+        malformed.pages[0].nodes[rootIndex].properties.append(.init(
+            key: .init(rawValue: CanonicalReusableStyleIndex.namespace + "definition.\(styleID.description).fill"),
+            value: .string("not-a-color"), origin: .authored))
+        XCTAssertThrowsError(try malformed.validate())
+
+        let record = AdvancedStyleDiagnosticFactory.make(
+            command: mixed, resultRevision: session.document.revision,
+            result: .success, failure: nil)
+        XCTAssertEqual(record.sanitizedIdentifiers.count, 2)
+        XCTAssertFalse(record.sanitizedIdentifiers.joined().contains(fixture.nodeID.description))
+        XCTAssertTrue(record.requirementIDs.contains("SF-0511-008"))
     }
 }
 

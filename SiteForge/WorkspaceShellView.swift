@@ -14,27 +14,35 @@ struct WorkspaceShellView: View {
             if state.lifecycle.recoveryCandidate != nil {
                 RecoveryCandidateBar(controller: state.lifecycle)
             }
+            GeometryReader { geometry in
             HSplitView {
-                NavigatorView(state: state, focus: $focusedControl)
-                    .frame(
-                        minWidth: WorkspaceMetrics.navigatorWidth.lowerBound,
-                        idealWidth: 240,
-                        maxWidth: WorkspaceMetrics.navigatorWidth.upperBound
-                    )
+                if !state.isFocusModeEnabled {
+                    NavigatorView(state: state, focus: $focusedControl)
+                        .frame(
+                            minWidth: WorkspaceMetrics.navigatorWidth.lowerBound,
+                            idealWidth: min(SiteForgeVisualSystem.navigatorIdealWidth, WorkspaceMetrics.navigatorMaximumWidth(for: geometry.size.width)),
+                            maxWidth: WorkspaceMetrics.navigatorMaximumWidth(for: geometry.size.width)
+                        )
+                }
 
                 CanvasPlaceholderView(state: state, focus: $focusedControl, tabRouter: tabRouter)
                     .frame(minWidth: WorkspaceMetrics.minimumCanvasWidth, maxWidth: .infinity)
 
-                InspectorView(state: state, focus: $focusedControl)
-                    .frame(
-                        minWidth: WorkspaceMetrics.inspectorWidth.lowerBound,
-                        idealWidth: 300,
-                        maxWidth: WorkspaceMetrics.inspectorWidth.upperBound
-                    )
+                if !state.isFocusModeEnabled {
+                    InspectorView(state: state, focus: $focusedControl)
+                        .frame(
+                            minWidth: WorkspaceMetrics.inspectorWidth.lowerBound,
+                            idealWidth: min(SiteForgeVisualSystem.inspectorIdealWidth, WorkspaceMetrics.inspectorMaximumWidth(for: geometry.size.width)),
+                            maxWidth: WorkspaceMetrics.inspectorMaximumWidth(for: geometry.size.width)
+                        )
+                }
+            }
             }
 
-            Divider()
-            StatusBarView(state: state)
+            if !state.isFocusModeEnabled {
+                Divider()
+                StatusBarView(state: state)
+            }
         }
         .frame(
             minWidth: WorkspaceMetrics.effectiveMinimumWindowSize().width,
@@ -45,7 +53,7 @@ struct WorkspaceShellView: View {
         .accessibilityIdentifier("workspace.shell")
         .background {
             ZStack {
-                Color(nsColor: .underPageBackgroundColor)
+                SiteForgeVisualSystem.canvasPasteboard
                 WindowCloseGuard(state: state).frame(width: 0, height: 0)
                 WorkspaceWindowTabRouterInstaller(
                     router: tabRouter,
@@ -62,7 +70,7 @@ struct WorkspaceShellView: View {
                 }
             }
         }
-        .navigationTitle(state.lifecycle.title)
+        .modifier(WorkspaceDocumentTitle(lifecycle: state.lifecycle))
         .sheet(item: $state.pageEditorRequest) { request in
             PageEditorSheet(state: state, request: request)
         }
@@ -80,11 +88,21 @@ struct WorkspaceShellView: View {
         }) {
             LocalPreviewView(state: state)
         }
+        .sheet(isPresented: $state.isBuildDiagnosticsPresented, onDismiss: {
+            state.cancelStaticBuild(silent: true)
+        }) {
+            StaticBuildDiagnosticsView(state: state)
+        }
+        .sheet(isPresented: $state.isClipboardComponentPreflightPresented, onDismiss: {
+            state.cancelCrossProjectComponentPaste()
+        }) {
+            ClipboardComponentTransferPreflightView(state: state)
+        }
         .sheet(isPresented: Binding(
             get: { state.lifecycle.isRecoveryDetailsPresented },
             set: { state.lifecycle.isRecoveryDetailsPresented = $0 }
         )) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.toolbarGroupSpacing) {
                 Text("Recovery Details").font(.title2)
                 Text(state.lifecycle.recoveryCandidate?.summary ?? "No valid recovery candidate is available.")
                 Text("Project content and complete file paths are excluded from these details.")
@@ -93,7 +111,7 @@ struct WorkspaceShellView: View {
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("recovery.details.done")
             }
-            .padding(24).frame(minWidth: 420)
+            .padding(SiteForgeVisualSystem.settingsFormPadding).frame(minWidth: 420)
             .accessibilityIdentifier("recovery.details")
         }
         .onExitCommand {
@@ -110,7 +128,7 @@ private struct RecoveryCandidateBar: View {
     @ObservedObject var controller: DocumentLifecycleController
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: SiteForgeVisualSystem.standardSpacing) {
             Label(
                 controller.canRestoreRecovery
                     ? "A newer valid recovery candidate is available."
@@ -186,18 +204,45 @@ private struct WindowCloseGuard: NSViewRepresentable {
     }
 }
 
+private struct WorkspaceDocumentTitle: ViewModifier {
+    @ObservedObject var lifecycle: DocumentLifecycleController
+    func body(content: Content) -> some View {
+        // The lifecycle, not the outer shell's layout/selection publications,
+        // owns Save As, external rename and Edited title transitions.
+        content.navigationTitle(lifecycle.title)
+    }
+}
+
 private struct WorkspaceToolbar: ToolbarContent {
     @ObservedObject var state: WorkspaceShellState
 
     var body: some ToolbarContent {
+        if state.isFocusModeEnabled {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Exit Focus", systemImage: "arrow.down.right.and.arrow.up.left") {
+                    state.toggleFocusMode()
+                }
+                .help("Return to the full editor")
+                .accessibilityIdentifier("toolbar.focus.exit")
+            }
+        } else {
+            if #available(macOS 26.0, *) {
+                editorToolbar.sharedBackgroundVisibility(.hidden)
+            } else {
+                editorToolbar
+            }
+        }
+    }
+
+    @ToolbarContentBuilder private var editorToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             ForEach(CanvasTool.primaryToolbarTools) { tool in
                 Button {
                     state.selectTool(tool)
                 } label: {
-                    Label(tool.title, systemImage: tool.systemImage)
-                        .symbolVariant(state.selectedTool == tool ? .fill : .none)
+                    Image(systemName: tool.systemImage)
                 }
+                .accessibilityLabel(tool.title)
                 .help("\(tool.title) tool (\(tool.shortcut.character.uppercased()))")
                 .accessibilityIdentifier("toolbar.tool.\(tool.rawValue)")
                 .accessibilityValue(state.selectedTool == tool ? "Selected" : "Not selected")
@@ -214,7 +259,7 @@ private struct WorkspaceToolbar: ToolbarContent {
                     .accessibilityValue(state.selectedTool == tool ? "Selected" : "Not selected")
                 }
             } label: {
-                Label("More Tools", systemImage: "ellipsis.circle")
+                Label("Insert", systemImage: "plus")
             }
             .help("Section, Stack, Grid, Button, Link, and Form tools")
             .accessibilityLabel("More authoring tools")
@@ -266,30 +311,44 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     let accessibilityDescription: (Tab) -> String?
     let focus: FocusState<ShellFocus?>.Binding
     let focusValue: (Tab) -> ShellFocus
+    @ScaledMetric(relativeTo: .caption) private var labelSize: CGFloat = 12
 
     var body: some View {
-        HStack(spacing: 3) {
-            overflowMenu
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    ForEach(tabs) { tab in
-                        tabButton(tab)
-                    }
+        GeometryReader { geometry in
+            let values = Array(tabs)
+            let minimum: [Double] = values.map { tab in
+                Double(ceil((title(tab) as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: labelSize, weight: .semibold)]).width)
+                    + SiteForgeVisualSystem.microSpacing * 2)
+            }
+            let allocation = ShellTabLayoutPolicy.allocate(width: geometry.size.width,
+                minimumWidths: minimum, selected: values.firstIndex(of: selection) ?? 0,
+                gap: SiteForgeVisualSystem.hairlineSpacing)
+            HStack(spacing: SiteForgeVisualSystem.hairlineSpacing) {
+                ForEach(Array(allocation.indices.enumerated()), id: \.element) { offset, index in
+                    tabButton(values[index])
+                        .frame(width: allocation.widths[offset], height: SiteForgeVisualSystem.tabStripHeight)
+                }
+                if allocation.overflow {
+                    overflowMenu(fullWidth: allocation.indices.isEmpty)
+                        .frame(width: allocation.menuWidth)
                 }
             }
-            // The scrolling tab strip is the flexible region. Keep the
-            // leading native overflow menu allocated at the practical
-            // minimum width, away from a hosted display's potentially
-            // clipped trailing edge.
-            .frame(minWidth: 0, maxWidth: .infinity)
-            .clipped()
         }
-        .padding(3)
-        .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 7))
+        .frame(maxWidth: .infinity, minHeight: SiteForgeVisualSystem.tabStripHeight,
+               maxHeight: SiteForgeVisualSystem.tabStripHeight, alignment: .leading)
+        .padding(SiteForgeVisualSystem.tabStripInset)
+        .background(SiteForgeVisualSystem.tabStripSurface,
+                    in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius, style: .continuous)
+                .strokeBorder(SiteForgeVisualSystem.quietBoundary, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifierPrefix + ".bar")
     }
 
-    private var overflowMenu: some View {
+    private func overflowMenu(fullWidth: Bool) -> some View {
         Menu {
             ForEach(tabs) { tab in
                 Button {
@@ -304,18 +363,27 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
                 }
             }
         } label: {
-            Image(systemName: "ellipsis.circle")
-                .frame(minWidth: 24, minHeight: 24)
+            HStack {
+                if fullWidth { Text(title(selection)).font(.system(size: labelSize, weight: .semibold)).lineLimit(1) }
+                Image(systemName: "ellipsis.circle")
+            }.frame(maxWidth: .infinity, minHeight: 24)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .frame(width: 28, height: 28)
+        .frame(height: 28)
         .contentShape(Rectangle())
         .layoutPriority(1)
         .help("Show all \(identifierPrefix.hasPrefix("navigator") ? "navigator" : "Inspector") tabs")
         .accessibilityLabel("Show all tabs")
+        .accessibilityValue(title(selection))
         .accessibilityIdentifier("\(identifierPrefix).overflow")
     }
+
+    /*
+     A second-row fallback is intentionally forbidden. At supported workspace
+     widths the direct row fits; below that boundary complete segments and an
+     explicit native overflow menu retain keyboard/VoiceOver access.
+     */
 
     @ViewBuilder
     private func tabButton(_ tab: Tab) -> some View {
@@ -323,22 +391,16 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
             selection = tab
         } label: {
             Text(title(tab))
-                .font(.caption.weight(.semibold))
+                .font(.system(size: labelSize, weight: .semibold))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 6)
+                .padding(.horizontal, SiteForgeVisualSystem.microSpacing)
+                .padding(.vertical, SiteForgeVisualSystem.compactSpacing)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(selection == tab ? Color.accentColor.opacity(0.16) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-        .overlay {
-            if selection == tab {
-                RoundedRectangle(cornerRadius: 5)
-                    .stroke(Color.accentColor.opacity(0.55))
-            }
-        }
+        .modifier(SiteForgeRowSurface(selected: selection == tab))
         .focusable()
         .focused(focus, equals: focusValue(tab))
         .accessibilityIdentifier("\(identifierPrefix).\(tab.rawValue)")
@@ -351,8 +413,19 @@ private struct NavigatorView: View {
     @ObservedObject var state: WorkspaceShellState
     let focus: FocusState<ShellFocus?>.Binding
 
+    @ViewBuilder private var pageManagementControls: some View {
+        Button("New Page…", systemImage: "doc.badge.plus") { state.presentPageEditor(.create) }
+            .disabled(!state.pageEditingIsAvailable).lineLimit(1)
+            .accessibilityIdentifier("navigator.pages.new")
+        if let page = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }) {
+            Menu("Page Actions") { PageActionButtons(state: state, page: page) }
+                .disabled(!state.pageEditingIsAvailable).lineLimit(1)
+                .accessibilityIdentifier("navigator.pages.actions")
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             ShellTabBar(
                 tabs: NavigatorTab.allCases,
                 selection: $state.navigatorTab,
@@ -378,9 +451,9 @@ private struct NavigatorView: View {
             .accessibilityIdentifier("navigator.quickOpen")
 
             if state.navigatorTab == .pages {
-                HStack(spacing: 6) {
+                HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                     TextField("Search Pages", text: $state.pageSearchText)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                         .accessibilityLabel("Search pages by name or route")
                         .accessibilityIdentifier("navigator.pages.search")
                         .onSubmit { state.openFirstMatchingPage() }
@@ -394,16 +467,12 @@ private struct NavigatorView: View {
                 Text(state.pageSearchSummary)
                     .font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("navigator.pages.search.status")
-                Button("New Page…", systemImage: "doc.badge.plus") { state.presentPageEditor(.create) }
-                    .disabled(!state.pageEditingIsAvailable)
-                    .accessibilityIdentifier("navigator.pages.new")
-                if let page = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }) {
-                    Menu("Page Actions") { PageActionButtons(state: state, page: page) }
-                        .disabled(!state.pageEditingIsAvailable)
-                        .accessibilityIdentifier("navigator.pages.actions")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: SiteForgeVisualSystem.compactSpacing) { pageManagementControls }
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) { pageManagementControls }
                 }
                 ScrollView {
-                    LazyVStack(spacing: 4) {
+                    LazyVStack(spacing: SiteForgeVisualSystem.microSpacing) {
                         if state.filteredPages.isEmpty {
                             ContentUnavailableView.search(text: state.pageSearchText)
                                 .accessibilityIdentifier("navigator.pages.search.empty")
@@ -427,9 +496,9 @@ private struct NavigatorView: View {
                 .accessibilityLabel("Pages navigator")
                 .accessibilityIdentifier("navigator.pages.list")
             } else if state.navigatorTab == .layers {
-                HStack(spacing: 6) {
+                HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                     TextField("Search Layers", text: $state.layerSearchText)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                         .accessibilityLabel("Search layers by name")
                         .accessibilityIdentifier("navigator.layers.search")
                         .onSubmit { state.selectFirstMatchingLayer() }
@@ -465,7 +534,7 @@ private struct NavigatorView: View {
                     .accessibilityIdentifier("navigator.empty")
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 4) {
+                        LazyVStack(spacing: SiteForgeVisualSystem.microSpacing) {
                             if state.filteredLayerTargets.isEmpty {
                                 ContentUnavailableView.search(text: state.layerSearchText)
                                     .accessibilityIdentifier("navigator.layers.search.empty")
@@ -489,7 +558,7 @@ private struct NavigatorView: View {
                                         Text((authored ?? property.defaultValue) ? "Visible" : "Hidden in instance")
                                             .font(.caption2).foregroundStyle(.secondary)
                                     }
-                                    .padding(.horizontal, 8).padding(.vertical, 5)
+                                    .padding(.horizontal, SiteForgeVisualSystem.controlInset).padding(.vertical, 5)
                                     .accessibilityElement(children: .combine)
                                     .accessibilityLabel("Component child \(property.label)")
                                     .accessibilityValue("\((authored ?? property.defaultValue) ? "Visible" : "Hidden"); \(authored == nil ? "definition default" : "instance override")")
@@ -512,8 +581,9 @@ private struct NavigatorView: View {
                     .id(NavigatorTab.components)
             }
         }
-        .padding(10)
+        .padding(SiteForgeVisualSystem.panePadding)
         .workspaceChrome(.navigator)
+        .groupBoxStyle(SiteForgeInspectorGroupStyle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.navigator.rawValue)
     }
@@ -565,10 +635,10 @@ private struct QuickOpenSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             Text("Quick Open").font(.title2.weight(.semibold))
             TextField("Find a page, layer, or action", text: $query)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                 .accessibilityIdentifier("quickOpen.search")
                 .onSubmit(openFirst)
             Picker("Search Scope", selection: $scope) {
@@ -582,7 +652,7 @@ private struct QuickOpenSheet: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("quickOpen.status")
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
                     if scope.includesPages, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                        !state.recentQuickOpenPages.isEmpty {
                         Text("Recent Pages").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -760,7 +830,7 @@ private struct QuickOpenSheet: View {
                     .accessibilityIdentifier("quickOpen.cancel")
             }
         }
-        .padding(20)
+        .padding(SiteForgeVisualSystem.settingsFormPadding)
         .frame(minWidth: 440, minHeight: 320)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("quickOpen.sheet")
@@ -769,11 +839,687 @@ private struct QuickOpenSheet: View {
 
 /// SF-0902/0905: drafts belong to the selected scene/revision, not the
 /// definition or expanded renderer nodes. All actions use the component registry.
+private struct ComponentFeedbackText: View {
+    let announcement: String
+    var body: some View {
+        if !announcement.isEmpty, announcement != "Editing component definition; changes update linked instances" {
+            Text(announcement)
+        }
+    }
+}
+
+private struct PageStructureInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let node: DocumentNode
+    @State private var height: String = ""
+    @State private var padding: String = ""
+    @State private var destination: PageID?
+    @State private var identity: DesignInspectorOperationIdentity?
+    @State private var convertConfirmation = false
+    @State private var linksExpanded = false
+    @State private var validation: String?
+    private var role: PageFlowRole? { CanonicalPageFlow.role(node) }
+    private var navigationRole: Bool { role == .header || role == .footer }
+    private var bodyPeers: [DocumentNode] {
+        guard let page = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }),
+              case .node(let parentID) = node.parent, let parent = page.nodes.first(where: { $0.id == parentID }) else { return [] }
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        return parent.childIDs.compactMap { byID[$0] }.filter { CanonicalPageFlow.role($0) == .body }
+    }
+    var body: some View {
+        GroupBox(role == .header ? "Header Settings" : role == .footer ? "Footer Settings" : "Connected Section") {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                if role == nil {
+                    Text("Legacy free-positioned Section. Opening the project does not move it. Conversion derives X/Y/width from its containing area and places it in vertical flow; authored geometry remains available to exact Undo.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Button("Convert to Connected Flow…") { convertConfirmation = true }
+                        .accessibilityIdentifier("inspector.flow.convert")
+                } else {
+                    Text(role == .header ? "Top of page content · full available width" : role == .footer
+                         ? "After page content · not fixed to the viewport" : "Connected vertical flow · full containing width")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("inspector.flow.provenance")
+                    Text(state.resolvedSelectedGeometrySummary.map { "Resolved geometry: " + $0 }
+                         ?? "No current resolved geometry is available.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                        .help("Height is authored intent. Stack/Grid owners can fit the computed height without rewriting the saved value.")
+                        .accessibilityIdentifier("inspector.flow.resolved")
+                    LabeledContent("Height") {
+                    TextField("Height", text: $height).onSubmit { number(height, isPadding: false) }
+                        .focusedValue(\.siteforgeNativeTextEditor, true)
+                        .accessibilityLabel("\(role?.rawValue.capitalized ?? "Section") height")
+                        .accessibilityIdentifier("inspector.flow.height")
+                    }
+                    Text(state.geometryInspectorResponsiveSource(for: .height) ?? "Desktop · authored/defaulted height")
+                        .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("inspector.flow.height.provenance")
+                    LabeledContent("Padding") {
+                    TextField("Content Padding", text: $padding).onSubmit { number(padding, isPadding: true) }
+                        .focusedValue(\.siteforgeNativeTextEditor, true)
+                        .disabled(DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.padding != nil)
+                        .accessibilityIdentifier("inspector.flow.padding")
+                    }
+                    if DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.padding != nil {
+                        Text("Design padding overrides layout padding. Edit the existing Design control to change it.").font(.caption)
+                    }
+                    HStack {
+                        Button("Apply Height") { number(height, isPadding: false) }.accessibilityIdentifier("inspector.flow.height.apply")
+                        Button("Cancel", action: resetDrafts).accessibilityIdentifier("inspector.flow.cancel")
+                    }
+                    Button("Apply Padding") { number(padding, isPadding: true) }
+                        .disabled(DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.padding != nil)
+                        .accessibilityIdentifier("inspector.flow.padding.apply")
+                    if role == .body {
+                        HStack {
+                            Button("Move Up") { reorder(-1) }.accessibilityIdentifier("inspector.flow.moveUp")
+                                .disabled(bodyPeers.first?.id == node.id)
+                            Button("Move Down") { reorder(1) }.accessibilityIdentifier("inspector.flow.moveDown")
+                                .disabled(bodyPeers.last?.id == node.id)
+                        }
+                        Text("Drag the Section body to reorder. The insertion line indicates its new boundary; no X/Y value is written.").font(.caption)
+                    }
+                    if navigationRole {
+                        PageChromeContentsControls(state: state, owner: node, commit: commit)
+                        Toggle("Hamburger Menu on Mobile", isOn: Binding(get: {
+                            node.insertionProperty(CanonicalPageFlow.hamburgerKey)?.value == .boolean(true)
+                        }, set: { commit(.hamburger(node.id, $0)) }))
+                            .accessibilityIdentifier("inspector.navigation.hamburger")
+                        Text("Desktop/Tablet show page links. Mobile uses a keyboard-accessible expandable menu when enabled and links exist. Test interaction in Preview.")
+                            .font(.caption).fixedSize(horizontal: false, vertical: true)
+                        Picker("Navigation Alignment", selection: Binding(get: {
+                            node.insertionStringProperty(CanonicalPageFlow.alignmentKey) ?? "start"
+                        }, set: { value in if let alignment = ContainerLayoutAlignment(rawValue: value) { commit(.alignment(node.id, alignment)) } })) {
+                            ForEach(ContainerLayoutAlignment.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0.rawValue) }
+                        }.accessibilityIdentifier("inspector.navigation.alignment")
+                        let pages = state.pages.filter { $0.role != .notFound && $0.id != state.effectiveSelectedPageID }
+                        Picker("Add Page Link", selection: $destination) {
+                            Text("Choose a project page").tag(Optional<PageID>.none)
+                            ForEach(pages) { Text($0.name).tag(Optional($0.id)) }
+                        }.accessibilityIdentifier("inspector.navigation.add.page")
+                        Button("Add Link") { if let destination { commit(.addLink(owner: node.id, pageID: destination)) } }
+                            .disabled(destination == nil).accessibilityIdentifier("inspector.navigation.add")
+                        if pages.isEmpty {
+                            Text("Create another page in Pages before adding a navigation link.").font(.caption)
+                            Button("New Page…") { state.presentPageEditor(.create) }.accessibilityIdentifier("inspector.navigation.newPage")
+                        }
+                        DisclosureGroup("Edit individual links", isExpanded: $linksExpanded) {
+                            ForEach(state.pageStructureNavigation?.links ?? []) { link in
+                                PageNavigationLinkFields(state: state, owner: node.id, link: link)
+                            }
+                        }.disclosureGroupStyle(SiteForgeInspectorDisclosureStyle(identifier: "inspector.navigation.links"))
+                    }
+                    Text("Background and border use the shared Design Inspector; accessibility remains in Accessibility.").font(.caption)
+                }
+                if let validation { Text(validation).font(.caption).foregroundStyle(.red).accessibilityIdentifier("inspector.flow.validation") }
+                ComponentFeedbackText(announcement: state.componentAnnouncement).font(.caption).accessibilityValue(state.componentAnnouncement)
+                    .accessibilityIdentifier("inspector.flow.status")
+            }
+        }.onAppear { identity = state.componentTextDraftIdentity; resetDrafts() }
+            .onChange(of: state.componentTextInspectorKey) { _, _ in
+                identity = state.componentTextDraftIdentity; resetDrafts()
+            }
+            .onExitCommand(perform: resetDrafts)
+            .alert("Convert Section to connected flow?", isPresented: $convertConfirmation) {
+                Button("Convert", role: .destructive) { commit(.convert(node.id, confirmed: true)) }
+                    .accessibilityIdentifier("inspector.flow.convert.confirm")
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The Section fills its containing width and moves into connected order. Header/Footer become page anchors. Child data and authored geometry are retained; Undo restores the exact old layout. No responsive constraints or fixed positioning are invented.")
+            }
+    }
+    private func commit(_ edit: PageStructureEdit) { if let identity { _ = state.commitPageStructure(edit, identity: identity) } }
+    private func number(_ draft: String, isPadding: Bool) {
+        guard case .success(let value) = GeometryInspectorNumberParser.parse(draft) else {
+            validation = "Enter a complete finite number; the last committed value is unchanged."; return
+        }
+        guard isPadding ? (0...10_000).contains(value) : (1...LayoutPolicy.maximumDimension).contains(value) else {
+            validation = isPadding ? "Padding must be 0–10,000 points." : "Height must be at least 1 point and within the supported dimension limit."
+            return
+        }
+        validation = nil
+        commit(isPadding ? .padding(node.id, value, state.viewportPreset.responsiveBreakpoint) : .height(node.id, value, state.viewportPreset.responsiveBreakpoint))
+    }
+    private func resetDrafts() {
+        height = GeometryInspectorNumberParser.format(ResponsiveGeometryResolver.value(for: .height, node: node,
+            breakpoint: state.viewportPreset.responsiveBreakpoint)?.0 ?? 320)
+        padding = GeometryInspectorNumberParser.format(CanonicalPageFlow.padding(node, breakpoint: state.viewportPreset.responsiveBreakpoint,
+            width: state.viewportState.contentBounds.size.width))
+        validation = nil
+    }
+    private func reorder(_ direction: Double) {
+        let peers = bodyPeers
+        guard let index = peers.firstIndex(where: { $0.id == node.id }), peers.indices.contains(index + Int(direction)),
+              let page = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }),
+              let frame = page.resolvedStructuralGeometry(breakpoint: state.viewportPreset.responsiveBreakpoint,
+                viewportWidth: state.viewportState.contentBounds.size.width)[peers[index + Int(direction)].id]?.frame else { return }
+        commit(.reorder(node.id, pointerY: frame.minY + frame.size.height / 2 + direction))
+    }
+}
+
+private struct PageChromeContentsControls: View {
+    @ObservedObject var state: WorkspaceShellState
+    let owner: DocumentNode
+    let commit: (PageStructureEdit) -> Void
+    @State private var titleDraft = ""
+    @State private var gapDraft = "24"
+    @State private var layoutValidation: String?
+    @State private var customizationExpanded = false
+    private var page: DocumentPage? { state.pages.first { $0.id == state.effectiveSelectedPageID } }
+    private func referenced(_ key: String) -> DocumentNode? {
+        guard let id = CanonicalPageChrome.reference(key, on: owner) else { return nil }
+        return page?.nodes.first { $0.id == id }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+            if let title = referenced(CanonicalPageChrome.titleKey), let content = referenced(CanonicalPageChrome.contentKey) {
+                Toggle("Show Site Title", isOn: Binding(get: { !title.selectionBooleanProperty("hidden") },
+                    set: { commit(.showTitle(owner.id, $0)) }))
+                    .accessibilityIdentifier("inspector.navigation.title.visible")
+                TextField("Site Title", text: $titleDraft).onSubmit { commit(.title(owner.id, text: titleDraft)) }
+                    .focusedValue(\.siteforgeNativeTextEditor, true)
+                    .accessibilityIdentifier("inspector.navigation.title")
+                HStack {
+                    Button("Apply Title") { commit(.title(owner.id, text: titleDraft)) }
+                        .accessibilityIdentifier("inspector.navigation.title.apply")
+                    Button("Cancel") { titleDraft = CanonicalPageChrome.titleText(title, in: state.documentSession.document) }
+                }
+                Text(title.insertionProperty("content.text")?.origin == .authored ? "Authored title" : "Defaulted from Home page")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.navigation.title.provenance")
+                DisclosureGroup("Customize Contents", isExpanded: $customizationExpanded) {
+                    Picker("Direction", selection: Binding(get: { content.insertionStringProperty("layout.axis") ?? "horizontal" },
+                        set: { value in if let axis = ContainerLayoutAxis(rawValue: value) { layout(content, axis: axis) } })) {
+                        Text("Horizontal").tag("horizontal"); Text("Vertical").tag("vertical")
+                    }.accessibilityIdentifier("inspector.navigation.content.direction")
+                    Picker("Alignment", selection: Binding(get: { content.insertionStringProperty("layout.align") ?? "center" },
+                        set: { value in if let alignment = ContainerLayoutAlignment(rawValue: value) { layout(content, alignment: alignment) } })) {
+                        ForEach(ContainerLayoutAlignment.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0.rawValue) }
+                    }.accessibilityIdentifier("inspector.navigation.content.alignment")
+                    LabeledContent("Gap") {
+                        TextField("Content Gap", text: $gapDraft).onSubmit { layout(content) }
+                            .focusedValue(\.siteforgeNativeTextEditor, true)
+                            .accessibilityIdentifier("inspector.navigation.content.gap")
+                    }
+                    Button("Restore Automatic Layout") { commit(.automaticLayout(owner.id)) }
+                        .disabled(!CanonicalPageChrome.isCustom(owner))
+                        .accessibilityIdentifier("inspector.navigation.content.reset")
+                    Text(CanonicalPageChrome.isCustom(owner) ? "Custom content layout" : "Flexible navigation width · editable content layout")
+                        .font(.caption).accessibilityIdentifier("inspector.navigation.content.provenance")
+                    if let layoutValidation {
+                        Text(layoutValidation).font(.caption).foregroundStyle(.red)
+                            .accessibilityIdentifier("inspector.navigation.content.validation")
+                    }
+                }.disclosureGroupStyle(SiteForgeInspectorDisclosureStyle(identifier: "inspector.navigation.customize"))
+                if let page {
+                    Text("Included Pages").font(.headline)
+                    ForEach(state.pages.filter { $0.role != .notFound && $0.role != .componentDefinition }) { destination in
+                        Toggle(destination.name, isOn: Binding(get: {
+                            CanonicalPageChrome.links(owner: owner, page: page).contains {
+                                $0.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == destination.id.description && !$0.selectionBooleanProperty("hidden")
+                            }
+                        }, set: { commit(.includePage(owner.id, destination.id, $0)) }))
+                        .accessibilityIdentifier("inspector.navigation.include." + destination.id.description)
+                    }
+                    Text("Excluding a page hides its navigation link, not the page. Its label and identity are retained.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } else if CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner) != nil {
+                Text("Original title or navigation content is missing. Its identity is retained; restore it with Undo or the original saved project.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                Button("Undo Last Edit", action: state.undo).disabled(!state.canUndo)
+            } else {
+                Button("Add Editable Title and Navigation") { commit(.editableContents(owner.id)) }
+                    .accessibilityIdentifier("inspector.navigation.editableContents")
+                Text("Existing content and page links are preserved. Undo restores the original structure.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+            }
+        }.onAppear(perform: resetDrafts)
+            .onChange(of: owner) { _, _ in resetDrafts() }
+            .onChange(of: state.componentTextInspectorKey) { _, _ in resetDrafts() }
+            .onExitCommand(perform: resetDrafts)
+    }
+    private func resetDrafts() {
+        titleDraft = referenced(CanonicalPageChrome.titleKey).map { CanonicalPageChrome.titleText($0, in: state.documentSession.document) } ?? ""
+        gapDraft = GeometryInspectorNumberParser.format(referenced(CanonicalPageChrome.contentKey)?.insertionNumberProperty("layout.gap") ?? 24)
+        layoutValidation = nil
+    }
+    private func layout(_ content: DocumentNode, axis: ContainerLayoutAxis? = nil, alignment: ContainerLayoutAlignment? = nil) {
+        guard case .success(let gap) = GeometryInspectorNumberParser.parse(gapDraft), (0...10_000).contains(gap) else {
+            layoutValidation = "Enter a complete gap from 0 to 10,000 points. Committed layout is unchanged."; return
+        }
+        layoutValidation = nil
+        commit(.contentLayout(owner.id, axis: axis ?? ContainerLayoutAxis(rawValue: content.insertionStringProperty("layout.axis") ?? "horizontal") ?? .horizontal,
+            gap: gap, alignment: alignment ?? ContainerLayoutAlignment(rawValue: content.insertionStringProperty("layout.align") ?? "center") ?? .center))
+    }
+}
+
+private struct PageNavigationLinkFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let owner: NodeID
+    let link: PageNavigationLink
+    @State private var label: String
+    @State private var pageID: PageID
+    @State private var identity: DesignInspectorOperationIdentity?
+    init(state: WorkspaceShellState, owner: NodeID, link: PageNavigationLink) {
+        self.state = state; self.owner = owner; self.link = link
+        _label = State(initialValue: link.label); _pageID = State(initialValue: link.pageID)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+            if !link.isAvailable { Label("Missing page · destination retained", systemImage: "exclamationmark.triangle").font(.caption) }
+            TextField("Link Label", text: $label).onSubmit(apply).accessibilityIdentifier("inspector.navigation.label.\(link.id)")
+            Picker("Destination", selection: $pageID) {
+                if !link.isAvailable { Text("Missing original page").tag(link.pageID) }
+                ForEach(state.pages.filter { $0.role != .notFound }) { Text($0.name).tag($0.id) }
+            }.accessibilityIdentifier("inspector.navigation.destination.\(link.id)")
+            HStack {
+                Button("Apply", action: apply).accessibilityIdentifier("inspector.navigation.apply.\(link.id)")
+                Button("Cancel") { label = link.label; pageID = link.pageID }
+                Button("Remove", role: .destructive) { commit(.removeLink(owner: owner, link: link.id)) }
+            }
+            HStack {
+                Button("Up") { commit(.reorderLink(owner: owner, link: link.id, offset: -1)) }
+                    .disabled(state.pageStructureNavigation?.links.first?.id == link.id)
+                Button("Down") { commit(.reorderLink(owner: owner, link: link.id, offset: 1)) }
+                    .disabled(state.pageStructureNavigation?.links.last?.id == link.id)
+            }
+        }.onAppear { identity = state.componentTextDraftIdentity }
+            .onChange(of: state.componentTextInspectorKey) { _, _ in
+                identity = state.componentTextDraftIdentity; label = link.label; pageID = link.pageID
+            }
+            .onExitCommand { label = link.label; pageID = link.pageID }
+    }
+    private func apply() { commit(.editLink(owner: owner, link: link.id, pageID: pageID, label: label)) }
+    private func commit(_ edit: PageStructureEdit) { if let identity { _ = state.commitPageStructure(edit, identity: identity) } }
+}
+
+private struct ComponentOrganizationInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    var body: some View {
+        GroupBox("Property Organization") {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                if state.editingComponentID != nil, let node = state.selectedCanonicalNodes.first,
+                   state.selectedCanonicalNodes.count == 1 {
+                    let entries = state.componentOrganizationEntries
+                    ForEach(entries.filter { $0.sourceNodeID == node.id }) { entry in
+                        ComponentOrganizationFields(state: state, entry: entry, entries: entries)
+                            .disabled(!state.componentTextEditingAvailable)
+                    }
+                    if !entries.contains(where: { $0.sourceNodeID == node.id }) {
+                        Text("Expose a property on this layer before organizing it.").font(.caption)
+                    }
+                } else {
+                    Text("Select one definition layer to edit its property group and position. Instance values and child layout are unchanged.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                }
+                ComponentFeedbackText(announcement: state.componentAnnouncement).font(.caption)
+                    .accessibilityLabel("Property organization status").accessibilityValue(state.componentAnnouncement)
+                    .accessibilityIdentifier("component.organization.status")
+            }
+        }
+    }
+}
+
+private struct ComponentOrganizationFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let entry: CanonicalComponentOrganization.Entry
+    let entries: [CanonicalComponentOrganization.Entry]
+    @State private var group: String
+    @State private var position: Int
+    @State private var identity: DesignInspectorOperationIdentity?
+    init(state: WorkspaceShellState, entry: CanonicalComponentOrganization.Entry,
+         entries: [CanonicalComponentOrganization.Entry]) {
+        self.state = state; self.entry = entry; self.entries = entries
+        _group = State(initialValue: entry.group ?? "")
+        _position = State(initialValue: entries.firstIndex { $0.id == entry.id } ?? 0)
+    }
+    private var suffix: String { entry.id.stableDescription }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+            Text(entry.label).font(.headline).lineLimit(1).help(entry.label)
+            Text(entry.rank == nil && entry.group == nil ? "Default · stable binding order" : "Authored · definition presentation")
+                .font(.caption).foregroundStyle(.secondary)
+            TextField("Group (empty = ungrouped)", text: $group).onSubmit(apply)
+                .accessibilityLabel("Property group for " + entry.label)
+                .accessibilityIdentifier("component.organization.group." + suffix)
+            Picker("Position", selection: $position) {
+                ForEach(entries.indices, id: \.self) { Text(String($0 + 1)).tag($0) }
+            }.accessibilityIdentifier("component.organization.position." + suffix)
+            HStack {
+                Button("Apply", action: apply).accessibilityIdentifier("component.organization.apply." + suffix)
+                Button("Cancel", action: cancel).accessibilityIdentifier("component.organization.cancel." + suffix)
+            }
+            Button("Reset Organization") {
+                if let identity {
+                    state.commitComponentOrganization(.resetPropertyOrganization(nodeID: entry.sourceNodeID,
+                        property: entry.id), identity: identity)
+                }
+            }.disabled(entry.rank == nil && entry.group == nil)
+                .accessibilityIdentifier("component.organization.reset." + suffix)
+        }.onAppear { identity = state.componentTextDraftIdentity }
+            .onExitCommand(perform: cancel)
+    }
+    private func apply() {
+        if let identity {
+            state.commitComponentOrganization(.organizeProperty(nodeID: entry.sourceNodeID, property: entry.id,
+                group: group.isEmpty ? nil : group, position: position), identity: identity)
+        }
+    }
+    private func cancel() {
+        group = entry.group ?? ""; position = entries.firstIndex { $0.id == entry.id } ?? 0
+    }
+}
+
+private struct OrganizedComponentInstanceInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let instance: DocumentNode
+    let reader: ScrollViewProxy
+    @State private var query = ""
+    @State private var conflictsOnly = false
+    @State private var navigationProperty: ComponentOverridePropertyIdentity?
+    @FocusState private var focusedProperty: ComponentOverridePropertyIdentity?
+    private var discovery: ComponentPropertyDiscovery.Result {
+        ComponentPropertyDiscovery.project(state.componentOrganizationEntries, query: query,
+            authored: state.componentAuthoredPropertyIdentities,
+            conflicts: Set(state.componentOverrideConflicts.map(\.property)), conflictsOnly: conflictsOnly)
+    }
+    private var groups: [String?] {
+        var result: [String?] = []
+        for entry in discovery.entries where !result.contains(entry.group) { result.append(entry.group) }
+        return result
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+            TextField("Search component properties", text: Binding(get: { query }, set: { query = String($0.prefix(256)) }))
+                .accessibilityLabel("Search component properties by name, type, group or provenance")
+                .accessibilityIdentifier("component.discovery.search")
+                .onSubmit { reveal(discovery.neighbor(of: nil, offset: 1), reader: reader) }
+                .onExitCommand { query = ""; conflictsOnly = false }
+            Text("\(discovery.entries.count) of \(discovery.total) properties")
+                .font(.caption).accessibilityIdentifier("component.discovery.count")
+                .accessibilityValue("\(discovery.entries.count) matching of \(discovery.total) exposed properties")
+            Toggle("Conflicting properties only", isOn: $conflictsOnly)
+                .accessibilityIdentifier("component.discovery.conflicts")
+            HStack {
+                Button("Previous") { reveal(discovery.neighbor(of: navigationProperty, offset: -1), reader: reader) }
+                    .accessibilityLabel("Reveal previous matching component property")
+                    .accessibilityIdentifier("component.discovery.previous")
+                    .disabled(discovery.entries.isEmpty)
+                Button("Next") { reveal(discovery.neighbor(of: navigationProperty, offset: 1), reader: reader) }
+                    .accessibilityLabel("Reveal next matching component property")
+                    .accessibilityIdentifier("component.discovery.next")
+                    .disabled(discovery.entries.isEmpty)
+                Button("Clear") { query = ""; conflictsOnly = false }
+                    .accessibilityIdentifier("component.discovery.clear")
+            }.disabled(discovery.entries.isEmpty && query.isEmpty && !conflictsOnly)
+            if discovery.entries.isEmpty {
+                Text("No matching properties. Clear the search to restore definition order. Retained conflicts are available below.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("component.discovery.empty")
+            }
+            if discovery.hiddenConflictCount > 0 {
+                Text("\(discovery.hiddenConflictCount) retained conflict(s) outside these results. Recovery below is never filtered.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("component.discovery.hiddenConflicts")
+            }
+            ForEach(groups, id: \.self) { group in
+                GroupBox {
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                        ForEach(discovery.entries.filter { $0.group == group }) { entry in
+                            field(entry)
+                                .id(state.componentTextInspectorKey + ":" + entry.id.stableDescription)
+                                .disabled(!state.componentTextEditingAvailable)
+                                .id(entry.id).focusable().focused($focusedProperty, equals: entry.id)
+                                .accessibilityElement(children: .contain)
+                                .accessibilityLabel(entry.label + ", " + entry.id.organizationKind + ", " + (entry.group ?? "ungrouped"))
+                                .onMoveCommand { direction in
+                                    if focusedProperty == entry.id && (direction == .up || direction == .down) {
+                                        reveal(discovery.neighbor(of: entry.id, offset: direction == .up ? -1 : 1), reader: reader)
+                                    }
+                                }
+                        }
+                    }
+                } label: {
+                    Text(group ?? "Ungrouped Properties").lineLimit(1).help(group ?? "Ungrouped Properties")
+                }.accessibilityElement(children: .contain)
+                    .accessibilityLabel(group ?? "Ungrouped Properties")
+                    .accessibilityIdentifier("component.organization.instance.group." + (group.map { "named." + $0 } ?? "default"))
+            }
+            ComponentOverrideRecoveryView(state: state, instance: instance)
+                .id(state.componentTextInspectorKey)
+                .disabled(!state.componentTextEditingAvailable)
+            if groups.isEmpty { Text("No exposed properties. Edit the definition to expose a supported property.").font(.caption) }
+            Text("Reset All affects the entire instance, including filtered-out properties and retained conflicts; it is not limited to \(discovery.entries.count) matching rows. It reveals available definition defaults. Undo restores exact values.")
+                .font(.caption).fixedSize(horizontal: false, vertical: true)
+            Button("Reset All Component Overrides") {
+                if let identity = state.componentTextDraftIdentity { state.commitComponentText(.resetAllOverrides(instance.id), identity: identity) }
+            }.disabled(!state.componentTextEditingAvailable || !instance.properties.contains { $0.key.rawValue.hasPrefix(CanonicalComponentReference.namespace) && $0.key.rawValue != CanonicalComponentReference.key })
+                .accessibilityIdentifier("component.text.resetAll")
+            Button("Reset All Visibility Overrides") {
+                if let identity = state.componentTextDraftIdentity { state.commitComponentVisibility(.resetAllVisibilityOverrides(instance.id), identity: identity) }
+            }.disabled(!state.componentTextEditingAvailable || CanonicalComponentVisibility.overrides(on: instance).isEmpty)
+                .accessibilityIdentifier("component.visibility.resetAll")
+            Text("Slots inherit definition fallback; supplied content remains unavailable.").font(.caption)
+                .accessibilityIdentifier("component.slot.supply.unavailable")
+            ComponentFeedbackText(announcement: state.componentAnnouncement).font(.caption)
+                .accessibilityLabel("Component property status").accessibilityValue(state.componentAnnouncement)
+                .accessibilityIdentifier("component.organization.status")
+        }.onChange(of: discovery.entries.map(\.id)) { _, ids in
+            if let focusedProperty, !ids.contains(focusedProperty) { self.focusedProperty = nil }
+            if let navigationProperty, !ids.contains(navigationProperty) { self.navigationProperty = nil }
+        }.onChange(of: focusedProperty) { _, value in
+            if let value { navigationProperty = value }
+        }
+    }
+    private func reveal(_ id: ComponentOverridePropertyIdentity?, reader: ScrollViewProxy) {
+        guard let id else { return }
+        reader.scrollTo(id, anchor: .center)
+        navigationProperty = id
+        focusedProperty = id
+    }
+    @ViewBuilder private func field(_ entry: CanonicalComponentOrganization.Entry) -> some View {
+        switch entry.id {
+        case .text(let id):
+            if let p = state.componentTextProperties.first(where: { $0.id == id }) {
+                ComponentTextInstanceFields(state: state, instanceID: instance.id, property: p,
+                    authored: CanonicalComponentText.overrides(on: instance)[id])
+            }
+        case .visibility(let id):
+            if let p = state.componentVisibilityProperties.first(where: { $0.id == id }) {
+                ComponentVisibilityInstanceFields(state: state, instanceID: instance.id, property: p,
+                    authored: CanonicalComponentVisibility.overrides(on: instance)[id])
+            }
+        case .action(let id):
+            if let p = state.componentActionProperties.first(where: { $0.id == id }) {
+                let value = CanonicalComponentAction.overrides(on: instance)[id]
+                ComponentActionDestinationFields(state: state, instance: instance, property: p,
+                    committed: value ?? p.defaultValue, isAuthored: value != nil)
+            }
+        case .slot(let id):
+            if let p = state.componentSlotProperties.first(where: { $0.id == id }) {
+                ComponentSlotFallbackFields(state: state, instance: instance, property: p)
+            }
+        case .choice, .media:
+            ComponentOrganizedChoiceMediaFields(state: state, instance: instance, entry: entry)
+        }
+    }
+}
+
+private struct ComponentRetainedOverrideValueView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let value: ComponentOverrideValue
+    let identifier: String
+    var body: some View {
+        // Native selectable text's generic container does not expose AXValue.
+        // Preserve pointer text selection while representing the same displayed
+        // value as static text for VoiceOver, on one stable semantic element.
+        content.accessibilityRepresentation {
+            Text(accessibleValue)
+                .accessibilityLabel("Retained override value")
+                .accessibilityValue(accessibleValue)
+                .accessibilityIdentifier(identifier)
+        }
+    }
+
+    private var accessibleValue: String {
+        switch value {
+        case .text(let text): text
+        case .visibility(let visible): visible ? "Visible" : "Hidden"
+        case .choice(let mode): mode.rawValue.capitalized
+        case .media(let id): state.imageAssets.first { $0.id == id }?.displayName ?? "Missing image asset · reference retained"
+        case .action(let target):
+            switch target {
+            case .none: "None"
+            case .external(let url): url
+            case .page: "Retained page destination"
+            case .section: "Retained section destination"
+            }
+        case .slotFallback(let ids): "Inherited fallback: \(ids.count) roots"
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch value {
+        case .text(let text):
+            Text(text).textSelection(.enabled)
+        case .visibility(let visible): Text(visible ? "Retained value: Visible" : "Retained value: Hidden")
+        case .choice(let mode): Text("Retained fit: " + mode.rawValue.capitalized)
+        case .media(let id): Text(state.imageAssets.first { $0.id == id }?.displayName ?? "Missing image asset · reference retained")
+        case .action(let target):
+            switch target {
+            case .none: Text("Retained destination: None")
+            case .external(let url): Text(url).textSelection(.enabled)
+            case .page: Text("Retained page destination")
+            case .section: Text("Retained section destination")
+            }
+        case .slotFallback(let ids): Text("Inherited fallback: \(ids.count) roots")
+        }
+    }
+}
+
+private struct ComponentOverrideRecoveryView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let instance: DocumentNode
+    private struct ResetRequest: Identifiable {
+        let id = UUID()
+        let identity: DesignInspectorOperationIdentity
+        let propertyIDs: [PropertyID]
+    }
+    @State private var request: ResetRequest?
+    @State private var operationIdentity: DesignInspectorOperationIdentity?
+    private var conflicts: [ComponentOverrideConflictFinding] { state.componentOverrideConflicts }
+    private var definitionAvailable: Bool { state.componentOrganizationDefinition != nil }
+    var body: some View {
+        if !conflicts.isEmpty || !definitionAvailable {
+            GroupBox("Retained Override Recovery") {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                    Label("\(conflicts.count) retained override conflict(s)", systemImage: "exclamationmark.triangle")
+                        .font(.headline).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityValue("\(conflicts.count) retained authored override conflicts")
+                        .accessibilityIdentifier("component.recovery.summary")
+                    if !definitionAvailable {
+                        Text("Original definition unavailable. Its reference and authored intent are preserved; resetting overrides does not replace that definition.")
+                            .font(.caption).fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("component.recovery.definition.unavailable")
+                    }
+                    Text("Restore original stable binding data from Undo or the original saved project. No replacement is guessed and no value is converted.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Button("Open Original Definition") {
+                        if let identity = operationIdentity {
+                            state.revealComponentRecoverySource(instanceID: instance.id, property: nil, identity: identity)
+                        }
+                    }.disabled(!definitionAvailable).accessibilityIdentifier("component.recovery.definition.reveal")
+                    ForEach(conflicts) { conflict in
+                        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                            Text(conflict.label ?? "Retained \(conflict.property.organizationKind) override")
+                                .font(.headline).lineLimit(1).help(conflict.property.stableDescription)
+                            Text(conflict.reason.explanation).font(.caption).fixedSize(horizontal: false, vertical: true)
+                                .accessibilityValue(conflict.reason.rawValue + "; authored intent retained")
+                                .accessibilityIdentifier("component.recovery.reason." + conflict.property.stableDescription)
+                            ComponentRetainedOverrideValueView(state: state, value: conflict.retainedValue,
+                                identifier: "component.recovery.value." + conflict.property.stableDescription)
+                            if conflict.path != nil {
+                                Button("Reveal Original Source") {
+                                    if let identity = operationIdentity {
+                                        state.revealComponentRecoverySource(instanceID: instance.id, property: conflict.property, identity: identity)
+                                    }
+                                }.accessibilityIdentifier("component.recovery.source.reveal." + conflict.property.stableDescription)
+                            } else {
+                                Text("Original source unavailable; restore its binding before revealing it.").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Text("Reset removes this retained authored value. An available original default becomes effective; Undo restores the exact value and identity.")
+                                .font(.caption).fixedSize(horizontal: false, vertical: true)
+                            Button("Reset Retained Override…") { prepare([conflict.authoredPropertyID]) }
+                                .accessibilityIdentifier("component.recovery.reset." + conflict.property.stableDescription)
+                        }
+                    }
+                    Button("Reset All Retained Conflicts…") { prepare(conflicts.map(\.authoredPropertyID)) }
+                        .disabled(conflicts.isEmpty).accessibilityIdentifier("component.recovery.resetAll")
+                    Text("Reset All Retained Conflicts leaves healthy overrides and definition organization unchanged.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .alert("Reset retained overrides?", isPresented: Binding(get: { request != nil }, set: { if !$0 { request = nil } }), presenting: request) { request in
+                Button("Reset Retained Overrides", role: .destructive) {
+                    state.resetComponentOverrideConflicts(instanceID: instance.id, expectedPropertyIDs: request.propertyIDs,
+                        identity: request.identity)
+                    self.request = nil
+                }.accessibilityIdentifier("component.recovery.confirm")
+                Button("Cancel", role: .cancel) { self.request = nil }.accessibilityIdentifier("component.recovery.cancel")
+            } message: { request in
+                Text("Remove \(request.propertyIDs.count) retained authored value(s)? Available original defaults will be used and effective rendering may change. Healthy values, binding identities and canonical geometry stay intact. Undo restores the exact removed values.")
+            }
+            .onAppear { operationIdentity = state.componentTextDraftIdentity }
+        }
+    }
+    private func prepare(_ propertyIDs: [PropertyID]) {
+        guard !propertyIDs.isEmpty, let identity = operationIdentity else { return }
+        request = .init(identity: identity, propertyIDs: propertyIDs)
+    }
+}
+
+private struct ComponentOrganizedChoiceMediaFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let instance: DocumentNode
+    let entry: CanonicalComponentOrganization.Entry
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+            if case .choice(let id) = entry.id, let p = state.componentChoiceProperties.first(where: { $0.id == id }) {
+                let authored = CanonicalComponentChoice.overrides(on: instance)[id]
+                Picker(p.label, selection: Binding(get: { authored ?? p.defaultValue }, set: { value in
+                    if let identity = state.componentTextDraftIdentity {
+                        state.commitComponentChoice(.setChoiceOverride(instanceID: instance.id, propertyID: id, value: value), identity: identity)
+                    }
+                })) { ForEach(ImageFitMode.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) } }
+                    .accessibilityLabel(p.label + " component choice")
+                    .accessibilityValue((authored ?? p.defaultValue).rawValue.capitalized)
+                    .accessibilityIdentifier("component.choice.value.\(id)")
+                Text(authored == nil ? "Inherited · definition default" : "Authored · this instance").font(.caption)
+                Button("Reset Override") {
+                    if let identity = state.componentTextDraftIdentity { state.commitComponentChoice(.resetChoiceOverride(instanceID: instance.id, propertyID: id), identity: identity) }
+                }.disabled(authored == nil).accessibilityIdentifier("component.choice.reset.\(id)")
+            } else if case .media(let id) = entry.id, let p = state.componentMediaProperties.first(where: { $0.id == id }) {
+                let authored = CanonicalComponentMedia.overrides(on: instance)[id]
+                Picker(p.label, selection: Binding(get: { authored ?? p.defaultValue }, set: { value in
+                    if let identity = state.componentTextDraftIdentity { state.commitComponentMedia(.setMediaOverride(instanceID: instance.id, propertyID: id, assetID: value), identity: identity) }
+                })) { ForEach(state.imageAssets) { Text($0.displayName).tag($0.id) } }
+                    .disabled(state.imageAssets.isEmpty)
+                    .accessibilityLabel(p.label + " component image")
+                    .accessibilityValue(state.imageAssets.first { $0.id == (authored ?? p.defaultValue) }?.displayName ?? "Missing image asset")
+                    .accessibilityIdentifier("component.media.value.\(id)")
+                Text(authored == nil ? "Inherited · definition default" : "Authored · this instance").font(.caption)
+                Button("Reset Override") {
+                    if let identity = state.componentTextDraftIdentity { state.commitComponentMedia(.resetMediaOverride(instanceID: instance.id, propertyID: id), identity: identity) }
+                }.disabled(authored == nil).accessibilityIdentifier("component.media.reset.\(id)")
+            }
+        }
+    }
+}
+
 private struct ComponentTextInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             Text("Component Text").font(.headline)
             if let node = state.selectedDefinitionText {
                 ComponentTextDefinitionFields(state: state, node: node)
@@ -802,12 +1548,16 @@ private struct ComponentTextInspectorView: View {
                         }.accessibilityIdentifier("component.text.missing.reset.\(id)")
                     }
                 }
-                Button("Reset All Text Overrides") {
+                Button("Reset All Component Overrides") {
                     if let identity = state.componentTextDraftIdentity {
-                        state.commitComponentText(.resetAllTextOverrides(instance.id), identity: identity)
+                        state.commitComponentText(.resetAllOverrides(instance.id), identity: identity)
                     }
                 }
-                .disabled(overrides.isEmpty || !state.componentTextEditingAvailable)
+                .disabled((overrides.isEmpty && CanonicalComponentVisibility.overrides(on: instance).isEmpty
+                    && CanonicalComponentChoice.overrides(on: instance).isEmpty
+                    && CanonicalComponentMedia.overrides(on: instance).isEmpty
+                    && CanonicalComponentAction.overrides(on: instance).isEmpty)
+                    || !state.componentTextEditingAvailable)
                 .accessibilityIdentifier("component.text.resetAll")
                 Text("Reset removes authored values and restores definition defaults. Empty text is an authored value.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -820,7 +1570,7 @@ private struct ComponentTextInspectorView: View {
             if !state.componentTextEditingAvailable {
                 Text("Editing requires one available, unlocked, visible canonical object.").font(.caption)
             }
-            Text(state.componentAnnouncement)
+            ComponentFeedbackText(announcement: state.componentAnnouncement)
                 .font(.caption).accessibilityLabel("Component text status")
                 .accessibilityValue(state.componentAnnouncement)
                 .accessibilityIdentifier("component.text.status")
@@ -832,7 +1582,7 @@ private struct ComponentVisibilityInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             Text("Component Visibility").font(.headline)
             if let node = state.selectedDefinitionVisibilityChild {
                 ComponentVisibilityDefinitionFields(state: state, node: node)
@@ -851,7 +1601,7 @@ private struct ComponentVisibilityInspectorView: View {
                 }
                 ForEach(overrides.keys.filter { id in !properties.contains { $0.id == id } }
                     .sorted { $0.description < $1.description }, id: \.self) { id in
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
                         Text("Missing visibility binding").font(.headline)
                         Text("The authored value is retained. Restore its definition binding or explicitly reset it.")
                             .font(.caption)
@@ -863,11 +1613,18 @@ private struct ComponentVisibilityInspectorView: View {
                         }.accessibilityIdentifier("component.visibility.missing.reset.\(id)")
                     }
                 }
+                Button("Reset All Visibility Overrides") {
+                    if let identity = state.componentTextDraftIdentity {
+                        state.commitComponentVisibility(.resetAllVisibilityOverrides(instance.id), identity: identity)
+                    }
+                }
+                .disabled(overrides.isEmpty || !state.componentVisibilityEditingAvailable)
+                .accessibilityIdentifier("component.visibility.resetAll")
             } else {
                 Text("Select an eligible definition child or linked instance to edit visibility. Component roots are not eligible.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text(state.componentAnnouncement)
+            ComponentFeedbackText(announcement: state.componentAnnouncement)
                 .font(.caption).accessibilityLabel("Component visibility status")
                 .accessibilityValue(state.componentAnnouncement)
                 .accessibilityIdentifier("component.visibility.status")
@@ -891,7 +1648,7 @@ private struct ComponentVisibilityDefinitionFields: View {
         _identity = State(initialValue: state.componentTextDraftIdentity)
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             Text(CanonicalComponentVisibility.property(on: node) == nil
                 ? "Not exposed · canonical child visibility" : "Exposed · Boolean definition default")
                 .font(.caption).accessibilityIdentifier("component.visibility.definition.provenance")
@@ -942,7 +1699,7 @@ private struct ComponentVisibilityInstanceFields: View {
         _identity = State(initialValue: state.componentTextDraftIdentity)
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
             Toggle(property.label, isOn: Binding(
                 get: { authored ?? property.defaultValue },
                 set: { value in
@@ -969,6 +1726,525 @@ private struct ComponentVisibilityInstanceFields: View {
     }
 }
 
+/// SF-0902: a native enum control exposes Image fit without copying asset or
+/// geometry state into the component instance.
+private struct ComponentChoiceInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            Text("Component Choice").font(.headline)
+            if let node = state.selectedDefinitionChoiceImage {
+                ComponentChoiceDefinitionFields(state: state, node: node)
+            } else if let instance = state.selectedComponent {
+                let overrides = CanonicalComponentChoice.overrides(on: instance)
+                ForEach(state.componentChoiceProperties) { property in
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                        Picker(property.label, selection: Binding(
+                            get: { overrides[property.id] ?? property.defaultValue },
+                            set: { value in
+                                if let identity = state.componentTextDraftIdentity {
+                                    state.commitComponentChoice(.setChoiceOverride(instanceID: instance.id,
+                                        propertyID: property.id, value: value), identity: identity)
+                                }
+                            })) {
+                            ForEach(ImageFitMode.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                        }
+                        .accessibilityLabel(property.label + " component choice")
+                        .accessibilityValue((overrides[property.id] ?? property.defaultValue).rawValue.capitalized)
+                        .accessibilityHint(overrides[property.id] == nil
+                            ? "Inherited from the definition default" : "Authored instance override")
+                        .accessibilityIdentifier("component.choice.value.\(property.id)")
+                        Text(overrides[property.id] == nil ? "Inherited · definition default" : "Authored · this instance")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Reset Override") {
+                            if let identity = state.componentTextDraftIdentity {
+                                state.commitComponentChoice(.resetChoiceOverride(instanceID: instance.id,
+                                    propertyID: property.id), identity: identity)
+                            }
+                        }
+                        .disabled(overrides[property.id] == nil)
+                        .accessibilityIdentifier("component.choice.reset.\(property.id)")
+                    }
+                }
+            }
+            ComponentFeedbackText(announcement: state.componentAnnouncement)
+                .font(.caption).accessibilityLabel("Component choice status")
+                .accessibilityValue(state.componentAnnouncement)
+                .accessibilityIdentifier("component.choice.status")
+        }
+    }
+}
+
+private struct ComponentChoiceDefinitionFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let node: DocumentNode
+    @State private var label: String
+    @State private var cancelled = false
+
+    init(state: WorkspaceShellState, node: DocumentNode) {
+        self.state = state; self.node = node
+        _label = State(initialValue: CanonicalComponentChoice.property(on: node)?.label ?? "Image Fit")
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+            Text(CanonicalComponentChoice.property(on: node) == nil
+                ? "Not exposed · Image fit" : "Exposed · Image fit · definition default")
+                .font(.caption).accessibilityIdentifier("component.choice.definition.provenance")
+            TextField("Property name", text: Binding(get: { label }, set: { label = $0; cancelled = false }))
+                .accessibilityIdentifier("component.choice.definition.name")
+                .onSubmit { commit() }
+            HStack {
+                Button(CanonicalComponentChoice.property(on: node) == nil ? "Expose Image Fit" : "Apply") { commit() }
+                    .accessibilityIdentifier("component.choice.definition.apply")
+                Button("Cancel") {
+                    label = CanonicalComponentChoice.property(on: node)?.label ?? "Image Fit"
+                    cancelled = true
+                }.accessibilityIdentifier("component.choice.definition.cancel")
+                Button("Remove Property") {
+                    if let identity = state.componentTextDraftIdentity {
+                        state.commitComponentChoice(.removeChoiceProperty(node.id), identity: identity)
+                    }
+                }
+                .disabled(CanonicalComponentChoice.property(on: node) == nil)
+                .accessibilityIdentifier("component.choice.definition.remove")
+            }
+            if cancelled { Text("Draft cancelled; committed choice unchanged.").font(.caption) }
+        }
+        .onExitCommand {
+            label = CanonicalComponentChoice.property(on: node)?.label ?? "Image Fit"
+            cancelled = true
+        }
+    }
+    private func commit() {
+        if let identity = state.componentTextDraftIdentity {
+            state.commitComponentChoice(.exposeChoice(nodeID: node.id, label: label), identity: identity)
+        }
+    }
+}
+
+/// SF-0902: media overrides select an existing project AssetID. The picker
+/// never stores a path or resource bytes in the component instance.
+private struct ComponentMediaInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            Text("Component Image").font(.headline)
+            if let node = state.selectedDefinitionMediaImage {
+                ComponentMediaDefinitionFields(state: state, node: node)
+            } else if let instance = state.selectedComponent {
+                let overrides = CanonicalComponentMedia.overrides(on: instance)
+                ForEach(state.componentMediaProperties) { property in
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                        Picker(property.label, selection: Binding(
+                            get: { overrides[property.id] ?? property.defaultValue },
+                            set: { assetID in
+                                if let identity = state.componentTextDraftIdentity {
+                                    state.commitComponentMedia(.setMediaOverride(instanceID: instance.id,
+                                        propertyID: property.id, assetID: assetID), identity: identity)
+                                }
+                            })) {
+                            ForEach(state.imageAssets) { asset in
+                                Text(asset.displayName).tag(asset.id)
+                            }
+                        }
+                        .disabled(state.imageAssets.isEmpty)
+                        .accessibilityLabel(property.label + " component image")
+                        .accessibilityValue(state.imageAssets.first(where: {
+                            $0.id == (overrides[property.id] ?? property.defaultValue)
+                        })?.displayName ?? "Missing image asset")
+                        .accessibilityHint(overrides[property.id] == nil
+                            ? "Inherited from the definition default" : "Authored instance override")
+                        .accessibilityIdentifier("component.media.value.\(property.id)")
+                        Text(overrides[property.id] == nil ? "Inherited · definition default" : "Authored · this instance")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Reset Override") {
+                            if let identity = state.componentTextDraftIdentity {
+                                state.commitComponentMedia(.resetMediaOverride(instanceID: instance.id,
+                                    propertyID: property.id), identity: identity)
+                            }
+                        }
+                        .disabled(overrides[property.id] == nil)
+                        .accessibilityIdentifier("component.media.reset.\(property.id)")
+                    }
+                }
+            }
+            ComponentFeedbackText(announcement: state.componentAnnouncement)
+                .font(.caption).accessibilityLabel("Component image status")
+                .accessibilityValue(state.componentAnnouncement)
+                .accessibilityIdentifier("component.media.status")
+        }
+    }
+}
+
+private struct ComponentMediaDefinitionFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let node: DocumentNode
+    @State private var label: String
+    @State private var cancelled = false
+
+    init(state: WorkspaceShellState, node: DocumentNode) {
+        self.state = state; self.node = node
+        _label = State(initialValue: CanonicalComponentMedia.property(on: node)?.label ?? "Image")
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+            Text(CanonicalComponentMedia.property(on: node) == nil
+                ? "Not exposed · Image asset" : "Exposed · Image asset · definition default")
+                .font(.caption).accessibilityIdentifier("component.media.definition.provenance")
+            TextField("Property name", text: Binding(get: { label }, set: { label = $0; cancelled = false }))
+                .accessibilityLabel("Component image property name")
+                .accessibilityIdentifier("component.media.definition.name")
+                .onSubmit { commit() }
+            HStack {
+                Button(CanonicalComponentMedia.property(on: node) == nil ? "Expose Image" : "Apply") { commit() }
+                    .accessibilityIdentifier("component.media.definition.apply")
+                Button("Cancel") { cancel() }.accessibilityIdentifier("component.media.definition.cancel")
+                Button("Remove Property") {
+                    if let identity = state.componentTextDraftIdentity {
+                        state.commitComponentMedia(.removeMediaProperty(node.id), identity: identity)
+                    }
+                }
+                .disabled(CanonicalComponentMedia.property(on: node) == nil)
+                .accessibilityIdentifier("component.media.definition.remove")
+            }
+            if cancelled { Text("Draft cancelled; committed image unchanged.").font(.caption) }
+        }
+        .onExitCommand { cancel() }
+    }
+    private func commit() {
+        if let identity = state.componentTextDraftIdentity {
+            state.commitComponentMedia(.exposeMedia(nodeID: node.id, label: label), identity: identity)
+        }
+    }
+    private func cancel() {
+        label = CanonicalComponentMedia.property(on: node)?.label ?? "Image"
+        cancelled = true
+    }
+}
+
+private struct ComponentActionInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        GroupBox("Component Actions") {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                if let control = state.selectedDefinitionActionControl {
+                    ComponentActionDefinitionFields(state: state, node: control)
+                } else if let instance = state.selectedComponent {
+                    let overrides = CanonicalComponentAction.overrides(on: instance)
+                    ForEach(state.componentActionProperties) { property in
+                        ComponentActionDestinationFields(state: state, instance: instance, property: property,
+                            committed: overrides[property.id] ?? property.defaultValue,
+                            isAuthored: overrides[property.id] != nil)
+                    }
+                    let known = Set(state.componentActionProperties.map(\.id))
+                    ForEach(overrides.keys.filter { !known.contains($0) }.sorted { $0.description < $1.description }, id: \.self) { id in
+                        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                            Label("Missing action binding — intent retained", systemImage: "exclamationmark.triangle")
+                                .font(.caption).fixedSize(horizontal: false, vertical: true)
+                            Button("Reset Missing Action") {
+                                if let identity = state.componentTextDraftIdentity {
+                                    state.commitComponentAction(.resetActionOverride(instanceID: instance.id, propertyID: id), identity: identity)
+                                }
+                            }.accessibilityIdentifier("component.action.missing.reset.\(id)")
+                        }
+                    }
+                    if state.componentActionProperties.isEmpty && overrides.isEmpty {
+                        Text("This definition has no exposed Button or Link destinations.").font(.caption)
+                    }
+                    Button("Reset All Component Overrides") {
+                        if let identity = state.componentTextDraftIdentity {
+                            state.commitComponentAction(.resetAllOverrides(instance.id), identity: identity)
+                        }
+                    }
+                    .disabled(!state.componentTextEditingAvailable || (instance.properties.allSatisfy {
+                        !$0.key.rawValue.hasPrefix(CanonicalComponentReference.namespace) || $0.key.rawValue == CanonicalComponentReference.key
+                    }))
+                    .accessibilityIdentifier("component.action.resetAll")
+                } else {
+                    Text(state.selectionState.count > 1
+                         ? "Mixed selection · component actions are inspection-only. Select one linked instance or one definition control."
+                         : "Select a Button or Link in the definition to expose its destination.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("component.action.unavailable")
+                }
+                ComponentFeedbackText(announcement: state.componentAnnouncement).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityLabel("Component action status").accessibilityValue(state.componentAnnouncement)
+                    .accessibilityIdentifier("component.action.status")
+            }
+        }
+        .disabled(!state.componentTextEditingAvailable)
+    }
+}
+
+private struct ComponentActionDefinitionFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let node: DocumentNode
+    @State private var label: String
+    @State private var identity: DesignInspectorOperationIdentity?
+    @State private var cancelled = false
+
+    init(state: WorkspaceShellState, node: DocumentNode) {
+        self.state = state; self.node = node
+        _label = State(initialValue: CanonicalComponentAction.property(on: node)?.label ?? "Destination")
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            Text(CanonicalComponentAction.property(on: node) == nil ? "Not exposed · definition destination" : "Exposed · definition destination")
+                .font(.caption).accessibilityIdentifier("component.action.definition.provenance")
+            TextField("Property name", text: $label)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
+                .accessibilityLabel("Component action property name")
+                .accessibilityIdentifier("component.action.definition.name")
+                .onSubmit { apply() }
+            Text("The default is this control’s existing Link Target. Edit it in Interactions.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Button("Edit Default Destination") { state.inspectorTab = .interactions }
+                .accessibilityHint("Uses the existing native Link Target editor for this definition control")
+                .accessibilityIdentifier("component.action.definition.editDefault")
+            HStack {
+                Button(CanonicalComponentAction.property(on: node) == nil ? "Expose Action" : "Apply", action: apply)
+                    .accessibilityIdentifier("component.action.definition.apply")
+                Button("Cancel", action: cancel).accessibilityIdentifier("component.action.definition.cancel")
+            }
+            Button("Remove Property") {
+                if let identity { state.commitComponentAction(.removeActionProperty(node.id), identity: identity) }
+            }
+            .disabled(CanonicalComponentAction.property(on: node) == nil)
+            .accessibilityHint("Existing instance values remain inspectable as missing-binding conflicts")
+            .accessibilityIdentifier("component.action.definition.remove")
+            if cancelled { Text("Draft cancelled; the committed action is unchanged.").font(.caption) }
+        }
+        .onAppear { identity = state.componentTextDraftIdentity }
+        .onExitCommand { cancel() }
+    }
+    private func apply() {
+        guard let identity else { return }
+        if state.commitComponentAction(.exposeAction(nodeID: node.id, label: label), identity: identity) { cancelled = false }
+    }
+    private func cancel() {
+        label = CanonicalComponentAction.property(on: node)?.label ?? "Destination"
+        identity = state.componentTextDraftIdentity; cancelled = true
+    }
+}
+
+private struct ComponentActionDestinationFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let instance: DocumentNode
+    let property: ExposedComponentActionProperty
+    let committed: CanonicalLinkTarget
+    let isAuthored: Bool
+    @State private var kind = "none"
+    @State private var page = ""
+    @State private var section = ""
+    @State private var url = ""
+    @State private var identity: DesignInspectorOperationIdentity?
+    @State private var message = ""
+    @FocusState private var focus: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            Text(property.label).font(.headline).lineLimit(1).help(property.label)
+            if let definitionID = CanonicalComponentReference.definitionID(for: instance),
+               state.componentDefinitions.first(where: { $0.id == definitionID })?.nodes.first(where: { $0.id == property.sourceNodeID })?.kind == .button {
+                Text("Button destination intent is retained. Navigation execution remains unavailable for Buttons; Links use the supported Preview path.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Text(isAuthored ? "Authored · this instance" : "Inherited · definition default")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("component.action.provenance.\(property.id)")
+            if committed.isMissing(in: state.documentSession.document) {
+                Label("Destination missing — choose a replacement or Reset Override.", systemImage: "exclamationmark.triangle")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("component.action.missing.\(property.id)")
+            }
+            NativeLinkDestinationFields(document: state.documentSession.document,
+                kind: $kind, page: $page, section: $section, url: $url, focus: $focus,
+                allowsMixed: false, identifierPrefix: "component.action.target.\(property.id)", onSubmit: apply)
+            HStack {
+                Button("Apply", action: apply).accessibilityIdentifier("component.action.apply.\(property.id)")
+                Button("Cancel") { refresh(); message = "Draft cancelled; committed action unchanged." }
+                    .accessibilityIdentifier("component.action.cancel.\(property.id)")
+                Button("Reset Override") {
+                    if let identity { state.commitComponentAction(.resetActionOverride(instanceID: instance.id, propertyID: property.id), identity: identity) }
+                }.disabled(!isAuthored).accessibilityIdentifier("component.action.reset.\(property.id)")
+            }
+            if !message.isEmpty {
+                Text(message).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("component.action.validation.\(property.id)")
+            }
+        }
+        .onAppear { refresh() }
+        .onExitCommand { refresh(); message = "Draft cancelled; committed action unchanged." }
+    }
+    private func refresh() {
+        identity = state.componentTextDraftIdentity; page = ""; section = ""; url = ""; focus = nil
+        switch committed {
+        case .none: kind = "none"
+        case .page(let id): kind = "page"; page = id.description
+        case .section(let pageID, let nodeID): kind = "section"; page = pageID.description; section = nodeID.description
+        case .external(let value): kind = "external"; url = value
+        }
+    }
+    private func apply() {
+        let target: CanonicalLinkTarget
+        switch kind {
+        case "none": target = .none
+        case "page":
+            guard let id = PageID(uuidString: page) else { message = "Choose an available page."; return }
+            target = .page(id)
+        case "section":
+            guard let pageID = PageID(uuidString: page), let nodeID = NodeID(uuidString: section) else {
+                message = "Choose an available page and section."; return
+            }
+            target = .section(pageID: pageID, nodeID: nodeID)
+        case "external": target = .external(url)
+        default: message = "Choose a supported destination."; return
+        }
+        guard let identity else { message = "Wait for the current component to finish adopting, then retry."; return }
+        if state.commitComponentAction(.setActionOverride(instanceID: instance.id, propertyID: property.id, target: target), identity: identity) {
+            message = ""; focus = nil
+        } else { message = state.componentAnnouncement }
+    }
+}
+
+private struct ComponentSlotInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        GroupBox("Component Slots") {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                if let container = state.selectedDefinitionSlotContainer {
+                    ComponentSlotDefinitionFields(state: state, node: container)
+                } else if let instance = state.selectedComponent {
+                    if let definitionID = CanonicalComponentReference.definitionID(for: instance),
+                       !state.componentDefinitions.contains(where: { $0.id == definitionID }) {
+                        Label("Definition missing · slot intent is retained with the instance reference. Restore the definition to inspect its fallback.", systemImage: "exclamationmark.triangle")
+                            .font(.caption).fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("component.slot.definition.missing")
+                    } else if state.componentSlotProperties.isEmpty {
+                        Text("No named fallback slots. Edit the definition and select a non-root container to expose one.")
+                            .font(.caption).fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("component.slot.empty")
+                    }
+                    ForEach(state.componentSlotProperties) { property in
+                        ComponentSlotFallbackFields(state: state, instance: instance, property: property)
+                    }
+                } else {
+                    Text(state.selectionState.count > 1
+                         ? "Mixed selection · slots are inspection-only. Select one instance or one definition container."
+                         : "Select a non-root Frame, Section, Stack or Grid in the definition to expose its existing fallback children.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("component.slot.unavailable")
+                }
+                Text("Slots currently inherit definition content. Instance-specific content isn't available yet; edit the definition fallback to change shared content.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("component.slot.supply.unavailable")
+                ComponentFeedbackText(announcement: state.componentAnnouncement).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityLabel("Component slot status").accessibilityValue(state.componentAnnouncement)
+                    .accessibilityIdentifier("component.slot.status")
+            }
+        }
+    }
+}
+
+private struct ComponentSlotDefinitionFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let node: DocumentNode
+    @State private var label: String
+    @State private var identity: DesignInspectorOperationIdentity?
+    @State private var cancelled = false
+
+    init(state: WorkspaceShellState, node: DocumentNode) {
+        self.state = state; self.node = node
+        _label = State(initialValue: CanonicalComponentSlot.property(on: node)?.label ?? "Content")
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            Text(CanonicalComponentSlot.property(on: node) == nil ? "Not exposed · ordered fallback children" : "Exposed · definition-owned fallback")
+                .font(.caption).accessibilityIdentifier("component.slot.definition.provenance")
+            TextField("Slot name", text: Binding(get: { label }, set: { label = $0; cancelled = false }))
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
+                .accessibilityLabel("Component slot name")
+                .accessibilityHint("Apply or Return names the existing container. Escape or Cancel keeps the committed slot unchanged.")
+                .accessibilityIdentifier("component.slot.definition.name")
+                .onSubmit { apply() }
+            Text("\(node.childIDs.count) ordered fallback root\(node.childIDs.count == 1 ? "" : "s")")
+                .font(.caption).accessibilityIdentifier("component.slot.definition.children")
+            Text("Use Elements or Insert to add real children; use Layers to select and reorder them. This edits the shared definition fallback.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button(CanonicalComponentSlot.property(on: node) == nil ? "Expose Slot" : "Apply", action: apply)
+                    .accessibilityIdentifier("component.slot.definition.apply")
+                Button("Cancel", action: cancel).accessibilityIdentifier("component.slot.definition.cancel")
+            }
+            Button("Remove Slot Binding") {
+                if let identity { state.commitComponentSlot(.removeSlotProperty(node.id), identity: identity) }
+            }
+            .disabled(CanonicalComponentSlot.property(on: node) == nil)
+            .accessibilityHint("Removes only the binding; the container and all fallback children remain in the definition")
+            .accessibilityIdentifier("component.slot.definition.remove")
+            if cancelled { Text("Draft cancelled; the committed slot is unchanged.").font(.caption) }
+        }
+        .disabled(!state.componentTextEditingAvailable)
+        .onAppear { identity = state.componentTextDraftIdentity }
+        .onExitCommand { cancel() }
+    }
+    private func apply() {
+        guard let identity else { return }
+        if state.commitComponentSlot(.exposeSlot(nodeID: node.id, label: label), identity: identity) { cancelled = false }
+    }
+    private func cancel() {
+        label = CanonicalComponentSlot.property(on: node)?.label ?? "Content"
+        identity = state.componentTextDraftIdentity; cancelled = true
+    }
+}
+
+private struct ComponentSlotFallbackFields: View {
+    @ObservedObject var state: WorkspaceShellState
+    let instance: DocumentNode
+    let property: ExposedComponentSlotProperty
+    @State private var identity: DesignInspectorOperationIdentity?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            Text(property.label).font(.headline).lineLimit(1).help(property.label)
+            Text("Inherited · definition fallback · \(property.defaultChildIDs.count) ordered roots")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityLabel("Slot \(property.label), inherited definition fallback")
+                .accessibilityValue("Inherited definition fallback; \(property.defaultChildIDs.count) ordered roots; no supplied override")
+                .accessibilityIdentifier("component.slot.provenance.\(property.id)")
+            if property.defaultChildIDs.isEmpty {
+                Text("Empty fallback. Edit the definition to add supported children.")
+                    .font(.caption).accessibilityIdentifier("component.slot.fallback.empty.\(property.id)")
+            } else {
+                ForEach(Array(property.defaultChildIDs.prefix(8).enumerated()), id: \.element) { index, childID in
+                    let name = state.componentDefinitions.flatMap(\.nodes).first(where: { $0.id == childID })?.name ?? "Missing fallback child"
+                    Text("\(index + 1). \(name)").font(.caption).lineLimit(1).help(name)
+                        .accessibilityLabel("Fallback child \(index + 1): \(name)")
+                        .accessibilityIdentifier("component.slot.child.\(property.id).\(childID)")
+                }
+                if property.defaultChildIDs.count > 8 {
+                    Text("\(property.defaultChildIDs.count - 8) more fallback roots · open the definition to inspect every child")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Button("Edit Definition Fallback") {
+                if let identity {
+                    state.editComponentSlotFallback(property.id, instanceID: instance.id, identity: identity)
+                }
+            }
+            .disabled(!state.componentTextEditingAvailable)
+            .accessibilityHint("Selects the canonical slot container in its definition. Changes affect every inheriting instance.")
+            .accessibilityIdentifier("component.slot.editFallback.\(property.id)")
+        }
+        .onAppear { identity = state.componentTextDraftIdentity }
+    }
+}
+
 private struct ComponentTextDefinitionFields: View {
     @ObservedObject var state: WorkspaceShellState
     let node: DocumentNode
@@ -985,7 +2261,7 @@ private struct ComponentTextDefinitionFields: View {
     }
     private var exposed: ExposedComponentTextProperty? { CanonicalComponentText.property(on: node) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             Text(exposed == nil ? "Not exposed · plain text" : "Exposed · plain text · definition default")
                 .font(.caption).accessibilityIdentifier("component.text.definition.provenance")
             Text("Property name").font(.caption)
@@ -996,8 +2272,6 @@ private struct ComponentTextDefinitionFields: View {
             TextField("Default text", text: Binding(get: { content }, set: { content = $0; cancelled = false }), axis: .vertical).lineLimit(1...4)
                 .accessibilityLabel("Component default text")
                 .accessibilityIdentifier("component.text.definition.default")
-            Text("Draft — Apply commits; Escape or Cancel restores the last committed value.")
-                .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button(exposed == nil ? "Expose Text" : "Apply") { commit() }
                     .accessibilityIdentifier("component.text.definition.apply")
@@ -1033,7 +2307,7 @@ private struct ComponentTextInstanceFields: View {
         _identity = State(initialValue: state.componentTextDraftIdentity)
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
             Text(property.label).font(.headline).fixedSize(horizontal: false, vertical: true)
             Text(authored == nil ? "Inherited · definition default" : "Authored · this instance")
                 .font(.caption).accessibilityIdentifier("component.text.provenance.\(property.id)")
@@ -1059,18 +2333,19 @@ private struct ComponentTextInstanceFields: View {
 
 private struct ComponentsNavigatorView: View {
     @ObservedObject var state: WorkspaceShellState
+    @State private var inspecting: ComponentDependencyRequest?
     @State private var deleting: PageID?
     @State private var renaming: ComponentRenameRequest?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             Button("Create from Selection", action: state.createComponent)
                 .disabled(!state.canCreateComponent)
                 .help("Select one authored Frame, Section, Stack or Grid. Nested components are not supported.")
                 .accessibilityIdentifier("components.create")
             HStack {
                 TextField("Search Components", text: $state.componentSearchText)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                     .accessibilityIdentifier("components.search")
                     .onSubmit {
                         if let first = state.filteredComponentDefinitions.first {
@@ -1086,6 +2361,24 @@ private struct ComponentsNavigatorView: View {
                     .accessibilityIdentifier("components.search.clear")
                 }
             }
+            HStack(spacing: SiteForgeVisualSystem.controlInset) {
+                Picker("Component Filter", selection: $state.componentCollectionFilter) {
+                    ForEach(ComponentCollectionFilter.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Component Filter")
+                .accessibilityIdentifier("components.filter")
+                Picker("Component Sort", selection: $state.componentCollectionSort) {
+                    ForEach(ComponentCollectionSort.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Component Sort")
+                .accessibilityIdentifier("components.sort")
+                if state.isComponentDependencyIndexing {
+                    ProgressView().controlSize(.small)
+                        .accessibilityLabel("Updating component dependencies")
+                }
+            }
             Text("\(state.filteredComponentDefinitions.count) of \(state.componentDefinitions.count) component definitions")
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("components.search.status")
@@ -1095,7 +2388,7 @@ private struct ComponentsNavigatorView: View {
             }
             ScrollViewReader { scroll in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
                         if state.filteredComponentDefinitions.isEmpty && !state.componentDefinitions.isEmpty {
                             ContentUnavailableView.search(text: state.componentSearchText)
                                 .accessibilityIdentifier("components.search.empty")
@@ -1128,7 +2421,7 @@ private struct ComponentsNavigatorView: View {
                 }
             }
             if !state.componentAnnouncement.isEmpty {
-                Text(state.componentAnnouncement).font(.caption)
+                ComponentFeedbackText(announcement: state.componentAnnouncement).font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("components.status")
             }
@@ -1146,13 +2439,18 @@ private struct ComponentsNavigatorView: View {
         .sheet(item: $renaming) { request in
             ComponentRenameView(state: state, request: request) { renaming = nil }
         }
+        .sheet(item: $inspecting) { request in
+            ComponentDependencyInspectorView(state: state, definitionID: request.id) { inspecting = nil }
+        }
+        .onAppear { state.refreshComponentDependencies() }
     }
 
     private func componentDefinitionRow(_ definition: DocumentPage) -> some View {
-        let usageCount = state.componentUsageCount(definition.id)
+        let dependency = state.componentDependencyEntry(definition.id)
+        let usageCount = dependency?.usages.count ?? state.componentUsageCount(definition.id)
         let isRevealed = state.highlightedComponentDefinitionID == definition.id
         let editingIsDisabled = state.editingComponentID != nil || !state.pageEditingIsAvailable
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
             Text(definition.name)
                 .fontWeight(.semibold)
                 .lineLimit(1)
@@ -1167,26 +2465,179 @@ private struct ComponentsNavigatorView: View {
                     .foregroundStyle(Color.accentColor)
                     .accessibilityIdentifier("components.definition.revealed." + definition.id.description)
             }
-            HStack {
-                Button("Insert") { state.insertComponent(definition.id) }
-                    .disabled(editingIsDisabled)
-                    .accessibilityIdentifier("components.insert." + definition.id.description)
-                Button("Edit") { state.editComponentDefinition(definition.id) }
-                    .disabled(state.editingComponentID != nil)
-                    .accessibilityIdentifier("components.edit." + definition.id.description)
-                Button("Rename…") { renaming = .init(id: definition.id, name: definition.name) }
-                    .disabled(editingIsDisabled)
-                    .accessibilityIdentifier("components.rename." + definition.id.description)
-                Button("Delete", role: .destructive) { deleting = definition.id }
-                    .disabled(editingIsDisabled)
-                    .accessibilityIdentifier("components.delete." + definition.id.description)
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                HStack {
+                    Button("Insert") { state.insertComponent(definition.id) }
+                        .disabled(editingIsDisabled)
+                        .accessibilityIdentifier("components.insert." + definition.id.description)
+                    Button("Edit") { state.editComponentDefinition(definition.id) }
+                        .disabled(state.editingComponentID != nil)
+                        .accessibilityIdentifier("components.edit." + definition.id.description)
+                    Button("Details…") { inspecting = .init(id: definition.id) }
+                        .accessibilityIdentifier("components.details." + definition.id.description)
+                }
+                HStack {
+                    Button("Rename…") { renaming = .init(id: definition.id, name: definition.name) }
+                        .disabled(editingIsDisabled)
+                        .accessibilityIdentifier("components.rename." + definition.id.description)
+                    Button("Delete", role: .destructive) { deleting = definition.id }
+                        .disabled(editingIsDisabled)
+                        .accessibilityIdentifier("components.delete." + definition.id.description)
+                }
+            }
+            if let dependency, !dependency.issues.isEmpty {
+                Label("Dependency issue", systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("components.issue." + definition.id.description)
             }
         }
         .accessibilityElement(children: .contain)
-        .padding(5)
-        .background(isRevealed ? Color.accentColor.opacity(0.14) : .clear,
-                    in: RoundedRectangle(cornerRadius: 6))
+        .padding(SiteForgeVisualSystem.rowInset)
+        .modifier(SiteForgeRowSurface(selected: isRevealed))
         .id(definition.id)
+    }
+}
+
+private struct ComponentDependencyRequest: Identifiable {
+    let id: PageID
+}
+
+private struct ComponentDependencyInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let definitionID: PageID
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
+            HStack {
+                Label("Component Details", systemImage: "square.stack.3d.up")
+                    .font(.title2.weight(.semibold))
+                Spacer()
+                Button("Done", action: dismiss).keyboardShortcut(.cancelAction)
+            }
+            if let entry = state.componentDependencyEntry(definitionID) {
+                Text(entry.name).font(.headline).lineLimit(1).help(entry.name)
+                List {
+                    Section("Where Used · \(entry.usages.count)") {
+                        if entry.usages.isEmpty {
+                            Text("No linked instances. This definition can be removed when its dependency graph is valid.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(entry.usages) { usage in
+                                Button {
+                                    state.revealComponentUsage(usage); dismiss()
+                                } label: {
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(usage.locationLabel).lineLimit(1)
+                                            Text(usage.isHidden ? "Hidden instance · inspect in Layers" : "Visible linked instance")
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer(); Image(systemName: "arrow.right.circle")
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Open usage in \(usage.locationLabel)")
+                                .accessibilityValue(usage.isHidden ? "Hidden; opens Layers without a canvas ghost" : "Visible")
+                                .accessibilityIdentifier("components.usage." + usage.nodeID.description)
+                            }
+                        }
+                    }
+                    Section("Dependencies") {
+                        dependencyRow("Component definitions", entry.directDefinitionIDs.count)
+                        dependencyRow("Image assets", entry.assetIDs.count)
+                        dependencyRow("Color tokens", entry.tokenIDs.count)
+                        dependencyRow("Reusable styles", entry.styleIDs.count)
+                        dependencyRow("Exposed text properties", entry.textProperties.count)
+                        dependencyRow("Exposed visibility properties", entry.visibilityProperties.count)
+                        dependencyRow("Exposed choice properties", entry.choiceProperties.count)
+                        dependencyRow("Exposed media properties", entry.mediaProperties.count)
+                        dependencyRow("Exposed action properties", entry.actionProperties.count)
+                        dependencyRow("Fallback slots", entry.slotProperties.count)
+                        dependencyRow("Organized properties", entry.propertyOrganization.filter { $0.group != nil || $0.rank != nil }.count)
+                        ForEach(entry.propertyOrganization) { property in
+                            LabeledContent(property.label, value: property.group ?? "Ungrouped")
+                                .accessibilityValue((property.group ?? "Ungrouped") + "; " + (property.rank == nil ? "default order" : "authored order"))
+                        }
+                        dependencyRow("Action destination pages", entry.actionPageIDs.count)
+                        ForEach(entry.actionPageIDs, id: \.self) { destinationID in
+                            LabeledContent("Action destination", value: state.documentSession.document.pages.first {
+                                $0.id == destinationID
+                            }?.name ?? "Missing destination · intent retained")
+                            .accessibilityIdentifier("components.actionDestination.\(destinationID)")
+                        }
+                        dependencyRow("Authored instance overrides", entry.authoredOverrideCount)
+                        dependencyRow("Override conflicts", entry.overrideConflictCount)
+                        ForEach(entry.overrideConflicts) { conflict in
+                            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                                Label(conflict.property.organizationKind.capitalized + " override · " + conflict.reason.rawValue,
+                                      systemImage: "exclamationmark.triangle")
+                                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("components.conflict." + conflict.id)
+                                Text(conflict.reason.explanation).font(.caption)
+                                if let usage = entry.usages.first(where: { $0.nodeID == conflict.instanceID }) {
+                                    Button("Inspect Retained Override") {
+                                        state.revealComponentUsage(usage); state.inspectorTab = .content; dismiss()
+                                    }.accessibilityIdentifier("components.conflict.reveal." + conflict.id)
+                                }
+                            }
+                        }
+                        if entry.issues.isEmpty {
+                            Label("Dependency graph valid", systemImage: "checkmark.circle")
+                        } else {
+                            ForEach(entry.issues, id: \.rawValue) { issue in
+                                Label(issue.rawValue, systemImage: "exclamationmark.triangle")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Section("Compatibility") {
+                        Text(entry.transferStatus)
+                        Text("Static output: use Build Diagnostics for the current project revision.")
+                            .foregroundStyle(.secondary)
+                        Text("Replace Definition is unavailable in this bounded model because compatible replacement semantics are not yet specified.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                HStack {
+                    if entry.canRemoveWithoutDetach {
+                        Button("Remove Unused Component", role: .destructive) {
+                            state.removeUnusedComponent(definitionID); dismiss()
+                        }
+                        .accessibilityIdentifier("components.maintenance.remove")
+                    } else if entry.canDetachUses {
+                        Button("Detach Uses and Delete", role: .destructive) {
+                            state.detachUsesAndDeleteComponent(definitionID); dismiss()
+                        }
+                        .accessibilityIdentifier("components.maintenance.detachDelete")
+                    } else {
+                        Text("Removal unavailable until usages and dependency issues are resolved.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Refresh") { state.refreshComponentDependencies() }
+                        .accessibilityIdentifier("components.dependencies.refresh")
+                }
+            } else if state.isComponentDependencyIndexing {
+                ProgressView("Inspecting component dependencies…")
+            } else {
+                ContentUnavailableView(
+                    "Component Details Unavailable", systemImage: "exclamationmark.triangle",
+                    description: Text("The project changed or the definition is unavailable. Refresh and reopen Details.")
+                )
+                Button("Refresh", action: state.refreshComponentDependencies)
+            }
+        }
+        .padding(SiteForgeVisualSystem.panePadding)
+        .frame(minWidth: 520, idealWidth: 620, minHeight: 420)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("components.dependencies")
+    }
+
+    private func dependencyRow(_ title: String, _ count: Int) -> some View {
+        HStack { Text(title); Spacer(); Text(String(count)).foregroundStyle(.secondary) }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(title): \(count)")
     }
 }
 
@@ -1211,10 +2662,10 @@ private struct ComponentRenameView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             Text("Rename Component").font(.headline)
             TextField("Component name", text: $name)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                 .focused($focused)
                 .accessibilityIdentifier("components.rename.name")
                 .onSubmit(performRename)
@@ -1222,7 +2673,7 @@ private struct ComponentRenameView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if !message.isEmpty {
-                Text(message).font(.caption).foregroundStyle(.red)
+                Text(message).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger)
                     .accessibilityIdentifier("components.rename.validation")
             }
             HStack {
@@ -1232,7 +2683,7 @@ private struct ComponentRenameView: View {
                     .accessibilityIdentifier("components.rename.apply")
             }
         }
-        .padding(20).frame(width: 360)
+        .padding(SiteForgeVisualSystem.settingsFormPadding).frame(width: 360)
         .onAppear { focused = true }
     }
 
@@ -1249,7 +2700,7 @@ private struct AssetsNavigatorView: View {
     @State private var editingAsset: ImageAsset?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             HStack {
                 Text("Images").font(.headline)
                 Spacer()
@@ -1260,11 +2711,22 @@ private struct AssetsNavigatorView: View {
                     .accessibilityIdentifier("assets.import")
             }
             TextField("Search Images", text: $state.assetSearchText)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                 .accessibilityIdentifier("assets.search")
             Toggle("Favorites", isOn: $state.assetFavoritesOnly)
                 .accessibilityIdentifier("assets.filter.favorites")
-            Picker("Usage", selection: $state.assetUsageFilter) {
+            Picker("Usage", selection: Binding(
+                get: { state.assetUsageFilter },
+                set: { filter in
+                    // Segmented Picker writes while SwiftUI is reconciling
+                    // the filtered rows. Apply the scene-local filter after
+                    // that update turn; a newer choice naturally wins.
+                    Task { @MainActor in
+                        await Task.yield()
+                        state.assetUsageFilter = filter
+                    }
+                }
+            )) {
                 ForEach(AssetUsageFilter.allCases) { filter in
                     Text(filter.title).tag(filter)
                         .accessibilityIdentifier("assets.filter.usage.\(filter.rawValue)")
@@ -1272,7 +2734,7 @@ private struct AssetsNavigatorView: View {
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("assets.filter.usage")
-            HStack(spacing: 5) {
+            HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                 Picker("Folder", selection: $state.assetFolderFilter) {
                     Text("All folders").tag(String?.none)
                     ForEach(state.imageAssetFolders, id: \.self) { folder in
@@ -1308,7 +2770,7 @@ private struct AssetsNavigatorView: View {
             } else {
                 ScrollViewReader { scroll in
                     ScrollView {
-                        LazyVStack(spacing: 6) {
+                        LazyVStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                             ForEach(state.imageAssets) { asset in
                                 AssetRow(asset: asset, state: state) {
                                     state.selectedAssetID = asset.id
@@ -1322,7 +2784,16 @@ private struct AssetsNavigatorView: View {
                         if let id = state.selectedAssetID { scroll.scrollTo(id, anchor: .center) }
                     }
                     .onChange(of: state.selectedAssetID) { _, id in
-                        if let id { scroll.scrollTo(id, anchor: .center) }
+                        guard let id else { return }
+                        // Selection publishes while SwiftUI is reconciling the
+                        // asset rows. Move the presentation-only scroll to the
+                        // next main-actor turn and reject a stale selection
+                        // rather than mutating ScrollViewReader during update.
+                        Task { @MainActor in
+                            await Task.yield()
+                            guard state.selectedAssetID == id else { return }
+                            scroll.scrollTo(id, anchor: .center)
+                        }
                     }
                     .accessibilityLabel("Imported image assets")
                     .accessibilityIdentifier("assets.list")
@@ -1393,7 +2864,7 @@ private struct AssetRow: View {
     }
 
     private var rowContent: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: SiteForgeVisualSystem.controlInset) {
             Group {
                 if let data = state.imageAssetThumbnail(asset.id), let image = NSImage(data: data) {
                     Image(nsImage: image).resizable().scaledToFit()
@@ -1401,9 +2872,10 @@ private struct AssetRow: View {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 42, height: 42)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
-            VStack(alignment: .leading, spacing: 2) {
+            .frame(width: SiteForgeVisualSystem.thumbnailSize, height: SiteForgeVisualSystem.thumbnailSize)
+            .background(SiteForgeVisualSystem.fieldSurface,
+                        in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.rowCornerRadius))
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.hairlineSpacing) {
                 if isRenaming {
                     TextField("Asset name", text: $nameDraft)
                         .focused($renameFocused)
@@ -1430,9 +2902,8 @@ private struct AssetRow: View {
             if asset.organization?.favorite == true { Image(systemName: "star.fill").accessibilityHidden(true) }
             if state.selectedAssetID == asset.id { Image(systemName: "checkmark.circle.fill") }
         }
-        .padding(6).contentShape(Rectangle())
-        .background(state.selectedAssetID == asset.id ? Color.accentColor.opacity(0.14) : .clear,
-                    in: RoundedRectangle(cornerRadius: 7))
+        .padding(SiteForgeVisualSystem.rowInset).contentShape(Rectangle())
+        .modifier(SiteForgeRowSurface(selected: state.selectedAssetID == asset.id))
     }
 
     private func commitRename() {
@@ -1461,7 +2932,7 @@ private struct AssetOrganizationEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             Text("Organize Image").font(.headline)
             Text(asset.displayName).lineLimit(1).foregroundStyle(.secondary)
             TextField("Project folder", text: $folder)
@@ -1471,7 +2942,7 @@ private struct AssetOrganizationEditor: View {
             Toggle("Favorite", isOn: $favorite)
                 .accessibilityIdentifier("assets.organization.favorite")
             if !validation.isEmpty {
-                Text(validation).foregroundStyle(.red)
+                Text(validation).foregroundStyle(SiteForgeVisualSystem.danger)
                     .accessibilityIdentifier("assets.organization.validation")
             }
             HStack {
@@ -1483,7 +2954,7 @@ private struct AssetOrganizationEditor: View {
                     .accessibilityIdentifier("assets.organization.save")
             }
         }
-        .padding(20)
+        .padding(SiteForgeVisualSystem.settingsFormPadding)
         .frame(minWidth: 300, idealWidth: 360)
         .onExitCommand { dismiss() }
     }
@@ -1512,10 +2983,10 @@ private struct ElementsCatalogView: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(spacing: SiteForgeVisualSystem.controlInset) {
+            HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                 TextField("Search Elements", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                     .accessibilityLabel("Search elements by name or category")
                     .accessibilityIdentifier("navigator.elements.search")
                     .onExitCommand { searchText = "" }
@@ -1531,14 +3002,14 @@ private struct ElementsCatalogView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("navigator.elements.search.status")
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.toolbarGroupSpacing) {
                     if results.isEmpty {
                         ContentUnavailableView.search(text: searchText)
                             .accessibilityIdentifier("navigator.elements.search.empty")
                     }
                     ForEach(["Layout", "Basic", "Site", "Forms"], id: \.self) { category in
                         if results.contains(where: { $0.category == category }) {
-                            VStack(alignment: .leading, spacing: 6) {
+                            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
                                 Text(category).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                                 ForEach(results.filter { $0.category == category }) { item in
                                     ElementCatalogRow(item: item, state: state)
@@ -1582,9 +3053,9 @@ private struct ElementCatalogRow: View {
                 state.selectTool(tool)
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: SiteForgeVisualSystem.controlInset) {
                 Image(systemName: item.systemImage).frame(width: 16)
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.hairlineSpacing) {
                     Text(item.title)
                     Text(item.keyboardPath).font(.caption2).foregroundStyle(.secondary)
                 }
@@ -1593,7 +3064,7 @@ private struct ElementCatalogRow: View {
                     Image(systemName: "clock").foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 8).padding(.vertical, 6).contentShape(Rectangle())
+            .padding(.horizontal, SiteForgeVisualSystem.controlInset).padding(.vertical, SiteForgeVisualSystem.compactSpacing).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled({
@@ -1696,7 +3167,7 @@ private struct NavigatorLayerRow: View {
     }
 
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: SiteForgeVisualSystem.hairlineSpacing) {
             if state.isDragInsertionPreview(before: target.id) {
                 Capsule()
                     .fill(Color.accentColor)
@@ -1715,7 +3186,7 @@ private struct NavigatorLayerRow: View {
                     ? .toggle : flags.contains(.shift) ? .add : .replace
                 state.selectLayer(target.id, modifier: modifier)
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: SiteForgeVisualSystem.controlInset) {
                     Image(systemName: target.isLocked ? "lock.fill" : target.isVisible ? "square.dashed" : "eye.slash.fill")
                         .frame(width: 16)
                     Text(target.name).lineLimit(1)
@@ -1723,13 +3194,12 @@ private struct NavigatorLayerRow: View {
                     if !target.isVisible { Text("Hidden here").font(.caption2).foregroundStyle(.secondary) }
                     if isPrimary { Text("Primary").font(.caption2).foregroundStyle(.secondary) }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.horizontal, SiteForgeVisualSystem.controlInset)
+                .padding(.vertical, SiteForgeVisualSystem.compactSpacing)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .modifier(SiteForgeRowSurface(selected: isSelected))
             .focusable()
             .focused(focus, equals: .navigatorLayer(target.id))
             .onMoveCommand { direction in
@@ -1873,10 +3343,10 @@ private struct NavigatorPageRow: View {
         Button {
             state.selectPage(page.id)
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: SiteForgeVisualSystem.controlInset) {
                 Image(systemName: page.role == .home ? "house" : "doc")
                     .frame(width: 16)
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.hairlineSpacing) {
                     Text(page.name).lineLimit(1)
                     Text(page.route.rawValue)
                         .font(.caption2)
@@ -1888,13 +3358,12 @@ private struct NavigatorPageRow: View {
                     Text("404").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, SiteForgeVisualSystem.controlInset)
+            .padding(.vertical, SiteForgeVisualSystem.compactSpacing)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .modifier(SiteForgeRowSurface(selected: isSelected))
         .focusable()
         .focused(focus, equals: .navigatorPage(page.id))
         .onMoveCommand { direction in
@@ -1955,7 +3424,7 @@ private struct PageEditorSheet: View {
     @State private var error = ""
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             Text(request.mode == .delete ? "Delete Page" : "Page Details").font(.headline)
             if request.mode == .delete {
                 Text("Delete \(request.name) and \(request.objects) authored objects? \(request.inboundLinks) incoming links will retain missing targets for repair. Undo restores the page and its links.")
@@ -1964,15 +3433,17 @@ private struct PageEditorSheet: View {
                 if request.mode != .route {
                     Text("Page name").font(.caption)
                     TextField("Page name", text: $name).accessibilityIdentifier("page.editor.name")
+                        .focusedValue(\.siteforgeNativeTextEditor, true)
                 }
                 if request.mode != .rename {
                     Text("Route").font(.caption)
                     TextField("Route", text: $route).accessibilityIdentifier("page.editor.route")
+                        .focusedValue(\.siteforgeNativeTextEditor, true)
                     Text("Static path, for example /about/team. Home and /404 are protected.")
                         .font(.caption).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if !error.isEmpty { Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            if !error.isEmpty { Text(error).foregroundStyle(SiteForgeVisualSystem.danger).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("page.editor.validation") }
             HStack {
                 Spacer()
@@ -1988,7 +3459,7 @@ private struct PageEditorSheet: View {
                     else { error = state.pageAnnouncement }
                 }.keyboardShortcut(.defaultAction).accessibilityIdentifier("page.editor.apply")
             }
-        }.padding(20).frame(width: 360)
+        }.padding(SiteForgeVisualSystem.settingsFormPadding).frame(width: 360)
             .onAppear { name = request.name; route = request.route }
     }
 }
@@ -2008,7 +3479,7 @@ private struct CanvasPlaceholderView: View {
                     Button("Exit Definition", action: state.exitComponentDefinition)
                         .accessibilityIdentifier("components.exit")
                 }
-                .padding(8)
+                .padding(SiteForgeVisualSystem.controlInset)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(.bar)
                 // Like the viewport controls, the edit breadcrumb must
@@ -2016,6 +3487,24 @@ private struct CanvasPlaceholderView: View {
                 .zIndex(1)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("components.editing.context")
+            }
+            if state.isolationRootID != nil {
+                HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
+                    Label("Isolated", systemImage: "scope")
+                    ForEach(state.isolationBreadcrumb) { node in
+                        Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                        Text(node.name).lineLimit(1)
+                    }
+                    Spacer()
+                    Button("Exit Isolation") { state.exitIsolation() }
+                        .accessibilityIdentifier("canvas.isolation.exit")
+                    Button("Exit All") { state.exitIsolation(all: true) }
+                        .accessibilityIdentifier("canvas.isolation.exitAll")
+                }
+                .padding(.horizontal, 10).padding(.vertical, SiteForgeVisualSystem.compactSpacing)
+                .background(.bar).zIndex(1)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("canvas.isolation.breadcrumb")
             }
             ViewportControlsView(state: state, focus: focus, tabRouter: tabRouter)
                 // The header owns its intrinsic one-, two-, or three-row
@@ -2046,6 +3535,15 @@ private struct CanvasPlaceholderView: View {
                         .focusable()
                         .focused(focus, equals: .viewportCanvas)
                         .contextMenu {
+                            Button("Isolate Selection") {
+                                _ = state.enterIsolation(provenance: .contextualMenu)
+                            }
+                            .disabled(!state.canIsolateSelection)
+                            Button("Exit Isolation") { state.exitIsolation() }
+                                .disabled(state.isolationRootID == nil)
+                            Button("Exit All Isolation") { state.exitIsolation(all: true) }
+                                .disabled(state.isolationRootID == nil)
+                            Divider()
                             Button("Paste") {
                                 _ = state.pasteSiteForgeObjects(provenance: .contextualMenu)
                             }
@@ -2167,38 +3665,37 @@ private struct CanvasPlaceholderView: View {
                     .opacity(0.001)
                     .allowsHitTesting(false)
 
+                    if state.canvasRenderPlan != nil && state.isCurrentPageGenuinelyEmpty && state.selectedTool == .select {
+                        VStack(spacing: SiteForgeVisualSystem.compactSpacing) {
+                            Text("Your canvas is empty").font(.headline)
+                            Text("Add an element to start shaping this page.")
+                                .font(.callout).foregroundStyle(.secondary)
+                            HStack {
+                                Button("Insert Frame") { state.performDefaultInsertion(.frame, provenance: .pointer) }
+                                    .disabled(!state.insertionAvailability(.frame).isEnabled)
+                                    .accessibilityIdentifier("canvas.empty.insert.frame")
+                                Button("Insert Text") { state.performDefaultInsertion(.text, provenance: .pointer) }
+                                    .disabled(!state.insertionAvailability(.text).isEnabled)
+                                    .accessibilityIdentifier("canvas.empty.insert.text")
+                            }
+                        }
+                        .padding(SiteForgeVisualSystem.controlInset)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: min(geometry.size.width, SiteForgeVisualSystem.emptyHintMaximumWidth))
+                        .background(Color(nsColor: .windowBackgroundColor),
+                                    in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius))
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("canvas.empty.hint")
+                        .zIndex(1)
+                    }
                     if state.canvasRenderPlan == nil {
                         ProgressView("Preparing canvas…")
                             .controlSize(.small)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
-                    } else if state.canvasRenderPlan?.authoredObjects.isEmpty == true && state.selectedTool == .select {
-                        // ContentUnavailableView expands to its proposed
-                        // canvas size on macOS, which would turn its empty
-                        // area into an invisible pointer shield. This bounded
-                        // compact form leaves the rest of the real canvas
-                        // available for pointer insertion and selection.
-                        VStack(spacing: 10) {
-                            Label("Your canvas is empty", systemImage: "rectangle.dashed")
-                                .font(.headline)
-                            Text("Start with a Frame, plain Text, or an imported Image. Blank-project roots are structural and are not rendered.")
-                                .multilineTextAlignment(.center)
-                                .font(.callout)
-                            Text("Use the visible Frame or Text actions, or import and insert an Image from Assets.")
-                                .multilineTextAlignment(.center)
-                        }
-                        // Keep the central world-space canvas available to the
-                        // real Frame/Text pointer workflow; these named start
-                        // actions intentionally live above that interaction
-                        // area rather than becoming an invisible click shield.
-                        .frame(maxWidth: 360)
-                        .padding(20)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                        .allowsHitTesting(false)
-                        .accessibilityIdentifier("canvas.empty.state")
                     }
                 }
-                .background(Color(nsColor: .underPageBackgroundColor))
+                .background(SiteForgeVisualSystem.canvasPasteboard)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("canvas.viewport.surface")
             }
@@ -2215,91 +3712,126 @@ private struct ViewportControlsView: View {
     @State private var focusSceneID = ViewportPresetFocusSceneID()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Label("Breakpoint", systemImage: "display")
-                    .font(.caption.weight(.semibold))
-                    .fixedSize()
-                    .accessibilityHint("Selects the responsive geometry breakpoint authored by the Layout Inspector.")
-
-                NativeViewportPresetControl(
-                    selection: $state.viewportPreset,
-                    sceneID: focusSceneID,
-                    tabRouter: tabRouter,
-                    isKeyboardFocusRequested: focus.wrappedValue == .viewportPreset,
-                    onNativeFocusChange: { isFocused in
-                        if isFocused {
-                            focus.wrappedValue = .viewportPreset
-                        } else if focus.wrappedValue == .viewportPreset {
-                            focus.wrappedValue = nil
-                        }
-                    }
-                )
-                .frame(width: 110)
-                .focusable()
-                .focused(focus, equals: .viewportPreset)
-
-                Text("\(state.viewportPreset.width) px")
-                    .monospacedDigit()
-                    .fixedSize()
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("canvas.viewport.width")
-
-                Spacer(minLength: 4)
-
-                Button("Compare") {
-                    state.isResponsiveComparisonPresented = true
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+            AdaptiveViewportControlsLayout(
+                horizontalSpacing: SiteForgeVisualSystem.standardSpacing,
+                verticalSpacing: SiteForgeVisualSystem.microSpacing
+            ) {
+                primaryControls
+                zoomControls
+            }
+            if state.selectionOutsideActiveArtboard {
+                HStack(spacing: SiteForgeVisualSystem.controlInset) {
+                    Spacer(minLength: 4)
+                    Button("Reveal Selection", systemImage: "viewfinder") { state.revealSelection() }
+                        .labelStyle(.titleAndIcon)
+                        .buttonStyle(.bordered)
+                        .fixedSize()
+                        .help("Reveal the selected Desktop geometry without moving it")
+                        .accessibilityLabel("Reveal Selection")
+                        .accessibilityIdentifier("canvas.selection.reveal")
                 }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("canvas.viewport.contextControls")
+            }
+        }
+        .controlSize(.small)
+        .padding(.horizontal, SiteForgeVisualSystem.panePadding)
+        .padding(.vertical, SiteForgeVisualSystem.microSpacing)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workspaceChrome(.viewportControls)
+        .sheet(isPresented: $state.isResponsiveComparisonPresented) {
+            ResponsiveBreakpointComparisonView(state: state)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("canvas.viewport.controls")
+    }
+
+    private var primaryControls: some View {
+        HStack(spacing: SiteForgeVisualSystem.controlInset) {
+            Label("Breakpoint", systemImage: "display")
+                .font(.caption.weight(.semibold))
+                .fixedSize()
+                .accessibilityHint("Selects the responsive geometry breakpoint authored by the Layout Inspector.")
+
+            NativeViewportPresetControl(
+                selection: $state.viewportPreset,
+                sceneID: focusSceneID,
+                tabRouter: tabRouter,
+                isKeyboardFocusRequested: focus.wrappedValue == .viewportPreset,
+                onNativeFocusChange: { isFocused in
+                    if isFocused {
+                        focus.wrappedValue = .viewportPreset
+                    } else if focus.wrappedValue == .viewportPreset {
+                        focus.wrappedValue = nil
+                    }
+                }
+            )
+            .frame(width: 110)
+            .focusable()
+            .focused(focus, equals: .viewportPreset)
+
+            Text("\(state.viewportPreset.width) px")
+                .monospacedDigit()
+                .fixedSize()
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("canvas.viewport.width")
+
+            Button("Compare") { state.isResponsiveComparisonPresented = true }
                 .buttonStyle(.bordered)
                 .fixedSize()
+                .focusable()
+                .focused(focus, equals: .viewportCompare)
                 .help("Compare Desktop, Tablet, and Mobile resolved layout without changing the document")
                 .accessibilityLabel("Compare responsive breakpoints")
                 .accessibilityIdentifier("canvas.viewport.compare")
 
-                Toggle("Grid", isOn: $state.isWorldGridVisible)
-                    .toggleStyle(.button)
-                    .fixedSize()
-                    .accessibilityIdentifier("canvas.grid.toggle")
-                    .accessibilityLabel("World grid")
+            Toggle("Grid", isOn: $state.isWorldGridVisible)
+                .toggleStyle(.button)
+                .fixedSize()
+                .focusable()
+                .focused(focus, equals: .viewportGrid)
+                .accessibilityIdentifier("canvas.grid.toggle")
+                .accessibilityLabel("World grid")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("canvas.viewport.primaryControls")
+    }
+
+    private var zoomControls: some View {
+        HStack(spacing: SiteForgeVisualSystem.controlInset) {
+            Button {
+                state.performViewportCommand(CanvasViewportCommand(.zoomOut))
+            } label: {
+                Image(systemName: "minus")
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("canvas.viewport.primaryControls")
+            .buttonStyle(.bordered)
+            .help("Zoom Out")
+            .accessibilityLabel("Zoom Out")
+            .disabled(state.zoomPercent == 25)
+            .focusable()
+            .focused(focus, equals: .viewportZoomOut)
+            .accessibilityIdentifier("canvas.zoom.out")
 
-            HStack(spacing: 8) {
-                Button {
-                    state.performViewportCommand(CanvasViewportCommand(.zoomOut))
-                } label: {
-                    Image(systemName: "minus")
-                }
-                .buttonStyle(.bordered)
-                .help("Zoom Out")
-                .accessibilityLabel("Zoom Out")
-                .disabled(state.zoomPercent == 25)
-                .focusable()
-                .focused(focus, equals: .viewportZoomOut)
-                .accessibilityIdentifier("canvas.zoom.out")
+            Text("\(state.zoomPercent)%")
+                .monospacedDigit()
+                .frame(minWidth: 42)
+                .accessibilityIdentifier("canvas.zoom.value")
 
-                Text("\(state.zoomPercent)%")
-                    .monospacedDigit()
-                    .frame(minWidth: 42)
-                    .accessibilityIdentifier("canvas.zoom.value")
+            Button {
+                state.performViewportCommand(CanvasViewportCommand(.zoomIn))
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.bordered)
+            .help("Zoom In")
+            .accessibilityLabel("Zoom In")
+            .disabled(state.viewportState.zoom == .maximum)
+            .focusable()
+            .focused(focus, equals: .viewportZoomIn)
+            .accessibilityIdentifier("canvas.zoom.in")
 
-                Button {
-                    state.performViewportCommand(CanvasViewportCommand(.zoomIn))
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.bordered)
-                .help("Zoom In")
-                .accessibilityLabel("Zoom In")
-                .disabled(state.viewportState.zoom == .maximum)
-                .focusable()
-                .focused(focus, equals: .viewportZoomIn)
-                .accessibilityIdentifier("canvas.zoom.in")
-
-                Button("1:1") {
-                    state.performViewportCommand(CanvasViewportCommand(.actualSize))
-                }
+            Button("1:1") { state.performViewportCommand(CanvasViewportCommand(.actualSize)) }
                 .buttonStyle(.bordered)
                 .fixedSize()
                 .help("Actual Size")
@@ -2308,11 +3840,7 @@ private struct ViewportControlsView: View {
                 .focused(focus, equals: .viewportReset)
                 .accessibilityIdentifier("canvas.zoom.reset")
 
-                Spacer(minLength: 4)
-
-                Button("Fit Canvas") {
-                    state.performViewportCommand(CanvasViewportCommand(.fitWidth))
-                }
+            Button("Fit Canvas") { state.performViewportCommand(CanvasViewportCommand(.fitWidth)) }
                 .buttonStyle(.bordered)
                 .fixedSize()
                 .help("Fit to Canvas")
@@ -2321,9 +3849,7 @@ private struct ViewportControlsView: View {
                 .focused(focus, equals: .viewportFitCanvas)
                 .accessibilityIdentifier("canvas.zoom.fitCanvas")
 
-                Button("Fit Document") {
-                    state.performViewportCommand(CanvasViewportCommand(.fitDocument))
-                }
+            Button("Fit Document") { state.performViewportCommand(CanvasViewportCommand(.fitDocument)) }
                 .buttonStyle(.bordered)
                 .fixedSize()
                 .help("Fit to Document")
@@ -2331,54 +3857,57 @@ private struct ViewportControlsView: View {
                 .focusable()
                 .focused(focus, equals: .viewportFit)
                 .accessibilityIdentifier("canvas.zoom.fit")
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("canvas.viewport.zoomControls")
-
-            if (state.canvasRenderPlan?.authoredObjects.isEmpty == true && state.selectedTool == .select)
-                || state.selectionOutsideActiveArtboard {
-                HStack(spacing: 8) {
-                    if state.canvasRenderPlan?.authoredObjects.isEmpty == true {
-                        Text("Empty canvas")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Button("Insert Frame") {
-                            state.performDefaultInsertion(.frame, provenance: .accessibility)
-                        }
-                        .accessibilityIdentifier("canvas.empty.insert.frame")
-                        .disabled(!state.insertionAvailability(.frame).isEnabled)
-                        Button("Insert Text") {
-                            state.performDefaultInsertion(.text, provenance: .accessibility)
-                        }
-                        .accessibilityIdentifier("canvas.empty.insert.text")
-                        .disabled(!state.insertionAvailability(.text).isEnabled)
-                    }
-                    Spacer(minLength: 4)
-                    if state.selectionOutsideActiveArtboard {
-                        Button("Reveal Selection", systemImage: "viewfinder") {
-                            state.revealSelection()
-                        }
-                        .labelStyle(.titleAndIcon)
-                        .buttonStyle(.bordered)
-                        .fixedSize()
-                        .help("Reveal the selected Desktop geometry without moving it")
-                        .accessibilityLabel("Reveal Selection")
-                        .accessibilityIdentifier("canvas.selection.reveal")
-                    }
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("canvas.viewport.contextControls")
-            }
-        }
-        .controlSize(.small)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .workspaceChrome(.viewportControls)
-        .sheet(isPresented: $state.isResponsiveComparisonPresented) {
-            ResponsiveBreakpointComparisonView(state: state)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("canvas.viewport.controls")
+        .accessibilityIdentifier("canvas.viewport.zoomControls")
+    }
+}
+
+/// Measures one stable set of native controls and chooses a row or two rows
+/// without constructing competing SwiftUI branches. This preserves AppKit
+/// first-responder identity while the user tabs through the header.
+private struct AdaptiveViewportControlsLayout: Layout {
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        guard sizes.count == 2 else { return .zero }
+        let rowWidth = sizes[0].width + horizontalSpacing + sizes[1].width
+        let availableWidth = proposal.width ?? rowWidth
+        if rowWidth <= availableWidth {
+            return CGSize(width: min(rowWidth, availableWidth), height: max(sizes[0].height, sizes[1].height))
+        }
+        return CGSize(
+            width: min(max(sizes[0].width, sizes[1].width), availableWidth),
+            height: sizes[0].height + verticalSpacing + sizes[1].height
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        guard sizes.count == 2 else { return }
+        let rowWidth = sizes[0].width + horizontalSpacing + sizes[1].width
+        if rowWidth <= bounds.width {
+            let y0 = bounds.minY + (bounds.height - sizes[0].height) / 2
+            let y1 = bounds.minY + (bounds.height - sizes[1].height) / 2
+            subviews[0].place(at: CGPoint(x: bounds.minX, y: y0), proposal: .init(sizes[0]))
+            subviews[1].place(at: CGPoint(x: bounds.minX + sizes[0].width + horizontalSpacing, y: y1),
+                              proposal: .init(sizes[1]))
+        } else {
+            subviews[0].place(at: bounds.origin, proposal: .init(sizes[0]))
+            subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + sizes[0].height + verticalSpacing),
+                              proposal: .init(sizes[1]))
+        }
     }
 }
 
@@ -2387,9 +3916,9 @@ private struct ResponsiveBreakpointComparisonView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.toolbarGroupSpacing) {
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
                     Text("Compare Breakpoints").font(.title3.weight(.semibold))
                     Text(state.selectionState.isEmpty
                          ? "Reviewing all positioned objects on the active page."
@@ -2402,7 +3931,7 @@ private struct ResponsiveBreakpointComparisonView: View {
             }
             Divider()
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
                     ForEach(state.responsiveBreakpointReviews) { review in
                         responsiveReviewCard(review)
                     }
@@ -2414,13 +3943,13 @@ private struct ResponsiveBreakpointComparisonView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("responsive.compare.scope")
         }
-        .padding(18)
+        .padding(SiteForgeVisualSystem.cardPadding)
         .frame(width: 560, height: 520)
         .accessibilityIdentifier("responsive.compare.sheet")
     }
 
     private func responsiveReviewCard(_ review: ResponsiveBreakpointReview) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             HStack {
                 Label(review.title, systemImage: review.breakpoint == .desktop ? "desktopcomputer" : "ipad.and.iphone")
                     .font(.headline)
@@ -2438,8 +3967,8 @@ private struct ResponsiveBreakpointComparisonView: View {
             }
             Text(review.differenceSummary).font(.callout.weight(.medium))
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { reviewFacts(review) }
-                VStack(alignment: .leading, spacing: 3) { reviewFacts(review) }
+                HStack(spacing: SiteForgeVisualSystem.standardSpacing) { reviewFacts(review) }
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) { reviewFacts(review) }
             }
             if let name = review.primaryName, let geometry = review.primaryGeometry,
                let visible = review.primaryIsVisible, let provenance = review.primaryProvenance {
@@ -2453,8 +3982,8 @@ private struct ResponsiveBreakpointComparisonView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(12)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 9))
+        .padding(SiteForgeVisualSystem.panePadding)
+        .background(SiteForgeVisualSystem.elevatedSurface, in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius, style: .continuous))
         .accessibilityElement(children: .contain)
     }
 
@@ -3138,7 +4667,7 @@ private struct FormInspectorFieldsView: View {
     private var form: DocumentNode? { state.selectedFormContainer }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             if let form {
                 Text("Form").font(.headline)
                 Text("Submission, destinations, and visitor data are unavailable in this bounded editor slice.")
@@ -3179,15 +4708,15 @@ private struct FormInspectorFieldsView: View {
                 .accessibilityIdentifier("inspector.form.kind")
                 TextField("Visible label", text: Binding(get: { label }, set: { label = $0; mixedLabel = false }),
                           prompt: Text(mixedLabel ? "Mixed labels" : "Visible label"))
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                     .accessibilityIdentifier("inspector.form.label")
                 TextField("Machine name", text: Binding(get: { name }, set: { name = $0; mixedName = false }),
                           prompt: Text(mixedName ? "Mixed machine names" : "Machine name"))
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                     .accessibilityIdentifier("inspector.form.name")
                 TextField("Help text (optional)", text: Binding(get: { help }, set: { help = $0; mixedHelp = false }),
                           prompt: Text(mixedHelp ? "Mixed help text" : "Help text (optional)"))
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                     .accessibilityIdentifier("inspector.form.help")
                 Picker("Requirement", selection: $required) {
                     if required == nil { Text("Mixed").tag(Bool?.none) }
@@ -3200,7 +4729,7 @@ private struct FormInspectorFieldsView: View {
                         maximumLength = $0; mixedMaximumLength = false
                     }),
                               prompt: Text(mixedMaximumLength ? "Mixed limits" : "Maximum length (optional)"))
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                         .accessibilityIdentifier("inspector.form.maximumLength")
                 }
                 if kind == .select {
@@ -3209,7 +4738,7 @@ private struct FormInspectorFieldsView: View {
                     }),
                               prompt: Text(mixedOptions ? "Mixed ordered options" : "Label=value, one per line"),
                               axis: .vertical)
-                        .lineLimit(2...5).textFieldStyle(.roundedBorder)
+                        .lineLimit(2...5).textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                         .accessibilityIdentifier("inspector.form.options")
                 }
                 Text("Type: \(state.formFieldInspectorPresentation.kind.displayValue) · \(state.formFieldInspectorPresentation.kind.provenance)")
@@ -3233,11 +4762,10 @@ private struct FormInspectorFieldsView: View {
                 }
                 Text(status.isEmpty ? state.lastFormInspectorAnnouncement : status)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Form field edit status")
-                    .accessibilityValue(status.isEmpty ? state.lastFormInspectorAnnouncement : status)
-                    .accessibilityIdentifier("inspector.form.status")
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Form field Inspector")
         .padding(.horizontal, 4)
         .onAppear(perform: refresh)
         .onChange(of: state.canvasRenderPlan?.identity) { _, _ in refresh() }
@@ -3328,7 +4856,7 @@ private struct FormAccessibilityInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             Text("Form Accessibility").font(.headline)
             if let form = state.formContainerAccessibilityPresentation {
                 Text(form.status)
@@ -3385,7 +4913,7 @@ private struct FormAccessibilityInspectorView: View {
     private func accessibilityRow(_ label: String, _ value: FormInspectorAggregateValue,
                                   identifier: String) -> some View {
         LabeledContent(label) {
-            VStack(alignment: .trailing, spacing: 1) {
+            VStack(alignment: .trailing, spacing: SiteForgeVisualSystem.hairlineSpacing) {
                 Text(value.displayValue)
                     .accessibilityLabel("\(label): \(value.displayValue), \(value.provenance)")
                     .accessibilityIdentifier(identifier)
@@ -3404,7 +4932,7 @@ private struct GeneralAccessibilityInspectorView: View {
     @State private var message: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             HStack {
                 Text("Accessibility").font(.headline)
                 Spacer()
@@ -3422,14 +4950,14 @@ private struct GeneralAccessibilityInspectorView: View {
                 .accessibilityIdentifier("inspector.accessibility.role")
             ForEach(CanonicalAccessibilityMetadata.Field.allCases, id: \.self) { field in
                 let value = state.accessibilityMetadataInspectorValue(field)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+                    HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                         Text(field.title).frame(width: 92, alignment: .leading).lineLimit(1)
                         TextField(field.title, text: Binding(
                             get: { drafts[field] ?? display(value) },
                             set: { drafts[field] = $0; message = nil }
                         ))
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                         .focused($focused, equals: field)
                         .onSubmit { commit(field) }
                         .onChange(of: focused) { previous, current in
@@ -3451,7 +4979,7 @@ private struct GeneralAccessibilityInspectorView: View {
                 .disabled(state.selectionState.isEmpty)
                 .accessibilityIdentifier("inspector.accessibility.editSemantic")
             if let message {
-                Text(message).font(.caption).foregroundStyle(.red)
+                Text(message).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("inspector.accessibility.validation")
             }
@@ -3523,6 +5051,61 @@ private struct GeneralAccessibilityInspectorView: View {
     }
 }
 
+/// Shared native destination fields. Callers own draft/commit timing; target
+/// validation stays in CanonicalLinkTarget and the identity-gated registries.
+private struct NativeLinkDestinationFields: View {
+    let document: CanonicalDocument
+    @Binding var kind: String
+    @Binding var page: String
+    @Binding var section: String
+    @Binding var url: String
+    let focus: FocusState<String?>.Binding
+    let allowsMixed: Bool
+    let identifierPrefix: String
+    let onSubmit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            Picker("Target type", selection: $kind) {
+                Text("No target").tag("none"); Text("Page").tag("page")
+                Text("Section").tag("section"); Text("External HTTP(S)").tag("external")
+                if allowsMixed { Text("Mixed").tag("mixed") }
+            }
+            .accessibilityLabel("Destination type").accessibilityIdentifier(identifierPrefix + ".type")
+            if kind == "page" || kind == "section" {
+                Picker("Page", selection: $page) {
+                    Text("Choose a page").tag("")
+                    ForEach(document.websitePages, id: \.id) {
+                        Text("\($0.name) — \($0.route.rawValue)").tag($0.id.description)
+                    }
+                    if !page.isEmpty && !document.websitePages.contains(where: { $0.id.description == page }) {
+                        Text("Missing page").tag(page)
+                    }
+                }.accessibilityIdentifier(identifierPrefix + ".page")
+            }
+            if kind == "section" {
+                Picker("Section", selection: $section) {
+                    Text("Choose a section").tag("")
+                    ForEach(document.websitePages.first(where: { $0.id.description == page })?.nodes.filter { $0.kind == .section } ?? [], id: \.id) {
+                        Text($0.name).tag($0.id.description)
+                    }
+                    if !section.isEmpty && !(document.websitePages.first(where: { $0.id.description == page })?.nodes.contains {
+                        $0.id.description == section && $0.kind == .section
+                    } ?? false) { Text("Missing section").tag(section) }
+                }.accessibilityIdentifier(identifierPrefix + ".section")
+            }
+            if kind == "external" {
+                TextField("https://example.com", text: $url)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).focused(focus, equals: "url")
+                    .accessibilityLabel("External URL")
+                    .accessibilityHint("Use an HTTP or HTTPS destination without credentials. Return applies; Escape cancels.")
+                    .accessibilityIdentifier(identifierPrefix + ".url")
+                    .onSubmit(onSubmit)
+            }
+        }
+    }
+}
+
 private struct ControlInspectorFieldsView: View {
     @ObservedObject var state: WorkspaceShellState
     let interactions: Bool
@@ -3553,7 +5136,7 @@ private struct ControlInspectorFieldsView: View {
         return values.count == 1 ? values.first!.capitalized : "Mixed provenance"
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             if nodes.isEmpty {
                 ContentUnavailableView("Select a Button or Link", systemImage: "link",
                     description: Text("These controls edit Button and Link labels and targets. Other selected objects are unchanged."))
@@ -3568,7 +5151,7 @@ private struct ControlInspectorFieldsView: View {
                         TextField(mixedLabel ? "Mixed labels" : "Label", text: Binding(get: { label }, set: {
                             if label != $0 { label = $0; dirty = true }
                         }))
-                            .textFieldStyle(.roundedBorder).focused($field, equals: "label")
+                            .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).focused($field, equals: "label")
                             .accessibilityLabel("Control label").accessibilityIdentifier("inspector.content.control.label")
                             .onSubmit { commitDraft("return") }
                         Button("Reset Label") { submit(.label(nil), provenance: "reset") }
@@ -3594,54 +5177,30 @@ private struct ControlInspectorFieldsView: View {
         .onExitCommand { dirty = false; refresh(); message = "Draft cancelled; committed properties are unchanged."; field = nil }
     }
     private var targetFields: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             if target == nil { Text("Mixed targets").accessibilityIdentifier("inspector.interactions.link.mixed") }
             if nodes.contains(where: { (try? CanonicalLinkTarget.resolve($0).isMissing(in: document)) == true }) {
                 Label("Target missing — choose a replacement or remove the target.", systemImage: "exclamationmark.triangle")
                     .font(.caption).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("inspector.interactions.link.missing")
             }
-            Picker("Target type", selection: Binding(get: { kind }, set: {
-                kind = $0; page = ""; section = ""; dirty = true
-                if $0 == "none" { submit(.target(nil), provenance: "picker") }
-            })) {
-                Text("No target").tag("none"); Text("Page").tag("page"); Text("Section").tag("section")
-                Text("External HTTP(S)").tag("external")
-                if target == nil { Text("Mixed").tag("mixed") }
-            }.accessibilityIdentifier("inspector.interactions.link.type")
-            if kind == "page" || kind == "section" {
-                Picker("Page", selection: Binding(get: { page }, set: {
+            NativeLinkDestinationFields(document: document,
+                kind: Binding(get: { kind }, set: {
+                    kind = $0; page = ""; section = ""; dirty = true
+                    if $0 == "none" { submit(.target(nil), provenance: "picker") }
+                }),
+                page: Binding(get: { page }, set: {
                     page = $0; section = ""; dirty = true
                     if kind == "page", let id = PageID(uuidString: $0) { submit(.target(.page(id)), provenance: "picker") }
-                })) {
-                    Text("Choose a page").tag("")
-                    ForEach(document.websitePages, id: \.id) { Text("\($0.name) — \($0.route.rawValue)").tag($0.id.description) }
-                    if !page.isEmpty && !document.pages.contains(where: { $0.id.description == page }) { Text("Missing page").tag(page) }
-                }.accessibilityIdentifier("inspector.interactions.link.page")
-            }
-            if kind == "section" {
-                Picker("Section", selection: Binding(get: { section }, set: {
+                }),
+                section: Binding(get: { section }, set: {
                     section = $0
                     if let pageID = PageID(uuidString: page), let nodeID = NodeID(uuidString: $0) {
                         submit(.target(.section(pageID: pageID, nodeID: nodeID)), provenance: "picker")
                     }
-                })) {
-                    Text("Choose a section").tag("")
-                    ForEach(document.pages.first(where: { $0.id.description == page })?.nodes.filter { $0.kind == .section } ?? [], id: \.id) {
-                        Text($0.name).tag($0.id.description)
-                    }
-                    if !section.isEmpty && !(document.pages.first(where: { $0.id.description == page })?.nodes.contains(where: { $0.id.description == section && $0.kind == .section }) ?? false) {
-                        Text("Missing section").tag(section)
-                    }
-                }.accessibilityIdentifier("inspector.interactions.link.section")
-            }
-            if kind == "external" {
-                TextField("https://example.com", text: Binding(get: { url }, set: {
-                    if url != $0 { url = $0; dirty = true }
-                }))
-                    .textFieldStyle(.roundedBorder).focused($field, equals: "url")
-                    .accessibilityLabel("External URL").accessibilityIdentifier("inspector.interactions.link.url")
-                    .onSubmit { commitDraft("return") }
-            }
+                }),
+                url: Binding(get: { url }, set: { if url != $0 { url = $0; dirty = true } }),
+                focus: $field, allowsMixed: target == nil,
+                identifierPrefix: "inspector.interactions.link", onSubmit: { commitDraft("return") })
             Picker("Open in", selection: Binding(get: { context }, set: {
                 if let value = CanonicalLinkContext(rawValue: $0) { submit(.context(value), provenance: "picker") }
             })) {
@@ -3683,12 +5242,95 @@ private struct ControlInspectorFieldsView: View {
     }
 }
 
+private struct InspectorWorkflowControls: View {
+    @ObservedObject var state: WorkspaceShellState
+    @State private var toolsExpanded = false
+    var body: some View {
+        DisclosureGroup("Inspector Tools", isExpanded: $toolsExpanded) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+            HStack {
+                TextField("Find Inspector properties", text: Binding(get: { state.inspectorSectionQuery },
+                    set: { state.inspectorSectionQuery = String($0.prefix(256)) }))
+                    .accessibilityLabel("Find Inspector sections by property name")
+                    .accessibilityIdentifier("inspector.workflow.search")
+                    .onSubmit { if let first = state.discoveredInspectorSections.first { state.inspectorTab = first } }
+                    .onExitCommand { state.inspectorSectionQuery = "" }
+                Button("Clear") { state.inspectorSectionQuery = "" }
+                    .disabled(state.inspectorSectionQuery.isEmpty)
+                    .accessibilityIdentifier("inspector.workflow.clear")
+            }
+            if !state.inspectorSectionQuery.isEmpty || !state.pinnedInspectorSections.isEmpty {
+            ScrollView(.horizontal) {
+                HStack {
+                    ForEach(state.discoveredInspectorSections) { section in
+                        Button { state.inspectorTab = section } label: {
+                            Label(section.title, systemImage: state.pinnedInspectorSections.contains(section) ? "pin.fill" : "slider.horizontal.3")
+                                .lineLimit(1).fixedSize()
+                        }.accessibilityLabel("Reveal " + section.title + " Inspector")
+                            .accessibilityValue(state.inspectorTab == section ? "Current section" : "Available section")
+                            .accessibilityIdentifier("inspector.workflow.section." + section.rawValue)
+                    }
+                }
+            }
+            }
+            HStack {
+                Text("\(state.discoveredInspectorSections.count) sections").font(.caption)
+                    .accessibilityIdentifier("inspector.workflow.count")
+                Spacer()
+                Button(state.pinnedInspectorSections.contains(state.inspectorTab) ? "Unpin Section" : "Pin Section", action: state.toggleInspectorPin)
+                    .accessibilityValue(state.pinnedInspectorSections.contains(state.inspectorTab) ? "Pinned" : "Not pinned")
+                    .accessibilityIdentifier("inspector.workflow.pin")
+            }
+            if state.discoveredInspectorSections.isEmpty {
+                Text("No matching section. Clear search; the current Inspector and all tabs remain available.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.workflow.empty")
+            }
+            if state.inspectorTab == .layout {
+                Group {
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                        Picker("Property", selection: $state.inspectorTransferField) {
+                            ForEach(GeometryInspectorField.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }.accessibilityIdentifier("inspector.workflow.transfer.field")
+                        Text(state.geometryInspectorResponsiveSource(for: state.inspectorTransferField) ?? "Unavailable geometry source")
+                            .font(.caption).fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("inspector.workflow.transfer.provenance")
+                        if state.geometryInspectorValue(for: state.inspectorTransferField) == .mixed {
+                            Text("Mixed values — Copy is unavailable. Paste explicitly unifies only applicable objects.")
+                                .font(.caption).fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("inspector.workflow.transfer.mixed")
+                        }
+                        HStack {
+                            Button("Copy Value", action: state.copyInspectorGeometry).disabled(!state.canCopyInspectorGeometry)
+                                .lineLimit(1)
+                                .accessibilityIdentifier("inspector.workflow.copy")
+                            Button("Paste Value", action: state.pasteInspectorGeometry)
+                                .lineLimit(1)
+                                .disabled(!state.pageEditingIsAvailable || state.selectionState.isEmpty)
+                                .accessibilityIdentifier("inspector.workflow.paste")
+                        }
+                    }
+                }.help("Copy a consistent geometry value; Paste authors only applicable objects at this breakpoint in one undoable transaction.")
+            }
+            if !state.inspectorWorkflowAnnouncement.isEmpty,
+               state.inspectorWorkflowAnnouncement != "Inspector discovery is local to this window." {
+            Text(state.inspectorWorkflowAnnouncement).font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Inspector workflow status").accessibilityValue(state.inspectorWorkflowAnnouncement)
+                .accessibilityIdentifier("inspector.workflow.status")
+            }
+        }
+        }.disclosureGroupStyle(SiteForgeInspectorDisclosureStyle(identifier: "inspector.workflow.disclosure"))
+    }
+}
+
 private struct InspectorView: View {
     @ObservedObject var state: WorkspaceShellState
     let focus: FocusState<ShellFocus?>.Binding
+    @State private var componentPropertiesExpanded = false
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: SiteForgeVisualSystem.standardSpacing) {
             ShellTabBar(
                 tabs: InspectorTab.allCases,
                 selection: $state.inspectorTab,
@@ -3706,6 +5348,28 @@ private struct InspectorView: View {
                     }
                 }
             )
+
+            if state.inspectorTab == .layout,
+               state.hasContainerLayoutSelection
+                || state.lastContainerLayoutAnnouncement != "Container layout inactive" {
+                Text(state.currentContainerLayoutAnnouncement)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Container layout edit status")
+                .accessibilityValue(state.currentContainerLayoutAnnouncement)
+                .accessibilityIdentifier("inspector.layout.container.announcement")
+            } else if state.inspectorTab == .content,
+                      state.hasFormInspectorContext
+                        || state.lastFormInspectorAnnouncement != "Form field properties" {
+                Text(state.lastFormInspectorAnnouncement)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Form field edit status")
+                .accessibilityValue(state.lastFormInspectorAnnouncement)
+                .accessibilityIdentifier("inspector.form.status")
+            }
 
             if case let .unavailable(reason, nextStep) = state.inspectorTab.availability {
                 ContentUnavailableView(
@@ -3730,23 +5394,23 @@ private struct InspectorView: View {
                 .accessibilityLabel("Nothing Selected. Select an object to inspect its \(state.inspectorTab.title.lowercased()).")
                 .accessibilityIdentifier("inspector.empty")
             } else {
+                ScrollViewReader { inspectorReader in
                 ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
                         Label(state.selectionSummary, systemImage: state.selectionState.count > 1 ? "square.stack.3d.up" : "selection.pin.in.out")
                             .font(.headline)
-                        Text(state.selectionState.count == 1 ? "Primary selection" : "Multiple selection")
-                            .foregroundStyle(.secondary)
                         if state.layerTargets.first(where: { $0.id == state.selectionState.primaryID })?.isLocked == true {
                             Label("Locked — inspection only", systemImage: "lock.fill")
                                 .foregroundStyle(.secondary)
                         }
-                        inspectorDetails
+                        InspectorWorkflowControls(state: state)
+                        inspectorDetails(reader: inspectorReader)
                     }
                     // The production minimum-height window can extend under the
                     // Dock on a shorter display. Keep the last native control
                     // scrollable above that occlusion instead of stranding it
                     // against the bottom edge of the Inspector.
-                    .padding(.bottom, 80)
+                    .padding(.bottom, SiteForgeVisualSystem.inspectorBottomClearance)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel("Inspector selection summary")
@@ -3755,16 +5419,18 @@ private struct InspectorView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .accessibilityIdentifier("inspector.selection.scroll")
+                }
             }
         }
-        .padding(10)
+        .padding(SiteForgeVisualSystem.panePadding)
         .workspaceChrome(.inspector)
+        .groupBoxStyle(SiteForgeInspectorGroupStyle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.inspector.rawValue)
     }
 
     @ViewBuilder
-    private var inspectorDetails: some View {
+    private func inspectorDetails(reader: ScrollViewProxy) -> some View {
         switch state.inspectorTab {
         case .design:
             if let instance = state.selectedComponent {
@@ -3788,21 +5454,45 @@ private struct InspectorView: View {
                     .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ","))
             }
         case .layout:
+            if let owner = state.selectedPageChromeOwner {
+                Text("Part of \(owner.name). Its containing layout determines the visible position; automatic content/navigation bounds are managed by Header/Footer settings.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                Button("Open Header/Footer Settings", action: state.revealPageChromeOwner)
+                    .accessibilityIdentifier("inspector.navigation.owner")
+            }
+            if state.hasMixedPageStructureSelection {
+                Text("Mixed page-structure selection. Heights can be edited together; positions/widths and navigation remain managed by their owners.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+            }
+            if let node = state.selectedPageStructureNode {
+                PageStructureInspectorView(state: state, node: node)
+                    .id("page-structure:" + state.documentSession.document.id.description + node.id.description)
+            }
             Text(state.transformGeometrySummary)
                 .monospacedDigit()
                 .accessibilityLabel("Selection geometry")
                 .accessibilityValue(state.transformGeometrySummary)
                 .accessibilityIdentifier("inspector.transform.geometry")
-            Text("Fixed geometry remains authored. Base min/max and aspect sizing applies to Frame and Image; automatic sizing is not yet available.")
+            Text(state.hasManagedPageStructureSelection
+                 ? "Connected layout derives position/width. Height and original geometry intent stay canonical; Frames remain free-positioned."
+                 : "Fixed geometry remains authored. Base min/max and aspect sizing applies to Frame and Image; automatic sizing is not yet available.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             GeometryInspectorFieldsView(state: state)
                 .id(state.geometryInspectorSelectionKey)
-            if !state.supportedFluidValueTargets.isEmpty {
+            if !state.hasManagedPageStructureSelection {
+                PositioningInspectorView(state: state).modifier(SiteForgeInspectorSectionSurface())
+                    .id("position:" + state.geometryInspectorSelectionKey)
+            } else {
+                Text("Page flow owns positioning. Free/fixed/sticky offsets are inactive while connected; Undo conversion restores the original data.").font(.caption)
+            }
+            if !state.supportedFluidValueTargets.isEmpty && !state.hasManagedPageStructureSelection {
                 FluidValueInspectorView(state: state)
+                    .modifier(SiteForgeInspectorSectionSurface())
                     .id("fluid:" + state.geometryInspectorSelectionKey)
             }
             SizingInspectorFieldsView(state: state)
+                .modifier(SiteForgeInspectorSectionSurface())
                 .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ","))
             if state.hasContainerLayoutSelection {
                 Divider()
@@ -3812,10 +5502,11 @@ private struct InspectorView: View {
             if !state.selectionState.isEmpty {
                 Divider()
                 ResponsiveVisibilityInspectorView(state: state)
+                    .modifier(SiteForgeInspectorSectionSurface())
                     .id("visibility:\(state.geometryInspectorSelectionKey)")
             }
             Divider()
-            guideAndSnappingDetails
+            guideAndSnappingDetails.modifier(SiteForgeInspectorSectionSurface())
         case .accessibility:
             if state.hasFormInspectorContext {
                 FormAccessibilityInspectorView(state: state)
@@ -3824,15 +5515,63 @@ private struct InspectorView: View {
                 GeneralAccessibilityInspectorView(state: state)
                     .id("general-accessibility:" + state.geometryInspectorSelectionKey)
             }
-        case .content where state.hasComponentTextInspectorContext:
-            VStack(alignment: .leading, spacing: 14) {
-                if state.selectedDefinitionText != nil || !state.componentTextProperties.isEmpty
-                    || (state.selectedComponent.map { !CanonicalComponentText.overrides(on: $0).isEmpty } ?? false) {
-                    ComponentTextInspectorView(state: state)
+        case .content where state.hasMixedPageStructureSelection || state.hasPageNavigationSelection:
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                Text("Select one Header/Footer to edit navigation, or one Section to organize flow. Navigation links keep their owner's layout and PageID destinations; no primary values are borrowed for mixed selections.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                if state.hasPageNavigationSelection, state.selectedCanonicalNodes.count == 1 {
+                    Button("Edit Header/Footer Links", action: state.revealPageNavigationOwner)
+                        .disabled(!state.pageEditingIsAvailable)
+                        .accessibilityIdentifier("inspector.navigation.revealOwner")
                 }
-                ComponentVisibilityInspectorView(state: state)
             }
-                .id("component-text:" + state.componentTextInspectorKey)
+        case .content where state.selectedPageStructureNode != nil:
+            if let node = state.selectedPageStructureNode {
+                PageStructureInspectorView(state: state, node: node)
+                    .id("page-structure-content:" + state.documentSession.document.id.description + node.id.description)
+            }
+        case .content where state.hasComponentTextInspectorContext:
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.toolbarGroupSpacing) {
+                if let instance = state.selectedComponent {
+                    OrganizedComponentInstanceInspectorView(state: state, instance: instance, reader: reader)
+                        .modifier(SiteForgeInspectorSectionSurface())
+                        .id(state.documentSession.document.id.description + ":" + instance.id.description + ":" +
+                            (CanonicalComponentReference.definitionID(for: instance)?.description ?? "missing"))
+                } else {
+                    if let text = state.selectedDefinitionText { plainTextDetails(text) }
+                    if !state.componentOrganizationEntries.isEmpty || state.selectedDefinitionText != nil
+                        || state.selectedDefinitionVisibilityChild != nil || state.selectedDefinitionChoiceImage != nil
+                        || state.selectedDefinitionMediaImage != nil || state.selectedDefinitionActionControl != nil
+                        || state.selectedDefinitionSlotContainer != nil {
+                    DisclosureGroup("Component Properties", isExpanded: $componentPropertiesExpanded) {
+                    if !state.componentOrganizationEntries.isEmpty {
+                        ComponentOrganizationInspectorView(state: state)
+                    }
+                    if state.selectedDefinitionText != nil {
+                        ComponentTextInspectorView(state: state)
+                    }
+                    if state.selectedDefinitionVisibilityChild != nil { ComponentVisibilityInspectorView(state: state) }
+                    if state.selectedDefinitionChoiceImage != nil {
+                        ComponentChoiceInspectorView(state: state)
+                    }
+                    if state.selectedDefinitionMediaImage != nil {
+                        ComponentMediaInspectorView(state: state)
+                    }
+                    if state.selectedDefinitionActionControl != nil { ComponentActionInspectorView(state: state) }
+                    if state.selectedDefinitionSlotContainer != nil { ComponentSlotInspectorView(state: state) }
+                    }.disclosureGroupStyle(SiteForgeInspectorDisclosureStyle(identifier: "component.definition.properties"))
+                    }
+                }
+            }
+                // Keep discovery state across edits; only value drafts/recovery
+                // capture a new adopted operation identity. Selection or document
+                // replacement still creates a fresh discovery context.
+                .id(state.selectedComponent == nil ? "component-text:" + state.componentTextInspectorKey :
+                    "component-discovery:" + state.documentSession.document.id.description + ":" +
+                    state.selectionState.orderedIDs.map(\.description).joined(separator: ",") + ":" +
+                    (state.selectedComponent.flatMap { CanonicalComponentReference.definitionID(for: $0) }?.description ?? "missing"))
+        case .content where state.selectedCanonicalNodes.count == 1 && state.selectedCanonicalNodes.first?.kind == .text && !state.hasFormInspectorContext:
+            if let text = state.selectedCanonicalNodes.first { plainTextDetails(text) }
         case .content where state.hasFormInspectorContext:
             FormInspectorFieldsView(state: state)
                 .id("form-field:" + state.geometryInspectorSelectionKey)
@@ -3842,8 +5581,27 @@ private struct InspectorView: View {
         }
     }
 
+    private func plainTextDetails(_ node: DocumentNode) -> some View {
+        GroupBox("Text") {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                Text(node.insertionStringProperty("content.text") ?? "")
+                    .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Committed text")
+                    .accessibilityValue(node.insertionStringProperty("content.text") ?? "")
+                    .accessibilityIdentifier("inspector.text.content")
+                HStack {
+                    Button("Edit Text") { _ = state.beginTextEditing(nodeID: node.id, provenance: .pointer) }
+                        .disabled(!state.pageEditingIsAvailable)
+                        .accessibilityIdentifier("inspector.text.edit")
+                    Button("Typography") { state.inspectorTab = .design }
+                        .accessibilityIdentifier("inspector.text.typography")
+                }
+            }
+        }
+    }
+
     private var guideAndSnappingDetails: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             Text("Guides & Snapping").font(.headline)
             Text(state.snappingStatus)
                 .font(.caption)
@@ -3883,6 +5641,131 @@ private struct InspectorView: View {
             .toggleStyle(.checkbox)
             .accessibilityIdentifier("inspector.snapping.suppress")
         }
+    }
+}
+
+private struct AdvancedStyleInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @State private var styleName = ""
+    @State private var stateFill = ""
+    @State private var stateOpacity = ""
+    @State private var editedState: CanonicalInteractionStyleState = .hover
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            Divider()
+            HStack {
+                Text("Reusable Styles").font(.headline)
+                Spacer()
+                Button("Detach") {
+                    _ = state.commitAdvancedStyle(.applyReusableStyles([]), operation: "Reusable style detach")
+                }
+                .disabled(state.selectedReusableStyleIDs?.isEmpty != false)
+                .accessibilityIdentifier("inspector.design.style.detach")
+            }
+            HStack {
+                TextField("Style name", text: $styleName)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
+                    .accessibilityIdentifier("inspector.design.style.name")
+                Button("Create from Selection") { createStyle() }
+                    .disabled(styleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("inspector.design.style.create")
+            }
+            ForEach(state.reusableStyleDefinitions, id: \.id) { definition in
+                HStack {
+                    Text(definition.name).lineLimit(1)
+                    Spacer()
+                    Button("Apply") {
+                        _ = state.commitAdvancedStyle(.applyReusableStyles([definition.id]), operation: "Reusable style apply")
+                    }
+                    .accessibilityLabel("Apply reusable style \(definition.name)")
+                    Button("Update") { updateStyle(definition) }
+                        .accessibilityLabel("Update reusable style \(definition.name) from selection")
+                    Button("Delete", role: .destructive) {
+                        _ = state.commitAdvancedStyle(.removeReusableStyle(definition.id), operation: "Reusable style deletion")
+                    }
+                    .accessibilityLabel("Delete reusable style \(definition.name)")
+                }
+                .controlSize(.small)
+            }
+            Divider()
+            Text("Interaction States").font(.headline)
+            Picker("Preview state", selection: $state.forcedStyleState) {
+                ForEach(CanonicalInteractionStyleState.allCases, id: \.self) {
+                    Text($0.rawValue.capitalized).tag($0)
+                }
+            }
+            .accessibilityIdentifier("inspector.design.state.preview")
+            Picker("Edit state", selection: $editedState) {
+                ForEach(CanonicalInteractionStyleState.allCases.filter { $0 != .default }, id: \.self) {
+                    Text($0.rawValue.capitalized).tag($0)
+                }
+            }
+            HStack {
+                TextField("State fill #RRGGBBAA", text: $stateFill).textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
+                    .accessibilityIdentifier("inspector.design.state.fill")
+                TextField("Opacity 0–100", text: $stateOpacity).textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
+                    .frame(width: 92).accessibilityIdentifier("inspector.design.state.opacity")
+            }
+            HStack {
+                Button("Apply State") { commitState() }
+                    .accessibilityIdentifier("inspector.design.state.apply")
+                Button("Remove State") {
+                    _ = state.commitAdvancedStyle(.removeState(editedState), operation: "State style removal")
+                }
+                .accessibilityIdentifier("inspector.design.state.remove")
+            }
+            Text("State preview is editor-only; authored variants remain canonical and undoable.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .onChange(of: editedState) { _, _ in restoreStateDraft() }
+        .onAppear { restoreStateDraft() }
+        .onExitCommand {
+            styleName = ""; restoreStateDraft()
+            state.cancelAdvancedStyleDraft()
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inspector.design.advancedStyles")
+    }
+
+    private func createStyle() {
+        let appearance = selectedAppearance()
+        let name = styleName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if state.commitAdvancedStyle(.createReusableStyle(id: ReusableStyleID(), name: name,
+            fill: appearance.fill, opacity: appearance.opacity), operation: "Reusable style creation") { styleName = "" }
+    }
+
+    private func updateStyle(_ definition: CanonicalReusableStyleDefinition) {
+        let appearance = selectedAppearance()
+        _ = state.commitAdvancedStyle(
+            .updateReusableStyle(id: definition.id, name: definition.name,
+                                 fill: appearance.fill, opacity: appearance.opacity),
+            operation: "Reusable style update"
+        )
+    }
+
+    private func selectedAppearance() -> (fill: CanonicalSolidColor?, opacity: Double?) {
+        let fill: CanonicalSolidColor? = if case .single(let value, _) = state.designInspectorFillValue() { value } else { nil }
+        let opacity: Double? = if case .single(let value, _) = state.designInspectorOpacityValue() { value } else { nil }
+        return (fill, opacity)
+    }
+
+    private func restoreStateDraft() {
+        let value = state.selectedStateVariant(editedState)
+        stateFill = value?.fill?.hexadecimalRGBA ?? ""
+        stateOpacity = value?.opacity.map { String(Int(($0 * 100).rounded())) } ?? ""
+    }
+
+    private func commitState() {
+        let fill = stateFill.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil : CanonicalSolidColor.parse(hexadecimal: stateFill)
+        let opacity: Double? = stateOpacity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil : Double(stateOpacity).map { $0 / 100 }
+        guard (stateFill.isEmpty || fill != nil), opacity.map({ (0...1).contains($0) }) ?? true,
+              fill != nil || opacity != nil else { return }
+        let id = state.selectedStateVariant(editedState)?.id ?? UUID()
+        _ = state.commitAdvancedStyle(.setState(state: editedState, id: id, fill: fill, opacity: opacity),
+                                      operation: "\(editedState.rawValue.capitalized) state style")
     }
 }
 
@@ -3931,14 +5814,16 @@ private struct DesignInspectorFieldsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             imageControls
             imageFillControls
-            Text("Appearance").font(.headline)
+            if state.selectedCanonicalNodes.contains(where: { $0.kind.isTextual }) { typographyControls }
+            GroupBox("Appearance") {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             let fill = state.designInspectorFillValue()
             let fillIsApplicable = !isUnavailable(fill)
             let fillIsEditable = fillIsApplicable && !state.hasBoundColorTokenSelection
-            HStack(spacing: 8) {
+            HStack(spacing: SiteForgeVisualSystem.controlInset) {
                 NativeDesignColorWell(
                     color: resolvedColor(fill),
                     isEnabled: fillIsEditable,
@@ -3952,7 +5837,7 @@ private struct DesignInspectorFieldsView: View {
                 )
                 .frame(width: 48, height: 26)
                 TextField("Hexadecimal fill", text: $hexDraft)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                     .disabled(!fillIsEditable)
                     .focused($hexFocused)
                     .onSubmit { commitHex() }
@@ -3977,10 +5862,10 @@ private struct DesignInspectorFieldsView: View {
             colorTokenControls
             let opacity = state.designInspectorOpacityValue()
             let opacityIsApplicable = !isUnavailable(opacity)
-            HStack(spacing: 8) {
+            HStack(spacing: SiteForgeVisualSystem.controlInset) {
                 Text("Opacity").frame(width: 56, alignment: .leading)
                 TextField("Opacity", text: $opacityDraft)
-                    .textFieldStyle(.roundedBorder).monospacedDigit()
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
                     .disabled(!opacityIsApplicable)
                     .focused($opacityFocused)
                     .onSubmit { commitOpacity() }
@@ -4002,17 +5887,22 @@ private struct DesignInspectorFieldsView: View {
                 )
                 .frame(width: 22, height: 26)
             }
-            if let message { Text(message).font(.caption).foregroundStyle(.red).accessibilityIdentifier("inspector.design.validation") }
+            if let message { Text(message).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger).accessibilityIdentifier("inspector.design.validation") }
             Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("inspector.design.announcement")
             if state.hasBoundColorTokenSelection {
                 Text("Unbind the color token to edit fill layers.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
+            }
+            }
             FillLayerListInspectorView(state: state)
                 .disabled(state.hasBoundColorTokenSelection)
-            typographyControls
-            semanticElementControls
-            boxStyleControls
+                .modifier(SiteForgeInspectorSectionSurface())
+            AdvancedStyleInspectorView(state: state).modifier(SiteForgeInspectorSectionSurface())
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) { semanticElementControls }
+                .modifier(SiteForgeInspectorSectionSurface())
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) { boxStyleControls }
+                .modifier(SiteForgeInspectorSectionSurface())
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Design appearance")
@@ -4040,7 +5930,7 @@ private struct DesignInspectorFieldsView: View {
             }
             .accessibilityIdentifier("inspector.tokens.new")
         }
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
             Text("Appearance color").font(.caption).foregroundStyle(.secondary)
             Picker("Appearance color", selection: $tokenTarget) {
                 Text("Fill").tag(LocalColorTarget.fill)
@@ -4199,7 +6089,7 @@ private struct DesignInspectorFieldsView: View {
     @ViewBuilder
     private var imageFillControls: some View {
         if !state.imageFillSelection.isEmpty {
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
                 Text("Image Fill").font(.headline)
                 Text(state.imageFillInspectorStatus())
                     .font(.caption).foregroundStyle(.secondary)
@@ -4244,16 +6134,16 @@ private struct DesignInspectorFieldsView: View {
         case .unavailable:
             EmptyView()
         case .mixed(let applicable, let skipped):
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
                 Text("Image").font(.headline)
                 Text("Mixed image properties across \(applicable) Image\(applicable == 1 ? "" : "s")\(skipped > 0 ? "; \(skipped) incompatible object\(skipped == 1 ? "" : "s") will be skipped" : "").")
                     .font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("inspector.image.mixed")
             }
         case .single(let image, let asset):
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
                 Text("Image").font(.headline)
-                HStack(spacing: 8) {
+                HStack(spacing: SiteForgeVisualSystem.controlInset) {
                     Group {
                         if let data = state.imageAssetThumbnail(asset.id), let thumbnail = NSImage(data: data) {
                             Image(nsImage: thumbnail).resizable().scaledToFit()
@@ -4262,8 +6152,8 @@ private struct DesignInspectorFieldsView: View {
                         }
                     }
                     .frame(width: 48, height: 40)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
-                    VStack(alignment: .leading, spacing: 2) {
+                    .background(SiteForgeVisualSystem.fieldSurface, in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.rowCornerRadius))
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.hairlineSpacing) {
                         Text(asset.displayName).lineLimit(1)
                         Text("\(asset.pixelWidth) × \(asset.pixelHeight)")
                             .font(.caption2).foregroundStyle(.secondary)
@@ -4275,21 +6165,21 @@ private struct DesignInspectorFieldsView: View {
                 }
                 Picker("Fit Mode", selection: Binding(
                     get: { image.fitMode },
-                    set: { _ = state.commitImageInspectorEdit(.fit($0)) }
+                    set: { scheduleImageInspectorEdit(.fit($0)) }
                 )) {
                     ForEach(ImageFitMode.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("inspector.image.fit")
-                HStack(spacing: 6) {
+                HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                     Text("Focal").frame(width: 42, alignment: .leading)
                     TextField("X %", text: $imageFocalXDraft)
-                        .textFieldStyle(.roundedBorder).monospacedDigit()
+                        .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
                         .onSubmit { commitImageFocal() }
                         .accessibilityLabel("Image focal point X percent")
                         .accessibilityIdentifier("inspector.image.focalX")
                     TextField("Y %", text: $imageFocalYDraft)
-                        .textFieldStyle(.roundedBorder).monospacedDigit()
+                        .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
                         .onSubmit { commitImageFocal() }
                         .accessibilityLabel("Image focal point Y percent")
                         .accessibilityIdentifier("inspector.image.focalY")
@@ -4300,7 +6190,7 @@ private struct DesignInspectorFieldsView: View {
                     .fixedSize().accessibilityIdentifier("inspector.image.focalReset")
                 }
                 TextField("Alternative text", text: $imageAltDraft)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                     .disabled(image.isDecorative)
                     .onSubmit { _ = state.commitImageInspectorEdit(.altText(imageAltDraft)) }
                     .accessibilityLabel("Image alternative text")
@@ -4330,6 +6220,19 @@ private struct DesignInspectorFieldsView: View {
         }
         if !state.commitImageInspectorEdit(.focal(x: x / 100, y: y / 100)) {
             message = state.imageInspectorFailure?.localizedDescription
+        }
+    }
+
+    /// Native segmented controls publish their new selection during SwiftUI's
+    /// control reconciliation. Compile the canonical command on the next
+    /// main-actor turn and only if the selected scene/revision is unchanged.
+    private func scheduleImageInspectorEdit(_ edit: ImageInspectorEdit) {
+        let expectedContext = selectionContextKey
+        Task { @MainActor in
+            await Task.yield()
+            guard selectionContextKey == expectedContext else { return }
+            _ = state.commitImageInspectorEdit(edit)
+            resetDrafts()
         }
     }
 
@@ -4418,16 +6321,16 @@ private struct DesignInspectorFieldsView: View {
         let value = state.typographyInspectorValue()
         let typography: CanonicalTypography? = if case .single(let style, _) = value { style } else { nil }
         let enabled: Bool = if case .unavailable = value { false } else { true }
-        Divider()
+        GroupBox("Typography") {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
         HStack {
-            Text("Typography").font(.headline)
             Spacer()
             Button("Reset") { commitTypography(.reset, operation: "reset") }
                 .disabled(!enabled)
                 .accessibilityIdentifier("inspector.design.typography.reset")
         }
         TextField("Font family", text: $fontFamilyDraft)
-            .textFieldStyle(.roundedBorder).disabled(!enabled)
+            .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).disabled(!enabled)
             .focused($typographyFocusedField, equals: .family)
             .onSubmit { commitFontFamily() }
             .onChange(of: typographyFocusedField) { old, current in
@@ -4437,7 +6340,7 @@ private struct DesignInspectorFieldsView: View {
             .accessibilityValue(typographyAccessibility(value, component: "family"))
             .accessibilityHint(typographyHint(value))
             .accessibilityIdentifier("inspector.design.typography.family")
-        HStack(spacing: 7) {
+        HStack(spacing: SiteForgeVisualSystem.controlInset) {
             Picker("Weight", selection: Binding(
                 get: { typography?.weight ?? .regular },
                 set: { commitTypography(.weight($0), operation: "weight", provenance: .picker) }
@@ -4456,7 +6359,7 @@ private struct DesignInspectorFieldsView: View {
             .accessibilityLabel("Paragraph alignment")
             .accessibilityIdentifier("inspector.design.typography.alignment")
         }
-        HStack(alignment: .top, spacing: 7) {
+        HStack(alignment: .top, spacing: SiteForgeVisualSystem.controlInset) {
             typographyNumberField("Size", text: $fontSizeDraft, field: .size, value: typography?.size)
             typographyNumberField("Line height", text: $lineHeightDraft, field: .lineHeight, value: typography?.lineHeight)
             typographyNumberField("Tracking", text: $trackingDraft, field: .tracking, value: typography?.tracking)
@@ -4464,7 +6367,7 @@ private struct DesignInspectorFieldsView: View {
         Text(typographyProvenance(value))
             .font(.caption2).foregroundStyle(.secondary)
             .accessibilityIdentifier("inspector.design.typography.status")
-        HStack(spacing: 7) {
+        HStack(spacing: SiteForgeVisualSystem.controlInset) {
             NativeDesignColorWell(
                 color: state.textForegroundInspectorColor() ?? CanonicalSolidColor(red: 0, green: 0, blue: 0, alpha: 1),
                 isEnabled: enabled && !state.hasBoundColorTokenSelection(target: .textForeground),
@@ -4475,7 +6378,7 @@ private struct DesignInspectorFieldsView: View {
                 onCommit: { commitTypography(.foreground($0), operation: "foreground", provenance: .picker) }
             )
             TextField("Foreground #RRGGBBAA", text: $textForegroundDraft)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                 .disabled(!enabled || state.hasBoundColorTokenSelection(target: .textForeground))
                 .focused($typographyFocusedField, equals: .foreground)
                 .onSubmit { commitTextForeground() }
@@ -4495,8 +6398,10 @@ private struct DesignInspectorFieldsView: View {
             .font(.caption2).foregroundStyle(.secondary)
             .accessibilityIdentifier("inspector.design.typography.foregroundStatus")
         if let fallback = state.typographyResolutionStatus {
-            Text(fallback).font(.caption2).foregroundStyle(.orange)
+            Text(fallback).font(.caption2).foregroundStyle(SiteForgeVisualSystem.warning)
                 .accessibilityIdentifier("inspector.design.typography.fallback")
+        }
+        }
         }
     }
 
@@ -4507,10 +6412,10 @@ private struct DesignInspectorFieldsView: View {
         value: Double?
     ) -> some View {
         let available: Bool = if case .unavailable = state.typographyInspectorValue() { false } else { true }
-        return VStack(alignment: .leading, spacing: 3) {
+        return VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
             Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             TextField(label, text: text)
-                .textFieldStyle(.roundedBorder).monospacedDigit().disabled(!available)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit().disabled(!available)
                 .focused($typographyFocusedField, equals: field)
                 .onSubmit { commitTypographyNumber(field) }
                 .onChange(of: typographyFocusedField) { old, current in
@@ -4658,7 +6563,7 @@ private struct DesignInspectorFieldsView: View {
         let enabled: Bool = if case .unavailable = value { false } else { true }
         Divider()
         Text("Border, Radius & Shadow").font(.headline)
-        HStack(spacing: 7) {
+        HStack(spacing: SiteForgeVisualSystem.controlInset) {
             NativeDesignColorWell(
                 color: style?.border?.color ?? CanonicalSolidColor(red: 0.18, green: 0.20, blue: 0.24, alpha: 1),
                 isEnabled: enabled && !state.hasBoundColorTokenSelection(target: .border),
@@ -4673,7 +6578,7 @@ private struct DesignInspectorFieldsView: View {
                 }
             ).frame(width: 38, height: 24)
             TextField("Border width", text: $borderWidthDraft)
-                .textFieldStyle(.roundedBorder).focused($borderWidthFocused).disabled(!enabled)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).focused($borderWidthFocused).disabled(!enabled)
                 .onSubmit { commitBorder(style) }
                 .onChange(of: borderWidthFocused) { old, current in if old && !current { commitBorder(style, provenance: .focusLoss) } }
                 .accessibilityLabel("Border width in points")
@@ -4695,10 +6600,10 @@ private struct DesignInspectorFieldsView: View {
                 resetDrafts()
             }.disabled(!enabled).accessibilityIdentifier("inspector.design.borderToggle")
         }
-        HStack(spacing: 7) {
+        HStack(spacing: SiteForgeVisualSystem.controlInset) {
             Text("Radius").frame(width: 52, alignment: .leading)
             TextField("Uniform radius", text: $radiusDraft)
-                .textFieldStyle(.roundedBorder).focused($radiusFocused).disabled(!enabled)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).focused($radiusFocused).disabled(!enabled)
                 .onSubmit { commitRadius() }
                 .onChange(of: radiusFocused) { old, current in if old && !current { commitRadius(provenance: .focusLoss) } }
                 .accessibilityLabel("Uniform corner radius in points")
@@ -4709,10 +6614,10 @@ private struct DesignInspectorFieldsView: View {
             }.disabled(!enabled).accessibilityIdentifier("inspector.design.cornerRadiusToggle")
         }
         if state.hasContentBoxSelection {
-            HStack(spacing: 7) {
+            HStack(spacing: SiteForgeVisualSystem.controlInset) {
                 Text("Padding").frame(width: 52, alignment: .leading)
                 TextField("Uniform padding", text: $paddingDraft)
-                    .textFieldStyle(.roundedBorder).focused($paddingFocused).disabled(!enabled)
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).focused($paddingFocused).disabled(!enabled)
                     .onSubmit { commitPadding() }
                     .onChange(of: paddingFocused) { old, current in if old && !current { commitPadding(provenance: .focusLoss) } }
                     .accessibilityLabel("Uniform content padding in points")
@@ -4731,7 +6636,7 @@ private struct DesignInspectorFieldsView: View {
             .accessibilityHint("Clip child content to the selected Frame or Section bounds.")
             .accessibilityIdentifier("inspector.design.clipContent")
         }
-        HStack(spacing: 7) {
+        HStack(spacing: SiteForgeVisualSystem.controlInset) {
             NativeDesignColorWell(
                 color: style?.shadow?.color ?? CanonicalSolidColor(red: 0, green: 0, blue: 0, alpha: 0.25),
                 isEnabled: enabled && !state.hasBoundColorTokenSelection(target: .outerShadow),
@@ -4746,7 +6651,7 @@ private struct DesignInspectorFieldsView: View {
                 }
             ).frame(width: 38, height: 24)
             TextField("X, Y, Blur, Spread", text: $shadowDraft)
-                .textFieldStyle(.roundedBorder).focused($shadowFocused).disabled(!enabled)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).focused($shadowFocused).disabled(!enabled)
                 .onSubmit { commitShadow(style) }
                 .onChange(of: shadowFocused) { old, current in if old && !current { commitShadow(style, provenance: .focusLoss) } }
                 .accessibilityLabel("Shadow X, Y, blur, and spread in points")
@@ -5029,7 +6934,7 @@ private struct SizingInspectorFieldsView: View {
     @State private var message: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             Divider()
             HStack {
                 Text("Sizing").font(.headline)
@@ -5048,13 +6953,13 @@ private struct SizingInspectorFieldsView: View {
             }
             ForEach(SizingConstraintField.allCases, id: \.self) { field in
                 let value = state.sizingConstraintValue(for: field)
-                HStack(spacing: 6) {
+                HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                     Text(field.title).frame(width: 82, alignment: .leading).lineLimit(1)
                     TextField(field.title, text: Binding(
                         get: { drafts[field] ?? display(value) },
                         set: { drafts[field] = $0; message = nil }
                     ))
-                    .textFieldStyle(.roundedBorder).monospacedDigit()
+                    .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
                     .focused($focusedField, equals: field)
                     .onSubmit { commit(field) }
                     .onChange(of: focusedField) { previous, current in
@@ -5085,7 +6990,7 @@ private struct SizingInspectorFieldsView: View {
             if state.sizingAspectEnabled == nil, state.sizingConstraintAvailability.isEnabled {
                 Text("Mixed aspect-lock values").font(.caption2).foregroundStyle(.secondary)
             }
-            if let message { Text(message).font(.caption).foregroundStyle(.red)
+            if let message { Text(message).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger)
                 .accessibilityIdentifier("inspector.sizing.validation") }
             Text(state.lastSizingConstraintAnnouncement).font(.caption2).foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.sizing.announcement")
@@ -5137,6 +7042,85 @@ private struct SizingInspectorFieldsView: View {
 /// Scene-local string drafts for canonical fixed-geometry fields. The view is
 /// intentionally the only owner of incomplete locale input; `WorkspaceShellState`
 /// receives one validated number only at the native commit boundary.
+private struct PositioningInspectorView: View {
+    @ObservedObject var state: WorkspaceShellState
+    @State private var drafts: [PositionInsetEdge: String] = [:]
+    @State private var zDraft = ""
+
+    var body: some View {
+        let value = state.selectedPositioning
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            Divider()
+            Text("Positioning").font(.headline)
+            Picker("Mode", selection: Binding(
+                get: { value?.mode ?? .static },
+                set: { _ = state.commitAdvancedStyle(.positionMode($0), operation: "Position mode", provenance: .picker) }
+            )) {
+                ForEach(CanonicalPositionMode.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+            }
+            .disabled(value == nil)
+            .accessibilityIdentifier("inspector.layout.position.mode")
+            Text("Containing block: \(state.selectedPositioningContainingBlock)")
+                .font(.caption2).foregroundStyle(.secondary)
+                .accessibilityLabel("Containing block")
+                .accessibilityValue(state.selectedPositioningContainingBlock)
+                .accessibilityIdentifier("inspector.layout.position.containingBlock")
+            if let value, value.mode != .static {
+                ForEach(PositionInsetEdge.allCases, id: \.self) { edge in
+                    HStack {
+                        Text(edge.rawValue.capitalized).frame(width: 52, alignment: .leading)
+                        TextField(edge.rawValue.capitalized, text: Binding(
+                            get: { drafts[edge] ?? inset(edge, value: value).map { GeometryInspectorNumberParser.format($0) } ?? "" },
+                            set: { drafts[edge] = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
+                        .onSubmit { commit(edge) }
+                        .accessibilityHint("Enter a finite inset and press Return. Empty removes the authored inset.")
+                        .accessibilityIdentifier("inspector.layout.position.\(edge.rawValue)")
+                    }
+                }
+            }
+            HStack {
+                Text("Layer").frame(width: 52, alignment: .leading)
+                TextField("Stacking layer", text: Binding(
+                    get: { zDraft.isEmpty ? String(value?.zIndex ?? 0) : zDraft }, set: { zDraft = $0 }
+                ))
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit().onSubmit { commitZ() }
+                .disabled(value == nil)
+                .accessibilityLabel("Stacking layer")
+                .accessibilityIdentifier("inspector.layout.position.zIndex")
+            }
+            Text(positioningProvenance(value))
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .onExitCommand { drafts.removeAll(); zDraft = ""; state.cancelAdvancedStyleDraft() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inspector.layout.positioning")
+    }
+
+    private func inset(_ edge: PositionInsetEdge, value: CanonicalPositioning) -> Double? {
+        switch edge { case .top: value.top; case .right: value.right; case .bottom: value.bottom; case .left: value.left }
+    }
+
+    private func positioningProvenance(_ value: CanonicalPositioning?) -> String {
+        guard let value else { return "Mixed or unavailable positioning" }
+        return value.origin == .authored ? "Authored positioning" : "Default static positioning"
+    }
+
+    private func commit(_ edge: PositionInsetEdge) {
+        let raw = drafts[edge] ?? ""
+        let value: Double?
+        if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { value = nil }
+        else { guard let parsed = Double(raw), parsed.isFinite else { return }; value = parsed }
+        if state.commitAdvancedStyle(.positionInset(edge, value), operation: "Position inset") { drafts[edge] = nil }
+    }
+
+    private func commitZ() {
+        guard let value = Int(zDraft), state.commitAdvancedStyle(.zIndex(value), operation: "Stacking layer") else { return }
+        zDraft = ""
+    }
+}
+
 private struct GeometryInspectorFieldsView: View {
     @ObservedObject var state: WorkspaceShellState
     @FocusState private var focusedField: GeometryInspectorField?
@@ -5144,12 +7128,16 @@ private struct GeometryInspectorFieldsView: View {
     @State private var validationMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Geometry").font(.headline)
-            ForEach(GeometryInspectorField.allCases, id: \.self) { field in
+        GroupBox("Geometry") {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading) {
+            ForEach(GeometryInspectorField.allCases.filter { field in
+                (state.selectedPageStructureNode.flatMap(CanonicalPageFlow.role) == nil && !state.hasMixedPageStructureSelection) || field == .height
+            }, id: \.self) { field in
                 fieldRow(field)
             }
-            HStack(spacing: 8) {
+            }
+            HStack(spacing: SiteForgeVisualSystem.controlInset) {
                 Text("Breakpoint")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -5177,13 +7165,14 @@ private struct GeometryInspectorFieldsView: View {
             if let validationMessage {
                 Text(validationMessage)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(SiteForgeVisualSystem.danger)
                     .accessibilityIdentifier("inspector.layout.validation")
             }
             Text(state.lastGeometryInspectorAnnouncement)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.layout.announcement")
+        }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Layout geometry")
@@ -5200,14 +7189,14 @@ private struct GeometryInspectorFieldsView: View {
     private func fieldRow(_ field: GeometryInspectorField) -> some View {
         let value = state.geometryInspectorValue(for: field)
         let availability = state.geometryInspectorAvailability(for: field)
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
             Text(field.title)
-                .frame(width: 44, alignment: .leading)
+                .font(.caption)
             TextField(field.title, text: draftBinding(for: field, value: value))
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                 .monospacedDigit()
                 .focused($focusedField, equals: field)
-                .onSubmit { commit(field, provenance: .keyboard) }
+                .onSubmit { commit(field, provenance: .keyboard, useCurrentValue: true) }
                 .onChange(of: focusedField) { previous, current in
                     if previous == field, current != field {
                         // FocusState changes are applied while SwiftUI is
@@ -5228,7 +7217,6 @@ private struct GeometryInspectorFieldsView: View {
                 .accessibilityHint(availability.disabledReason ?? "Enter a finite value and press Return to commit. Escape restores the committed value.")
                 .accessibilityIdentifier("inspector.layout.\(field.rawValue)")
             provenanceLabel(for: value, field: field)
-                .frame(width: 104, alignment: .trailing)
         }
     }
 
@@ -5239,6 +7227,9 @@ private struct GeometryInspectorFieldsView: View {
         Binding(
             get: { drafts[field] ?? displayValue(for: value) },
             set: {
+                // Native field-editor reconciliation can write back the
+                // displayed string when focus changes without any typing.
+                guard drafts[field] != nil || $0 != displayValue(for: value) else { return }
                 drafts[field] = $0
                 validationMessage = nil
             }
@@ -5281,8 +7272,12 @@ private struct GeometryInspectorFieldsView: View {
         }
     }
 
-    private func commit(_ field: GeometryInspectorField, provenance: GeometryInspectorProvenance) {
-        let text = drafts[field] ?? displayValue(for: state.geometryInspectorValue(for: field))
+    private func commit(_ field: GeometryInspectorField, provenance: GeometryInspectorProvenance,
+                        useCurrentValue: Bool = false) {
+        // Traversing an untouched field is not authoring intent. In
+        // particular, it must not promote a default to authored, advance the
+        // revision or disable the next field while the renderer adopts it.
+        guard let text = drafts[field] ?? (useCurrentValue ? displayValue(for: state.geometryInspectorValue(for: field)) : nil) else { return }
         switch GeometryInspectorNumberParser.parse(text) {
         case .success(let value):
             guard GeometryInspectorCommandRegistry.isValid(value, for: field) else {
@@ -5320,7 +7315,7 @@ private struct FluidValueInspectorView: View {
     @FocusState private var focused: FluidValueDraftField?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             HStack {
                 Text("Fluid Value").font(.headline)
                 Spacer()
@@ -5367,7 +7362,7 @@ private struct FluidValueInspectorView: View {
                 if !minimum.isEmpty || !preferred.isEmpty || !maximum.isEmpty { draftFields }
             }
             if let validation {
-                Text(validation).font(.caption).foregroundStyle(.red)
+                Text(validation).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger)
                     .accessibilityIdentifier("inspector.layout.fluid.validation")
             }
             Text(state.lastFluidValueAnnouncement).font(.caption2).foregroundStyle(.secondary)
@@ -5390,7 +7385,7 @@ private struct FluidValueInspectorView: View {
         let hasDraft = !minimum.isEmpty || !preferred.isEmpty || !maximum.isEmpty
         if hasDraft { draftFields }
         else {
-            HStack(spacing: 8) {
+            HStack(spacing: SiteForgeVisualSystem.controlInset) {
                 valueLabel("Min", value.minimum)
                 valueLabel("Preferred", value.preferred)
                 valueLabel("Max", value.maximum)
@@ -5407,7 +7402,7 @@ private struct FluidValueInspectorView: View {
     }
 
     private var draftFields: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
             fluidField("Minimum", text: $minimum, focus: .minimum)
             fluidField("Preferred", text: $preferred, focus: .preferred)
             fluidField("Maximum", text: $maximum, focus: .maximum)
@@ -5432,7 +7427,7 @@ private struct FluidValueInspectorView: View {
     private func fluidField(_ label: String, text: Binding<String>, focus: FluidValueDraftField) -> some View {
         HStack {
             Text(label).frame(width: 72, alignment: .leading)
-            TextField(label, text: text).textFieldStyle(.roundedBorder).monospacedDigit()
+            TextField(label, text: text).textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
                 .focused($focused, equals: focus)
                 .onSubmit { commit(.keyboard) }
                 .accessibilityLabel("Fluid \(target.title) \(label.lowercased())")
@@ -5441,7 +7436,7 @@ private struct FluidValueInspectorView: View {
     }
 
     private func valueLabel(_ title: String, _ value: Double) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.hairlineSpacing) {
             Text(title).font(.caption2).foregroundStyle(.secondary)
             Text(format(value)).monospacedDigit()
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -5502,7 +7497,7 @@ private struct ContainerLayoutInspectorView: View {
     @State private var validationMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             HStack {
                 Text("Container Layout").font(.headline)
                 Spacer()
@@ -5519,13 +7514,9 @@ private struct ContainerLayoutInspectorView: View {
             if let validationMessage {
                 Text(validationMessage)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(SiteForgeVisualSystem.danger)
                     .accessibilityIdentifier("inspector.layout.container.validation")
             }
-            Text(state.currentContainerLayoutAnnouncement)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("inspector.layout.container.announcement")
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Container layout")
@@ -5546,11 +7537,11 @@ private struct ContainerLayoutInspectorView: View {
         if case .unavailable = selection {
             EmptyView()
         } else {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+                HStack(spacing: SiteForgeVisualSystem.controlInset) {
                     Text(field.title).frame(width: 62, alignment: .leading)
                     TextField(field.title, text: numericBinding(field, selection: selection))
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                         .monospacedDigit()
                         // Keep the intrinsic-width Reset action inside the
                         // practical Inspector width. An unconstrained native
@@ -5595,8 +7586,8 @@ private struct ContainerLayoutInspectorView: View {
             if case .unavailable = selection {
                 EmptyView()
             } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+                    HStack(spacing: SiteForgeVisualSystem.controlInset) {
                         Picker("Direction", selection: axisBinding(selection)) {
                             ForEach(ContainerLayoutAxis.allCases, id: \.self) { axis in
                                 Text(axis.rawValue.capitalized).tag(axis as ContainerLayoutAxis?)
@@ -5628,7 +7619,7 @@ private struct ContainerLayoutInspectorView: View {
             if case .unavailable = selection {
                 EmptyView()
             } else {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
                     // Four intrinsic-width segments must not compress the label
                     // into a column at the supported compact Inspector width.
                     Text("Alignment")
@@ -5676,7 +7667,7 @@ private struct ContainerLayoutInspectorView: View {
             },
             set: { value in
                 guard let value else { return }
-                commit(.axis, value: .axis(value), operation: "direction", provenance: .picker)
+                schedulePickerCommit(.axis, value: .axis(value), operation: "direction")
             }
         )
     }
@@ -5689,9 +7680,33 @@ private struct ContainerLayoutInspectorView: View {
             },
             set: { value in
                 guard let value else { return }
-                commit(.alignment, value: .alignment(value), operation: "alignment", provenance: .picker)
+                schedulePickerCommit(.alignment, value: .alignment(value), operation: "alignment")
             }
         )
+    }
+
+    /// A segmented Picker publishes its binding while SwiftUI is reconciling
+    /// the native control. Defer the document mutation to the next main-actor
+    /// event and retain the canonical edit identity so a changed selection,
+    /// revision, document, or breakpoint makes the edit neutral. The registry
+    /// captures the live immutable renderer generation when it prepares the
+    /// command after this guard.
+    private func schedulePickerCommit(
+        _ field: ContainerLayoutField,
+        value: ContainerLayoutValue,
+        operation: String
+    ) {
+        let documentID = state.documentSession.document.id
+        let revision = state.documentSession.document.revision
+        let selection = state.selectionState.orderedIDs
+        let breakpoint = state.viewportPreset
+        Task { @MainActor in
+            guard state.documentSession.document.id == documentID,
+                  state.documentSession.document.revision == revision,
+                  state.selectionState.orderedIDs == selection,
+                  state.viewportPreset == breakpoint else { return }
+            commit(field, value: value, operation: operation, provenance: .picker)
+        }
     }
 
     private func commitNumeric(
@@ -5806,7 +7821,7 @@ private struct ResponsiveVisibilityInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
             Text("Breakpoint Visibility").font(.headline)
             switch state.responsiveVisibilityValue {
             case .single(let visible, let origin, let source, let applicable, let skipped):
@@ -5821,7 +7836,7 @@ private struct ResponsiveVisibilityInspectorView: View {
             case .mixed(let applicable, let skipped):
                 Text("Visible at \(state.viewportPreset.title): Mixed")
                     .accessibilityIdentifier("inspector.layout.visibility.mixed")
-                HStack(spacing: 8) {
+                HStack(spacing: SiteForgeVisualSystem.controlInset) {
                     Button("Show") {
                         _ = state.commitResponsiveVisibility(true, provenance: .pointer)
                     }
@@ -5864,7 +7879,7 @@ private struct StatusBarView: View {
     }
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: SiteForgeVisualSystem.toolbarGroupSpacing) {
             Label("Zoom \(state.zoomPercent)%", systemImage: "magnifyingglass")
                 .accessibilityValue(state.viewportAccessibilityValue)
                 .accessibilityIdentifier("status.zoom")
@@ -5935,7 +7950,7 @@ private struct StatusBarView: View {
             }
             Label(lifecycle.statusText,
                   systemImage: lifecycle.phase == .failed || lifecycle.phase == .conflicted ? "exclamationmark.triangle.fill" : "doc.badge.clock")
-                .foregroundStyle(lifecycle.phase == .failed || lifecycle.phase == .conflicted ? .red : .secondary)
+                .foregroundStyle(lifecycle.phase == .failed || lifecycle.phase == .conflicted ? SiteForgeVisualSystem.danger : Color.secondary)
                 .accessibilityLabel("Document status: \(lifecycle.statusText)")
                 .accessibilityValue(lifecycle.statusText)
                 .accessibilityIdentifier("status.document")
@@ -5945,14 +7960,14 @@ private struct StatusBarView: View {
                 .accessibilityIdentifier("status.activeTool")
             Divider().frame(height: 14)
             Label("Ready", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+                .foregroundStyle(SiteForgeVisualSystem.success)
                 .accessibilityLabel("Diagnostics status: Ready")
                 .accessibilityIdentifier("status.diagnostics")
         }
         .font(.caption)
         .lineLimit(1)
-        .padding(.horizontal, 10)
-        .frame(height: 28)
+        .padding(.horizontal, SiteForgeVisualSystem.panePadding)
+        .frame(height: SiteForgeVisualSystem.statusBarHeight)
         .workspaceChrome(.statusBar)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.statusBar.rawValue)
@@ -6003,7 +8018,7 @@ private struct LocalPreviewView: View {
                 .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("preview.done")
             }
-            .padding(16)
+            .padding(SiteForgeVisualSystem.toolbarGroupSpacing)
             Divider()
             if let snapshot = state.previewState.snapshot {
                 LocalPreviewCanvas(
@@ -6011,6 +8026,9 @@ private struct LocalPreviewView: View {
                     viewportBounds: state.previewState.currentPage?.viewportBounds,
                     onFollow: { state.followPreviewLink($0) }
                 )
+                // Website paper has a neutral light default independent of
+                // dark editor chrome; native visitor controls stay readable.
+                .environment(\.colorScheme, .light)
             } else {
                 ContentUnavailableView(
                     "Preview unavailable",
@@ -6035,6 +8053,202 @@ private struct LocalPreviewView: View {
     }
 }
 
+private struct StaticBuildDiagnosticsView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
+            HStack {
+                Label("Build Diagnostics", systemImage: "wrench.and.screwdriver")
+                    .font(.title2.weight(.semibold))
+                Spacer()
+                Button("Done") { state.isBuildDiagnosticsPresented = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            Text("Preflight and create local semantic HTML, deterministic CSS, and referenced image assets. This workflow never publishes or runs custom code.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: SiteForgeVisualSystem.standardSpacing) {
+                Picker("Profile", selection: $state.staticBuildProfile) {
+                    ForEach(LocalBuildProfile.allCases) { profile in Text(profile.title).tag(profile) }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 260)
+                .accessibilityLabel("Build profile")
+                .accessibilityValue(state.staticBuildProfile.title)
+                .accessibilityIdentifier("build.profile")
+                Button("Run Preflight") { state.runStaticBuildPreflight() }
+                    .disabled(state.staticBuildPhase == .preflighting || state.staticBuildPhase == .writing)
+                    .accessibilityIdentifier("build.preflight")
+                Button("Cancel") { state.cancelStaticBuild() }
+                    .disabled(state.staticBuildPhase != .preflighting && state.staticBuildPhase != .writing)
+                    .accessibilityIdentifier("build.cancel")
+                Spacer()
+            }
+            .onChange(of: state.staticBuildProfile) { _, _ in state.runStaticBuildPreflight() }
+
+            GroupBox("Status") {
+                HStack(alignment: .top, spacing: SiteForgeVisualSystem.standardSpacing) {
+                    if state.staticBuildPhase == .preflighting || state.staticBuildPhase == .writing {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(state.staticBuildStatus).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.vertical, 4)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("build.status")
+            }
+
+            GroupBox("Compatibility findings") {
+                if let compilation = state.staticBuildCompilation, !compilation.findings.isEmpty {
+                    List(compilation.findings) { finding in
+                        HStack(alignment: .top, spacing: SiteForgeVisualSystem.standardSpacing) {
+                            Image(systemName: icon(for: finding.severity))
+                                .foregroundStyle(color(for: finding.severity))
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                                Text(finding.code.replacingOccurrences(of: "-", with: " ").capitalized)
+                                    .font(.headline)
+                                Text(finding.explanation).fixedSize(horizontal: false, vertical: true)
+                                Text(finding.repair).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if finding.affectedNodeID != nil {
+                                Button("Show Object") { state.revealStaticBuildFinding(finding) }
+                                    .accessibilityHint("Selects the affected object in Layers")
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(finding.severity.rawValue), \(finding.explanation), Repair: \(finding.repair)")
+                    }
+                    .frame(minHeight: 210)
+                } else {
+                    ContentUnavailableView("No findings yet", systemImage: "checkmark.shield",
+                                           description: Text("Run preflight for the current revision."))
+                        .frame(minHeight: 180)
+                }
+            }
+
+            HStack {
+                Button("Copy Redacted Summary") { state.copyStaticBuildSummary() }
+                    .disabled(state.staticBuildCompilation == nil)
+                    .accessibilityIdentifier("build.copySummary")
+                Spacer()
+                Button("Choose Destination and Build…") { chooseDestination() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(state.staticBuildCompilation?.canWrite != true || state.staticBuildPhase != .ready)
+                    .accessibilityIdentifier("build.write")
+            }
+        }
+        .padding(SiteForgeVisualSystem.sectionSpacing)
+        .frame(minWidth: 720, idealWidth: 820, minHeight: 560, idealHeight: 640)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("build.diagnostics")
+    }
+
+    private func chooseDestination() {
+        let panel = NSSavePanel()
+        panel.title = "Create Local Static Output"
+        panel.prompt = "Build"
+        panel.nameFieldStringValue = "SiteForge Static Build"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let exists = FileManager.default.fileExists(atPath: destination.path)
+        state.writeStaticBuild(to: destination, replacingExisting: exists)
+    }
+
+    private func icon(for severity: StaticBuildFindingSeverity) -> String {
+        switch severity {
+        case .error: "xmark.octagon.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .information: "info.circle.fill"
+        case .unsupported: "questionmark.diamond.fill"
+        case .policyBlocked: "lock.shield.fill"
+        }
+    }
+
+    private func color(for severity: StaticBuildFindingSeverity) -> Color {
+        switch severity {
+        case .error: .red
+        case .warning: .orange
+        case .information: .secondary
+        case .unsupported, .policyBlocked: .yellow
+        }
+    }
+}
+
+private struct ClipboardComponentTransferPreflightView: View {
+    @ObservedObject var state: WorkspaceShellState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
+            Label("Import Component Dependencies", systemImage: "square.stack.3d.up")
+                .font(.title2.weight(.semibold))
+            Text("This paste includes local component definitions from another project. Review the complete transfer before changing this project.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let summary = state.pendingClipboardComponentSummary {
+                List(summary.entries, id: \.sourceDefinitionID) { entry in
+                    HStack(spacing: SiteForgeVisualSystem.standardSpacing) {
+                        Image(systemName: icon(for: entry.resolution))
+                            .foregroundStyle(color(for: entry.resolution))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.hairlineSpacing) {
+                            Text(entry.displayName).lineLimit(1)
+                            Text(label(for: entry.resolution)).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(entry.displayName), \(label(for: entry.resolution))")
+                }
+                .frame(minHeight: 180)
+                Text(summary.accessibilitySummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("clipboard.component.summary")
+            }
+            HStack {
+                Button("Cancel") { state.cancelCrossProjectComponentPaste() }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("clipboard.component.cancel")
+                Spacer()
+                Button("Import and Paste") { state.confirmCrossProjectComponentPaste() }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("clipboard.component.confirm")
+            }
+        }
+        .padding(SiteForgeVisualSystem.panePadding)
+        .frame(minWidth: 520, idealWidth: 600, minHeight: 330)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipboard.component.preflight")
+    }
+
+    private func label(for resolution: ClipboardComponentTransferSummary.Entry.Resolution) -> String {
+        switch resolution {
+        case .imported: "New local definition will be imported"
+        case .reused: "Equivalent local definition will be reused"
+        case .renamed: "Name conflict; a deterministic Copy name will be used"
+        }
+    }
+
+    private func icon(for resolution: ClipboardComponentTransferSummary.Entry.Resolution) -> String {
+        switch resolution {
+        case .imported: "square.and.arrow.down"
+        case .reused: "equal.circle"
+        case .renamed: "character.cursor.ibeam"
+        }
+    }
+
+    private func color(for resolution: ClipboardComponentTransferSummary.Entry.Resolution) -> Color {
+        switch resolution {
+        case .imported: .accentColor
+        case .reused: .secondary
+        case .renamed: .orange
+        }
+    }
+}
+
 private struct LocalPreviewCanvas: View {
     let snapshot: CanvasPreviewSceneSnapshot
     let viewportBounds: WorldRect?
@@ -6050,8 +8264,8 @@ private struct LocalPreviewCanvas: View {
             )
             ZStack(alignment: .topLeading) {
                 Color.white
-                ForEach(snapshot.objects.filter(\.isVisible).sorted { $0.paintOrder < $1.paintOrder }, id: \.id) { object in
-                    LocalPreviewObject(object: object, onFollow: onFollow)
+                ForEach(snapshot.objects.filter { $0.isVisible && $0.navigationOwnerID == nil }.sorted { $0.paintOrder < $1.paintOrder }, id: \.id) { object in
+                    LocalPreviewObject(object: object, scale: scale, onFollow: onFollow)
                         .frame(width: object.frame.size.width * scale, height: object.frame.size.height * scale)
                         .position(
                             x: inset + (object.frame.origin.x - bounds.origin.x) * scale + object.frame.size.width * scale / 2,
@@ -6060,6 +8274,7 @@ private struct LocalPreviewCanvas: View {
                         .clipShape(RoundedRectangle(cornerRadius: object.cornerRadius * scale))
                 }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
             .clipShape(Rectangle())
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Preview page, revision \(snapshot.revision), \(snapshot.objects.count) authored objects")
@@ -6081,13 +8296,169 @@ private struct LocalPreviewCanvas: View {
     }
 }
 
+private struct NativePageNavigationPreview: View {
+    let navigation: PageNavigationSnapshot
+    let availableWidth: Double
+    let onFollow: (CanvasPreviewLink) -> Void
+    var body: some View {
+        let layout = CanonicalPageFlow.navigationLayout(availableWidth: availableWidth,
+            count: navigation.links.count, alignment: navigation.alignment)
+        HStack(spacing: layout.gap) {
+            if navigation.usesHamburger {
+                NativePageNavigationMenu(navigation: navigation, onFollow: onFollow)
+                    .frame(width: min(90, max(1, availableWidth)), height: navigation.rowHeight ?? 32)
+            } else if !navigation.itemFrames.isEmpty {
+                ZStack(alignment: .topLeading) {
+                    ForEach(navigation.links) { link in
+                        if let frame = navigation.itemFrames.first(where: { $0.id == link.id }) {
+                            Button { follow(link) } label: { Text(link.label).lineLimit(1).help(link.label) }
+                                .disabled(!link.isAvailable).buttonStyle(.plain)
+                                .frame(width: frame.width, height: frame.height, alignment: .leading)
+                                .offset(x: frame.x, y: frame.y)
+                                .accessibilityLabel(link.label + " page link")
+                                .accessibilityValue(link.pageID == navigation.currentPageID ? "Current page" : link.isAvailable ? "Available" : "Missing original page")
+                                .accessibilityIdentifier("preview.navigation.link.\(link.id)")
+                        }
+                    }
+                }.frame(width: availableWidth, height: navigation.rowHeight ?? 32, alignment: .topLeading)
+            } else {
+                ForEach(navigation.links) { link in
+                    Button { follow(link) } label: { Text(link.label).lineLimit(1).help(link.label) }
+                        .disabled(!link.isAvailable).buttonStyle(.plain)
+                        .frame(width: layout.width, height: navigation.rowHeight ?? 32, alignment: .leading)
+                        .accessibilityLabel(link.label + " page link")
+                        .accessibilityValue(link.pageID == navigation.currentPageID ? "Current page" : link.isAvailable ? "Available" : "Missing original page")
+                        .accessibilityIdentifier("preview.navigation.link.\(link.id)")
+                }
+            }
+        }.font(.system(size: 14))
+            .frame(width: max(1, availableWidth), alignment: navigation.alignment == "end" ? .trailing : navigation.alignment == "center" ? .center : .leading)
+            .clipped()
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Authored page navigation")
+    }
+    private func follow(_ link: PageNavigationLink) { onFollow(.init(target: .page(link.pageID), context: link.context ?? .same, isMissing: !link.isAvailable)) }
+}
+
+/// A shipping native pull-down owns menu tracking and restores its actual
+/// first responder on cancellation. No launch-mode or automation branch.
+private struct NativePageNavigationMenu: NSViewRepresentable {
+    let navigation: PageNavigationSnapshot
+    let onFollow: (CanvasPreviewLink) -> Void
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = FocusRestoringPageNavigationPopUpButton(frame: .zero, pullsDown: true)
+        button.controlSize = .small
+        context.coordinator.button = button
+        updateNSView(button, context: context)
+        return button
+    }
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.onFollow = onFollow
+        let menu = NSMenu(title: "Page navigation")
+        menu.autoenablesItems = false
+        menu.addItem(NSMenuItem(title: "Menu", action: nil, keyEquivalent: ""))
+        for link in navigation.links {
+            let item = NSMenuItem(title: link.label, action: #selector(Coordinator.follow(_:)), keyEquivalent: "")
+            item.target = context.coordinator; item.representedObject = link
+            item.isEnabled = link.isAvailable
+            item.toolTip = link.isAvailable ? link.label : "Missing original page. Repair this link in Header/Footer settings."
+            item.state = link.pageID == navigation.currentPageID ? .on : .off
+            menu.addItem(item)
+        }
+        menu.delegate = context.coordinator
+        button.menu = menu
+        button.setAccessibilityLabel("Page navigation menu")
+        button.setAccessibilityHelp("Open to choose a project page. Escape closes the native menu and restores focus.")
+        button.setAccessibilityIdentifier("preview.navigation.menu.\(navigation.ownerID)")
+    }
+    static func dismantleNSView(_ button: NSPopUpButton, coordinator: Coordinator) {
+        button.menu?.delegate = nil; coordinator.button = nil
+    }
+    @MainActor final class Coordinator: NSObject, NSMenuDelegate {
+        weak var button: NSPopUpButton?
+        var onFollow: ((CanvasPreviewLink) -> Void)?
+        @objc func follow(_ item: NSMenuItem) {
+            guard let link = item.representedObject as? PageNavigationLink, link.isAvailable else { return }
+            onFollow?(.init(target: .page(link.pageID), context: link.context ?? .same, isMissing: false))
+        }
+        func menuDidClose(_ menu: NSMenu) {
+            guard let button, let window = button.window, window.isVisible else { return }
+            _ = window.makeFirstResponder(button)
+        }
+    }
+}
+
+@MainActor
+private final class FocusRestoringPageNavigationPopUpButton: NSPopUpButton {
+    override var acceptsFirstResponder: Bool { isEnabled }
+    override func mouseDown(with event: NSEvent) {
+        _ = window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+        if let window, window.isVisible { _ = window.makeFirstResponder(self) }
+    }
+    override func performClick(_ sender: Any?) {
+        _ = window?.makeFirstResponder(self)
+        super.performClick(sender)
+        if let window, window.isVisible { _ = window.makeFirstResponder(self) }
+    }
+}
+
+private struct LocalPreviewAuthoredText: NSViewRepresentable {
+    let object: CanvasRenderObject
+    let scale: Double
+    func makeNSView(context: Context) -> CanvasPreviewTextView { CanvasPreviewTextView() }
+    func updateNSView(_ view: CanvasPreviewTextView, context: Context) {
+        view.configure(object: object, scale: scale)
+    }
+}
+
+/// Preview fits world geometry, so its text must fit by that same scale rather
+/// than inheriting the native Inspector font and truncating an authored title.
+/// The shared live-canvas factory owns all font, inset and baseline decisions.
+final class CanvasPreviewTextView: NSView {
+    private var object: CanvasRenderObject?
+    private var presentationScale = 1.0
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func configure(object: CanvasRenderObject, scale: Double) {
+        self.object = object
+        presentationScale = scale
+        wantsLayer = true
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        layer?.sublayers = []
+        guard let object, bounds.width > 0, bounds.height > 0,
+              let text = CanvasAuthoredTextLayerFactory.makeLayer(for: object,
+                viewportObjectRect: bounds, zoom: presentationScale,
+                contentsScale: window?.backingScaleFactor ?? 2) else { return }
+        // LocalPreviewObject composites the complete authored object once.
+        // Applying object opacity again on its text child would square alpha.
+        text.opacity = 1
+        layer?.addSublayer(text)
+    }
+}
+
 private struct LocalPreviewObject: View {
     let object: CanvasRenderObject
+    let scale: Double
     let onFollow: (CanvasPreviewLink) -> Void
 
     var body: some View {
         if let link = object.previewLink {
-            Button { onFollow(link) } label: { renderedContent }
+            Button { onFollow(link) } label: {
+                // Native raster text deliberately does not intercept input.
+                // The authored link rectangle, including transparent text
+                // space, remains the real SwiftUI button's pointer surface.
+                renderedContent.contentShape(Rectangle())
+            }
                 .buttonStyle(.plain)
                 .disabled(link.isMissing)
                 .help(link.isMissing ? "Missing link target" : "Follow \(object.plainText ?? "link")")
@@ -6102,11 +8473,17 @@ private struct LocalPreviewObject: View {
     private var renderedContent: some View {
         ZStack(alignment: .topLeading) {
             previewFill
-            if let text = object.plainText {
-                Text(text)
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(6)
+            if let navigation = object.navigation,
+               let geometry = CanvasPreviewNavigationGeometry(frame: object.frame, padding: navigation.padding,
+                    rowHeight: navigation.rowHeight ?? 32, scale: scale) {
+                NativePageNavigationPreview(navigation: navigation, availableWidth: geometry.worldSize.width, onFollow: onFollow)
+                    .frame(width: geometry.worldSize.width, height: geometry.worldSize.height)
+                    .scaleEffect(scale, anchor: .topLeading)
+                    .frame(width: geometry.displaySize.width, height: geometry.displaySize.height, alignment: .topLeading)
+                    .offset(x: geometry.displayOrigin.x, y: geometry.displayOrigin.y)
+            }
+            if object.plainText != nil {
+                LocalPreviewAuthoredText(object: object, scale: scale)
                     .accessibilityLabel(object.accessibilityLabel)
             } else if object.imageAssetID != nil {
                 if let data = object.imageData, let image = NSImage(data: data) {
@@ -6134,11 +8511,9 @@ private struct LocalPreviewObject: View {
                         dash: previewBorderDash(border.style)
                     )
                 )
-            } else {
-                RoundedRectangle(cornerRadius: object.cornerRadius).stroke(Color.black.opacity(0.12), lineWidth: 1)
             }
         }
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: object.navigation == nil ? .ignore : .contain)
         .accessibilityLabel(object.accessibilityLabel)
     }
 
@@ -6162,6 +8537,10 @@ private struct LocalPreviewObject: View {
         if let rgba = CanvasAuthoredFillCompositor.resolvedColor(layers: object.fillLayers, atNormalizedPoint: (0.5, 0.5)) ?? object.fillRGBA,
            rgba.count == 4 {
             Color(red: rgba[0], green: rgba[1], blue: rgba[2], opacity: rgba[3])
+        } else if object.plainText != nil {
+            // Ordinary text has no background just because Preview is hosted
+            // in a dark native window. Only authored fills may paint one.
+            Color.clear
         } else {
             Color(nsColor: .controlBackgroundColor)
         }
@@ -6290,7 +8669,17 @@ private final class WorkspaceCommandTargetRegistry: NSObject {
     }
 }
 
+private struct NativeTextEditorFocusKey: FocusedValueKey { typealias Value = Bool }
+extension FocusedValues {
+    var siteforgeNativeTextEditor: Bool? {
+        get { self[NativeTextEditorFocusKey.self] }
+        set { self[NativeTextEditorFocusKey.self] = newValue }
+    }
+}
+
 struct SiteForgeCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+    @FocusedValue(\.siteforgeNativeTextEditor) private var focusedNativeTextEditor
     @FocusedObject private var state: WorkspaceShellState?
     @FocusedObject private var launchExperience: LaunchExperienceController?
 
@@ -6307,7 +8696,10 @@ struct SiteForgeCommands: Commands {
     }
 
     private var nativeTextResponderIsActive: Bool {
-        NSApp.keyWindow?.firstResponder is NSTextView
+        // Modern SwiftUI input can use AppKitWindow as its responder rather
+        // than a classic field editor. Its focus value is the native draft
+        // context; NSTextView remains the inline-editor compatibility path.
+        focusedNativeTextEditor == true || NSApp.keyWindow?.firstResponder is NSTextView
     }
 
     private func routePasteboardAction(_ selector: Selector, objectAction: (WorkspaceShellState) -> Void) {
@@ -6320,12 +8712,24 @@ struct SiteForgeCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New") { launchExperience?.createBlankProject() }
+            Button("New") {
+                if let launchExperience { launchExperience.createBlankProject() }
+                else if WorkspaceLaunchRequestQueue.shared.enqueue(.new) { openWindow(id: "workspace") }
+            }
                 .keyboardShortcut("n", modifiers: .command)
-                .disabled(launchExperience == nil)
-            Button("Open…") { launchExperience?.presentOpenPanel() }
+            Button("Open…") {
+                if let launchExperience { launchExperience.presentOpenPanel() }
+                else if let url = NativeProjectOpenPanel.chooseProject(),
+                        WorkspaceLaunchRequestQueue.shared.enqueue(.open(url)) { openWindow(id: "workspace") }
+            }
                 .keyboardShortcut("o", modifiers: .command)
-                .disabled(launchExperience == nil)
+            Divider()
+            Button("Close Window") {
+                // Native responder ownership closes Settings/sheets correctly;
+                // document windows still pass through their unsaved guard.
+                NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut("w", modifiers: .command)
         }
 
         CommandGroup(replacing: .saveItem) {
@@ -6364,6 +8768,11 @@ struct SiteForgeCommands: Commands {
         }
 
         CommandGroup(replacing: .pasteboard) {
+            Button("Select All") {
+                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut("a", modifiers: .command)
+            .disabled(!nativeTextResponderIsActive)
             Button("Cut") {
                 routePasteboardAction(#selector(NSText.cut(_:))) {
                     _ = $0.cutSelection(provenance: .menu)
@@ -6460,7 +8869,7 @@ struct SiteForgeCommands: Commands {
             }
             .disabled(commandState?.insertionAvailability(.frame).isEnabled != true)
             Divider()
-            Button("Insert Section at Center") {
+            Button("Insert Section in Flow") {
                 commandState?.performDefaultInsertion(.section, provenance: .menu)
             }
             .keyboardShortcut("1", modifiers: [.command, .option])
@@ -6475,18 +8884,18 @@ struct SiteForgeCommands: Commands {
             }
             .keyboardShortcut("3", modifiers: [.command, .option])
             .disabled(commandState?.insertionAvailability(.grid).isEnabled != true)
-            Button("Insert Header at Center") {
+            Button("Insert Header at Page Top") {
                 commandState?.performDefaultInsertion(.section, provenance: .menu, template: .header)
             }
-            .disabled(commandState?.insertionAvailability(.section).isEnabled != true)
+            .disabled(commandState?.insertionAvailability(.section, template: .header).isEnabled != true)
             Button("Insert Navigation at Center") {
                 commandState?.performDefaultInsertion(.section, provenance: .menu, template: .navigation)
             }
-            .disabled(commandState?.insertionAvailability(.section).isEnabled != true)
-            Button("Insert Footer at Center") {
+            .disabled(commandState?.insertionAvailability(.section, template: .navigation).isEnabled != true)
+            Button("Insert Footer after Page Content") {
                 commandState?.performDefaultInsertion(.section, provenance: .menu, template: .footer)
             }
-            .disabled(commandState?.insertionAvailability(.section).isEnabled != true)
+            .disabled(commandState?.insertionAvailability(.section, template: .footer).isEnabled != true)
             Divider()
             Button("Insert Selected Image at Center") {
                 commandState?.insertSelectedImage()
@@ -6532,6 +8941,17 @@ struct SiteForgeCommands: Commands {
         }
 
         CommandMenu("Selection") {
+            Button("Isolate Selection") {
+                _ = commandState?.enterIsolation(provenance: .menu)
+            }
+            .keyboardShortcut(.return, modifiers: [.command, .option])
+            .disabled(commandState?.canIsolateSelection != true)
+            Button("Exit Isolation") { commandState?.exitIsolation() }
+                .keyboardShortcut(.escape, modifiers: [.command, .option])
+                .disabled(commandState?.isolationRootID == nil)
+            Button("Exit All Isolation") { commandState?.exitIsolation(all: true) }
+                .disabled(commandState?.isolationRootID == nil)
+            Divider()
             Button("Edit Selected Text") {
                 guard let nodeID = commandState?.selectionState.primaryID else { return }
                 commandState?.beginTextEditing(nodeID: nodeID, provenance: .menu)
@@ -6687,6 +9107,29 @@ private struct SiteForgeSupplementaryCommands: Commands {
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
             .disabled(state == nil)
+            // Commands are installed once for the native menu bar while the
+            // focused workspace can continue publishing presentation state.
+            // Keep the menu title stable so AppKit never exposes a stale
+            // Enter/Exit label during menu tracking; the action remains the
+            // same reversible focus-mode toggle for pointer and keyboard use.
+            Button("Toggle Focus Mode") {
+                state?.toggleFocusMode()
+            }
+            .keyboardShortcut("f", modifiers: [.command, .option, .shift])
+            .disabled(state == nil)
+            Button("Presentation Mode") { state?.openPresentationMode() }
+                .keyboardShortcut("p", modifiers: [.command, .option, .shift])
+                .disabled(state == nil)
+        }
+
+        CommandMenu("Build") {
+            Button("Build Diagnostics…") { state?.openBuildDiagnostics() }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+                .disabled(state == nil)
+            Button("Run Static Preflight") { state?.runStaticBuildPreflight() }
+                .disabled(state == nil)
+            Button("Cancel Static Build") { state?.cancelStaticBuild() }
+                .disabled(state?.staticBuildPhase != .preflighting && state?.staticBuildPhase != .writing)
         }
     }
 }
@@ -6884,23 +9327,35 @@ enum CanvasAuthoredTextLayerFactory {
         viewport: CanvasViewportState,
         contentsScale: CGFloat
     ) -> CATextLayer? {
+        guard let origin = try? viewport.transform.worldToViewport(object.frame.origin) else { return nil }
+        return makeLayer(for: object,
+            viewportObjectRect: CGRect(x: origin.x, y: origin.y,
+                width: object.frame.size.width * viewport.zoom.value,
+                height: object.frame.size.height * viewport.zoom.value),
+            zoom: viewport.zoom.value, contentsScale: contentsScale)
+    }
+
+    static func makeLayer(
+        for object: CanvasRenderObject,
+        viewportObjectRect: CGRect,
+        zoom: Double,
+        contentsScale: CGFloat
+    ) -> CATextLayer? {
         guard object.plainText != nil,
               object.isVisible,
               object.opacity.isFinite,
               (0...1).contains(object.opacity),
+              zoom.isFinite, zoom > 0,
+              viewportObjectRect.width.isFinite, viewportObjectRect.height.isFinite,
+              viewportObjectRect.minX.isFinite, viewportObjectRect.minY.isFinite,
+              viewportObjectRect.width > 0, viewportObjectRect.height > 0,
               let text = object.plainText,
-              !text.isEmpty,
-              let origin = try? viewport.transform.worldToViewport(object.frame.origin) else {
+              !text.isEmpty else {
             return nil
         }
         let layout = CanvasTextLayout(
-            viewportObjectRect: CGRect(
-                x: origin.x,
-                y: origin.y,
-                width: object.frame.size.width * viewport.zoom.value,
-                height: object.frame.size.height * viewport.zoom.value
-            ),
-            zoom: viewport.zoom.value,
+            viewportObjectRect: viewportObjectRect,
+            zoom: zoom,
             text: text,
             typography: object.typography
         )
@@ -6918,7 +9373,7 @@ enum CanvasAuthoredTextLayerFactory {
            let rgba = CanvasAuthoredFillCompositor.resolvedColor(layers: object.fillLayers, atNormalizedPoint: (0.5, 0.5)) ?? object.fillRGBA,
            rgba.count == 4, rgba[3] >= 0.5 {
             foreground = 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2] > 0.5 ? .black : .white
-        } else { foreground = .labelColor }
+        } else { foreground = layout.foregroundColor }
         layer.string = NSAttributedString(string: text, attributes: [
             .font: layout.font,
             .foregroundColor: foreground,
@@ -7414,7 +9869,11 @@ final class NativeCanvasViewportView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.underPageBackgroundColor.setFill()
+        let pasteboard = window?.isKeyWindow == false
+            ? (SiteForgeVisualSystem.canvasPasteboardNSColor.blended(withFraction: 0.10, of: .windowBackgroundColor)
+                ?? SiteForgeVisualSystem.canvasPasteboardNSColor)
+            : SiteForgeVisualSystem.canvasPasteboardNSColor
+        pasteboard.setFill()
         dirtyRect.fill()
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         context.saveGState()
@@ -7441,12 +9900,10 @@ final class NativeCanvasViewportView: NSView {
             // The artboard deliberately has more contrast than the
             // pasteboard. It remains an editor decoration backed by the
             // preset's actual content bounds, not an authored rectangle.
-            let artboardSurface = NSColor.windowBackgroundColor
-                .blended(withFraction: 0.16, of: .labelColor) ?? .windowBackgroundColor
-            context.setFillColor(artboardSurface.cgColor)
+            context.setFillColor(SiteForgeVisualSystem.artboardSurfaceNSColor.cgColor)
             context.fill(artboard)
             context.setShadow(offset: .zero, blur: 0)
-            context.setStrokeColor(NSColor.separatorColor.withAlphaComponent(0.98).cgColor)
+            context.setStrokeColor(SiteForgeVisualSystem.artboardBoundaryNSColor.cgColor)
             context.setLineWidth(2 / max(1, viewportState.pixelRatio.value))
             context.stroke(artboard)
         }
@@ -7473,7 +9930,9 @@ final class NativeCanvasViewportView: NSView {
         while x <= visible.maxX {
             if let point = try? viewportState.transform.worldToViewport(.init(x: x, y: 0)) {
                 let isMajor = abs((x / major).rounded() - x / major) < 0.000_001
-                context.setStrokeColor(NSColor.separatorColor.withAlphaComponent(isMajor ? 0.28 : 0.13).cgColor)
+                context.setStrokeColor(
+                    (isMajor ? SiteForgeVisualSystem.gridMajorNSColor : SiteForgeVisualSystem.gridMinorNSColor).cgColor
+                )
                 context.setLineWidth(1 / scale)
                 context.move(to: .init(x: aligned(point.x), y: 0)); context.addLine(to: .init(x: aligned(point.x), y: bounds.height)); context.strokePath()
             }
@@ -7483,7 +9942,9 @@ final class NativeCanvasViewportView: NSView {
         while y <= visible.maxY {
             if let point = try? viewportState.transform.worldToViewport(.init(x: 0, y: y)) {
                 let isMajor = abs((y / major).rounded() - y / major) < 0.000_001
-                context.setStrokeColor(NSColor.separatorColor.withAlphaComponent(isMajor ? 0.28 : 0.13).cgColor)
+                context.setStrokeColor(
+                    (isMajor ? SiteForgeVisualSystem.gridMajorNSColor : SiteForgeVisualSystem.gridMinorNSColor).cgColor
+                )
                 context.setLineWidth(1 / scale)
                 context.move(to: .init(x: 0, y: aligned(point.y))); context.addLine(to: .init(x: bounds.width, y: aligned(point.y))); context.strokePath()
             }
@@ -7876,11 +10337,13 @@ final class NativeCanvasViewportView: NSView {
                 width: preview.frame.size.width * viewportState.zoom.value,
                 height: preview.frame.size.height * viewportState.zoom.value
             )
-            layer.path = CGPath(rect: CanvasViewportDrawGeometry.inset(layer.bounds, dx: 1, dy: 1) ?? .zero, transform: nil)
+            layer.path = preview.kind == "flow-insertion-boundary"
+                ? CGPath(rect: layer.bounds, transform: nil)
+                : CGPath(rect: CanvasViewportDrawGeometry.inset(layer.bounds, dx: 1, dy: 1) ?? .zero, transform: nil)
             layer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
             layer.strokeColor = NSColor.controlAccentColor.cgColor
             layer.lineWidth = 2
-            layer.lineDashPattern = [6, 4]
+            layer.lineDashPattern = preview.kind == "flow-insertion-boundary" ? nil : [6, 4]
             overlayContainer.addSublayer(layer)
         }
         for overlay in transformOverlays {
@@ -8555,7 +11018,7 @@ final class CanvasContentTileLayer: CALayer {
             string: text,
             attributes: [
                 .font: NSFont.systemFont(ofSize: layout.fontSize),
-                .foregroundColor: NSColor.labelColor,
+                .foregroundColor: layout.foregroundColor,
                 .paragraphStyle: paragraph,
             ]
         )
@@ -8631,7 +11094,8 @@ struct CanvasTextLayout: Equatable {
     let alignment: NSTextAlignment
     let paragraphStyle: NSParagraphStyle
     var foregroundColor: NSColor {
-        guard let rgba = typographyForegroundRGBA, rgba.count == 4 else { return .labelColor }
+        // Website paper ink must not inherit the editor's dark appearance.
+        guard let rgba = typographyForegroundRGBA, rgba.count == 4 else { return .black }
         return NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
     }
     private let typographyForegroundRGBA: [Double]?

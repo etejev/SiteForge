@@ -3,6 +3,29 @@ import XCTest
 
 @MainActor
 final class BlankProjectTests: XCTestCase {
+    // SF-0401-004, SF-0203-006: a hidden real object is not a blank document.
+    func testCanvasEmptyHintUsesCanonicalPresenceRatherThanRenderAvailability() throws {
+        let blank = ProjectCreation.blank()
+        let empty = WorkspaceShellState(documentSession: DocumentSession(document: blank))
+        XCTAssertTrue(empty.isCurrentPageGenuinelyEmpty)
+        var document = blank
+        let rootID = document.pages[0].rootNodeIDs[0]
+        let id = NodeID()
+        document.pages[0].nodes[0].childIDs.append(id)
+        document.pages[0].nodes.append(DocumentNode(id: id, kind: .frame, name: "Hidden real element",
+            parent: .node(rootID), properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(2000)),
+                .init(key: .init(rawValue: "layout.y"), value: .number(40)),
+                .init(key: .init(rawValue: "layout.width"), value: .number(240)),
+                .init(key: .init(rawValue: "layout.height"), value: .number(160)),
+                .init(key: .init(rawValue: "hidden"), value: .boolean(true), origin: .authored)
+            ]))
+        try document.validate()
+        let state = WorkspaceShellState(documentSession: DocumentSession(document: document))
+        XCTAssertFalse(state.isCurrentPageGenuinelyEmpty)
+        XCTAssertEqual(state.documentSession.document, document)
+        XCTAssertTrue(state.documentSession.document.pages[0].nodes.contains { $0.id == id })
+    }
     // SF-0205-003/004 — recent pages are bounded scene navigation, not
     // canonical query or package history.
     func testQuickOpenRecentPagesDeduplicateBoundAndDiscardMissingIDs() {
@@ -130,6 +153,113 @@ final class BlankProjectTests: XCTestCase {
         XCTAssertEqual(template.templateID, templateID)
         XCTAssertEqual(template.pages.map(\.provenance), [.template])
         try template.validate()
+    }
+
+    // SF-AUTHORING-106 / SF-0204-001/002/003/005 — the approved local
+    // starter is deterministic canonical content, not launch-only fixture UI.
+    func testStarterSiteHasStableTemplateProvenanceSemanticStructureAndNoNotFoundPage() throws {
+        let documentID = DocumentID(UUID(uuidString: "02040000-0000-4000-8000-000000000001")!)
+        let first = StarterSiteTemplate.document(id: documentID)
+        let second = StarterSiteTemplate.document(id: documentID)
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.creationKind, .template)
+        XCTAssertEqual(first.templateID, StarterSiteTemplate.id)
+        XCTAssertEqual(first.pages.map(\.name), ["Home", "About"])
+        XCTAssertEqual(first.pages.map(\.route.rawValue), ["/", "/about"])
+        XCTAssertEqual(first.pages.map(\.role), [.home, .standard])
+        XCTAssertEqual(first.pages.map(\.provenance), [.template, .template])
+        XCTAssertFalse(first.pages.contains { $0.role == .notFound || $0.route.rawValue == "/404" })
+        XCTAssertTrue(first.imageAssets.isEmpty)
+
+        for page in first.pages {
+            let elements = page.nodes.compactMap { node -> SemanticHTMLElement? in
+                CanonicalSemanticElement.resolved(for: node)?.0
+            }
+            XCTAssertTrue(elements.contains(.header))
+            XCTAssertTrue(elements.contains(.main))
+            XCTAssertTrue(elements.contains(.footer))
+            XCTAssertEqual(page.nodes.filter { $0.kind == .section }.count, 3)
+            XCTAssertEqual(page.nodes.filter { $0.kind == .text }.count, 3)
+            XCTAssertTrue(page.nodes.filter { $0.kind == .text }.allSatisfy {
+                CanonicalTypography.resolved(for: $0)?.family == CanonicalTypography.defaultFamily
+                    && $0.insertionStringProperty("content.text")?.isEmpty == false
+            })
+        }
+        XCTAssertEqual(Set(first.pages.flatMap(\.nodes).map(\.id)).count, first.pages.flatMap(\.nodes).count)
+        XCTAssertEqual(Set(first.pages.flatMap(\.nodes).flatMap(\.properties).map(\.id)).count,
+                       first.pages.flatMap(\.nodes).flatMap(\.properties).count)
+        try first.validate()
+    }
+
+    // SF-AUTHORING-106 / SF-0204-003/005/007 — each preset resolves every
+    // authored starter surface inside its product artboard without changing
+    // canonical Desktop geometry.
+    func testStarterSiteResponsiveGeometryStaysInEveryProductArtboard() throws {
+        let document = StarterSiteTemplate.document()
+        try document.validate()
+        for page in document.pages {
+            for preset in ViewportPreset.allCases {
+                let resolved = page.resolvedStructuralGeometry(
+                    breakpoint: preset.responsiveBreakpoint,
+                    viewportWidth: Double(preset.width)
+                )
+                for section in page.nodes.filter({ $0.kind == .section }) {
+                    let frame = try XCTUnwrap(resolved[section.id])
+                    XCTAssertGreaterThanOrEqual(frame.origin.x, 0)
+                    XCTAssertGreaterThanOrEqual(frame.origin.y, 0)
+                    XCTAssertLessThanOrEqual(frame.origin.x + frame.size.width, Double(preset.width))
+                    XCTAssertLessThanOrEqual(frame.origin.y + frame.size.height, 900)
+                }
+            }
+        }
+    }
+
+    // SF-AUTHORING-106 / SF-0204-004/005 — lifecycle adoption validates the
+    // whole selection before replacement; the accepted template starts as a
+    // clean baseline and its ordinary copy uses exact command history.
+    func testStarterLifecycleIsAtomicCleanEditableUndoableAndRoundTrips() async throws {
+        let controller = DocumentLifecycleController(session: DocumentSession())
+        let starter = StarterSiteTemplate.document()
+        let creation = await controller.requestNewDocument(starter)
+        XCTAssertEqual(creation, .completed)
+        XCTAssertEqual(controller.session.document, starter)
+        XCTAssertEqual(controller.phase, .clean)
+        XCTAssertFalse(controller.session.canUndo)
+
+        let page = try XCTUnwrap(controller.session.document.pages.first)
+        let text = try XCTUnwrap(page.nodes.first { $0.kind == .text })
+        let old = try XCTUnwrap(text.insertionProperty("content.text"))
+        let edited = NodeProperty(
+            id: old.id, key: old.key, value: .string("Edited starter copy"), origin: .authored
+        )
+        try controller.session.execute(.setProperty(.init(pageID: page.id, nodeID: text.id, property: edited)))
+        func liveText() -> DocumentNode? {
+            controller.session.document.pages.first { $0.id == page.id }?.nodes.first { $0.id == text.id }
+        }
+        XCTAssertEqual(liveText()?.insertionStringProperty("content.text"),
+                       "Edited starter copy")
+        try controller.session.undo()
+        XCTAssertEqual(liveText()?.insertionProperty("content.text"), old)
+        try controller.session.redo()
+        XCTAssertEqual(liveText()?.insertionStringProperty("content.text"),
+                       "Edited starter copy")
+
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(controller.session.document))
+        XCTAssertEqual(reopened, controller.session.document)
+        XCTAssertEqual(reopened.templateID, StarterSiteTemplate.id)
+        let store = ProjectPackageStore()
+        let packageData = try await store.encode(ProjectPackage(document: reopened))
+        let reopenedPackage = try await store.decode(packageData)
+        XCTAssertEqual(reopenedPackage.document, reopened)
+
+        let invalidController = DocumentLifecycleController(session: DocumentSession(document: starter))
+        let beforeInvalidReplacement = invalidController.stateSnapshot
+        var malformed = StarterSiteTemplate.document()
+        malformed.pages = []
+        let rejection = await invalidController.requestNewDocument(malformed)
+        XCTAssertEqual(rejection, .failed(.malformedPackage))
+        XCTAssertEqual(invalidController.stateSnapshot, beforeInvalidReplacement)
     }
 
     // SF-0301-005, SF-0303-005

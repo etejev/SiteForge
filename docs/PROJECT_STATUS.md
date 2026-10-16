@@ -1,6 +1,272 @@
 # SiteForge Project Status
 
-Last updated: 2026-10-07.
+Last updated: 2026-10-15.
+
+Final authority: SF-PRODUCT-UI-010 DONE for its bounded owner correction.
+Final verification passes 636 model/integration +119 UI =755 tests, no failures
+or skips, repository checks green. Installed owner build is refreshed and
+fourteen final focused captures reviewed; original recovery remains unchanged.
+One local commit only; no push/next feature. Broader modules remain Partial.
+All older in-progress/blocker wording below is historical and superseded.
+
+Historical focused authority — 2026-10-15: OD-021 resolved after owner Xcode restart.
+Four focused interaction journeys pass 4/4 with twelve captures visually
+reviewed. Installed regular app refreshed. Final full verify and local commit
+are next; earlier blocked statements below are historical. No push authorized.
+
+Current authority: SF-PRODUCT-UI-010 remains IN PROGRESS. Latest full attempt
+records 636 model + 93 UI passes, four UI assertions and one native runner timeout.
+Four bounded corrections compile; normal/prebuilt focused routes execute no UI
+tests because automation mode initialization now times out. OD-021 is the safe
+owner-action boundary. No final gate, commit or push is claimed.
+
+Nested connected-layout focused acceptance now passes 1/1 (105.140 seconds),
+four captures reviewed. Count assertions reflect real editable Header/Footer
+nodes and Mobile menu projection. Final full verification remains required.
+
+Latest final-gate correction: Settings root AX containment preserves native
+sidebar/content identity. The unchanged focused journey passes 1/1 (24.021
+seconds), with seven captures reviewed. The preceding interrupted attempt passed
+636 model tests but is not a complete gate. Final verification remains required.
+
+Latest authority: the refreshed installed production smoke passed 1/1 (222.566
+seconds) through native authoring, Save/Close/Open, Preview and actual local
+static output. Six original-resolution captures passed visual review after a
+shared-text Preview correction (three focused metric/ink/navigation checks pass).
+All 69 original recovery files remain byte-identical. Installed Settings,
+Header/Footer and owned recovery fixture acceptance passed 3/3; all 17 additional
+captures passed original-resolution visual review. No runner remains active; the final full
+gate and authorized local commit remain pending. Earlier pending descriptions
+below are chronological history, superseded by this paragraph.
+
+Current authority: SF-PRODUCT-UI-010 owner correction remains IN PROGRESS.
+The completed baseline collector failed (722/741 tests passing). All nineteen
+baseline failing selectors subsequently passed focused repair coverage. The
+last interrupted verification passed all 635 unit/integration tests and fourteen
+UI journeys, then exposed a missing component-instance search-group inset. Its
+production layout correction passes discovery/recovery 2/2; two-instance native
+history/reopen acceptance is active. No completed milestone is claimed.
+The owner authorizes a reviewed LOCAL COMMIT after all acceptance. No push,
+GitHub operation, publication or distribution signing is authorized. Preserve
+genuine owner recovery. The current queue/handoff supersede historical policies.
+
+Current work is the owner-local regular-app delivery correction, not a new
+feature prompt. Counter remains 2/10. Global Settings, Advanced testing and
+compact/centered editor refinements have focused acceptance; installed regular
+app is installed with recoverable backups; connected Preview/output and the
+accumulated final gate remain pending. Current queue/handoff top sections supersede historical
+owner-away and separate-experimental instructions below. No GitHub,
+publication or distribution signing is authorized. Accumulated full acceptance
+remains pending, not a product-release claim. The current regular-app update
+installed successfully and preserved the original recovery bytes. Its Welcome
+is visible to the owner, but the native inspection connector still closes for
+SiteForge after both tool reset and normal app reopen; installed interactive
+visual/output review remains unaccepted, not silently waived.
+
+## Historical source-only snapshots (superseded by the current evidence above)
+
+Current cycle Prompt 2/10: 124 Inspector workflow source is implemented, unverified
+(four model tests/one native journey unrun). Owner-approved larger local-builder
+packages supersede the old fragmented 19–32/42–79 prompt estimates. After 124,
+phase one provisionally needs 5–8 complete packages; advanced specification
+expansion is a subsequent phase, not waived. Next: connected website/local-output
+completion. No execution, commit, external action or collector relaunch.
+
+Current source cycle Prompt 1/10: SF-AUTHORING-123 component-property discovery
+is source implemented, not verified. Three model selectors and one native
+journey are unrun; no execution was authorized while the owner is away.
+The prior collector finished with exit 1 and no live owner process; build passed,
+repository/code failed and UI initialization timed out enabling automation.
+Keep its report for owner-return acceptance/repair. Historical next-is-Prompt-10
+and no-tests statements below describe previous source checkpoints only.
+See `REMAINING_DEVELOPMENT_ROADMAP.md`: provisional 19–32 further local-authoring/
+output prompts, 42–79 identified specification-wide feature prompts conditional
+on owner decisions; neither count includes acceptance or guarantees release.
+
+SF-AUTHORING-122 is source-implemented as Prompt 9/10: nested connected output,
+shared policy/geometry, padded flow/minimum fitting, visible markers and native/
+exported navigation integration. Seven new model/integration selectors and one
+native journey remain unrun. No build/test/check/automation/install/signing or
+hosted operation ran. Schema stays v16; coverage remains Partial; tree is dirty
+and preserved intentionally. Next is Prompt-10 accumulated acceptance through
+one detached collector, not a new feature. See `PROMPT-10-ACCEPTANCE.md`.
+
+SF-AUTHORING-121 is source-implemented as Development Prompt 8/10. Schema v16
+adds opt-in connected Section roles and PageID navigation without changing old
+content. Shared flow frames drive editor/Preview; unsupported nested static
+layouts remain blocked. Six new selectors and one updated selector are unrun.
+Visuals, DOCX sync and verification remain deferred; modules are Partial.
+The accumulated tree remains uncommitted and unpushed.
+
+The expressly authorized experimental app/helper build passed. It includes
+connected-page source and the experimental Settings/local-testing add-on.
+No tests/checkers/UI automation/hosted operation ran; acceptance awaits Prompt
+10. The distinct controller identity preserves the existing normal app.
+See the local-testing evidence for build/install and remaining boundaries.
+
+The experimental app is installed alongside the unchanged normal app, with a
+distinct experimental identity and bundled runner/native progress helper.
+No app launch or functional/visual acceptance is claimed. Counter remains 8/10.
+
+SF-AUTHORING-120 is source-implemented as Development Prompt 7/10: confirmed
+retained-override recovery and original source navigation share the canonical
+projection/registry with dependency, transfer, Preview/output and serialization.
+Seven new selectors are unrun; no build/test/check/automation/visual acceptance,
+commit, push or GitHub action occurred. Schema remains v15. Modules remain
+Partial; OD-019 defers retarget/conversion and OD-018 defers supplied slots.
+The accumulated tree is preserved uncommitted for Prompt-10 verification.
+
+SF-AUTHORING-119 is source-implemented as Development Prompt 6/10: native
+definition property grouping/position/reset and grouped instance presentation
+reuse typed binding IDs and central transactions. Schema v15 adds only optional
+definition presentation metadata; values, layout and slot ownership are intact.
+Six new selectors are unrun. Compilation, tests, runtime visuals and the final
+gate remain deferred to Prompt 10. The accumulated tree remains uncommitted;
+no GitHub action occurred. OD-018 remains open. See the focused 119 evidence.
+
+SF-AUTHORING-118 delivers source-only named fallback slots as Prompt 5/10.
+The existing canonical definition child graph remains the sole default and
+ordering source; native editing/inspection, history, schema-v14 storage,
+transfer/detach and immutable output integration are present. Six new selectors
+are unrun. OD-018 requires an owner decision before supplied-content ownership
+and cardinality can be implemented; the full milestone remains incomplete.
+No test/build/checker/automation, verification, commit or push was performed.
+
+SF-AUTHORING-117 is source-implemented as Development Prompt 4 of 10.
+Native component action drafts/reset/provenance, exact command/history guards,
+destination-aware clipboard transfer, dependency/page-impact handling and
+resolved Link Preview/output are integrated in source. Nine new test selectors
+are unrun; Prompt 10 owns compilation, tests, visual/recovery review and the
+accumulated gate. Source implementation is not verified completion. All work
+remains uncommitted and unpushed.
+
+SF-PRODUCT-UI-008 follow-up now consumes the shared visual system throughout
+native Inspector/Settings groups, navigator row selection/hover, launch recents,
+Assets/Components, comparison cards, validation and recovery. Settings adds a
+read-only inherited Accessibility page. The complete concept/surface source
+matrix and unrun test selectors are retained in its evidence note; runtime
+visual acceptance is still reserved for Prompt 10. No commit/push is claimed.
+
+SF-AUTHORING-116 is source-implemented as Development Prompt 3 of the
+owner-directed ten-prompt cadence. Component-definition Button and Link nodes
+can expose stable action properties; linked instances author/reset canonical
+destinations through the identity-gated registry, and immutable graph
+resolution adopts the effective target with schema-v13 persistence. The
+owner add-on SF-PRODUCT-UI-008 also centralizes the concept-aligned shell,
+launch, pane, Settings, and state tokens without incrementing the cadence.
+Test source is present but no test, build, checker, or automation command was
+executed. Verification is deferred to Prompt 10; the cited modules remain Partial.
+
+The accumulated checkpoint is no longer blocked: the final `./sf verify`
+passed 567 unit/integration tests plus 104 actual-app UI journeys (671 total,
+zero failures), along with repository/security/traceability/architecture and
+evidence checks. `SF-AUTHORING-114` subsequently adds a focused, tested Image
+Fit/Fill/Stretch component choice property through the established component
+command and renderer-expansion path. Its focused test passes 1/1; no second
+complete gate passes for this bounded follow-on slice. The required attempt
+passed repository/build checks and 568 unit/integration tests, then failed
+before any UI journey because macOS XCTest timed out enabling automation mode.
+Result: `full-788bd61f-04f1-4071-ab01-260195fd373b.xcresult`.
+
+The accumulated post-2026-10-07 source batch is coherent through repository,
+security, 409-record traceability, architecture, AppIcon, and retained-evidence
+checks. Its complete non-UI target executed 566 tests; the three failures found
+there were corrected and pass exact 3/3 regressions. Retained original-resolution
+dark, selected, practical-minimum, and light/reduced-transparency captures were
+reviewed again and preserve readable single-row navigation, visible viewport
+controls, distinct pasteboard/grid/artboard layers, upright selected text, and
+no fixture/debug objects.
+
+The automation-mode timeout described in the historical source-only entries
+below is resolved and superseded by the 671-test checkpoint above. No commit,
+push, release, signing, notarization, publication, or `/Applications` mutation
+is claimed for the current working tree.
+
+SF-AUTHORING-113 is verified as a bounded component-override
+reconciliation slice. Stable typed override paths, inherited/authored/conflict
+provenance, intent-preserving binding removal, exact reset scopes, dependency
+counts, strict transfer mapping, and redacted static-output blocking are now
+connected for plain text and Boolean visibility. Its focused coverage and the
+accumulated 671-test gate pass. See
+`docs/evidence/SF-AUTHORING-113-COMPONENT-OVERRIDES.md`.
+For owner evaluation, the repository local-alpha workflow also produced and
+validated a universal unsigned/ad-hoc `0.1.0` build and installed it at
+`/Applications/SiteForge.app`; its isolated ordinary launch smoke passed.
+This does not change signing, notarization, update, publication, or verification
+status.
+
+SF-AUTHORING-112 is verified as a bounded local-component
+organization and dependency-inspection slice. Component organization remains
+scene-local; one cancellable revision-tagged snapshot supplies Where Used,
+dependency classes, typed issues, transfer/output readiness, and safe
+maintenance availability to a native accessible details sheet. Focused
+model/UI coverage and the accumulated 671-test gate pass; the cited normative
+modules remain Partial because their deferred product scope is not implemented.
+Evidence:
+`docs/evidence/SF-AUTHORING-112-COMPONENT-DEPENDENCIES.md`.
+
+SF-AUTHORING-111 is verified as a bounded cross-project component
+transfer. Clipboard envelope v2 captures the complete currently supported
+definition/dependency closure, validates untrusted graphs, reuses definitions
+only by deterministic structural equivalence, remaps imported stable
+identities and exposed bindings, and commits the definition plus pasted
+instance as one exact-inverse transaction after a native review preflight.
+Focused transfer coverage and the accumulated 671-test gate pass;
+SF-0308/SF-0901/SF-0902/SF-0905 remain Partial because their deferred product
+scope is not implemented. Evidence:
+`docs/evidence/SF-AUTHORING-111-COMPONENT-TRANSFER.md`.
+
+SF-AUTHORING-110 is source-implemented as a bounded local static-build and
+compatibility-diagnostics slice. The established immutable HTML/CSS plan now
+feeds explicit Development/Static Release profiles, referenced-only verified
+asset export, deterministic integrity provenance, and a contained atomic
+writer. A native Build Diagnostics sheet owns preflight, cancellation,
+findings, safe reveal, redacted summary, and explicit destination selection.
+The universal app build and parser checks passed; new focused test source is
+unrun and `./sf verify` remains deferred, so SF-1204/SF-1206/SF-1208/SF-1211
+remain Partial. Evidence:
+`docs/evidence/SF-AUTHORING-110-STATIC-BUILD-DIAGNOSTICS.md`.
+
+SF-PRODUCT-UI-007 completes a focused whole-app visual-convergence pass across
+the thirteen owner-provided directional renders plus the owner's live visual
+correction. Launch, stable one-row pane destinations, compact viewport
+controls, quiet blank-artboard hint, and Settings headers use one native
+semantic design system. A shared blue-neutral pasteboard/grid/artboard palette
+now provides clear depth without changing authored geometry. A universal
+macOS build passed and original-resolution normal, selected,
+practical-minimum, dark, light, increased-contrast, and Reduce Transparency
+evidence was reviewed. Focused affected journeys and the complete 104-test UI
+target are green. The first full gate found one stale native-tab traversal
+expectation; its exact focused correction and the final documentation-inclusive
+`./sf verify` pass. The gate executed 567 unit/integration tests plus 104
+actual-app UI journeys (671 total, zero failures). Evidence:
+`docs/evidence/SF-PRODUCT-UI-007-VISUAL-CONVERGENCE.md`.
+
+SF-PLATFORM-UPDATE-001 is source-implemented as the next bounded production
+slice. Settings now has a native vertical Updates destination backed by a typed
+metadata service, deterministic channel/version rules, cancellation and stale
+result rejection, truthful recovery states, and a pure fail-closed trust
+policy. The bundle contains no feed URL and no automatic schedule or installer
+is active. `OD-017` records the owner decision required for signing,
+notarization, feed/key custody, and installer ownership. The universal build
+passed; tests and the full gate remain deferred, so SF-1507 stays Partial.
+
+The owner-approved AppIcon v2 source is now the normative static identity for
+`SF-0201-009`. Its exact source bytes are retained, the edge-connected exterior
+matte is removed offline, all ten macOS renditions are regenerated, and the
+allowed static checker confirms dimensions, RGBA, deterministic pixels,
+exterior transparency, enclosed white SF preservation, catalog membership, and
+Debug/Release selection. Launch already consumes the packaged
+`NSApplication.applicationIconImage`; native About and Dock/Finder use the same
+bundle identity. Runtime/build review is deferred under the testing pause, so
+the requirement remains Partial.
+
+SF-AUTHORING-109 is source-implemented under the testing pause. Canonical
+position mode/insets/z-order, stable reusable appearance definitions, and
+bounded interaction variants now resolve through one transaction and immutable
+render/output path. Native Inspector controls and redacted diagnostics are
+connected. Runtime tests and live visual acceptance remain deferred, so
+SF-0504, SF-0510, and SF-0511 remain Partial.
 
 The current integrated checkpoint covers bounded slices
 `SF-AUTHORING-075`–`105` (excluding ready item `106`), `SF-AUTHORING-107`, and
@@ -10,6 +276,21 @@ repository check and all 640 tests: 542 unit/integration plus the complete
 therefore covered both by its focused 2/2 rerun and by the clean full gate.
 Requirement modules stay Partial wherever linked evidence records deferred
 scope.
+
+SF-AUTHORING-106 is now source-implemented under the owner testing pause. The
+welcome surface retains Blank Site and adds one local Starter Site whose
+canonical Home/About pages contain ordinary semantic Header/Main/Footer
+Sections and neutral System-typography Text. Stable template provenance,
+responsive in-artboard geometry, strict serialization, ordinary editing, and
+atomic clean lifecycle adoption are connected without remote assets or a
+starter 404 page. Focused test source is unrun, so this is **SOURCE IMPLEMENTED
+— VERIFICATION DEFERRED** and SF-0204 remains Partial.
+
+SF-AUTHORING-108 is source-implemented under the same pause. One canonical
+isolation marker and central transaction scope the immutable canvas, selection,
+Layers, hit-testing, and accessibility projection to a stable subtree. Native
+exits restore valid editor context; Focus and Presentation remain scene-local.
+New test source is unrun, so SF-0409 remains Partial.
 
 The chronological source-only notes below predate this verification checkpoint.
 
@@ -21,9 +302,8 @@ rejects unsupported component closure without mutation. The new source tests
 are unrun, so the slice is SOURCE IMPLEMENTED — VERIFICATION DEFERRED and
 SF-0308 remains Partial.
 
-The owner approved OD-016. SF-AUTHORING-106 is now ready with one local neutral
-Starter Site containing ordinary Home and About pages; Blank Site remains the
-neutral path and starter content must not expose a Not Found/404 page.
+The owner-approved OD-016 decision is implemented by the source-only
+SF-AUTHORING-106 slice described above.
 
 SF-AUTHORING-105 source-connects authorized recent projects to the welcome
 surface without retaining raw paths or introducing a second bookmark owner.
@@ -35,8 +315,8 @@ remain Partial.
 
 The final source audit does not find SiteForge globally source-complete. It
 classifies major unfinished modules and queues the next dependency-safe work in
-`docs/evidence/SF-SOURCE-COMPLETENESS-AUDIT.md`. OD-016 now supplies the bounded
-Starter Site content decision; implementation remains queued as SF-AUTHORING-106.
+`docs/evidence/SF-SOURCE-COMPLETENESS-AUDIT.md`. The approved bounded Starter
+Site decision is now source-connected by SF-AUTHORING-106.
 
 SF-PRODUCT-UI-006 source-reconciles the two clearest remaining shell hierarchy
 gaps: launch now presents the approved packaged SiteForge identity rather than

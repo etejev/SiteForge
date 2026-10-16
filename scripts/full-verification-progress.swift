@@ -1,127 +1,114 @@
 import AppKit
+import Foundation
 
+@MainActor
 final class ProgressApp: NSObject, NSApplicationDelegate {
-    private let stateURL: URL
-    private let logURL: URL
-    private var window: NSWindow!
-    private var indicator: NSProgressIndicator!
-    private var phaseLabel: NSTextField!
-    private var detailLabel: NSTextField!
-    private var elapsedLabel: NSTextField!
-    private var progressLabel: NSTextField!
+    let run: URL
+    private var window: NSPanel!
+    private var labels: [String: NSTextField] = [:]
+    private var bars: [String: NSProgressIndicator] = [:]
+    private var heading: NSTextField!
     private var timer: Timer?
-    private let startedAt = Date()
+    private var isRunning = true
 
-    init(statePath: String, logPath: String) {
-        stateURL = URL(fileURLWithPath: statePath)
-        logURL = URL(fileURLWithPath: logPath)
-    }
+    init(run: URL) { self.run = run }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 176))
-
-        phaseLabel = NSTextField(labelWithString: "Preparing full verification…")
-        phaseLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        phaseLabel.frame = NSRect(x: 24, y: 126, width: 412, height: 24)
-
-        detailLabel = NSTextField(wrappingLabelWithString: "SiteForge will continue testing without Codex interaction.")
-        detailLabel.textColor = .secondaryLabelColor
-        detailLabel.frame = NSRect(x: 24, y: 88, width: 412, height: 34)
-
-        indicator = NSProgressIndicator(frame: NSRect(x: 24, y: 64, width: 412, height: 12))
-        indicator.style = .bar
-        indicator.isIndeterminate = false
-        indicator.minValue = 0
-        indicator.maxValue = 100
-        indicator.doubleValue = 0
-
-        progressLabel = NSTextField(labelWithString: "0%")
-        progressLabel.alignment = .right
-        progressLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-        progressLabel.textColor = .secondaryLabelColor
-        progressLabel.frame = NSRect(x: 276, y: 43, width: 160, height: 18)
-
-        elapsedLabel = NSTextField(labelWithString: "Elapsed: 0m")
-        elapsedLabel.textColor = .secondaryLabelColor
-        elapsedLabel.frame = NSRect(x: 24, y: 24, width: 210, height: 22)
-
-        let revealButton = NSButton(title: "Reveal Log", target: self, action: #selector(revealLog))
-        revealButton.bezelStyle = .rounded
-        revealButton.frame = NSRect(x: 332, y: 18, width: 104, height: 30)
-
-        [phaseLabel, detailLabel, indicator, progressLabel, elapsedLabel, revealButton].forEach(content.addSubview)
-
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 176),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "SiteForge Verification"
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 250))
+        heading = NSTextField(wrappingLabelWithString: "Preparing local testing…")
+        heading.frame = NSRect(x: 20, y: 204, width: 380, height: 34)
+        content.addSubview(heading)
+        for (index, key) in ["code", "ui"].enumerated() {
+            let y = CGFloat(160 - index * 66)
+            let label = NSTextField(labelWithString: key == "code" ? "Code testing — waiting" : "UI automation — waiting")
+            label.frame = NSRect(x: 20, y: y, width: 380, height: 24)
+            label.font = .systemFont(ofSize: 13)
+            let bar = NSProgressIndicator(frame: NSRect(x: 20, y: y - 22, width: 380, height: 14))
+            bar.style = .bar
+            bar.minValue = 0
+            bar.maxValue = 1
+            bar.isIndeterminate = true
+            labels[key] = label
+            bars[key] = bar
+            content.addSubview(label)
+            content.addSubview(bar)
+        }
+        let reveal = NSButton(title: "Reveal Report", target: self, action: #selector(revealReport))
+        reveal.frame = NSRect(x: 20, y: 16, width: 130, height: 32)
+        let cancel = NSButton(title: "Cancel Run…", target: self, action: #selector(cancelRun))
+        cancel.frame = NSRect(x: 260, y: 16, width: 140, height: 32)
+        content.addSubview(reveal)
+        content.addSubview(cancel)
+        window = NSPanel(contentRect: content.frame, styleMask: [.titled, .closable, .miniaturizable, .nonactivatingPanel],
+                         backing: .buffered, defer: false)
+        window.title = "SiteForge Testing Progress"
         window.contentView = content
-        window.center()
         window.isReleasedWhenClosed = false
-        // Stay visible without becoming key or active. UI verification must
-        // retain ownership of the frontmost SiteForge window and first
-        // responder throughout native menu, pointer, and keyboard journeys.
-        window.orderFrontRegardless()
-
+        window.hidesOnDeactivate = false
+        window.level = .normal
+        window.isFloatingPanel = false
+        window.becomesKeyOnlyIfNeeded = true
+        // Ordinary level, no activation/frontmost request: the tested app stays key.
+        if let screen = NSScreen.main {
+            window.setFrameOrigin(NSPoint(x: screen.visibleFrame.minX + 12, y: screen.visibleFrame.minY + 12))
+        }
+        // Show without becoming key. The next tested app activation naturally
+        // orders its normal window above this ordinary-level panel.
+        window.orderFront(nil)
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            self?.refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
         }
     }
 
-    @objc private func revealLog() {
-        NSWorkspace.shared.activateFileViewerSelecting([logURL])
+    // The collector is a detached sibling process, not this app's child. Closing
+    // progress ends only its UI helper; testing and retained results continue.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    @objc private func revealReport() { NSWorkspace.shared.activateFileViewerSelecting([run]) }
+
+    @objc private func cancelRun() {
+        guard isRunning else { return }
+        let alert = NSAlert()
+        alert.messageText = "Cancel this testing run?"
+        alert.informativeText = "Only processes created by this collector are stopped. Completed results remain available."
+        alert.addButton(withTitle: "Keep Running")
+        alert.addButton(withTitle: "Cancel Run")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        try? Data().write(to: run.appendingPathComponent("cancel.request"), options: .atomic)
     }
 
     private func refresh() {
-        let elapsed = Int(Date().timeIntervalSince(startedAt))
-        elapsedLabel.stringValue = "Elapsed: \(elapsed / 60)m \(elapsed % 60)s"
-
-        guard let data = try? Data(contentsOf: stateURL),
-              let text = String(data: data, encoding: .utf8) else { return }
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard lines.count >= 4 else { return }
-
-        let status = lines[0]
-        phaseLabel.stringValue = lines[1]
-        detailLabel.stringValue = lines[2]
-        let progress = min(100, max(0, Double(lines[3]) ?? indicator.doubleValue))
-        indicator.doubleValue = progress
-        progressLabel.stringValue = "\(Int(progress.rounded()))%"
-
-        if status != "RUNNING" {
-            switch status {
-            case "PASSED":
-                indicator.doubleValue = 100
-                progressLabel.stringValue = "100% • Passed"
-                elapsedLabel.stringValue += " • Passed"
-            case "ISSUES":
-                indicator.doubleValue = 100
-                progressLabel.stringValue = "100% • Completed with Issues"
-                elapsedLabel.stringValue += " • Completed with Issues"
-            default:
-                indicator.doubleValue = 0
-                elapsedLabel.stringValue += " • Stopped"
-            }
-            timer?.invalidate()
-            NSApp.requestUserAttention(.informationalRequest)
-            Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { _ in
-                NSApp.terminate(nil)
-            }
+        guard let data = try? Data(contentsOf: run.appendingPathComponent("state.json")),
+              let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let stages = state["stages"] as? [String: [String: Any]] else { return }
+        let status = state["status"] as? String ?? "running"
+        isRunning = status == "running"
+        let active = stages.filter { $0.value["status"] as? String == "running" }.keys.sorted().joined(separator: ", ")
+        heading.stringValue = isRunning ? "Running: \(active.isEmpty ? "preparing" : active)" : "Testing \(status). Report retained."
+        for key in ["code", "ui"] {
+            guard let stage = stages[key], let label = labels[key], let bar = bars[key] else { continue }
+            let completed = (stage["completed"] as? NSNumber)?.intValue ?? 0
+            let total = (stage["total"] as? NSNumber)?.intValue
+            let outcome = stage["status"] as? String ?? "waiting"
+            let title = key == "code" ? "Code testing" : "UI automation"
+            let count = total.map { "\(completed)/\($0)" } ?? "\(completed) completed · total unknown"
+            let failed = (stage["failed"] as? NSNumber)?.intValue ?? 0
+            label.stringValue = "\(title): \(count) · \(outcome) · \(failed) failed"
+            bar.isIndeterminate = total == nil
+            if let total, total > 0 {
+                bar.maxValue = Double(total)
+                bar.doubleValue = Double(min(completed, total))
+            } else if outcome == "running" { bar.startAnimation(nil) }
+            else { bar.stopAnimation(nil) }
         }
+        // Completion remains visible until explicitly closed; closing never cancels.
     }
 }
 
-guard CommandLine.arguments.count == 3 else {
-    fputs("usage: full-verification-progress.swift <state-file> <log-file>\n", stderr)
-    exit(2)
-}
-
+guard CommandLine.arguments.count == 2 else { exit(2) }
 let app = NSApplication.shared
-let delegate = ProgressApp(statePath: CommandLine.arguments[1], logPath: CommandLine.arguments[2])
+let delegate = ProgressApp(run: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()

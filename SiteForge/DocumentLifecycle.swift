@@ -1050,7 +1050,16 @@ final class DocumentLifecycleController: ObservableObject {
     }
 
     @discardableResult
-    func requestNewDocument() async -> DocumentTransitionResult {
+    func requestNewDocument(_ document: CanonicalDocument = ProjectCreation.blank()) async -> DocumentTransitionResult {
+        // Validate the complete creation selection before authorization or a
+        // document boundary. A malformed local template therefore cannot
+        // disturb the current document, history, recovery ownership, or file
+        // URL even if a caller reaches this API outside the launch surface.
+        do {
+            try document.validate()
+        } catch {
+            return .failed(.malformedPackage)
+        }
         let attempt = beginTransitionAttempt()
         defer { finishTransitionAttempt(attempt) }
         let previousProjectID = project.projectID
@@ -1074,17 +1083,28 @@ final class DocumentLifecycleController: ObservableObject {
             guard transitionStillMatches(attempt) else { return .cancelled }
             let boundary = await beginDocumentBoundary()
             guard transitionStillMatches(attempt), lifecycleEpoch == boundary else { return .cancelled }
-            establishNewDocument()
+            do {
+                try establishNewDocument(document)
+            } catch {
+                failure = .malformedPackage
+                phase = .failed
+                finishTransitionAttempt(attempt)
+                return .failed(.malformedPackage)
+            }
             finishTransitionAttempt(attempt)
             return .completed
         }
     }
 
-    private func establishNewDocument() {
+    private func establishNewDocument(_ document: CanonicalDocument) throws {
         stopPresentingDurableFile()
-        let document = ProjectCreation.blank()
         observing = true
-        try? session.establishBaseline(document)
+        do {
+            try session.establishBaseline(document)
+        } catch {
+            observing = false
+            throw error
+        }
         observing = false
         let now = ProjectTimestamp(date: clock.now())
         project = ProjectPackage(createdAt: now, document: document)

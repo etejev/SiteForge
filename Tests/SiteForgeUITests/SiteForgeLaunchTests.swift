@@ -48,6 +48,33 @@ private enum PointerWindowPlacement {
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
+    // SF-0206-006/008, SF-1605-006/008: source acceptance for the shared
+    // Settings hierarchy. Execution is reserved for the owner's Prompt-10 gate.
+    func testConceptAlignedSettingsSidebarAndInheritedAccessibilityJourney() {
+        let application = launchWorkspace()
+        application.typeKey(",", modifierFlags: .command)
+        let sidebar = application.descendants(matching: .any)["settings.sidebar"]
+        let content = application.descendants(matching: .any)["settings.content"]
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+        XCTAssertTrue(content.exists)
+        XCTAssertLessThanOrEqual(sidebar.frame.maxX, content.frame.minX + 1,
+                                 "Settings categories belong in the left sidebar")
+        for destination in ["appearance", "canvas", "accessibility", "defaults", "updates", "support", "advanced"] {
+            let category = application.descendants(matching: .any)["settings.sidebar.\(destination)"]
+            XCTAssertTrue(waitForHittable(category, in: application))
+            category.click()
+            XCTAssertTrue(content.exists)
+            if destination == "accessibility" {
+                for preference in ["transparency", "contrast", "motion"] {
+                    XCTAssertTrue(application.descendants(matching: .any)["settings.accessibility.\(preference)"].exists)
+                }
+                XCTAssertFalse(application.checkBoxes["settings.accessibility.transparency"].exists,
+                               "Inherited macOS settings must not appear as app-authored overrides")
+            }
+            attachWindowScreenshot(application, named: "SF-PRODUCT-UI-008 Settings \(destination)")
+        }
+    }
+
     // SF-0206-002/004/006 — real native application preference-group reset.
     func testApplicationSettingsGroupResetCancelRestoreAndRelaunchJourney() {
         let application = launchWorkspace()
@@ -55,9 +82,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(grid.waitForExistence(timeout: 5))
         application.typeKey(",", modifierFlags: .command)
         @MainActor func tab(_ name: String) {
-            let button = application.toolbars.buttons[name]
-            XCTAssertTrue(button.waitForExistence(timeout: 5), application.debugDescription)
-            button.click()
+            let identifier = "settings.sidebar.\(name.lowercased())"
+            let item = application.descendants(matching: .any)[identifier]
+            XCTAssertTrue(waitForHittable(item, in: application), application.debugDescription)
+            item.click()
         }
         @MainActor func capture(_ name: String) {
             let attachment = XCTAttachment(screenshot: application.windows.firstMatch.screenshot())
@@ -74,8 +102,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let originalAppearance = ["Follow macOS", "Light", "Dark"].first {
             (application.radioButtons[$0].value as? NSNumber)?.intValue == 1
         } ?? "Follow macOS"
-        let originalAppearanceDefault = (application.staticTexts["settings.appearance.provenance"].value as? String)?
-            .contains("Default") == true
+        let originalAppearanceDefault = (application.buttons["settings.appearance.reset"].value as? String) == "Already default"
         if originalAppearance != "Dark" { application.radioButtons["Dark"].click() }
         if application.buttons["settings.appearance.apply"].isEnabled {
             application.buttons["settings.appearance.apply"].click()
@@ -84,14 +111,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         let canvasSetting = application.checkBoxes["settings.canvas.gridDefault"]
         XCTAssertTrue(canvasSetting.waitForExistence(timeout: 5))
         let originalCanvas = isOn(canvasSetting)
-        let originalCanvasDefault = (application.staticTexts["settings.canvas.provenance"].value as? String)?
-            .contains("Default") == true
+        let originalCanvasDefault = (application.buttons["settings.canvas.reset"].value as? String) == "Already default"
         if isOn(canvasSetting) { canvasSetting.click() }
         if application.buttons["settings.canvas.apply"].isEnabled {
             application.buttons["settings.canvas.apply"].click()
         }
 
-        tab("Reset")
+        tab("Defaults")
         capture("SF-AUTHORING-065 application defaults before reset")
         let stage = application.buttons["settings.group.stage"]
         XCTAssertTrue(stage.waitForExistence(timeout: 5))
@@ -103,7 +129,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue((application.staticTexts["settings.group.status"].value as? String)?.contains("cancelled") == true)
         stage.click()
         tab("Canvas")
-        tab("Reset")
+        tab("Defaults")
         XCTAssertFalse(application.buttons["settings.group.confirm"].exists)
         XCTAssertTrue((application.staticTexts["settings.group.status"].value as? String)?.contains("cancelled") == true)
         stage.click()
@@ -114,7 +140,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual((application.radioButtons["Follow macOS"].value as? NSNumber)?.intValue, 1)
         tab("Canvas")
         XCTAssertTrue(isOn(application.checkBoxes["settings.canvas.gridDefault"]))
-        tab("Reset")
+        tab("Defaults")
         application.buttons["settings.group.restore"].click()
         XCTAssertTrue((application.staticTexts["settings.group.status"].value as? String)?.contains("restored") == true)
         capture("SF-AUTHORING-065 previous defaults restored")
@@ -123,7 +149,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         tab("Canvas")
         XCTAssertFalse(isOn(application.checkBoxes["settings.canvas.gridDefault"]))
 
-        tab("Reset")
+        tab("Defaults")
         stage.click()
         application.buttons["settings.group.confirm"].click()
         application.terminate()
@@ -169,14 +195,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         let originalSceneGrid = isOn(grid)
 
         application.typeKey(",", modifierFlags: .command)
-        let canvasTab = application.toolbars.buttons["Canvas"]
-        XCTAssertTrue(canvasTab.waitForExistence(timeout: 5), application.debugDescription)
+        let canvasTab = application.descendants(matching: .any)["settings.sidebar.canvas"]
+        XCTAssertTrue(waitForHittable(canvasTab, in: application), application.debugDescription)
         canvasTab.click()
         let setting = application.checkBoxes["settings.canvas.gridDefault"]
         XCTAssertTrue(setting.waitForExistence(timeout: 5), application.debugDescription)
         let originalPreference = isOn(setting)
-        let originalWasDefault = (application.staticTexts["settings.canvas.provenance"].value as? String)?
-            .contains("Default") == true
+        let originalWasDefault = (application.buttons["settings.canvas.reset"].value as? String) == "Already default"
 
         @MainActor func screenshot(_ name: String, window: XCUIElement) {
             let attachment = XCTAttachment(screenshot: window.screenshot())
@@ -187,22 +212,19 @@ final class SiteForgeLaunchTests: XCTestCase {
         let settingsWindow = application.windows.containing(.checkBox, identifier: "settings.canvas.gridDefault").firstMatch
         XCTAssertTrue(settingsWindow.exists)
         screenshot("SF-AUTHORING-064 Canvas Settings initial", window: settingsWindow)
-        if isOn(setting) { setting.click() }
-        XCTAssertFalse(isOn(setting))
+        let targetPreference = !originalPreference
+        setting.click()
+        XCTAssertEqual(isOn(setting), targetPreference)
         XCTAssertTrue(application.buttons["settings.canvas.apply"].isEnabled)
         XCTAssertTrue(isOn(grid) == originalSceneGrid)
         screenshot("SF-AUTHORING-064 Canvas Settings draft", window: settingsWindow)
         application.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         XCTAssertEqual(isOn(application.checkBoxes["settings.canvas.gridDefault"]), originalPreference)
         XCTAssertFalse(application.buttons["settings.canvas.apply"].isEnabled)
-        if originalPreference { setting.click() }
-        else {
-            application.buttons["settings.canvas.reset"].click()
-            setting.click()
-        }
+        application.checkBoxes["settings.canvas.gridDefault"].click()
         XCTAssertTrue(application.buttons["settings.canvas.apply"].isEnabled)
         application.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
-        XCTAssertFalse(isOn(application.checkBoxes["settings.canvas.gridDefault"]))
+        XCTAssertEqual(isOn(application.checkBoxes["settings.canvas.gridDefault"]), targetPreference)
         XCTAssertTrue((application.staticTexts["settings.canvas.status"].value as? String)?.contains("saved") == true)
         screenshot("SF-AUTHORING-064 Canvas Settings committed", window: settingsWindow)
         XCTAssertEqual(isOn(grid), originalSceneGrid)
@@ -216,15 +238,16 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForWorkspaceReady(application))
         let freshGrid = application.descendants(matching: .any)["canvas.grid.toggle"]
         XCTAssertTrue(freshGrid.waitForExistence(timeout: 5))
-        XCTAssertFalse(isOn(freshGrid))
-        screenshot("SF-AUTHORING-064 new workspace inherits Grid Off", window: application.windows.firstMatch)
+        XCTAssertEqual(isOn(freshGrid), targetPreference)
+        screenshot("SF-AUTHORING-064 new workspace inherits Grid preference", window: application.windows.firstMatch)
         freshGrid.click()
-        XCTAssertTrue(isOn(application.descendants(matching: .any)["canvas.grid.toggle"]))
-        screenshot("SF-AUTHORING-064 live workspace Grid On", window: application.windows.firstMatch)
+        XCTAssertEqual(isOn(application.descendants(matching: .any)["canvas.grid.toggle"]), !targetPreference)
+        screenshot("SF-AUTHORING-064 live workspace toggled Grid", window: application.windows.firstMatch)
 
         application.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(application.toolbars.buttons["Canvas"].waitForExistence(timeout: 5))
-        application.toolbars.buttons["Canvas"].click()
+        let restoredCanvasTab = application.descendants(matching: .any)["settings.sidebar.canvas"]
+        XCTAssertTrue(waitForHittable(restoredCanvasTab, in: application))
+        restoredCanvasTab.click()
         let restoredSetting = application.checkBoxes["settings.canvas.gridDefault"]
         XCTAssertTrue(restoredSetting.waitForExistence(timeout: 5))
         if originalWasDefault {
@@ -236,24 +259,221 @@ final class SiteForgeLaunchTests: XCTestCase {
             application.buttons["settings.canvas.apply"].click()
         }
         XCTAssertEqual(isOn(application.checkBoxes["settings.canvas.gridDefault"]), originalPreference)
-        XCTAssertEqual((application.staticTexts["settings.canvas.provenance"].value as? String)?
-            .contains("Default") == true, originalWasDefault)
+        XCTAssertEqual((application.buttons["settings.canvas.reset"].value as? String) == "Already default", originalWasDefault)
     }
 
     // SF-0206-002/003/004/006/008 — real native Settings, no document hooks.
+    func testSelectedReferencesLightSettingsPreviewAndRestoreVisualJourney() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        application.typeKey(",", modifierFlags: .command)
+        let appearance = application.descendants(matching: .any)["settings.sidebar.appearance"]
+        XCTAssertTrue(waitForHittable(appearance, in: application)); appearance.click()
+        let light = application.radioButtons["Light"]
+        XCTAssertTrue(waitForHittable(light, in: application))
+        light.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate:
+            NSPredicate { _, _ in
+                let live = application.radioButtons["Light"]
+                return live.exists && (live.isSelected || (live.value as? NSNumber)?.boolValue == true)
+            }, object: nil)], timeout: 5) == .completed)
+        XCTAssertTrue(waitForValue(application.staticTexts["settings.appearance.status"], containing: "preview"))
+        for destination in ["appearance", "canvas", "accessibility", "defaults", "updates", "support"] {
+            let live = application.descendants(matching: .any)["settings.sidebar." + destination]
+            XCTAssertTrue(waitForHittable(live, in: application)); live.click()
+            XCTAssertTrue(application.descendants(matching: .any)["settings.content"].exists)
+            attachWindowScreenshot(application, named: "SF-UI-009 light Settings " + destination)
+        }
+        let restore = application.descendants(matching: .any)["settings.sidebar.appearance"]
+        XCTAssertTrue(waitForHittable(restore, in: application)); restore.click()
+        let cancel = application.buttons["settings.appearance.cancel"]
+        XCTAssertTrue(waitForHittable(cancel, in: application)); cancel.click()
+        XCTAssertFalse(application.buttons["settings.appearance.apply"].isEnabled)
+        application.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+    }
+
+    func testFixedSettingsSharesCardWidthTitlebarClearanceAndReopenGeometryJourney() {
+        let application = launchScenario("welcome")
+        application.typeKey(",", modifierFlags: .command)
+        let settings = application.windows["SiteForge Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        let visibleFrame = try! XCTUnwrap(NSScreen.main?.visibleFrame)
+        let expectedWidth = min(970, visibleFrame.width - 16)
+        XCTAssertEqual(settings.frame.width, expectedWidth, accuracy: 1)
+        let initialSize = settings.frame.size
+        let expectedFormWidth = min(680, expectedWidth - 250 - 40)
+        for destination in ["appearance", "canvas", "accessibility", "defaults", "updates", "support", "advanced"] {
+            let row = settings.descendants(matching: .any)["settings.sidebar." + destination]
+            XCTAssertTrue(waitForHittable(row, in: application)); row.click()
+            let form = settings.descendants(matching: .any)["settings.form"]
+            XCTAssertTrue(form.waitForExistence(timeout: 5))
+            XCTAssertEqual(settings.frame.size, initialSize)
+            // SwiftUI's semantic form group reports its children's union,
+            // excluding visual page insets. Assert the actual card geometry.
+            XCTAssertGreaterThanOrEqual(form.frame.width, expectedFormWidth - 48)
+            XCTAssertGreaterThanOrEqual(row.frame.minY, settings.frame.minY + 28)
+            XCTAssertEqual(settings.splitGroups.count, 0, "Settings has no collapsible or resizable split divider")
+            XCTAssertEqual(settings.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "sidebar")).count, 0)
+            let cards = settings.descendants(matching: .any).matching(identifier: "settings.card").allElementsBoundByIndex
+            XCTAssertFalse(cards.isEmpty, destination)
+            for card in cards {
+                XCTAssertEqual(card.frame.width, expectedFormWidth - 48, accuracy: 1, destination)
+                XCTAssertEqual(card.frame.midX, settings.frame.minX + 250 + (expectedWidth - 250) / 2, accuracy: 2, destination)
+            }
+            let capture = XCTAttachment(screenshot: settings.screenshot())
+            capture.name = "SF-UI-010 fixed Settings " + destination
+            capture.lifetime = .keepAlways; add(capture)
+        }
+        application.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(waitForNonexistence(settings))
+        application.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertEqual(settings.frame.size, initialSize)
+        let reopened = XCTAttachment(screenshot: settings.screenshot())
+        reopened.name = "SF-UI-010 fixed Settings reopened"; reopened.lifetime = .keepAlways; add(reopened)
+    }
+
+    func testOwnerLocalSettingsAndCenteredEmptyCanvasUseRealControlsJourney() {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        let viewport = application.descendants(matching: .any)["canvas.viewport.surface"]
+        for (prefix, region, destinations) in [
+            ("navigator.tab.", "shell.navigator", ["pages", "layers", "elements", "assets", "components"]),
+            ("inspector.tab.", "shell.inspector", ["design", "layout", "content", "interactions", "accessibility"])
+        ] {
+            for destination in destinations {
+                let control = application.buttons[prefix + destination]
+                XCTAssertTrue(waitForHittable(control, in: application), destination)
+                assertElement(control, isContainedIn: application.descendants(matching: .any)[region], destination)
+            }
+        }
+        let hint = application.descendants(matching: .any)["canvas.empty.hint"]
+        XCTAssertTrue(hint.waitForExistence(timeout: 5))
+        XCTAssertTrue(viewport.exists)
+        XCTAssertEqual(hint.frame.midX, viewport.frame.midX, accuracy: 2)
+        XCTAssertEqual(hint.frame.midY, viewport.frame.midY, accuracy: 2)
+        XCTAssertLessThan(hint.frame.width, viewport.frame.width)
+        XCTAssertLessThan(hint.frame.height, viewport.frame.height / 2)
+        viewport.coordinate(withNormalizedOffset: .init(dx: 0.1, dy: 0.1)).click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "interactions 1", timeout: 5))
+        attachWindowScreenshot(application, named: "SF-UI-009 compact toolbar centered empty canvas")
+        let insert = application.buttons["canvas.empty.insert.frame"]
+        XCTAssertTrue(waitForHittable(insert, in: application)); insert.click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        XCTAssertTrue(hint.waitForNonExistence(timeout: 5))
+        attachWindowScreenshot(application, named: "SF-UI-009 paired Inspector real Frame")
+        application.typeKey(",", modifierFlags: .command)
+        let advanced = application.descendants(matching: .any)["settings.sidebar.advanced"]
+        XCTAssertTrue(waitForHittable(advanced, in: application)); advanced.click()
+        XCTAssertTrue(application.buttons["settings.testing.full"].exists)
+        XCTAssertTrue(application.buttons["settings.testing.ui"].exists)
+        // An ordinary test build has no owner-local provision; do not pretend
+        // it contains a runnable development harness or trigger a nested suite.
+        XCTAssertFalse(application.buttons["settings.testing.full"].isEnabled)
+        XCTAssertFalse(application.buttons["settings.testing.ui"].isEnabled)
+        XCTAssertFalse(application.checkBoxes["settings.experimental.enabled"].exists)
+        attachWindowScreenshot(application, named: "SF-UI-009 Advanced truthful unavailable harness")
+        application.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(application.windows.containing(.button, identifier: "settings.testing.full")
+            .firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        application.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(application.descendants(matching: .any)["settings.sidebar.updates"].waitForExistence(timeout: 5))
+        application.descendants(matching: .any)["settings.sidebar.updates"].click()
+        XCTAssertFalse(application.descendants(matching: .any)["settings.updates.channel"].exists)
+        attachWindowScreenshot(application, named: "SF-UI-009 Updates fixed policy")
+    }
+
+    func testNativeSaveAsUpdatesLiveDocumentWindowTitleJourney() {
+        let application = launchWorkspace()
+        let insert = application.buttons["canvas.empty.insert.frame"]
+        XCTAssertTrue(waitForHittable(insert, in: application)); insert.click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        application.menuBars.menuBarItems["File"].click()
+        XCTAssertTrue(application.menuItems["Save As…"].isEnabled)
+        application.menuItems["Save As…"].click()
+        let name = application.textFields["saveAsNameTextField"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        replaceText(in: name, with: "Native Title Regression", application: application)
+        application.typeKey("g", modifierFlags: [.command, .shift])
+        let path = application.textFields["PathTextField"]
+        XCTAssertTrue(path.waitForExistence(timeout: 5))
+        replaceText(in: path, with: fixtureRoot.path, application: application)
+        path.typeKey(.return, modifierFlags: [])
+        let save = application.buttons["OKButton"]
+        XCTAssertTrue(waitForHittable(save, in: application)); save.click()
+        XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 5), application.debugDescription)
+        attachWindowScreenshot(application, named: "SF-UI-009 native Save As title diagnostic")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            application.windows["Native Title Regression"].exists
+        }, object: nil)], timeout: 5), .completed, "Durable Save As must publish the live clean document title. \(application.windows.firstMatch.debugDescription)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixtureRoot.appendingPathComponent("Native Title Regression.siteforge").path))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        attachWindowScreenshot(application, named: "SF-UI-009 native Save As live clean title")
+        // Native File commands remain usable after the last document closes;
+        // reopening must adopt a new live scene, not a retained closed state.
+        application.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(waitForNonexistence(application.windows["Native Title Regression"]))
+        application.menuBars.menuBarItems["File"].click()
+        XCTAssertTrue(application.menuItems["Open…"].isEnabled)
+        application.menuItems["Open…"].click()
+        application.typeKey("g", modifierFlags: [.command, .shift])
+        let reopenPath = application.textFields["PathTextField"]
+        XCTAssertTrue(reopenPath.waitForExistence(timeout: 5))
+        replaceText(in: reopenPath, with: fixtureRoot.appendingPathComponent("Native Title Regression.siteforge").path, application: application)
+        reopenPath.typeKey(.return, modifierFlags: [])
+        let open = application.buttons["OKButton"]
+        XCTAssertTrue(waitForHittable(open, in: application)); open.click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 5))
+        XCTAssertTrue(application.windows["Native Title Regression"].exists)
+        attachWindowScreenshot(application, named: "SF-UI-009 native last-window Open adopts reopened document")
+    }
+
+    func testNativeSelectAllInPageEditorReplacesDefaultDraftJourney() {
+        let application = launchWorkspace()
+        application.menuBars.menuBarItems["Page"].click()
+        application.menuItems["New Page…"].click()
+        let name = application.textFields["page.editor.name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5)); name.click()
+        XCTAssertTrue(waitForKeyboardFocus(identifier: "page.editor.name", in: application))
+        application.menuBars.menuBarItems["Edit"].click()
+        XCTAssertTrue(application.menuItems["Select All"].isEnabled)
+        application.menuItems["Select All"].click()
+        name.typeText("About")
+        XCTAssertEqual(application.textFields["page.editor.name"].value as? String, "About")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+        application.buttons["canvas.empty.insert.frame"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let width = application.textFields["inspector.layout.width"]
+        XCTAssertTrue(width.waitForExistence(timeout: 5)); width.click()
+        XCTAssertTrue(waitForKeyboardFocus(identifier: "inspector.layout.width", in: application))
+        width.typeKey(.tab, modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(identifier: "inspector.layout.height", in: application))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "defaulted"))
+        application.textFields["inspector.layout.height"].typeKey(.tab, modifierFlags: .shift)
+        XCTAssertTrue(waitForKeyboardFocus(identifier: "inspector.layout.width", in: application))
+        width.typeKey("a", modifierFlags: .command); width.typeText("320")
+        width.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "320"))
+        application.menuBars.menuBarItems["Edit"].click(); application.menuItems["Undo"].click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "240"))
+    }
+
     func testApplicationAppearanceSettingsPreviewApplyCancelResetJourney() {
         let application = launchWorkspace()
         application.typeKey(",", modifierFlags: .command)
         @MainActor func showAppearanceTab() {
-            let tab = application.toolbars.buttons["Appearance"]
-            XCTAssertTrue(tab.waitForExistence(timeout: 5))
+            let tab = application.descendants(matching: .any)["settings.sidebar.appearance"]
+            XCTAssertTrue(waitForHittable(tab, in: application))
             tab.click()
         }
         showAppearanceTab()
         let apply = application.buttons["settings.appearance.apply"]
         XCTAssertTrue(apply.waitForExistence(timeout: 5))
-        let provenance = application.staticTexts["settings.appearance.provenance"]
-        let originalWasDefault = (provenance.value as? String)?.contains("Default") == true
+        let originalWasDefault = (application.buttons["settings.appearance.reset"].value as? String) == "Already default"
         let originalChoice = ["Follow macOS", "Light", "Dark"].first {
             (application.radioButtons[$0].value as? NSNumber)?.intValue == 1
         }
@@ -266,7 +486,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         }
         @MainActor func awaitText(_ identifier: String, _ text: String) {
             let predicate = NSPredicate { _, _ in
-                let live = application.staticTexts[identifier]
+                let live = application.descendants(matching: .any)[identifier]
                 return live.exists && (live.value as? String)?.contains(text) == true
             }
             XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 5), .completed)
@@ -282,11 +502,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         if application.buttons["settings.appearance.apply"].isEnabled {
             application.buttons["settings.appearance.apply"].click()
         }
-        awaitText("settings.appearance.provenance", "Default")
+        awaitText("settings.appearance.reset", "Already default")
         func capture(_ name: String) {
             let window = application.windows.containing(.button, identifier: "settings.appearance.apply").firstMatch
             XCTAssertTrue(window.exists)
-            XCTAssertLessThan(window.frame.width, 700)
+            // The production Settings redesign uses a readable two-column
+            // NavigationSplitView. Keep the sidebar and detail pane available
+            // instead of forcing the obsolete compact toolbar width.
+            XCTAssertGreaterThanOrEqual(window.frame.width, 820)
             let attachment = XCTAttachment(screenshot: window.screenshot())
             attachment.name = name
             attachment.lifetime = .keepAlways
@@ -294,14 +517,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         }
         choose("Dark")
         XCTAssertTrue(application.buttons["settings.appearance.apply"].isEnabled)
-        awaitText("settings.appearance.provenance", "Preview")
+        awaitText("settings.appearance.status", "preview")
         capture("SF-SETTINGS dark preview")
         application.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         XCTAssertFalse(application.buttons["settings.appearance.apply"].isEnabled)
         choose("Light")
         application.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
         awaitText("settings.appearance.status", "saved")
-        awaitText("settings.appearance.provenance", "Authored")
+        awaitText("settings.appearance.reset", "Reset available")
         capture("SF-SETTINGS light committed")
         choose("Dark")
         application.typeKey("w", modifierFlags: .command)
@@ -315,7 +538,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         capture("SF-SETTINGS reopened cancellation")
         application.buttons["settings.appearance.reset"].click()
         application.buttons["settings.appearance.apply"].click()
-        awaitText("settings.appearance.provenance", "Default")
+        awaitText("settings.appearance.reset", "Already default")
         capture("SF-SETTINGS reset default")
         application.buttons["settings.appearance.restore"].click()
         XCTAssertEqual((application.radioButtons["Light"].value as? NSNumber)?.intValue, 1)
@@ -328,7 +551,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         showAppearanceTab()
         XCTAssertTrue(application.buttons["settings.appearance.apply"].waitForExistence(timeout: 5))
         XCTAssertEqual((application.radioButtons["Light"].value as? NSNumber)?.intValue, 1)
-        awaitText("settings.appearance.provenance", "Authored")
+        awaitText("settings.appearance.reset", "Reset available")
         capture("SF-SETTINGS persisted after relaunch")
     }
 
@@ -337,8 +560,8 @@ final class SiteForgeLaunchTests: XCTestCase {
     func testSupportSettingsGeneratesReviewableRedactedReportJourney() {
         let application = launchWorkspace()
         application.typeKey(",", modifierFlags: .command)
-        let supportTab = application.toolbars.buttons["Support"]
-        XCTAssertTrue(supportTab.waitForExistence(timeout: 5), application.debugDescription)
+        let supportTab = application.descendants(matching: .any)["settings.sidebar.support"]
+        XCTAssertTrue(waitForHittable(supportTab, in: application), application.debugDescription)
         supportTab.click()
 
         let generate = application.buttons["settings.support.generate"]
@@ -362,7 +585,8 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         let window = application.windows.containing(.button, identifier: "settings.support.generate").firstMatch
         XCTAssertTrue(window.exists)
-        XCTAssertLessThanOrEqual(window.frame.width, 700)
+        XCTAssertGreaterThanOrEqual(window.frame.width, 820)
+        XCTAssertLessThanOrEqual(window.frame.width, XCUIScreen.main.screenshot().image.size.width)
         let attachment = XCTAttachment(screenshot: window.screenshot())
         attachment.name = "SF-AUTHORING-104 Support Settings redacted report"
         attachment.lifetime = .keepAlways
@@ -373,7 +597,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue((status.value as? String)?.contains("copied") == true)
     }
 
-    private static let applicationBundleIdentifier = "app.siteforge.SiteForge"
+    private static let applicationBundleIdentifier = Bundle(for: SiteForgeLaunchTests.self)
+        .object(forInfoDictionaryKey: "SiteForgeTestApplicationIdentifier") as? String ?? "app.siteforge.SiteForge"
     private enum TestWindowAlignment: String {
         case left
         case right
@@ -852,9 +1077,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(waitForWorkspaceReady(application))
         @MainActor func reveal(_ element: XCUIElement) {
-            let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
-            for _ in 0..<8 where !element.isHittable { scroll.scroll(byDeltaX: 0, deltaY: -180) }
-            XCTAssertTrue(element.isHittable, "Responsive Inspector control \(element.identifier) must remain reachable")
+            _ = revealStructuralLayoutControl(element, in: application)
         }
         application.buttons["navigator.tab.elements"].click()
         application.buttons["navigator.elements.stack"].click()
@@ -884,7 +1107,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         preset.click(); application.menuItems["Mobile"].click()
         let gap = application.textFields["inspector.layout.container.gap"]
         XCTAssertTrue(gap.waitForExistence(timeout: 3))
-        gap.doubleClick(); gap.typeKey("a", modifierFlags: .command); gap.typeText("8"); gap.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(gap, with: "8", in: application)
         XCTAssertTrue(waitForValue(gap, containing: "Authored for Mobile"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-018 Mobile Stack override")
 
@@ -906,6 +1129,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.buttons["navigator.tab.layers"].click()
         let hiddenFrameRow = application.descendants(matching: .any)[selectedFrameIdentifier]
         XCTAssertTrue(waitForValue(hiddenFrameRow, containing: "Hidden at current breakpoint"))
+        XCTAssertTrue(waitForHittable(hiddenFrameRow, in: application))
+        hiddenFrameRow.click()
         attachWindowScreenshot(application, named: "SF-AUTHORING-018 Mobile hidden Layers inspection")
 
         application.buttons["inspector.tab.layout"].click()
@@ -923,8 +1148,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.menuBars.menuBarItems["Selection"].click()
         let clearSelection = application.menuItems["Clear Selection"]
         XCTAssertTrue(clearSelection.waitForExistence(timeout: 2)); clearSelection.click()
-        application.buttons["navigator.tab.elements"].click()
-        application.buttons["navigator.elements.grid"].click()
+        componentMenu("Insert", "Insert Grid at Center", in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 4", timeout: 5))
         for count in 5...6 {
             application.menuBars.menuBarItems["Insert"].click()
@@ -937,23 +1161,26 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTAssertTrue(gridRow.waitForExistence(timeout: 3)); gridRow.click()
         }
         application.buttons["inspector.tab.layout"].click()
-        XCTAssertTrue(waitForValue(
-            application.staticTexts["inspector.layout.container.announcement"],
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.announcement",
             containing: "Container layout inactive"
         ), "Selecting a different container at another breakpoint must not retain stale operation feedback")
-        XCTAssertTrue(waitForValue(
-            application.staticTexts["inspector.layout.visibility.announcement"],
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.visibility.announcement",
             containing: "Breakpoint visibility inactive"
         ), "Breakpoint visibility feedback must stay scoped to the selection and breakpoint that produced it")
         attachWindowScreenshot(application, named: "SF-AUTHORING-018 Desktop Stack Grid base layout")
         preset.click(); application.menuItems["Tablet"].click()
         let columns = application.textFields["inspector.layout.container.columns"]
         XCTAssertTrue(columns.waitForExistence(timeout: 3)); reveal(columns)
-        columns.doubleClick(); columns.typeKey("a", modifierFlags: .command)
-        columns.typeText("1"); columns.typeKey(.return, modifierFlags: [])
+        replaceStructuralLayoutField(columns, with: "1", in: application)
         XCTAssertTrue(waitForValue(columns, containing: "Authored for Tablet"))
-        XCTAssertTrue(waitForValue(
-            application.staticTexts["inspector.layout.container.announcement"], containing: "Columns committed"
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.announcement",
+            containing: "Columns committed"
         ))
         attachWindowScreenshot(application, named: "SF-AUTHORING-018 Tablet Grid override")
     }
@@ -1485,7 +1712,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         var application = launchIntegrationOpen(project, base64Fixture: fixture)
         XCTAssertTrue(waitForWorkspaceReady(application))
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
-        application.buttons["canvas.empty.insert.text"].click()
+        XCTAssertFalse(application.buttons["canvas.empty.insert.text"].exists,
+            "A retained legacy surface is not a genuinely blank page")
+        componentMenu("Insert", "Insert Text at Center", in: application)
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
         application.buttons["inspector.tab.design"].click()
         let inspector = application.scrollViews["inspector.selection.scroll"]
@@ -1758,6 +1987,57 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-012 all-incompatible fill")
     }
 
+    // SF-0504/SF-0510/SF-0511 — native Inspector controls author positioning,
+    // reusable appearance, and a bounded hover variant through the shipping
+    // transaction path. Forced state preview remains scene-local.
+    func testPositioningReusableStyleAndInteractionStateAuthoringJourney() throws {
+        let application = launchScenario("workspace")
+        let shell = application.descendants(matching: .any)["workspace.shell"]
+        XCTAssertTrue(shell.waitForExistence(timeout: 5))
+        let insert = application.buttons["canvas.empty.insert.frame"]
+        XCTAssertTrue(waitForHittable(insert, in: application)); insert.click()
+
+        application.buttons["inspector.tab.layout"].click()
+        let mode = application.descendants(matching: .any)["inspector.layout.position.mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5)); mode.click()
+        application.menuItems["Absolute"].click()
+        let top = application.textFields["inspector.layout.position.top"]
+        XCTAssertTrue(waitForHittable(top, in: application))
+        replaceText(in: top, with: "24\n", application: application)
+        let containingBlock = application.staticTexts["inspector.layout.position.containingBlock"]
+        XCTAssertTrue(containingBlock.waitForExistence(timeout: 5))
+        XCTAssertEqual(containingBlock.label, "Containing block")
+        XCTAssertEqual(containingBlock.value as? String, "Root")
+
+        application.buttons["inspector.tab.design"].click()
+        let inspector = application.scrollViews["inspector.selection.scroll"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 5))
+        @MainActor func reveal(_ identifier: String) -> XCUIElement {
+            revealStructuralLayoutControl(application.descendants(matching: .any)[identifier], in: application)
+        }
+        replaceText(in: reveal("inspector.design.style.name"), with: "Card", application: application)
+        reveal("inspector.design.style.create").click()
+        XCTAssertTrue(application.buttons["Apply reusable style Card"].waitForExistence(timeout: 5))
+        application.buttons["Apply reusable style Card"].click()
+        replaceText(in: reveal("inspector.design.state.fill"), with: "#1933CCFF", application: application)
+        replaceText(in: reveal("inspector.design.state.opacity"), with: "50", application: application)
+        reveal("inspector.design.state.apply").click()
+        XCTAssertTrue(waitForValue(
+            application.descendants(matching: .any)["inspector.design.announcement"],
+            containing: "committed"))
+        let preview = reveal("inspector.design.state.preview")
+        preview.click(); application.menuItems["Hover"].click()
+        attachWindowScreenshot(application, named: "SF-AUTHORING-109 positioning reusable hover state")
+        application.typeKey("z", modifierFlags: .command)
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(
+            application.textFields["inspector.design.state.fill"],
+            containing: "#1933CCFF"))
+        XCTAssertTrue(waitForValue(
+            application.textFields["inspector.design.state.opacity"],
+            containing: "50"))
+    }
+
     // SF-0508-001...008 — native Save, actual process close, and production
     // package reopen. Selection/draft state is intentionally re-established
     // through Layers because it is noncanonical editor convenience state.
@@ -1768,14 +2048,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForWorkspaceReady(application))
         // The historical schema-v4 member is deliberately geometry-less: it
         // exercises default resolution but must not be mistaken for a visible
-        // authored object. Insert one real Frame through the public empty
-        // canvas action, keeping the legacy member as unrelated package data
+        // authored object. Insert one real Frame through the public Insert
+        // menu action, keeping the legacy member as unrelated package data
         // while this journey proves renderer adoption across Save/Close/Open.
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 0"))
-        let insertFrame = application.buttons["canvas.empty.insert.frame"]
-        XCTAssertTrue(waitForHittable(insertFrame, in: application))
-        insertFrame.click()
+        XCTAssertFalse(application.descendants(matching: .any)["canvas.empty.hint"].exists,
+                       "A retained legacy node is not a genuinely blank page.")
+        componentMenu("Insert", "Insert Frame at Center", in: application)
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
         application.buttons["navigator.tab.layers"].click()
         // Keep the immutable schema-v4 legacy member as unrelated package
@@ -2186,6 +2466,34 @@ final class SiteForgeLaunchTests: XCTestCase {
         let reopenedImageFillStatus = application.descendants(matching: .any)["inspector.imageFill.status"].firstMatch
         XCTAssertTrue(waitForValue(reopenedImageFillStatus, containing: "Fit"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-061 Frame image fill reopened")
+
+        // SF-AUTHORING-115: expose the already imported local AssetID from a
+        // real Image child and verify the linked instance receives the native
+        // media picker without serializing a path or test-only mutation.
+        componentMenu("Component", "Create Component from Selection", in: application)
+        componentMenu("Component", "Edit Definition", in: application)
+        XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
+        revealComponentPointerTarget("navigator.tab.assets", in: application).click()
+        let reusableAsset = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "assets.row.", "siteforge-image"
+        )).firstMatch
+        XCTAssertTrue(reusableAsset.waitForExistence(timeout: 3)); reusableAsset.click()
+        revealComponentPointerTarget("assets.insert.selected", in: application).click()
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        let definitionImage = application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Image")).firstMatch
+        XCTAssertTrue(definitionImage.waitForExistence(timeout: 3)); definitionImage.click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("component.media.definition.name", with: "Hero Image", in: application)
+        revealComponentPointerTarget("component.media.definition.apply", in: application).click()
+        XCTAssertTrue(waitForValue(application.staticTexts["component.media.status"], containing: "committed"))
+        revealComponentPointerTarget("components.exit", in: application).click()
+        let mediaPicker = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "component.media.value.")).firstMatch
+        XCTAssertTrue(mediaPicker.waitForExistence(timeout: 3))
+        XCTAssertTrue((mediaPicker.value as? String)?.contains("siteforge-image") == true)
+        XCTAssertTrue(mediaPicker.isEnabled)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-115 component image property")
     }
 
     // SF-0404-001 through SF-0404-008
@@ -2272,8 +2580,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         expectation(for: rendered, evaluatedWith: canvas)
         waitForExpectations(timeout: 5)
         XCTAssertEqual(canvas.label, "Canvas viewport")
-        let emptyState = application.descendants(matching: .any)["canvas.empty.state"]
-        XCTAssertTrue(emptyState.waitForExistence(timeout: 5))
+        XCTAssertFalse(application.descendants(matching: .any)["canvas.empty.state"].exists)
+        let emptyHint = application.descendants(matching: .any)["canvas.empty.hint"]
+        XCTAssertTrue(emptyHint.waitForExistence(timeout: 5))
         XCTAssertTrue(application.buttons["canvas.empty.insert.frame"].isHittable)
         XCTAssertTrue(application.buttons["canvas.empty.insert.text"].isHittable)
         canvas.click()
@@ -2501,11 +2810,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         search.click(); search.typeText("grid")
         let grid = application.buttons["quickOpen.action.toggleGrid"]
         XCTAssertTrue(grid.waitForExistence(timeout: 3))
+        let gridToggle = application.descendants(matching: .any)["canvas.grid.toggle"]
+        let gridWasOn = gridToggle.isSelected || (gridToggle.value as? NSNumber)?.intValue == 1
         grid.click()
-        let gridValue = application.descendants(matching: .any)["canvas.grid.toggle"].value as? NSNumber
-        XCTAssertEqual(gridValue?.intValue, 0)
+        let liveGrid = application.descendants(matching: .any)["canvas.grid.toggle"]
+        let gridIsOn = liveGrid.isSelected || (liveGrid.value as? NSNumber)?.intValue == 1
+        XCTAssertEqual(gridIsOn, !gridWasOn)
         XCTAssertEqual(application.descendants(matching: .any)["status.document"].value as? String, initial)
-        attachWindowScreenshot(application, named: "SF-AUTHORING-071 Quick Open Grid off")
+        attachWindowScreenshot(application, named: "SF-AUTHORING-071 Quick Open Grid toggled")
     }
 
     // SF-AUTHORING-075–078: Quick Open invokes the same validated one-shot
@@ -2539,18 +2851,20 @@ final class SiteForgeLaunchTests: XCTestCase {
     func testDividerHeaderNavigationFooterInsertThroughNativeMenuJourney() throws {
         let application = launchWorkspace()
         for (offset, title) in ["Divider", "Header", "Navigation", "Footer"].enumerated() {
-            componentMenu("Insert", "Insert \(title) at Center", in: application)
+            let action = title == "Header" ? "Insert Header at Page Top"
+                : title == "Footer" ? "Insert Footer after Page Content" : "Insert \(title) at Center"
+            componentMenu("Insert", action, in: application)
             XCTAssertTrue(waitForLiveCanvasValue(in: application,
-                containing: "rendered objects \(offset + 1)", timeout: 5), title)
+                containing: "rendered objects \([1, 6, 7, 12][offset])", timeout: 5), title)
             XCTAssertTrue(application.descendants(matching: .any)["status.selectionPath"].label
                 .localizedCaseInsensitiveContains(title), title)
             if offset < 3 { componentMenu("Selection", "Clear Selection", in: application) }
         }
         attachWindowScreenshot(application, named: "SF-AUTHORING-086-089 authored site and divider templates")
         application.typeKey("z", modifierFlags: .command)
-        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 7", timeout: 5))
         application.typeKey("z", modifierFlags: [.command, .shift])
-        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 4", timeout: 5))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 12", timeout: 5))
     }
 
     // SF-AUTHORING-090: the native menu commits a real Form-owned Text field.
@@ -2660,12 +2974,18 @@ final class SiteForgeLaunchTests: XCTestCase {
                                        containing: "committed"))
 
         application.buttons["inspector.tab.accessibility"].click()
-        XCTAssertTrue(waitForValue(application.staticTexts["inspector.accessibility.formField.kind"],
-                                   containing: "Email"))
-        XCTAssertTrue(waitForValue(application.staticTexts["inspector.accessibility.formField.name"],
-                                   containing: "Work email"))
-        XCTAssertTrue(waitForValue(application.staticTexts["inspector.accessibility.formField.required"],
-                                   containing: "Required"))
+        let accessibilityScroll = application.descendants(matching: .any)["inspector.selection.scroll"]
+        XCTAssertTrue(accessibilityScroll.waitForExistence(timeout: 3))
+        accessibilityScroll.scroll(byDeltaX: 0, deltaY: 1_000)
+        XCTAssertTrue(waitForLiveValue(in: application,
+                                       identifier: "inspector.accessibility.formField.kind",
+                                       containing: "Email"))
+        XCTAssertTrue(waitForLiveValue(in: application,
+                                       identifier: "inspector.accessibility.formField.name",
+                                       containing: "Work email"))
+        XCTAssertTrue(waitForLiveValue(in: application,
+                                       identifier: "inspector.accessibility.formField.required",
+                                       containing: "Required"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-096 accessible Email field")
 
         application.buttons["navigator.tab.layers"].click()
@@ -2685,9 +3005,38 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.staticTexts["Submit controls"].exists)
         attachWindowScreenshot(application, named: "SF-AUTHORING-096 local validation and safe submit boundary")
 
-        application.typeKey("z", modifierFlags: .command)
-        application.typeKey("z", modifierFlags: [.command, .shift])
-        XCTAssertTrue(application.descendants(matching: .any)["inspector.accessibility.form.status"].exists)
+        // Use the visible history controls for this accessibility journey so
+        // the operation is owned by the live workspace state. Keyboard
+        // routing is covered independently; synthesizing Command-Z against
+        // the application element has an undefined AX frame after the native
+        // validation button relinquishes focus and can target a stale menu
+        // snapshot instead of the visible document window.
+        let undo = application.buttons["toolbar.undo"]
+        XCTAssertTrue(waitForEnabled(undo))
+        undo.click()
+        let redo = application.buttons["toolbar.redo"]
+        XCTAssertTrue(waitForEnabled(redo))
+        redo.click()
+        // History may legitimately repair a selection while the immutable
+        // canvas scene for the restored revision adopts. Re-select the
+        // canonical Form through the shipping Layers surface before proving
+        // the redone accessibility metadata, rather than querying a stale
+        // Inspector proxy from the prior revision.
+        application.buttons["navigator.tab.layers"].click()
+        let restoredForm = application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Form"
+        )).firstMatch
+        XCTAssertTrue(restoredForm.waitForExistence(timeout: 3))
+        restoredForm.click()
+        application.buttons["inspector.tab.accessibility"].click()
+        let liveAccessibilityScroll = application.descendants(matching: .any)["inspector.selection.scroll"]
+        XCTAssertTrue(liveAccessibilityScroll.waitForExistence(timeout: 3))
+        liveAccessibilityScroll.scroll(byDeltaX: 0, deltaY: 1_000)
+        XCTAssertTrue(waitForLiveSemanticText(
+            in: application,
+            identifier: "inspector.accessibility.form.status",
+            containing: "form"
+        ))
     }
 
     // SF-AUTHORING-098, SF-0701-002/006, SF-0702-002/006, SF-1203-002/006
@@ -2841,6 +3190,50 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
     }
 
+    // SF-AUTHORING-112, SF-0205-003/004/006/007, SF-0901-003/004/007,
+    // SF-0902-002/006, SF-0907-003/004/006/007/008 — the native Components
+    // surface exposes scene-local organization, dependency inspection and a
+    // stable Where Used navigation path without mutating canonical content.
+    func testComponentOrganizationDependencyInspectionAndWhereUsedJourney() throws {
+        let application = launchWorkspace()
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let selectedObject = canvasObject(named: "Frame", in: application).identifier
+        componentMenu("Component", "Create Component from Selection", in: application)
+        let overflow = application.descendants(matching: .any)["navigator.tab.overflow"]
+        if overflow.exists && overflow.isHittable {
+            overflow.click(); application.menuItems["Components"].click()
+        } else {
+            application.buttons["navigator.tab.components"].click()
+        }
+        XCTAssertTrue(application.popUpButtons["components.filter"].waitForExistence(timeout: 3))
+        XCTAssertTrue(application.popUpButtons["components.sort"].exists)
+        let row = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "components.definition."
+        )).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 3))
+        let definitionID = row.identifier.replacingOccurrences(of: "components.definition.", with: "")
+        let details = application.buttons["components.details.\(definitionID)"]
+        XCTAssertTrue(waitForHittable(details, in: application)); details.click()
+        XCTAssertTrue(application.descendants(matching: .any)["components.dependencies"].waitForExistence(timeout: 3))
+        XCTAssertTrue(application.staticTexts["Where Used · 1"].exists)
+        XCTAssertTrue(application.staticTexts["Static output: use Build Diagnostics for the current project revision."].exists)
+        XCTAssertTrue(application.staticTexts["Replace Definition is unavailable in this bounded model because compatible replacement semantics are not yet specified."].exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-112 component dependency inspection")
+
+        let usage = application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "components.usage."
+        )).firstMatch
+        XCTAssertTrue(waitForHittable(usage, in: application)); usage.click()
+        XCTAssertTrue(application.buttons["navigator.tab.layers"].waitForExistence(timeout: 3))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, selectedObject)
+        XCTAssertTrue(waitForLabel(
+            application.descendants(matching: .any)["status.selectionPath"],
+            containing: "Frame"
+        ))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-112 Where Used selection")
+    }
+
     // SF-AUTHORING-100: rename uses the visible native Components workflow
     // and preserves linked instance identity through exact history.
     func testComponentDefinitionRenamePropagatesToLinkedInstancesJourney() throws {
@@ -2974,8 +3367,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         fixtureRoot.appendingPathComponent("launch-lifecycle.txt")
     }
 
-    override func setUpWithError() throws {
-        try super.setUpWithError()
+    @MainActor override func setUp() async throws {
+        try await super.setUp()
         // Integration packages and recovery artifacts exercise descriptor-bound
         // application-owned I/O. Keep them in the same private temporary
         // container policy used by the package tests—not in a checkout whose
@@ -2986,14 +3379,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         launchStateRecords.removeAll(keepingCapacity: true)
     }
 
-    override func tearDownWithError() throws {
+    @MainActor override func tearDown() async throws {
         for application in launchedApplications where application.state != .notRunning {
             application.terminate()
         }
         launchedApplications.removeAll()
         try fixtureLease?.cleanup()
         fixtureLease = nil
-        try super.tearDownWithError()
+        try await super.tearDown()
     }
 
     private func launchWorkspace(
@@ -3351,8 +3744,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         let focusStatus = application.descendants(matching: .any)["workspace.focus.diagnostics"]
         let controlExists = control.exists
         let windowExists = window.exists
+        let controlIdentifier = controlExists && !control.identifier.isEmpty
+            ? control.identifier : "unavailable"
         let details = """
-        control=\(control.identifier)
+        control=\(controlIdentifier)
         application={state=\(application.state.rawValue);enabled=\(application.isEnabled);sheets=\(application.sheets.count);dialogs=\(application.dialogs.count)}
         state={exists=\(controlExists);enabled=\(controlExists && control.isEnabled);hittable=\(controlExists && control.isHittable);focused=\(controlExists && hasKeyboardFocus(control))}
         controlFrame=\(controlExists ? sanitizedFrame(control.frame) : "unavailable")
@@ -3363,10 +3758,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         responder=\(focusStatus.exists ? ((focusStatus.value as? String) ?? "unavailable") : "unavailable")
         """
         let attachment = XCTAttachment(string: details)
-        attachment.name = "pointer-failure-\(control.identifier)"
+        attachment.name = "pointer-failure-\(controlIdentifier)"
         attachment.lifetime = XCTAttachment.Lifetime.keepAlways
         add(attachment)
-        attachScreenshot(named: "pointer-failure-\(control.identifier)")
+        attachScreenshot(named: "pointer-failure-\(controlIdentifier)")
     }
 
     private func sanitizedFrame(_ frame: CGRect) -> String {
@@ -3469,7 +3864,11 @@ final class SiteForgeLaunchTests: XCTestCase {
     }
 
     private func attachWindowScreenshot(_ application: XCUIApplication, named name: String) {
-        let attachment = XCTAttachment(screenshot: application.windows.firstMatch.screenshot())
+        // A native sheet is its own AppKit window. The parent-window capture
+        // can omit it, so retain the actual app-owned modal surface instead
+        // of a misleading picture of the obscured editor or a desktop overlay.
+        let surface = application.sheets.firstMatch.exists ? application.sheets.firstMatch : application.windows.firstMatch
+        let attachment = XCTAttachment(screenshot: surface.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -3529,9 +3928,29 @@ final class SiteForgeLaunchTests: XCTestCase {
     }
 
     private func legacyFixtureURL(named name: String) -> URL {
-        let repository = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        return repository.appendingPathComponent("Tests/Fixtures/Legacy/\(name).siteforge.b64")
+        let staged = fixtureRoot.appendingPathComponent("legacy-\(name).siteforge.b64")
+        guard name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }),
+              let resources = Bundle(for: Self.self).resourceURL else {
+            XCTFail("A valid bundled historical fixture is required."); return staged
+        }
+        do {
+            let source = resources.appendingPathComponent("Legacy/\(name).siteforge.b64")
+            let bytes = try Data(contentsOf: source)
+            try bytes.write(to: staged, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged.path)
+        } catch {
+            XCTFail("The historical fixture could not be staged in owned temporary storage.")
+        }
+        return staged
+    }
+
+    func testBundledLegacyFixtureStagesExactBytesInOwnedTemporaryStorage() throws {
+        let name = "schema-v4-legacy-surface"
+        let staged = legacyFixtureURL(named: name)
+        let resources = try XCTUnwrap(Bundle(for: Self.self).resourceURL)
+        XCTAssertEqual(try Data(contentsOf: staged), try Data(contentsOf: resources.appendingPathComponent("Legacy/\(name).siteforge.b64")))
+        XCTAssertTrue(staged.path.hasPrefix(fixtureRoot.path + "/"))
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: staged.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
     private func makeLocalImageFixture(named name: String) throws -> URL {
@@ -3624,10 +4043,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         // occluding foreign window must not be misclassified as SiteForge
         // clipping its Inspector.
         application.activate()
-        for identifier in ["navigator.tab.overflow", "inspector.tab.overflow"] {
-            let overflow = application.descendants(matching: .any)[identifier]
-            XCTAssertTrue(waitForHittable(overflow, in: application), identifier)
-        }
+        selectNavigatorTab("Components", identifier: "components", in: application)
+        selectInspectorTab("Accessibility", identifier: "accessibility", in: application)
+        assertElement(application.buttons["navigator.tab.components"],
+                      isContainedIn: application.descendants(matching: .any)["shell.navigator"])
+        assertElement(application.buttons["inspector.tab.accessibility"],
+                      isContainedIn: application.descendants(matching: .any)["shell.inspector"])
+        attachWindowScreenshot(application, named: "SF-UI-009 compact selected tab labels fully revealed")
 
         let canvasRegion = application.descendants(matching: .any)["shell.canvas"]
         let viewportControls = application.descendants(matching: .any)["canvas.viewport.controls"]
@@ -3647,13 +4069,15 @@ final class SiteForgeLaunchTests: XCTestCase {
         ] {
             let control = application.descendants(matching: .any)[identifier]
             XCTAssertTrue(waitForHittable(control, in: application), identifier)
-            assertElement(control, isContainedIn: viewportControls, identifier)
+            let owner = identifier.hasPrefix("canvas.empty.")
+                ? application.descendants(matching: .any)["canvas.viewport.surface"] : viewportControls
+            assertElement(control, isContainedIn: owner, identifier)
         }
 
         application.buttons["canvas.empty.insert.frame"].click()
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(waitForValue(canvas, containing: "rendered objects 1"))
-        application.buttons["inspector.tab.design"].click()
+        selectInspectorTab("Design", identifier: "design", in: application)
 
         let inspector = application.descendants(matching: .any)["shell.inspector"]
         let inspectorScroll = application.descendants(matching: .any)["inspector.selection.scroll"]
@@ -3661,8 +4085,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(inspector.frame.width, 280 - 2)
         assertElement(inspectorScroll, isContainedIn: inspector)
 
-        let addGradient = application.buttons["inspector.design.layers.addGradient"]
+        // Native AX hittability alone can include a partly clipped row. Use
+        // the shared complete-frame, live-control pointer contract instead.
+        let addGradient = revealStructuralLayoutControl(
+            application.buttons["inspector.design.layers.addGradient"], in: application)
         XCTAssertTrue(waitForHittable(addGradient, in: application))
+        assertElement(addGradient, isContainedIn: inspectorScroll)
         addGradient.click()
         let angle = application.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier CONTAINS %@", ".angle"))
@@ -3671,18 +4099,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let gradientPrefix = angle.identifier.replacingOccurrences(of: ".angle", with: "")
         let addStopIdentifier = "\(gradientPrefix).addStop"
         for _ in 0..<4 {
-            let addStop = application.buttons[addStopIdentifier]
-            for _ in 0..<8 where !addStop.isHittable {
-                let controlFrame = addStop.frame
-                let viewportFrame = inspectorScroll.frame
-                if controlFrame.maxY > viewportFrame.maxY {
-                    inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
-                } else if controlFrame.minY < viewportFrame.minY {
-                    inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
-                } else {
-                    break
-                }
-            }
+            let addStop = revealStructuralLayoutControl(application.buttons[addStopIdentifier], in: application)
             XCTAssertTrue(waitForHittable(addStop, in: application))
             addStop.click()
         }
@@ -3701,7 +4118,21 @@ final class SiteForgeLaunchTests: XCTestCase {
         let lastStopPrefix = lastRemove.identifier.replacingOccurrences(of: ".remove", with: "")
         let lastRow = application.descendants(matching: .any)["\(lastStopPrefix).row"]
         XCTAssertTrue(lastRow.waitForExistence(timeout: 3))
+        // A hittable remove button can still belong to a partly clipped row.
+        // Reveal the complete compound row before asserting every subcontrol.
+        for _ in 0..<8 {
+            if inspectorScroll.frame.insetBy(dx: -1, dy: -1).contains(lastRow.frame) { break }
+            if lastRow.frame.maxY > inspectorScroll.frame.maxY {
+                inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
+            } else if lastRow.frame.minY < inspectorScroll.frame.minY {
+                inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
+            } else { break }
+        }
         assertElement(lastRow, isContainedIn: inspectorScroll)
+        let stopLabel = application.staticTexts["Stop 6"]
+        XCTAssertTrue(stopLabel.exists)
+        XCTAssertLessThanOrEqual(stopLabel.frame.height, 20, "The standard caption must remain on one readable line.")
+        assertElement(stopLabel, isContainedIn: lastRow)
         for suffix in [".position", ".color", ".up", ".down", ".remove"] {
             let control = application.descendants(matching: .any)["\(lastStopPrefix)\(suffix)"]
             XCTAssertTrue(control.exists, suffix)
@@ -3767,12 +4198,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         // Components can be beyond the horizontally scrolled tab strip at
         // the practical minimum width. Use the real, always-visible native
         // overflow menu rather than assuming its direct tab is on screen.
-        let navigatorOverflow = application.descendants(matching: .any)["navigator.tab.overflow"]
-        XCTAssertTrue(waitForHittable(navigatorOverflow, in: application))
-        navigatorOverflow.click()
-        let componentsMenuItem = application.menuItems["Components"]
-        XCTAssertTrue(componentsMenuItem.waitForExistence(timeout: 3))
-        componentsMenuItem.click()
+        selectNavigatorTab("Components", identifier: "components", in: application)
         XCTAssertTrue(application.buttons["components.create"].waitForExistence(timeout: 3))
         XCTAssertFalse(application.buttons["components.create"].isEnabled)
     }
@@ -3871,6 +4297,536 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertFalse(application.buttons["component.text.resetAll"].isEnabled)
     }
 
+    // SF-0902-002/004/006, SF-0905-002/005/006: source-only Prompt-4
+    // acceptance; execute at the accumulated Prompt-10 gate.
+    func testComponentActionNativeInspectorDraftResetHistoryAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("component-actions.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let instanceID = canvasObject(named: "Frame", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Link at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
+        componentMenu("Component", "Create Component from Selection", in: application)
+        componentMenu("Component", "Edit Definition", in: application)
+        let linkRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Link")).firstMatch
+        XCTAssertTrue(linkRow.waitForExistence(timeout: 5))
+        revealComponentPointerTarget(linkRow.identifier, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("component.action.definition.name", with: "Destination", in: application)
+        revealComponentPointerTarget("component.action.definition.apply", in: application).click()
+        XCTAssertTrue(waitForValue(application.staticTexts["component.action.status"], containing: "committed"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-117 exposed Link action")
+        revealComponentPointerTarget("components.exit", in: application).click()
+        let type = application.popUpButtons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
+            "component.action.target.", ".type")).firstMatch
+        XCTAssertTrue(type.waitForExistence(timeout: 5))
+        let propertyID = type.identifier.replacingOccurrences(of: "component.action.target.", with: "").replacingOccurrences(of: ".type", with: "")
+        let typeID = type.identifier, urlID = "component.action.target." + propertyID + ".url"
+        revealComponentPointerTarget(typeID, in: application).click()
+        application.menuItems["External HTTP(S)"].click()
+        replaceComponentTextField(urlID, with: "https://example.com/component-action", in: application)
+        application.textFields[urlID].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Authored"))
+        XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-117 authored external action")
+        replaceComponentTextField(urlID, with: "javascript:invalid", in: application)
+        revealComponentPointerTarget("component.action.apply." + propertyID, in: application).click()
+        XCTAssertTrue(application.staticTexts["component.action.validation." + propertyID].waitForExistence(timeout: 5))
+        application.textFields[urlID].click()
+        application.textFields[urlID].typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Inherited"))
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
+        revealComponentPointerTarget("component.action.reset." + propertyID, in: application).click()
+        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Inherited"))
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-117 exact reset undo and cancelled draft")
+        saveDocumentIfModified(in: application)
+        terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("component-action-recovery"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Authored"))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, "canvas.object." + instanceID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-117 reopened action and stable instance")
+    }
+
+    // SF-0902/0903/0905: source-only fallback acceptance; supplied-content
+    // ownership is explicitly unavailable pending OD-018.
+    func testInspectorWorkflowSearchPinGeometryPasteUndoAndMixedJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("inspector-workflow.siteforge")
+        let application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let firstFrameID = canvasObject(named: "Frame", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        revealComponentPointerTarget("inspector.tab.layout", in: application).click()
+        replaceComponentTextField("inspector.workflow.search", with: "width", in: application)
+        application.textFields["inspector.workflow.search"].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(application.buttons["inspector.workflow.section.layout"].exists)
+        revealComponentPointerTarget("inspector.workflow.pin", in: application).click()
+        XCTAssertTrue(waitForValue(application.buttons["inspector.workflow.pin"], containing: "Pinned"))
+        replaceComponentTextField("inspector.layout.width", with: "320", in: application)
+        application.textFields["inspector.layout.width"].typeKey(.return, modifierFlags: [])
+        revealComponentPointerTarget("inspector.workflow.copy", in: application).click()
+        replaceComponentTextField("inspector.layout.width", with: "280", in: application)
+        application.textFields["inspector.layout.width"].typeKey(.return, modifierFlags: [])
+        revealComponentPointerTarget("inspector.workflow.paste", in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "320"))
+        application.typeKey("z", modifierFlags: [.command])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "280"))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "320"))
+        replaceComponentTextField("inspector.workflow.search", with: "no matching properties", in: application)
+        XCTAssertTrue(application.staticTexts["inspector.workflow.empty"].exists)
+        application.textFields["inspector.workflow.search"].typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(application.buttons["inspector.workflow.section.design"].exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-124 Inspector search pins typed paste and exact undo redo")
+        componentMenu("Selection", "Clear Selection", in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        let secondRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@ AND identifier != %@",
+            "navigator.layer.", "Frame", "navigator.layer." + firstFrameID)).firstMatch
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 5))
+        let secondID = secondRow.identifier
+        revealComponentPointerTarget("navigator.layer." + firstFrameID, in: application).click()
+        let liveSecondRow = revealComponentPointerTarget(secondID, in: application)
+        XCUIElement.perform(withKeyModifiers: .shift) { liveSecondRow.click() }
+        XCTAssertTrue(application.buttons["navigator.layer." + firstFrameID].isSelected)
+        XCTAssertTrue(application.buttons[secondID].isSelected)
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["status.selectionPath"], containing: "2 selected"))
+        // Selection replacement recreates the contextual Inspector with its
+        // tools disclosure collapsed. Reveal that real shipping surface before
+        // asserting its mixed-state explanation and disabled Copy action.
+        let mixedExplanation = revealComponentPointerTarget("inspector.workflow.transfer.mixed", in: application)
+        XCTAssertTrue(mixedExplanation.exists)
+        XCTAssertFalse(application.buttons["inspector.workflow.copy"].isEnabled)
+        revealComponentPointerTarget("inspector.workflow.paste", in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "320"))
+        XCTAssertTrue(application.buttons["navigator.layer." + firstFrameID].isSelected)
+        XCTAssertTrue(application.buttons[secondID].isSelected)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-124 mixed values unified atomically with selection retained")
+    }
+
+    func testComponentPropertyDiscoveryNativeSearchClearTraversalAndContextJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("component-property-discovery.siteforge")
+        let application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let frameID = canvasObject(named: "Frame", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + frameID, in: application).click()
+        componentMenu("Component", "Create Component from Selection", in: application)
+        componentMenu("Component", "Edit Definition", in: application)
+        let textRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
+        XCTAssertTrue(textRow.waitForExistence(timeout: 5)); revealComponentPointerTarget(textRow.identifier, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("component.text.definition.name", with: "Editorial Title", in: application)
+        revealComponentPointerTarget("component.text.definition.apply", in: application).click()
+        revealComponentPointerTarget("components.exit", in: application).click()
+        replaceComponentTextField("component.discovery.search", with: "text inherited", in: application)
+        XCTAssertTrue(waitForValue(application.staticTexts["component.discovery.count"], containing: "1 matching"))
+        application.textFields["component.discovery.search"].typeKey(.return, modifierFlags: [])
+        application.typeKey(.tab, modifierFlags: [])
+        let field = application.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "component.text.value.")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5)); XCTAssertTrue(hasKeyboardFocus(field))
+        replaceComponentTextField("component.discovery.search", with: "unmatched", in: application)
+        XCTAssertTrue(application.staticTexts["component.discovery.empty"].waitForExistence(timeout: 5))
+        XCTAssertFalse(application.buttons["component.discovery.next"].isEnabled)
+        application.textFields["component.discovery.search"].typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.staticTexts["component.discovery.count"], containing: "1 matching"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-123 component discovery restored and keyboard traversal")
+        componentMenu("Component", "Edit Definition", in: application)
+        revealComponentPointerTarget("components.exit", in: application).click()
+        XCTAssertEqual(application.textFields["component.discovery.search"].value as? String, "")
+        XCTAssertTrue(waitForValue(application.staticTexts["component.discovery.count"], containing: "1 matching"))
+    }
+
+    func testComponentPropertyOrganizationNativeKeyboardCancelHistoryAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("component-property-organization.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let instanceID = canvasObject(named: "Frame", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
+        componentMenu("Component", "Create Component from Selection", in: application)
+        componentMenu("Component", "Edit Definition", in: application)
+        let textRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
+        XCTAssertTrue(textRow.waitForExistence(timeout: 5)); revealComponentPointerTarget(textRow.identifier, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("component.text.definition.name", with: "Title", in: application)
+        replaceComponentTextField("component.text.definition.default", with: "Shared Title", in: application)
+        revealComponentPointerTarget("component.text.definition.apply", in: application).click()
+        let group = application.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "component.organization.group.text:")).firstMatch
+        XCTAssertTrue(group.waitForExistence(timeout: 5)); let groupID = group.identifier
+        replaceComponentTextField(groupID, with: "Editorial", in: application)
+        application.textFields[groupID].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields[groupID], containing: "Editorial"))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.organization.status"], containing: "committed"))
+        replaceComponentTextField(groupID, with: "Discarded group", in: application)
+        application.textFields[groupID].typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields[groupID], containing: "Editorial"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-119 definition organization and cancelled draft")
+        revealComponentPointerTarget("components.exit", in: application).click()
+        let groupedID = "component.organization.instance.group.named.Editorial"
+        XCTAssertTrue(application.descendants(matching: .any)[groupedID].waitForExistence(timeout: 5))
+        let field = application.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "component.text.value.")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5)); let fieldID = field.identifier
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Shared Title"))
+        XCTAssertTrue(waitForComponentRenderedText("Shared Title", in: application))
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(application.descendants(matching: .any)["component.organization.instance.group.default"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Shared Title"))
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(application.descendants(matching: .any)[groupedID].waitForExistence(timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, "canvas.object." + instanceID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-119 grouped inherited instance and unchanged render")
+        saveDocumentIfModified(in: application); terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("organization-recovery"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        XCTAssertTrue(application.descendants(matching: .any)[groupedID].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Shared Title"))
+        XCTAssertTrue(waitForComponentRenderedText("Shared Title", in: application))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-119 reopened property group and stable identity")
+    }
+
+    func testComponentRetainedOverrideRecoveryConfirmationUndoAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("component-override-recovery.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let instanceID = canvasObject(named: "Frame", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
+        componentMenu("Component", "Create Component from Selection", in: application)
+        componentMenu("Component", "Edit Definition", in: application)
+        let textRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
+        XCTAssertTrue(textRow.waitForExistence(timeout: 5)); let sourceID = textRow.identifier
+        revealComponentPointerTarget(sourceID, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("component.text.definition.name", with: "Title", in: application)
+        replaceComponentTextField("component.text.definition.default", with: "Default title", in: application)
+        revealComponentPointerTarget("component.text.definition.apply", in: application).click()
+        revealComponentPointerTarget("components.exit", in: application).click()
+        let textField = application.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "component.text.value.")).firstMatch
+        XCTAssertTrue(textField.waitForExistence(timeout: 5)); let valueID = textField.identifier
+        let bindingID = valueID.replacingOccurrences(of: "component.text.value.", with: "")
+        replaceComponentTextField(valueID, with: "Retained title", in: application)
+        application.textFields[valueID].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForComponentRenderedText("Retained title", in: application))
+        componentMenu("Component", "Edit Definition", in: application)
+        revealComponentPointerTarget(sourceID, in: application).click()
+        revealComponentPointerTarget("component.text.definition.remove", in: application).click()
+        revealComponentPointerTarget("components.exit", in: application).click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        let resetID = "component.recovery.reset.text:" + bindingID
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.value.text:" + bindingID], containing: "Retained title"))
+        revealComponentPointerTarget(resetID, in: application).click()
+        assertComponentRecoveryConfirmation(in: application)
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForNonexistence(application.staticTexts["Reset retained overrides?"]))
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, "canvas.object." + instanceID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-120 retained conflict and cancelled reset")
+        revealComponentPointerTarget("component.recovery.definition.reveal", in: application).click()
+        XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
+        componentMenu("Edit", "Undo", in: application)
+        revealComponentPointerTarget("components.exit", in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields[valueID], containing: "Retained title"))
+        XCTAssertFalse(application.descendants(matching: .any)["component.recovery.summary"].exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-120 original binding restored with stable override")
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        saveDocumentIfModified(in: application); terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("override-conflict-recovery"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-120 reopened retained authored intent")
+        revealComponentPointerTarget("component.recovery.resetAll", in: application).click()
+        let confirmation = assertComponentRecoveryConfirmation(in: application)
+        confirmation.buttons["component.recovery.confirm"].click()
+        XCTAssertTrue(waitForNonexistence(application.descendants(matching: .any)["component.recovery.summary"]))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.organization.status"], containing: "Reset 1"))
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForNonexistence(application.descendants(matching: .any)["component.recovery.summary"]))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, "canvas.object." + instanceID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-120 confirmed reset and exact history")
+    }
+
+    @discardableResult
+    private func assertComponentRecoveryConfirmation(in application: XCUIApplication) -> XCUIElement {
+        // Native macOS confirmation sheets need not have XCUI's Alert role.
+        // Require the actual title and both visible actions, not an unrelated
+        // container classification or a merely present background reset button.
+        let sheet = application.sheets.containing(.button, identifier: "component.recovery.confirm").firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 3), application.debugDescription)
+        XCTAssertTrue(sheet.staticTexts["Reset retained overrides?"].exists, application.debugDescription)
+        for identifier in ["component.recovery.confirm", "component.recovery.cancel"] {
+            let actions = sheet.buttons.matching(identifier: identifier)
+            XCTAssertEqual(actions.count, 1, "Confirmation must expose one unambiguous on-screen action")
+            let action = actions.firstMatch
+            XCTAssertTrue(action.exists && action.isEnabled && action.isHittable, application.debugDescription)
+        }
+        return sheet
+    }
+
+    func testConnectedNestedSectionContainerGeometryAndBreakpointJourney() throws {
+        let application = launchWorkspace()
+        XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+        componentMenu("Insert", "Insert Section in Flow", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        componentMenu("Insert", "Insert Stack at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        let stackID = canvasObject(named: "Stack", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        // Each chrome owner contains its real content Stack, title, navigation
+        // and Home link; they are canonical rendered nodes, not fixture chrome.
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 7", timeout: 5))
+        componentMenu("Insert", "Insert Footer after Page Content", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 12", timeout: 5))
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("inspector.flow.height", with: "240", in: application)
+        application.textFields["inspector.flow.height"].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.flow.height"], containing: "240"))
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.flow.height"], containing: "200"))
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.flow.height"], containing: "240"))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + stackID, in: application).click()
+        componentMenu("Insert", "Insert Grid at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 13", timeout: 5))
+        componentMenu("Insert", "Insert Section in Flow", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 14", timeout: 5))
+        let selected = application.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "canvas.object."))
+            .allElementsBoundByIndex.filter(\.isSelected)
+        XCTAssertEqual(selected.count, 1)
+        let nestedID = try XCTUnwrap(selected.first?.identifier)
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.flow.resolved"].waitForExistence(timeout: 5))
+        for presetName in ["Desktop", "Tablet", "Mobile", "Desktop"] {
+            application.descendants(matching: .any)["canvas.viewport.preset"].click()
+            application.menuItems[presetName].click()
+            XCTAssertTrue(waitForValue(application.descendants(matching: .any)["canvas.viewport.preset"], containing: presetName))
+            application.buttons["canvas.zoom.fit"].click()
+            // Closed Mobile navigation retains both Home link nodes in Layers
+            // but excludes their canvas pixels/hit/AX surfaces, leaving 12.
+            let expectedRenderedCount = presetName == "Mobile" ? 12 : 14
+            XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects \(expectedRenderedCount)", timeout: 5))
+            let object = application.descendants(matching: .any)[nestedID]
+            XCTAssertTrue(object.waitForExistence(timeout: 5)); XCTAssertTrue(object.isSelected)
+            XCTAssertGreaterThan(object.frame.width, 0); XCTAssertGreaterThan(object.frame.height, 0)
+            XCTAssertTrue(application.descendants(matching: .any)["inspector.flow.provenance"].exists)
+            attachWindowScreenshot(application, named: "SF-AUTHORING-122 nested Grid Section \(presetName) resolved selection")
+        }
+    }
+
+    func testConnectedHeaderFooterNavigationMenuHeightUndoAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("connected-page-structure.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 5", timeout: 5))
+        let headerID = canvasObject(named: "Header", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("inspector.navigation.title", with: "Studio Site", in: application)
+        application.textFields["inspector.navigation.title"].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForComponentRenderedText("Studio Site", in: application))
+        attachWindowScreenshot(application, named: "SF-UI-010 editable Header title and included pages")
+        let showTitle = application.descendants(matching: .any)["inspector.navigation.title.visible"]
+        showTitle.click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 4", timeout: 5))
+        showTitle.click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 5", timeout: 5))
+        XCTAssertTrue(waitForComponentRenderedText("Studio Site", in: application))
+        replaceComponentTextField("inspector.flow.height", with: "240", in: application)
+        application.textFields["inspector.flow.height"].typeKey(.return, modifierFlags: [])
+        let customize = revealComponentPointerTarget("inspector.navigation.customize", in: application)
+        _ = revealStructuralLayoutControl(customize, in: application)
+        customize.click()
+        XCTAssertTrue(waitForDisclosureExpanded(customize))
+        replaceComponentTextField("inspector.navigation.content.gap", with: "8", in: application)
+        application.textFields["inspector.navigation.content.gap"].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["inspector.navigation.content.gap"], containing: "8"))
+        revealComponentPointerTarget("inspector.navigation.content.direction", in: application).click()
+        application.menuItems["Vertical"].click()
+        XCTAssertTrue(waitForValue(application.popUpButtons["inspector.navigation.content.direction"], containing: "Vertical"))
+        attachWindowScreenshot(application, named: "SF-UI-010 custom vertical Header contents")
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForValue(application.popUpButtons["inspector.navigation.content.direction"], containing: "Horizontal"))
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForValue(application.popUpButtons["inspector.navigation.content.direction"], containing: "Vertical"))
+        revealComponentPointerTarget("inspector.navigation.content.reset", in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields["inspector.navigation.content.gap"], containing: "24"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.navigation.title"], containing: "Studio Site"))
+        componentMenu("Insert", "Insert Section in Flow", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 6", timeout: 5))
+        componentMenu("Insert", "Insert Footer after Page Content", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 11", timeout: 5))
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        XCTAssertTrue(application.textFields["inspector.flow.height"].waitForExistence(timeout: 5))
+        replaceComponentTextField("inspector.flow.height", with: "240", in: application)
+        application.textFields["inspector.flow.height"].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.flow.status"], containing: "committed"))
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.flow.height"], containing: "200"))
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.flow.height"], containing: "240"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-121 connected Header body Footer and dedicated settings")
+        componentMenu("Page", "New Page…", in: application)
+        XCTAssertTrue(application.textFields["page.editor.name"].waitForExistence(timeout: 3))
+        replaceText(in: application.textFields["page.editor.name"], with: "About", application: application)
+        application.buttons["page.editor.apply"].click()
+        revealComponentPointerTarget("navigator.tab.pages", in: application).click()
+        let home = pageRow(named: "Legacy Surface", in: application)
+        XCTAssertTrue(home.waitForExistence(timeout: 5)); home.click()
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + headerID, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        application.popUpButtons["inspector.navigation.add.page"].click(); application.menuItems["About"].click()
+        revealComponentPointerTarget("inspector.navigation.add", in: application).click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 12", timeout: 5))
+        let includedAbout = application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "inspector.navigation.include.", "About")).firstMatch
+        revealStructuralLayoutControl(includedAbout, in: application).click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 11", timeout: 5))
+        revealStructuralLayoutControl(includedAbout, in: application).click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 12", timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, "canvas.object." + headerID)
+        let toggle = application.descendants(matching: .any)["inspector.navigation.hamburger"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual((toggle.value as? NSNumber)?.intValue, 1)
+        toggle.click(); toggle.click()
+        let preset = application.descendants(matching: .any)["canvas.viewport.preset"]
+        preset.click(); application.menuItems["Mobile"].click()
+        XCTAssertTrue(waitForValue(preset, containing: "Mobile"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-121 Mobile full-width header and navigation policy")
+        revealComponentPointerTarget("toolbar.preview", in: application).click()
+        let menu = application.descendants(matching: .any)["preview.navigation.menu." + headerID]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5)); XCTAssertTrue(menu.isHittable)
+        assertElement(application.descendants(matching: .any)["preview.local"],
+                      isContainedIn: application.sheets.firstMatch)
+        assertElement(menu, isContainedIn: application.descendants(matching: .any)["preview.canvas"])
+        menu.click(); application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(menu.isHittable, "Native Escape closes the menu and returns a usable control")
+        XCTAssertTrue(waitForKeyboardFocus(menu, in: application))
+        menu.click(); application.menuItems["About"].click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["preview.page"], containing: "About"))
+        attachWindowScreenshot(application, named: "SF-UI-010 native Preview followed About page")
+        revealComponentPointerTarget("preview.done", in: application).click()
+        attachWindowScreenshot(application, named: "SF-AUTHORING-121 functional native page-menu navigation")
+        saveDocumentIfModified(in: application); terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("connected-page-recovery"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        revealComponentPointerTarget("navigator.tab.pages", in: application).click()
+        pageRow(named: "Legacy Surface", in: application).click()
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + headerID, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.navigation.hamburger"].exists)
+        XCTAssertEqual((application.descendants(matching: .any)["inspector.navigation.hamburger"].value as? NSNumber)?.intValue, 1)
+        let linkDisclosure = revealComponentPointerTarget("inspector.navigation.links", in: application)
+        linkDisclosure.click()
+        XCTAssertTrue(waitForDisclosureExpanded(linkDisclosure))
+        XCTAssertTrue(application.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "inspector.navigation.label.")).firstMatch.exists)
+        XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, "canvas.object." + headerID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-121 reopened connected structure and stable navigation")
+    }
+
+    func testComponentSlotFallbackNativeAuthoringCancelHistoryAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("component-slot-fallback.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let instanceID = canvasObject(named: "Frame", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Stack at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
+        componentMenu("Component", "Create Component from Selection", in: application)
+        componentMenu("Component", "Edit Definition", in: application)
+        let stack = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Stack")).firstMatch
+        XCTAssertTrue(stack.waitForExistence(timeout: 5))
+        revealComponentPointerTarget(stack.identifier, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        replaceComponentTextField("component.slot.definition.name", with: "Content", in: application)
+        revealComponentPointerTarget("component.slot.definition.apply", in: application).click()
+        XCTAssertTrue(waitForValue(application.staticTexts["component.slot.status"], containing: "committed"))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-118 exposed ordered fallback slot")
+        replaceComponentTextField("component.slot.definition.name", with: "Discarded name", in: application)
+        application.textFields["component.slot.definition.name"].typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.textFields["component.slot.definition.name"], containing: "Content"))
+        revealComponentPointerTarget("components.exit", in: application).click()
+        let edit = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "component.slot.editFallback.")).firstMatch
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        let slotID = edit.identifier.replacingOccurrences(of: "component.slot.editFallback.", with: "")
+        XCTAssertTrue(waitForValue(application.staticTexts["component.slot.provenance." + slotID], containing: "Inherited"))
+        XCTAssertTrue(application.staticTexts["component.slot.supply.unavailable"].exists)
+        XCTAssertFalse(application.buttons["component.slot.supply"].exists, "No fake supplied-content mutation route is exposed")
+        revealComponentPointerTarget(edit.identifier, in: application).click()
+        XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForValue(application.textFields["component.slot.definition.name"], containing: "Content"))
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 4", timeout: 5))
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        revealComponentPointerTarget(stack.identifier, in: application).click()
+        XCTAssertTrue(waitForValue(application.textFields["component.slot.definition.name"], containing: "Content"))
+        revealComponentPointerTarget("component.slot.definition.remove", in: application).click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields["component.slot.definition.name"], containing: "Content"))
+        revealComponentPointerTarget("components.exit", in: application).click()
+        XCTAssertTrue(application.staticTexts["component.slot.provenance." + slotID].waitForExistence(timeout: 5))
+        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, "canvas.object." + instanceID)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-118 inherited fallback and preserved instance")
+        saveDocumentIfModified(in: application)
+        terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("slot-fallback-recovery"))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        revealComponentPointerTarget("navigator.tab.layers", in: application).click()
+        revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
+        revealComponentPointerTarget("inspector.tab.content", in: application).click()
+        XCTAssertTrue(waitForValue(application.staticTexts["component.slot.provenance." + slotID], containing: "Inherited"))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-118 reopened fallback slot")
+    }
+
     func testComponentVisibilityDefinitionInstanceResetAndReopenJourney() throws {
         let project = fixtureRoot.appendingPathComponent("component-visibility.siteforge")
         var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
@@ -3930,6 +4886,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForComponentVisibilityState(toggle.identifier, visible: true, in: application))
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         attachWindowScreenshot(application, named: "SF-AUTHORING-062 reopened visible override")
+        revealComponentPointerTarget("component.visibility.resetAll", in: application).click()
+        XCTAssertTrue(waitForComponentVisibilityState(toggle.identifier, visible: false, in: application))
+        XCTAssertFalse(application.buttons["component.visibility.resetAll"].isEnabled)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-113 reset all visibility overrides")
     }
 
     private func waitForComponentVisibilityState(_ identifier: String, visible: Bool,
@@ -3973,8 +4933,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         componentMenu("Component", "Create Component from Selection", in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, originalID)
-        revealComponentPointerTarget("navigator.tab.overflow", in: application).click()
-        application.menuItems["Components"].click()
+        selectNavigatorTab("Components", identifier: "components", in: application)
         XCTAssertTrue(application.buttons["components.create"].waitForExistence(timeout: 3))
         XCTAssertTrue(application.staticTexts["inspector.component.provenance"].exists)
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 original linked instance")
@@ -4060,11 +5019,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let originalID = canvasObject(named: "Frame", in: application).identifier
         application.menuBars.menuBarItems["Component"].click()
         application.menuItems["Create Component from Selection"].click()
-        let overflow = application.descendants(matching: .any)["navigator.tab.overflow"]
-        XCTAssertTrue(waitForHittable(overflow, in: application))
-        overflow.click()
-        XCTAssertTrue(application.menuItems["Components"].isEnabled)
-        application.menuItems["Components"].click()
+        selectNavigatorTab("Components", identifier: "components", in: application)
         for prefix in ["components.insert.", "components.edit.", "components.delete."] {
             let button = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", prefix)).firstMatch
             XCTAssertTrue(waitForHittable(button, in: application))
@@ -4149,10 +5104,61 @@ final class SiteForgeLaunchTests: XCTestCase {
     /// A 1100-point window can exceed the hosted display. Move the actual
     /// title bar to expose a target, retaining the production minimum and
     /// real pointer/focus assertions rather than bypassing the control.
+    private func selectNavigatorTab(_ title: String, identifier: String, in application: XCUIApplication) {
+        selectShellTab(title, directIdentifier: "navigator.tab.\(identifier)",
+                       overflowIdentifier: "navigator.tab.overflow", in: application)
+    }
+
+    private func selectInspectorTab(_ title: String, identifier: String, in application: XCUIApplication) {
+        selectShellTab(title, directIdentifier: "inspector.tab.\(identifier)",
+                       overflowIdentifier: "inspector.tab.overflow", in: application)
+    }
+
+    /// The shipping tab bar adaptively exposes either direct buttons or its
+    /// native overflow menu. Both are equivalent pointer surfaces.
+    private func selectShellTab(
+        _ title: String,
+        directIdentifier: String,
+        overflowIdentifier: String,
+        in application: XCUIApplication
+    ) {
+        let direct = application.buttons[directIdentifier]
+        let paneID = directIdentifier.hasPrefix("navigator.") ? "shell.navigator" : "shell.inspector"
+        let pane = application.descendants(matching: .any)[paneID]
+        // Scroll-view children can exist and even report AXHittable outside
+        // the viewport. Only click a fully visible tab; otherwise use the
+        // same native overflow menu offered to pointer/keyboard users.
+        if direct.exists && direct.isHittable && pane.exists && pane.frame.contains(direct.frame) {
+            revealComponentPointerTarget(directIdentifier, in: application).click()
+            return
+        }
+        revealComponentPointerTarget(overflowIdentifier, in: application).click()
+        let item = application.menuItems[title]
+        XCTAssertTrue(item.waitForExistence(timeout: 3), application.debugDescription)
+        XCTAssertTrue(item.isEnabled)
+        item.click()
+    }
+
     @discardableResult
     private func revealComponentPointerTarget(_ identifier: String, in application: XCUIApplication) -> XCUIElement {
+        if !application.descendants(matching: .any).matching(identifier: identifier).firstMatch.exists {
+            let disclosureID = identifier.hasPrefix("inspector.workflow.") ? "inspector.workflow.disclosure" :
+                identifier.hasPrefix("component.") ? "component.definition.properties" : ""
+            if !disclosureID.isEmpty {
+                let disclosure = application.descendants(matching: .any)[disclosureID]
+                if disclosure.exists {
+                    _ = revealStructuralLayoutControl(disclosure, in: application)
+                    disclosure.click()
+                    XCTAssertTrue(waitForDisclosureExpanded(disclosure), "The real disclosure must expand before its controls are used")
+                }
+            }
+        }
         let query = application.descendants(matching: .any).matching(identifier: identifier).firstMatch
-        XCTAssertTrue(query.waitForExistence(timeout: 3))
+        XCTAssertTrue(query.waitForExistence(timeout: 3), application.debugDescription)
+        let inspector = application.scrollViews["inspector.selection.scroll"]
+        if inspector.exists, inspector.descendants(matching: .any).matching(identifier: identifier).firstMatch.exists {
+            _ = revealStructuralLayoutControl(query, in: application)
+        }
         guard let visible = NSScreen.main?.visibleFrame else {
             XCTFail("A usable display is required for pointer interaction")
             return query
@@ -4339,7 +5345,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.menuBars.menuBarItems["Insert"].click()
         application.menuItems["Insert Button at Center"].click()
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
-        application.buttons["inspector.tab.interactions"].click()
+        selectInspectorTab("Interactions", identifier: "interactions", in: application)
         application.popUpButtons["inspector.interactions.link.type"].click()
         application.menuItems["Page"].click()
         let target = application.popUpButtons["inspector.interactions.link.page"]
@@ -4453,7 +5459,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(row("Button").isSelected); XCTAssertTrue(row("Text").isSelected)
         attachWindowScreenshot(application, named: "SF-AUTHORING-020 partial selection")
         row("Text").click()
-        XCTAssertTrue(application.descendants(matching: .any)["inspector.content.unavailable"].waitForExistence(timeout: 3))
+        XCTAssertTrue(application.buttons["inspector.text.edit"].waitForExistence(timeout: 3))
+        XCTAssertTrue(application.descendants(matching: .any)["inspector.text.content"].exists)
         XCTAssertFalse(application.textFields["inspector.content.control.label"].exists)
         XCTAssertTrue(waitForValue(selection, containing: "1 selected"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-020 incompatible selection")
@@ -4471,11 +5478,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         // At the practical minimum the native strip may overflow. Use its
         // visible production menu rather than asking XCTest to scroll a
         // clipped 25-point strip whose hit point may be outside the display.
-        revealComponentPointerTarget("inspector.tab.overflow", in: application).click()
-        application.menuItems["Content"].click()
+        selectInspectorTab("Content", identifier: "content", in: application)
         replaceStructuralLayoutField(application.textFields["inspector.content.control.label"], with: "Open page", in: application)
-        revealComponentPointerTarget("inspector.tab.overflow", in: application).click()
-        application.menuItems["Interactions"].click()
+        selectInspectorTab("Interactions", identifier: "interactions", in: application)
         application.popUpButtons["inspector.interactions.link.type"].click()
         application.menuItems["Page"].click()
         let page = application.popUpButtons["inspector.interactions.link.page"]
@@ -4630,7 +5635,12 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue((padding.value as? String)?.contains("48") == true)
         let sectionChildBefore = canvasObject(named: "Frame", in: application).frame
         replaceStructuralLayoutField(padding, with: "72", in: application)
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Padding committed", timeout: 3))
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.announcement",
+            containing: "Padding committed",
+            timeout: 3
+        ))
         let sectionChildAfter = canvasObject(named: "Frame", in: application).frame
         XCTAssertGreaterThan(sectionChildAfter.minX, sectionChildBefore.minX)
         XCTAssertGreaterThan(sectionChildAfter.minY, sectionChildBefore.minY)
@@ -4711,21 +5721,41 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealStructuralLayoutControl(columns, in: application)
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid two columns sparse row")
         replaceStructuralLayoutField(columns, with: "3", in: application)
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.layout.container.announcement"], containing: "Columns committed", timeout: 3))
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.announcement",
+            containing: "Columns committed",
+            timeout: 3
+        ))
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 9", timeout: 5))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid three columns")
 
         application.typeKey("z", modifierFlags: .command)
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "2", timeout: 3))
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.columns",
+            containing: "2",
+            timeout: 3
+        ))
         XCTAssertTrue(application.buttons["toolbar.redo"].isEnabled)
         application.typeKey("z", modifierFlags: [.command, .shift])
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "3", timeout: 3))
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.columns",
+            containing: "3",
+            timeout: 3
+        ))
         let reset = revealStructuralLayoutControl(
             application.buttons["inspector.layout.container.columns.reset"],
             in: application
         )
         XCTAssertTrue(reset.isEnabled); reset.click()
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.container.columns"], containing: "2", timeout: 3))
+        XCTAssertTrue(waitForLiveValue(
+            in: application,
+            identifier: "inspector.layout.container.columns",
+            containing: "2",
+            timeout: 3
+        ))
         attachWindowScreenshot(application, named: "SF-AUTHORING-017 grid reset default")
 
         application.menuBars.menuBarItems["File"].click()
@@ -5205,6 +6235,13 @@ final class SiteForgeLaunchTests: XCTestCase {
             in: application
         ))
         application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.viewport.compare"], in: application))
+        application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(
+            application.descendants(matching: .any)["canvas.grid.toggle"],
+            in: application
+        ))
+        application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.out"], in: application))
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.zoom.in"], in: application))
@@ -5249,6 +6286,8 @@ final class SiteForgeLaunchTests: XCTestCase {
             application.buttons["canvas.zoom.reset"],
             application.buttons["canvas.zoom.in"],
             application.buttons["canvas.zoom.out"],
+            application.checkBoxes["canvas.grid.toggle"],
+            application.buttons["canvas.viewport.compare"],
             application.descendants(matching: .any)["canvas.viewport.preset"],
             pageRow(named: "Not Found", in: application),
             pageRow(named: "Home", in: application),
@@ -5592,10 +6631,13 @@ final class SiteForgeLaunchTests: XCTestCase {
     func testInitialLaunchOffersKeyboardFocusedNativeProjectActions() throws {
         let application = launchScenario("welcome")
         let newProject = application.buttons["launch.newBlankProject"]
+        let starterProject = application.buttons["launch.newStarterProject"]
         let openProject = application.buttons["launch.openProject"]
         XCTAssertTrue(newProject.exists)
+        XCTAssertTrue(starterProject.exists)
         XCTAssertTrue(openProject.exists)
-        XCTAssertEqual(newProject.label, "New Site")
+        XCTAssertEqual(newProject.label, "Blank Site")
+        XCTAssertEqual(starterProject.label, "Starter Site")
         let brand = application.descendants(matching: .any).matching(
             NSPredicate(format: "label CONTAINS[c] %@", "SiteForge. Design durable websites")
         ).firstMatch
@@ -5612,9 +6654,48 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTAssertTrue(semanticText.contains(label), "Expected semantic assurance text: \(label)")
         }
         XCTAssertTrue(newProject.isHittable)
+        XCTAssertTrue(starterProject.isHittable)
         XCTAssertTrue(openProject.isHittable)
         application.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(application.descendants(matching: .any)["shell.canvas"].waitForExistence(timeout: 2))
+    }
+
+    // SF-AUTHORING-106 / SF-0204-001...008
+    @MainActor
+    func testStarterSiteCreatesOrdinaryHomeAboutSemanticWorkspaceJourney() throws {
+        let application = launchScenario("welcome")
+        let starter = application.buttons["launch.newStarterProject"]
+        XCTAssertTrue(starter.waitForExistence(timeout: 3))
+        XCTAssertTrue(starter.isHittable)
+        starter.click()
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application)
+
+        application.buttons["navigator.tab.pages"].click()
+        let home = application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.page.", "Home, route /"
+        )).firstMatch
+        let about = application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "navigator.page.", "About, route /about"
+        )).firstMatch
+        XCTAssertTrue(home.waitForExistence(timeout: 3))
+        XCTAssertTrue(about.waitForExistence(timeout: 3))
+        XCTAssertEqual(application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "navigator.page."
+        )).count, 2)
+        XCTAssertFalse(application.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "navigator.page.", "Not Found"
+        )).firstMatch.exists)
+
+        about.click()
+        application.buttons["navigator.tab.layers"].click()
+        for name in ["Header", "Main", "Footer", "Site title", "Introduction", "Footer text"] {
+            XCTAssertTrue(application.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", name
+            )).firstMatch.waitForExistence(timeout: 3), name)
+        }
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 6", timeout: 5))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-106 Starter Site Home About")
     }
 
     // SF-AUTHORING-105 / SF-0201-002/003/004/006,
@@ -5747,6 +6828,31 @@ final class SiteForgeLaunchTests: XCTestCase {
         recordLaunchState("after-launch", application)
         application.activate()
         recordLaunchState("after-activate", application)
+        let review = application.buttons["launch.recovery.review"]
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        assertNormalWindowPolicy(in: application)
+        @MainActor func retainedBytes() throws -> [String: Data] {
+            if try recovery.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
+                return ["recovery": try Data(contentsOf: recovery)]
+            }
+            let files = try XCTUnwrap(FileManager.default.enumerator(at: recovery,
+                includingPropertiesForKeys: [.isRegularFileKey]))
+            var result: [String: Data] = [:]
+            for case let file as URL in files where try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
+                result[String(file.path.dropFirst(recovery.path.count))] = try Data(contentsOf: file)
+            }
+            return result
+        }
+        let before = try retainedBytes()
+        XCTAssertFalse(before.isEmpty)
+        attachWindowScreenshot(application, named: "SF-UI-010 Welcome preserves recoverable work")
+        review.click()
+        XCTAssertTrue(application.buttons["launch.recovery.later"].waitForExistence(timeout: 5))
+        attachWindowScreenshot(application, named: "SF-UI-010 Recovery Review and Later")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        XCTAssertEqual(try retainedBytes(), before)
+        review.click()
         let restore = application.buttons["launch.recovery.restore"]
         XCTAssertTrue(restore.waitForExistence(timeout: 5))
         application.typeKey(.return, modifierFlags: [])
@@ -5763,6 +6869,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         recordLaunchState("after-launch", application)
         application.activate()
         recordLaunchState("after-activate", application)
+        let reviewAgain = application.buttons["launch.recovery.review"]
+        XCTAssertTrue(reviewAgain.waitForExistence(timeout: 5)); reviewAgain.click()
         let discard = application.buttons["launch.recovery.discard"]
         XCTAssertTrue(discard.waitForExistence(timeout: 5))
         discard.click()
@@ -5791,8 +6899,13 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         let canvas = application.descendants(matching: .any)["canvas.interaction"].firstMatch
         XCTAssertTrue(canvas.exists)
-        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        XCTAssertTrue((canvas.value as? String)?.contains("interactions 1") == true)
+        let canvasPoint = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.1))
+        let hint = application.descendants(matching: .any)["canvas.empty.hint"]
+        if hint.exists {
+            XCTAssertFalse(hint.frame.contains(canvasPoint.screenPoint), "Exercise canvas outside the intentional bounded hint")
+        }
+        canvasPoint.click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "interactions 1", timeout: 5))
 
         application.buttons["navigator.tab.layers"].click()
         XCTAssertTrue(application.descendants(matching: .any)["navigator.empty"].exists)
@@ -5838,6 +6951,15 @@ final class SiteForgeLaunchTests: XCTestCase {
         ) == .completed
     }
 
+    private func waitForDisclosureExpanded(_ element: XCUIElement) -> Bool {
+        let predicate = NSPredicate { object, _ in
+            guard let control = object as? XCUIElement, control.exists else { return false }
+            return (control.value as? NSNumber)?.intValue == 1 || (control.value as? String) == "1"
+                || (control.value as? String) == "Expanded"
+        }
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 3) == .completed
+    }
+
     /// A committed SwiftUI control may be replaced after publishing its
     /// binding. Re-query the live accessibility value so the assertion observes
     /// the current semantic state rather than a stale native proxy.
@@ -5856,10 +6978,23 @@ final class SiteForgeLaunchTests: XCTestCase {
                 .lowercased()
                 .contains(expected)
         }
-        return XCTWaiter.wait(
+        let result = XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
             timeout: timeout
-        ) == .completed
+        )
+        if result != .completed {
+            let element = application.descendants(matching: .any)[identifier].firstMatch
+            if element.exists {
+                print("Live AX value mismatch for \(identifier): exists=true label=\(element.label) value=\(String(describing: element.value))")
+            } else {
+                print("Live AX value mismatch for \(identifier): exists=false")
+            }
+            let selection = application.descendants(matching: .any)["status.selectionPath"].firstMatch
+            if selection.exists {
+                print("Live selection at mismatch: label=\(selection.label) value=\(String(describing: selection.value))")
+            }
+        }
+        return result == .completed
     }
 
     private func waitForLiveSemanticText(
@@ -5896,7 +7031,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         let predicate = NSPredicate { [weak application] _, _ in
             guard let application else { return false }
             let canvas = self.liveCanvas(in: application)
-            return (canvas.value as? String)?.contains(text) == true
+            guard let value = canvas.value as? String else { return false }
+            if text.hasPrefix("rendered objects ") {
+                // A count of 1 must never accept 12 after an adopted insertion.
+                return value.split(separator: ";").contains {
+                    $0.trimmingCharacters(in: .whitespaces) == text
+                }
+            }
+            return value.contains(text)
         }
         return XCTWaiter.wait(
             for: [XCTNSPredicateExpectation(predicate: predicate, object: application)],
@@ -5952,8 +7094,12 @@ final class SiteForgeLaunchTests: XCTestCase {
             // the non-hittable SwiftUI wrapper that shares its identifier.
             liveElement = liveStructuralLayoutControl(identifier, in: application)
         }
+        let safelyVisible = isSafelyVisibleForPointer(liveElement, inside: scroll)
+        if !safelyVisible {
+            attachPointerDiagnostics(control: liveElement, application: application)
+        }
         XCTAssertTrue(
-            isSafelyVisibleForPointer(liveElement, inside: scroll),
+            safelyVisible,
             "Inspector control \(identifier) must remain inside the usable display and reachable; control=\(liveElement.frame), scroll=\(scroll.frame), safe=\(pointerSafeIntersection(for: scroll.frame)), hittable=\(liveElement.isHittable)"
         )
         return liveElement
@@ -6381,6 +7527,85 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-107 clipboard duplicate cut paste")
     }
 
+    // SF-AUTHORING-111 / SF-0308-001...008 / SF-0901-006 — the real native
+    // clipboard path reviews a complete cross-project definition import before
+    // one atomic paste; cancellation remains destination-neutral.
+    @MainActor
+    func testCrossProjectComponentPastePreflightImportUndoRedoAccessibilityJourney() throws {
+        let application = launchWorkspace()
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        componentMenu("Component", "Create Component from Selection", in: application)
+        application.typeKey("c", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["status.clipboard"],
+                                   containing: "Copied 1 object"))
+
+        application.typeKey("n", modifierFlags: .command)
+        XCTAssertTrue(application.buttons["documentTransition.discard"].waitForExistence(timeout: 3))
+        application.buttons["documentTransition.discard"].click()
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+
+        application.typeKey("v", modifierFlags: .command)
+        let preflight = application.descendants(matching: .any)["clipboard.component.preflight"]
+        XCTAssertTrue(preflight.waitForExistence(timeout: 5))
+        let summary = application.descendants(matching: .any)["clipboard.component.summary"]
+        XCTAssertTrue(
+            waitForValue(summary, containing: "1 imported") ||
+            waitForLabel(summary, containing: "1 imported"),
+            "The native preflight must expose its transfer summary through a stable AX value or label."
+        )
+        attachWindowScreenshot(application, named: "SF-AUTHORING-111 component import preflight")
+        application.buttons["clipboard.component.cancel"].click()
+        XCTAssertTrue(waitForNonexistence(preflight))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+
+        application.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(preflight.waitForExistence(timeout: 5))
+        application.buttons["clipboard.component.confirm"].click()
+        XCTAssertTrue(waitForNonexistence(preflight))
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["status.clipboard"],
+                                   containing: "Imported component dependencies"))
+        let overflow = application.descendants(matching: .any)["navigator.tab.overflow"]
+        if overflow.exists && overflow.isHittable {
+            overflow.click(); application.menuItems["Components"].click()
+        } else { application.buttons["navigator.tab.components"].click() }
+        XCTAssertTrue(application.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "components.definition."
+        )).firstMatch.waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-AUTHORING-111 imported component selected")
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+    }
+
+    // SF-0409-001...008
+    @MainActor
+    func testCanvasIsolationFocusAndPresentationJourney() throws {
+        let application = launchWorkspace()
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        application.buttons["navigator.tab.elements"].click()
+        application.buttons["navigator.elements.section"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        application.menuBars.menuBarItems["Selection"].click()
+        let isolate = application.menuItems["Isolate Selection"]
+        XCTAssertTrue(isolate.isEnabled); isolate.click()
+        XCTAssertTrue(application.descendants(matching: .any)["canvas.isolation.breadcrumb"].waitForExistence(timeout: 5))
+        XCTAssertTrue(application.buttons["canvas.isolation.exit"].isHittable)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-108 isolated canvas")
+
+        componentMenu("Preview", "Toggle Focus Mode", in: application)
+        XCTAssertFalse(application.descendants(matching: .any)["shell.navigator"].exists)
+        XCTAssertFalse(application.descendants(matching: .any)["shell.inspector"].exists)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-108 focus mode")
+        componentMenu("Preview", "Toggle Focus Mode", in: application)
+        XCTAssertTrue(application.descendants(matching: .any)["shell.navigator"].waitForExistence(timeout: 5))
+        application.buttons["canvas.isolation.exit"].click()
+        XCTAssertFalse(application.descendants(matching: .any)["canvas.isolation.breadcrumb"].exists)
+    }
+
     // SF-0201-003, SF-0201-006, SF-0201-008
     @MainActor
     func testOpaqueHighContrastDarkAndInactiveMaterialStatesRemainOperable() throws {
@@ -6403,9 +7628,30 @@ final class SiteForgeLaunchTests: XCTestCase {
                 application.descendants(matching: .any)["workspace.shell"].label,
                 "SiteForge workspace"
             )
+            let navigatorTabs = ["pages", "layers", "elements", "assets", "components"].compactMap { name -> XCUIElement? in
+                let element = application.buttons["navigator.tab.\(name)"]
+                return element.exists ? element : nil
+            }
+            XCTAssertGreaterThanOrEqual(navigatorTabs.count, 2)
+            XCTAssertLessThanOrEqual((navigatorTabs.map(\.frame.midY).max() ?? 0) -
+                                     (navigatorTabs.map(\.frame.midY).min() ?? 0), 1,
+                                     "Navigator destinations must remain on one visual row")
+            let inspectorTabs = ["design", "layout", "content", "interactions", "accessibility"].compactMap { name -> XCUIElement? in
+                let element = application.buttons["inspector.tab.\(name)"]
+                return element.exists ? element : nil
+            }
+            XCTAssertGreaterThanOrEqual(inspectorTabs.count, 2)
+            XCTAssertLessThanOrEqual((inspectorTabs.map(\.frame.midY).max() ?? 0) -
+                                     (inspectorTabs.map(\.frame.midY).min() ?? 0), 1,
+                                     "Inspector destinations must remain on one visual row")
+            for identifier in ["canvas.viewport.preset", "canvas.grid.toggle", "canvas.zoom.out",
+                               "canvas.zoom.in", "canvas.zoom.reset", "canvas.zoom.fitCanvas", "canvas.zoom.fit"] {
+                XCTAssertTrue(application.descendants(matching: .any)[identifier].exists,
+                              "Persistent viewport control missing: \(identifier)")
+            }
             application.typeKey("\t", modifierFlags: [])
             XCTAssertTrue(application.descendants(matching: .any)["workspace.shell"].exists)
-            attachScreenshot(named: "workspace-\(name)")
+            attachWindowScreenshot(application, named: "workspace-\(name)")
             terminateAndWait(application)
         }
     }
@@ -6457,5 +7703,27 @@ final class SiteForgeLaunchTests: XCTestCase {
             )
             terminateAndWait(application)
         }
+    }
+
+    // SF-1208-002/004/006, SF-1211-002/004/006 — source journey; runtime
+    // execution remains deferred under the owner-directed testing pause.
+    @MainActor
+    func testStaticBuildDiagnosticsPreflightProfileCancelAndAccessibilityJourney() throws {
+        let application = launchScenario("workspace")
+        application.menuBars.menuBarItems["Build"].click()
+        let diagnostics = application.menuItems["Build Diagnostics…"]
+        XCTAssertTrue(diagnostics.isEnabled)
+        diagnostics.click()
+
+        let sheet = application.descendants(matching: .any)["build.diagnostics"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        let profile = application.popUpButtons["Build profile"]
+        XCTAssertTrue(profile.waitForExistence(timeout: 5), application.debugDescription)
+        XCTAssertTrue(application.buttons["build.preflight"].isEnabled)
+        XCTAssertTrue(application.descendants(matching: .any)["build.status"].waitForExistence(timeout: 5))
+        XCTAssertTrue(application.buttons["build.copySummary"].waitForExistence(timeout: 5))
+        XCTAssertTrue(application.buttons["build.write"].exists)
+        XCTAssertFalse(application.buttons["build.cancel"].isEnabled)
+        attachWindowScreenshot(application, named: "SF-AUTHORING-110 build diagnostics preflight")
     }
 }

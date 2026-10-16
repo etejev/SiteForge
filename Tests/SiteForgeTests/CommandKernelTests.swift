@@ -4,8 +4,7 @@ import XCTest
 @MainActor
 final class CommandKernelTests: XCTestCase {
     private func componentTextFixture() throws -> CanonicalDocument {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/Legacy/schema-v7-linked-text-document.json")
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "schema-v7-linked-text-document", withExtension: "json", subdirectory: "Legacy"))
         return try DocumentSerializer.decode(Data(contentsOf: url))
     }
 
@@ -34,6 +33,912 @@ final class CommandKernelTests: XCTestCase {
         try session.execute(textCommand(.exposeVisibility(nodeID: child.id, label: "Optional text",
             defaultValue: defaultVisible), document: document, pageID: definition.id, selected: child.id).command)
         return session
+    }
+
+    private func componentImageChoiceFixture() throws -> CanonicalDocument {
+        var document = try componentTextFixture()
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Hero", originalFilename: "hero.png",
+            format: .png, pixelWidth: 400, pixelHeight: 300, byteCount: 1,
+            contentHash: String(repeating: "a", count: 64))
+        document.imageAssets = [asset]
+        let definitionIndex = try XCTUnwrap(document.pages.firstIndex { $0.role == .componentDefinition })
+        var child = document.pages[definitionIndex].nodes[1]
+        child.kind = .image
+        child.name = "Hero Image"
+        child.properties.removeAll { $0.key.rawValue == "content.text" || CanonicalComponentText.metadataKeys.contains($0.key.rawValue) }
+        child.properties += [
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "assetID"), value: .string(asset.id.description), origin: .authored),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "fit"), value: .string(ImageFitMode.fit.rawValue), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.x"), value: .number(0.5), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.y"), value: .number(0.5), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "alt"), value: .string("Hero"), origin: .authored),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "decorative"), value: .boolean(false), origin: .defaulted),
+        ]
+        document.pages[definitionIndex].nodes[1] = child
+        try document.validate()
+        return document
+    }
+
+    func testComponentImageFitChoiceOverrideResetHistoryRendererAndPersistence() throws {
+        let initial = try componentImageChoiceFixture()
+        let definition = initial.componentDefinitions[0], image = definition.nodes[1]
+        let session = DocumentSession(document: initial)
+        try session.execute(textCommand(.exposeChoice(nodeID: image.id, label: "Image Fit"),
+            document: session.document, pageID: definition.id, selected: image.id).command)
+        let exposedDefinition = session.document.componentDefinitions[0]
+        let binding = try XCTUnwrap(CanonicalComponentChoice.property(on: exposedDefinition.nodes[1]))
+        XCTAssertEqual(binding.defaultValue, .fit)
+
+        let page = session.document.websitePages[0], instance = page.nodes[1]
+        try session.execute(textCommand(.setChoiceOverride(instanceID: instance.id, propertyID: binding.id, value: .fill),
+            document: session.document, pageID: page.id, selected: instance.id).command)
+        let authored = session.document
+        XCTAssertEqual(CanonicalComponentChoice.overrides(on: authored.websitePages[0].nodes[1])[binding.id], .fill)
+        let derivedID = NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue,
+            label: "component-child:" + image.id.description))
+        let resolved = try ComponentGraphResolver.resolvedPage(authored.websitePages[0], in: authored, breakpoint: .desktop)
+        XCTAssertEqual(CanonicalImageStyle.resolve(try XCTUnwrap(resolved.nodes.first { $0.id == derivedID }))?.fitMode, .fill)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(authored)), authored)
+        try session.undo()
+        XCTAssertTrue(CanonicalComponentChoice.overrides(on: session.document.websitePages[0].nodes[1]).isEmpty)
+        try session.redo()
+        XCTAssertEqual(CanonicalComponentChoice.overrides(on: session.document.websitePages[0].nodes[1])[binding.id], .fill)
+        try session.execute(textCommand(.resetChoiceOverride(instanceID: instance.id, propertyID: binding.id),
+            document: session.document, pageID: page.id, selected: instance.id).command)
+        let inherited = try ComponentGraphResolver.resolvedPage(session.document.websitePages[0], in: session.document,
+            breakpoint: .desktop)
+        XCTAssertEqual(CanonicalImageStyle.resolve(try XCTUnwrap(inherited.nodes.first { $0.id == derivedID }))?.fitMode, .fit)
+
+        let stale = DesignInspectorOperationIdentity(documentID: session.document.id, pageID: page.id,
+            revision: 0, sceneID: CanvasViewportSceneID(), rendererGeneration: 0)
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(.setChoiceOverride(instanceID: instance.id,
+            propertyID: binding.id, value: .stretch), identity: stale, in: session.document,
+            context: .init(activePageID: page.id, currentSceneID: stale.sceneID, rendererGeneration: session.document.revision,
+                selectedNodeIDs: [instance.id], availableNodeIDs: [instance.id], isLifecycleAvailable: true,
+                lifecycleDisabledReason: nil)))
+    }
+
+    func testComponentImageMediaOverrideResetHistoryRendererPersistenceAndValidation() throws {
+        var initial = try componentImageChoiceFixture()
+        let alternate = ImageAsset(resourceID: ResourceID(), displayName: "Alternate", originalFilename: "alternate.png",
+            format: .png, pixelWidth: 640, pixelHeight: 480, byteCount: 1,
+            contentHash: String(repeating: "b", count: 64))
+        initial.imageAssets.append(alternate)
+        let definition = initial.componentDefinitions[0], image = definition.nodes[1]
+        let session = DocumentSession(document: initial)
+        try session.execute(textCommand(.exposeMedia(nodeID: image.id, label: "Hero Image"),
+            document: session.document, pageID: definition.id, selected: image.id).command)
+        let exposed = session.document.componentDefinitions[0]
+        let binding = try XCTUnwrap(CanonicalComponentMedia.property(on: exposed.nodes[1]))
+        XCTAssertEqual(binding.defaultValue, initial.imageAssets[0].id)
+
+        let page = session.document.websitePages[0], instance = page.nodes[1]
+        try session.execute(textCommand(.setMediaOverride(instanceID: instance.id,
+            propertyID: binding.id, assetID: alternate.id), document: session.document,
+            pageID: page.id, selected: instance.id).command)
+        let authored = session.document
+        XCTAssertEqual(CanonicalComponentMedia.overrides(on: authored.websitePages[0].nodes[1])[binding.id], alternate.id)
+        let derivedID = NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue,
+            label: "component-child:" + image.id.description))
+        let resolved = try ComponentGraphResolver.resolvedPage(authored.websitePages[0], in: authored, breakpoint: .desktop)
+        XCTAssertEqual(CanonicalImageStyle.resolve(try XCTUnwrap(resolved.nodes.first { $0.id == derivedID }))?.assetID,
+            alternate.id)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(authored)), authored)
+        let forgedSchema11 = Data(String(decoding: try DocumentSerializer.encode(authored), as: UTF8.self)
+            .replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":11").utf8)
+        XCTAssertThrowsError(try DocumentSerializer.decode(forgedSchema11))
+
+        try session.undo()
+        XCTAssertTrue(CanonicalComponentMedia.overrides(on: session.document.websitePages[0].nodes[1]).isEmpty)
+        try session.redo()
+        XCTAssertEqual(CanonicalComponentMedia.overrides(on: session.document.websitePages[0].nodes[1])[binding.id], alternate.id)
+        try session.execute(textCommand(.resetMediaOverride(instanceID: instance.id, propertyID: binding.id),
+            document: session.document, pageID: page.id, selected: instance.id).command)
+        let inherited = try ComponentGraphResolver.resolvedPage(session.document.websitePages[0], in: session.document,
+            breakpoint: .desktop)
+        XCTAssertEqual(CanonicalImageStyle.resolve(try XCTUnwrap(inherited.nodes.first { $0.id == derivedID }))?.assetID,
+            initial.imageAssets[0].id)
+
+        XCTAssertThrowsError(try textCommand(.setMediaOverride(instanceID: instance.id,
+            propertyID: binding.id, assetID: AssetID()), document: session.document,
+            pageID: page.id, selected: instance.id))
+        let scene = CanvasViewportSceneID()
+        let identity = DesignInspectorOperationIdentity(documentID: session.document.id, pageID: page.id,
+            revision: session.document.revision, sceneID: scene, rendererGeneration: session.document.revision)
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: scene,
+            rendererGeneration: session.document.revision, selectedNodeIDs: [instance.id],
+            availableNodeIDs: [instance.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(.setMediaOverride(instanceID: instance.id,
+            propertyID: binding.id, assetID: alternate.id), identity: identity,
+            in: session.document, context: context, cancelled: true))
+        let mixedContext = TransformValidationContext(activePageID: page.id, currentSceneID: scene,
+            rendererGeneration: session.document.revision,
+            selectedNodeIDs: [instance.id, page.rootNodeIDs[0]],
+            availableNodeIDs: [instance.id, page.rootNodeIDs[0]],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(.setMediaOverride(instanceID: instance.id,
+            propertyID: binding.id, assetID: alternate.id), identity: identity,
+            in: session.document, context: mixedContext))
+    }
+
+    func testComponentActionOverrideResetHistoryRendererPersistenceAndValidation() throws {
+        var initial = try componentTextFixture()
+        let definitionIndex = try XCTUnwrap(initial.pages.firstIndex { $0.role == .componentDefinition })
+        var control = initial.pages[definitionIndex].nodes[1]
+        control.kind = .button
+        control.name = "Call to Action"
+        control.properties.removeAll {
+            $0.key.rawValue == "content.text" || CanonicalComponentText.metadataKeys.contains($0.key.rawValue)
+        }
+        control.properties.append(.init(key: .init(rawValue: CanonicalLinkTarget.labelKey),
+            value: .string("Learn more"), origin: .authored))
+        initial.pages[definitionIndex].nodes[1] = control
+        try initial.validate()
+
+        let definition = initial.componentDefinitions[0]
+        let session = DocumentSession(document: initial)
+        try session.execute(textCommand(.exposeAction(nodeID: control.id, label: "Destination"),
+            document: session.document, pageID: definition.id, selected: control.id).command)
+        let exposed = session.document.componentDefinitions[0]
+        let binding = try XCTUnwrap(CanonicalComponentAction.property(on: exposed.nodes[1]))
+        XCTAssertEqual(binding.defaultValue, .none)
+
+        let page = session.document.websitePages[0], instance = page.nodes[1]
+        let target = CanonicalLinkTarget.external("https://example.com/components")
+        try session.execute(textCommand(.setActionOverride(instanceID: instance.id,
+            propertyID: binding.id, target: target), document: session.document,
+            pageID: page.id, selected: instance.id).command)
+        XCTAssertEqual(CanonicalComponentAction.overrides(on: session.document.websitePages[0].nodes[1])[binding.id], target)
+        let derivedID = NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue,
+            label: "component-child:" + control.id.description))
+        let resolved = try ComponentGraphResolver.resolvedPage(session.document.websitePages[0],
+            in: session.document, breakpoint: .desktop)
+        XCTAssertEqual(try CanonicalLinkTarget.resolve(try XCTUnwrap(resolved.nodes.first { $0.id == derivedID })), target)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        let forgedSchema12 = Data(String(decoding: try DocumentSerializer.encode(session.document), as: UTF8.self)
+            .replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":12").utf8)
+        XCTAssertThrowsError(try DocumentSerializer.decode(forgedSchema12))
+
+        try session.undo()
+        XCTAssertTrue(CanonicalComponentAction.overrides(on: session.document.websitePages[0].nodes[1]).isEmpty)
+        try session.redo()
+        XCTAssertEqual(CanonicalComponentAction.overrides(on: session.document.websitePages[0].nodes[1])[binding.id], target)
+        try session.execute(textCommand(.resetActionOverride(instanceID: instance.id, propertyID: binding.id),
+            document: session.document, pageID: page.id, selected: instance.id).command)
+        XCTAssertTrue(CanonicalComponentAction.overrides(on: session.document.websitePages[0].nodes[1]).isEmpty)
+        XCTAssertNil(CanonicalComponentAction.decode("external:not-base64"))
+    }
+
+    func testComponentActionCodecRetainsNoneAndStrictDestinationIntent() {
+        let page = PageID(), section = NodeID()
+        let values: [CanonicalLinkTarget] = [.none, .page(page), .section(pageID: page, nodeID: section),
+                                           .external("https://example.com/path?q=a%20b#anchor")]
+        for value in values { XCTAssertEqual(CanonicalComponentAction.decode(CanonicalComponentAction.encode(value)), value) }
+        for invalid in ["", "None", "none:extra", "page:invalid", "section:\(page):invalid", "external:%%%%",
+                        CanonicalComponentAction.encode(.external("https://user:password@example.com")),
+                        CanonicalComponentAction.encode(.external("file:///private/file")), String(repeating: "a", count: 11_001)] {
+            XCTAssertNil(CanonicalComponentAction.decode(invalid))
+        }
+    }
+
+    private func exposedActionSession() throws -> (DocumentSession, NodeID, ComponentActionPropertyID) {
+        var document = try componentTextFixture()
+        let index = try XCTUnwrap(document.pages.firstIndex { $0.role == .componentDefinition })
+        var node = document.pages[index].nodes[1]
+        node.kind = .link
+        node.properties.removeAll { $0.key.rawValue == "content.text" || CanonicalComponentText.metadataKeys.contains($0.key.rawValue) }
+        document.pages[index].nodes[1] = node
+        let session = DocumentSession(document: document)
+        try session.execute(textCommand(.exposeAction(nodeID: node.id, label: "Destination"), document: document,
+            pageID: document.pages[index].id, selected: node.id).command)
+        return (session, node.id, try XCTUnwrap(CanonicalComponentAction.property(on: session.document.componentDefinitions[0].nodes[1])).id)
+    }
+
+    func testComponentActionRegistryRejectsCancelledStaleMalformedAndMissingDestinations() throws {
+        let (session, _, propertyID) = try exposedActionSession()
+        let document = session.document, page = document.websitePages[0], instance = page.nodes[1]
+        let scene = CanvasViewportSceneID()
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: page.id,
+            revision: document.revision, sceneID: scene, rendererGeneration: document.revision)
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: scene,
+            rendererGeneration: document.revision, selectedNodeIDs: [instance.id], availableNodeIDs: [instance.id],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let edit = ComponentEdit.setActionOverride(instanceID: instance.id, propertyID: propertyID, target: .none)
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: identity, in: document, context: context, cancelled: true))
+        let stale: [DesignInspectorOperationIdentity] = [
+            .init(documentID: DocumentID(), pageID: page.id, revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: PageID(), revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: page.id, revision: document.revision - 1, sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: page.id, revision: document.revision, sceneID: CanvasViewportSceneID(), rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: page.id, revision: document.revision, sceneID: scene, rendererGeneration: document.revision - 1)]
+        for captured in stale { XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: captured, in: document, context: context)) }
+        let mixed = TransformValidationContext(activePageID: page.id, currentSceneID: scene,
+            rendererGeneration: document.revision, selectedNodeIDs: [instance.id, page.rootNodeIDs[0]],
+            availableNodeIDs: [instance.id, page.rootNodeIDs[0]], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: identity, in: document, context: mixed))
+        let invalidTargets: [CanonicalLinkTarget] = [.page(PageID()), .section(pageID: page.id, nodeID: NodeID()),
+                                                     .external("javascript:alert(1)"), .external("https://example.com/a b")]
+        for target in invalidTargets {
+            XCTAssertThrowsError(try textCommand(.setActionOverride(instanceID: instance.id, propertyID: propertyID, target: target),
+                document: document, pageID: page.id, selected: instance.id))
+        }
+        XCTAssertEqual(session.document, document)
+    }
+
+    func testComponentActionMissingBindingResetAllAndRetargetGuardPreserveExactHistory() throws {
+        let (session, controlID, propertyID) = try exposedActionSession()
+        let page = session.document.websitePages[0], instance = page.nodes[1], definitionID = session.document.componentDefinitions[0].id
+        let target = CanonicalLinkTarget.page(page.id)
+        try session.execute(textCommand(.setActionOverride(instanceID: instance.id, propertyID: propertyID, target: target),
+            document: session.document, pageID: page.id, selected: instance.id).command)
+        let authored = session.document
+        let valueID = try XCTUnwrap(authored.websitePages[0].nodes[1].insertionProperty(CanonicalComponentAction.overrideKey(propertyID))).id
+        var retargeted = authored.componentDefinitions[0]
+        let oldIndex = try XCTUnwrap(retargeted.nodes.firstIndex { $0.id == controlID })
+        let old = retargeted.nodes[oldIndex]
+        retargeted.nodes[oldIndex].properties.removeAll { CanonicalComponentAction.metadataKeys.contains($0.key.rawValue) }
+        let newID = NodeID()
+        let replacement = DocumentNode(id: newID, kind: old.kind, name: old.name, parent: old.parent,
+            childIDs: old.childIDs, properties: old.properties.map { .init(id: PropertyID(), key: $0.key, value: $0.value, origin: $0.origin) })
+        retargeted.nodes.append(replacement)
+        retargeted.nodes[0].childIDs.append(newID)
+        let index = try XCTUnwrap(authored.pages.firstIndex { $0.id == definitionID })
+        XCTAssertThrowsError(try session.execute(.batch([.removePage(.init(pageID: definitionID)), .insertPage(.init(page: retargeted, index: index))])))
+        XCTAssertEqual(session.document, authored)
+        try session.execute(textCommand(.removeActionProperty(controlID), document: session.document,
+            pageID: definitionID, selected: controlID).command)
+        let projected = try CanonicalComponentOverrides.resolve(instance: session.document.websitePages[0].nodes[1], document: session.document)
+        XCTAssertTrue(projected.contains { $0.property == .action(propertyID) && $0.resolution == .conflict(.missingProperty, propertyID: valueID) })
+        try session.execute(textCommand(.resetAllOverrides(instance.id), document: session.document, pageID: page.id, selected: instance.id).command)
+        XCTAssertTrue(CanonicalComponentAction.overrides(on: session.document.websitePages[0].nodes[1]).isEmpty)
+        try session.undo()
+        XCTAssertEqual(session.document.websitePages[0].nodes[1].insertionProperty(CanonicalComponentAction.overrideKey(propertyID))?.id, valueID)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, authored.pages)
+        try session.redo()
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    func testComponentActionLinkDestinationReachesImmutablePreviewAndStaticOutput() async throws {
+        let (session, controlID, bindingID) = try exposedActionSession()
+        let page = session.document.websitePages[0], instance = page.nodes[1]
+        let external = CanonicalLinkTarget.external("https://example.com/authored-action")
+        try session.execute(textCommand(.setActionOverride(instanceID: instance.id, propertyID: bindingID, target: external),
+            document: session.document, pageID: page.id, selected: instance.id).command)
+        let expectedID = NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue,
+            label: "component-child:" + controlID.description))
+        let runtime = try await LocalPreviewRuntimeCompiler().compile(document: session.document,
+            imageResourceData: [:], pixelRatio: .init(1))
+        let rendered = try XCTUnwrap(runtime.pages.first { $0.id == page.id }?.objects.first { $0.id == expectedID })
+        XCTAssertEqual(rendered.previewLink?.target, external)
+        XCTAssertEqual(rendered.previewLink?.isMissing, false)
+        XCTAssertEqual(runtime.revision, session.document.revision)
+        let output = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        XCTAssertTrue(output.files.contains { $0.contents.contains("href=\"https://example.com/authored-action\"") })
+
+        let definition = session.document.componentDefinitions[0]
+        let sectionID = NodeID()
+        let section = DocumentNode(id: sectionID, kind: .section, name: "Internal destination", parent: .node(definition.rootNodeIDs[0]), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(12), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.y"), value: .number(60), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.width"), value: .number(160), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.height"), value: .number(80), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.container.kind"), value: .string("section"), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.padding"), value: .number(0), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.axis"), value: .string("vertical"), origin: .defaulted)])
+        try session.execute(.insertNode(.init(pageID: definition.id, node: section, index: 1)))
+        try session.execute(textCommand(.setActionOverride(instanceID: instance.id, propertyID: bindingID,
+            target: .section(pageID: definition.id, nodeID: sectionID)), document: session.document,
+            pageID: page.id, selected: instance.id).command)
+        let updated = try await LocalPreviewRuntimeCompiler().compile(document: session.document,
+            imageResourceData: [:], pixelRatio: .init(1))
+        let virtualSectionID = NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue,
+            label: "component-child:" + sectionID.description))
+        let updatedLink = try XCTUnwrap(updated.pages.first { $0.id == page.id }?.objects.first { $0.id == expectedID }?.previewLink)
+        XCTAssertEqual(updatedLink.target, .section(pageID: page.id, nodeID: virtualSectionID))
+        XCTAssertFalse(updatedLink.isMissing, "A section in the immutable expanded graph is a valid Preview destination")
+        XCTAssertEqual(rendered.previewLink?.target, external, "The old immutable snapshot must not adopt later edits")
+    }
+
+    func testComponentActionPageRenameRemovalAndDuplicationPreserveStableIntent() throws {
+        let (session, _, bindingID) = try exposedActionSession()
+        let source = session.document.websitePages[0], instance = source.nodes[1]
+        let destination = DocumentPage.minimum(name: "Destination", route: "/destination", role: .standard, provenance: .authored)
+        try session.execute(.insertPage(.init(page: destination, index: session.document.pages.count)))
+        try session.execute(textCommand(.setActionOverride(instanceID: instance.id, propertyID: bindingID, target: .page(destination.id)),
+            document: session.document, pageID: source.id, selected: instance.id).command)
+        XCTAssertEqual(PageCommandRegistry().inboundLinkCount(to: destination.id, in: session.document), 1)
+        try session.execute(.renamePage(.init(pageID: destination.id, name: "Renamed")))
+        XCTAssertEqual(CanonicalComponentAction.overrides(on: session.document.websitePages[0].nodes[1])[bindingID], .page(destination.id))
+        try session.execute(.removePage(.init(pageID: destination.id)))
+        XCTAssertEqual(CanonicalComponentAction.overrides(on: session.document.websitePages[0].nodes[1])[bindingID], .page(destination.id))
+        XCTAssertTrue(CanonicalLinkTarget.page(destination.id).isMissing(in: session.document))
+        let dependencies = try ComponentDependencySnapshot.build(document: session.document)
+        let dependency = try XCTUnwrap(dependencies.entries.first)
+        XCTAssertEqual(dependency.actionProperties.map(\.id), [bindingID])
+        XCTAssertEqual(dependency.actionPageIDs, [destination.id])
+        XCTAssertTrue(dependency.issues.contains(.missingActionDestination))
+        try session.undo()
+        XCTAssertFalse(CanonicalLinkTarget.page(destination.id).isMissing(in: session.document))
+        try session.execute(textCommand(.setActionOverride(instanceID: instance.id, propertyID: bindingID, target: .page(source.id)),
+            document: session.document, pageID: source.id, selected: instance.id).command)
+        let copy = try PageCommandRegistry().prepare(.duplicate,
+            identity: .init(documentID: session.document.id, revision: session.document.revision, pageID: source.id),
+            in: session.document, isAvailable: true)
+        try session.execute(copy.command)
+        let copiedPage = try XCTUnwrap(session.document.websitePages.first { $0.id == copy.selectedPageID })
+        let copiedInstance = try XCTUnwrap(copiedPage.nodes.first { $0.kind == .component })
+        XCTAssertEqual(CanonicalComponentAction.overrides(on: copiedInstance)[bindingID], .page(copiedPage.id))
+        XCTAssertEqual(CanonicalComponentAction.overrides(on: session.document.websitePages[0].nodes[1])[bindingID], .page(source.id))
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    private func componentSlotFallbackFixture() throws -> (CanonicalDocument, NodeID, [NodeID]) {
+        var document = try componentTextFixture()
+        let index = try XCTUnwrap(document.pages.firstIndex { $0.role == .componentDefinition })
+        var slot = document.pages[index].nodes[1]
+        slot.kind = .frame; slot.name = "Content Container"
+        slot.properties.removeAll { $0.key.rawValue == "content.text" || CanonicalComponentText.metadataKeys.contains($0.key.rawValue) }
+        if let height = slot.properties.firstIndex(where: { $0.key.rawValue == "layout.height" }) { slot.properties[height].value = .number(96) }
+        if let width = slot.properties.firstIndex(where: { $0.key.rawValue == "layout.width" }) { slot.properties[width].value = .number(160) }
+        let children = [NodeID(), NodeID()]
+        slot.childIDs = children
+        document.pages[index].nodes[1] = slot
+        let origin = try XCTUnwrap(slot.insertionGeometry).origin
+        for (offset, id) in children.enumerated() {
+            document.pages[index].nodes.append(DocumentNode(id: id, kind: .text, name: "Fallback \(offset + 1)", parent: .node(slot.id), properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(origin.x), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.y"), value: .number(origin.y + Double(offset * 28)), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.width"), value: .number(120), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.height"), value: .number(24), origin: .defaulted),
+                .init(key: .init(rawValue: "content.text"), value: .string("Fallback \(offset + 1)"), origin: .authored)]))
+        }
+        try document.validate()
+        return (document, slot.id, children)
+    }
+
+    private func organizedComponentFixture() throws -> CanonicalDocument {
+        let fixture = try componentSlotFallbackFixture()
+        var document = fixture.0
+        let slotID = fixture.1, children = fixture.2
+        let definitionIndex = try XCTUnwrap(document.pages.firstIndex { $0.role == .componentDefinition })
+        let rootID = document.pages[definitionIndex].rootNodeIDs[0]
+        let imageDocument = try componentImageChoiceFixture()
+        document.imageAssets = imageDocument.imageAssets
+        let sourceImage = imageDocument.componentDefinitions[0].nodes[1]
+        let image = DocumentNode(id: NodeID(), kind: .image, name: sourceImage.name, parent: .node(rootID),
+            properties: sourceImage.properties.map { .init(id: PropertyID(), key: $0.key, value: $0.value, origin: $0.origin) })
+        let sourceAction = try XCTUnwrap(document.pages[definitionIndex].nodes.first { $0.id == children[1] })
+        var action = DocumentNode(id: NodeID(), kind: .button, name: "Action", parent: .node(rootID),
+            properties: sourceAction.properties.filter { $0.key.rawValue != "content.text" }
+                .map { .init(id: PropertyID(), key: $0.key, value: $0.value, origin: $0.origin) })
+        action.properties.append(.init(key: .init(rawValue: CanonicalLinkTarget.labelKey), value: .string("Continue"), origin: .authored))
+        document.pages[definitionIndex].nodes.append(contentsOf: [image, action])
+        document.pages[definitionIndex].nodes[0].childIDs.append(contentsOf: [image.id, action.id])
+        let session = DocumentSession(document: document)
+        let edits: [(NodeID, ComponentEdit)] = [
+            (slotID, .exposeSlot(nodeID: slotID, label: "Content")),
+            (children[0], .exposeText(nodeID: children[0], label: "Title", defaultValue: "Original")),
+            (slotID, .exposeVisibility(nodeID: slotID, label: "Show content", defaultValue: true)),
+            (image.id, .exposeChoice(nodeID: image.id, label: "Image Fit")),
+            (image.id, .exposeMedia(nodeID: image.id, label: "Image Source")),
+            (action.id, .exposeAction(nodeID: action.id, label: "Destination"))]
+        for (id, edit) in edits {
+            try session.execute(textCommand(edit, document: session.document,
+                pageID: document.pages[definitionIndex].id, selected: id).command)
+        }
+        return session.document
+    }
+
+    func testComponentPropertyOrganizationAllTypesOrderGroupsAndContentNeutrality() throws {
+        let document = try organizedComponentFixture(), definition = document.componentDefinitions[0]
+        let entries = CanonicalComponentOrganization.entries(in: definition)
+        XCTAssertEqual(Set(entries.map { $0.id.organizationKind }), Set(CanonicalComponentOrganization.kinds))
+        XCTAssertEqual(entries.map(\.id.stableDescription), entries.map(\.id.stableDescription).sorted())
+        let session = DocumentSession(document: document)
+        for entry in entries.reversed() {
+            try session.execute(textCommand(.organizeProperty(nodeID: entry.sourceNodeID, property: entry.id,
+                group: "Content", position: 0), document: session.document, pageID: definition.id,
+                selected: entry.sourceNodeID).command)
+        }
+        let ordered = CanonicalComponentOrganization.entries(in: session.document.componentDefinitions[0])
+        XCTAssertEqual(ordered.map(\.id), entries.map(\.id)); XCTAssertTrue(ordered.allSatisfy { $0.group == "Content" })
+        XCTAssertEqual(ordered.compactMap(\.rank), Array(entries.indices))
+        for breakpoint in ResponsiveBreakpoint.allCases {
+            let old = try ComponentGraphResolver.resolvedPage(document.websitePages[0], in: document, breakpoint: breakpoint)
+            let new = try ComponentGraphResolver.resolvedPage(session.document.websitePages[0], in: session.document, breakpoint: breakpoint)
+            XCTAssertEqual(new.nodes, old.nodes, "Organization must not change renderer, geometry, defaults, or editor chrome")
+        }
+        XCTAssertEqual(session.document.websitePages, document.websitePages)
+        let original = try CanonicalComponentOverrides.resolve(instance: document.websitePages[0].nodes[1], document: document)
+        let resolved = try CanonicalComponentOverrides.resolve(instance: session.document.websitePages[0].nodes[1], document: session.document)
+        XCTAssertEqual(resolved, original)
+    }
+
+    func testComponentPropertyDiscoveryAllTypesGroupedOrderAndValuePrivacy() throws {
+        let document = try organizedComponentFixture()
+        let entries = CanonicalComponentOrganization.entries(in: document.componentDefinitions[0])
+        let empty = ComponentPropertyDiscovery.project(entries, query: "", authored: [], conflicts: [])
+        XCTAssertEqual(empty.entries, entries)
+        for kind in CanonicalComponentOrganization.kinds {
+            let result = ComponentPropertyDiscovery.project(entries, query: kind.uppercased(), authored: [], conflicts: [])
+            XCTAssertEqual(result.entries, entries.filter { $0.id.organizationKind == kind || $0.label.lowercased().contains(kind) })
+        }
+        let grouped = entries.enumerated().map { index, entry in
+            CanonicalComponentOrganization.Entry(id: entry.id, sourceNodeID: entry.sourceNodeID,
+                label: "Résumé \(index)", group: index.isMultiple(of: 2) ? "Editorial" : "Layout", rank: index)
+        }
+        let result = ComponentPropertyDiscovery.project(grouped, query: "RESUME editorial", authored: [], conflicts: [])
+        XCTAssertEqual(result.entries.map(\.id), grouped.enumerated().filter { $0.offset.isMultiple(of: 2) }.map { $0.element.id })
+        XCTAssertEqual(result.total, entries.count)
+        XCTAssertTrue(ComponentPropertyDiscovery.project(entries, query: "unrelated-private-content", authored: [], conflicts: []).entries.isEmpty)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(document)), document)
+    }
+
+    func testComponentPropertyDiscoveryConflictsRemainDiscoverableAndResetScopeUnfiltered() throws {
+        let document = try organizedComponentFixture()
+        let entries = CanonicalComponentOrganization.entries(in: document.componentDefinitions[0])
+        let first = try XCTUnwrap(entries.first)
+        let orphan = ComponentOverridePropertyIdentity.text(ComponentTextPropertyID())
+        let conflicts: Set<ComponentOverridePropertyIdentity> = [first.id, orphan]
+        let result = ComponentPropertyDiscovery.project(entries, query: "no-match", authored: [first.id], conflicts: conflicts)
+        XCTAssertTrue(result.entries.isEmpty); XCTAssertEqual(result.hiddenConflictCount, 2)
+        let recovered = ComponentPropertyDiscovery.project(entries, query: "", authored: [first.id], conflicts: conflicts, conflictsOnly: true)
+        XCTAssertEqual(recovered.entries.map(\.id), [first.id]); XCTAssertEqual(recovered.hiddenConflictCount, 1)
+        XCTAssertEqual(ComponentPropertyDiscovery.project(entries, query: "inherited", authored: [first.id], conflicts: []).entries.map(\.id), entries.dropFirst().map(\.id))
+        XCTAssertEqual(ComponentPropertyDiscovery.project(entries, query: "authored", authored: [first.id], conflicts: []).entries.map(\.id), [first.id])
+        // Discovery never rewrites the complete registry input or reset scope.
+        XCTAssertEqual(CanonicalComponentOrganization.entries(in: document.componentDefinitions[0]), entries)
+    }
+
+    func testComponentPropertyDiscoveryTraversalLiveDefinitionAndContextReplacement() throws {
+        let document = try organizedComponentFixture()
+        let entries = CanonicalComponentOrganization.entries(in: document.componentDefinitions[0])
+        let result = ComponentPropertyDiscovery.project(entries, query: "", authored: [], conflicts: [])
+        XCTAssertEqual(result.neighbor(of: nil, offset: 1), entries.first?.id)
+        XCTAssertEqual(result.neighbor(of: entries.last?.id, offset: 1), entries.last?.id)
+        XCTAssertEqual(result.neighbor(of: entries.first?.id, offset: -1), entries.first?.id)
+        XCTAssertEqual(result.neighbor(of: entries.first?.id, offset: 1), entries.dropFirst().first?.id)
+        let replacement = Array(entries.dropFirst().reversed())
+        let live = ComponentPropertyDiscovery.project(replacement, query: "", authored: [], conflicts: [])
+        XCTAssertEqual(live.entries, replacement)
+        XCTAssertEqual(live.neighbor(of: entries.first?.id, offset: 1), replacement.first?.id)
+        XCTAssertNil(ComponentPropertyDiscovery.project([], query: "", authored: [], conflicts: []).neighbor(of: entries.first?.id, offset: 1))
+        let session = DocumentSession(document: document)
+        let entry = try XCTUnwrap(entries.first)
+        try session.execute(textCommand(.organizeProperty(nodeID: entry.sourceNodeID, property: entry.id,
+            group: "Live Group", position: 0), document: session.document,
+            pageID: document.componentDefinitions[0].id, selected: entry.sourceNodeID).command)
+        let changed = CanonicalComponentOrganization.entries(in: session.document.componentDefinitions[0])
+        XCTAssertEqual(ComponentPropertyDiscovery.project(changed, query: "live group", authored: [], conflicts: []).entries.map(\.id), [entry.id])
+        XCTAssertEqual(Set(changed.map(\.id)), Set(entries.map(\.id)))
+    }
+
+    func testComponentPropertyOrganizationAtomicHistoryResetRemovalAndSchemaRoundTrip() throws {
+        let document = try organizedComponentFixture(), definition = document.componentDefinitions[0]
+        let entry = try XCTUnwrap(CanonicalComponentOrganization.entries(in: definition).first { $0.id.organizationKind == "text" })
+        let session = DocumentSession(document: document)
+        try session.execute(textCommand(.organizeProperty(nodeID: entry.sourceNodeID, property: entry.id,
+            group: "Editorial", position: 0), document: document, pageID: definition.id, selected: entry.sourceNodeID).command)
+        let organizedPages = session.document.pages
+        let unchanged = try textCommand(.organizeProperty(nodeID: entry.sourceNodeID, property: entry.id,
+            group: "Editorial", position: 0), document: session.document, pageID: definition.id, selected: entry.sourceNodeID)
+        if case .batch(let commands) = unchanged.command { XCTAssertTrue(commands.isEmpty) } else { XCTFail("Expected atomic batch") }
+        try session.undo(); XCTAssertEqual(session.document.pages, document.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, organizedPages)
+        let bytes = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(bytes), session.document)
+        XCTAssertThrowsError(try DocumentSerializer.decode(Data(String(decoding: bytes, as: UTF8.self)
+            .replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":14").utf8)))
+        try session.execute(textCommand(.resetPropertyOrganization(nodeID: entry.sourceNodeID, property: entry.id),
+            document: session.document, pageID: definition.id, selected: entry.sourceNodeID).command)
+        let reset = try XCTUnwrap(CanonicalComponentOrganization.entries(in: session.document.componentDefinitions[0]).first { $0.id == entry.id })
+        XCTAssertNil(reset.group); XCTAssertNil(reset.rank)
+        try session.undo(); XCTAssertEqual(session.document.pages, organizedPages)
+        try session.execute(textCommand(.removeTextProperty(entry.sourceNodeID), document: session.document,
+            pageID: definition.id, selected: entry.sourceNodeID).command)
+        let source = try XCTUnwrap(session.document.componentDefinitions[0].nodes.first { $0.id == entry.sourceNodeID })
+        XCTAssertFalse(source.properties.contains { $0.key.rawValue.hasPrefix(CanonicalComponentOrganization.namespace + "text.") })
+        try session.undo(); XCTAssertEqual(session.document.pages, organizedPages)
+        let legacy = try componentTextFixture()
+        XCTAssertTrue(CanonicalComponentOrganization.entries(in: legacy.componentDefinitions[0]).isEmpty)
+        let previousSchema = String(decoding: try DocumentSerializer.encode(document), as: UTF8.self)
+            .replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":14")
+        XCTAssertEqual(try DocumentSerializer.decode(Data(previousSchema.utf8)), document)
+    }
+
+    func testComponentPropertyOrganizationRenameRemovalConflictAndDetachPreserveIntent() throws {
+        let document = try organizedComponentFixture(), definition = document.componentDefinitions[0]
+        let entry = try XCTUnwrap(CanonicalComponentOrganization.entries(in: definition).first { $0.id.organizationKind == "text" })
+        guard case .text(let id) = entry.id else { return XCTFail("Expected text binding") }
+        let session = DocumentSession(document: document)
+        let instance = document.websitePages[0].nodes[1], pageID = document.websitePages[0].id
+        try session.execute(textCommand(.setTextOverride(instanceID: instance.id, propertyID: id, value: "Instance title"),
+            document: session.document, pageID: pageID, selected: instance.id).command)
+        let instanceProperties = session.document.websitePages[0].nodes[1].properties
+        try session.execute(textCommand(.organizeProperty(nodeID: entry.sourceNodeID, property: entry.id, group: "Content", position: 0),
+            document: session.document, pageID: definition.id, selected: entry.sourceNodeID).command)
+        try session.execute(textCommand(.exposeText(nodeID: entry.sourceNodeID, label: "Renamed title", defaultValue: "Updated default"),
+            document: session.document, pageID: definition.id, selected: entry.sourceNodeID).command)
+        let renamed = try XCTUnwrap(CanonicalComponentOrganization.entries(in: session.document.componentDefinitions[0]).first { $0.id == entry.id })
+        XCTAssertEqual(renamed.group, "Content"); XCTAssertEqual(renamed.label, "Renamed title")
+        XCTAssertEqual(session.document.websitePages[0].nodes[1].properties, instanceProperties)
+        try session.execute(textCommand(.removeTextProperty(entry.sourceNodeID), document: session.document, pageID: definition.id,
+            selected: entry.sourceNodeID).command)
+        let values = try CanonicalComponentOverrides.resolve(instance: session.document.websitePages[0].nodes[1], document: session.document)
+        let conflict = try XCTUnwrap(values.first { $0.property == entry.id })
+        if case .conflict(.missingProperty, _) = conflict.resolution {} else { XCTFail("Removal must retain authored intent as a conflict") }
+        XCTAssertEqual(conflict.effectiveValue, .text("Instance title"))
+        try session.undo(); try session.execute(textCommand(.detach(instance.id), document: session.document,
+            pageID: pageID, selected: instance.id).command)
+        XCTAssertFalse(session.document.websitePages.flatMap(\.nodes).flatMap(\.properties).contains {
+            $0.key.rawValue.hasPrefix(CanonicalComponentOrganization.namespace)
+        })
+        XCTAssertTrue(session.document.websitePages.flatMap(\.nodes).contains { $0.insertionStringProperty("content.text") == "Instance title" })
+    }
+
+    func testComponentPropertyOrganizationRejectsInvalidDuplicateMissingStaleAndCancelledState() throws {
+        let document = try organizedComponentFixture(), definition = document.componentDefinitions[0]
+        let entries = CanonicalComponentOrganization.entries(in: definition), entry = try XCTUnwrap(entries.first)
+        for (group, position) in [(" ", 0), ("Bad\nGroup", 0), (String(repeating: "g", count: 65), 0), ("Valid", -1), ("Valid", 64)] {
+            XCTAssertThrowsError(try textCommand(.organizeProperty(nodeID: entry.sourceNodeID, property: entry.id,
+                group: group, position: position), document: document, pageID: definition.id, selected: entry.sourceNodeID))
+        }
+        XCTAssertThrowsError(try textCommand(.organizeProperty(nodeID: entry.sourceNodeID, property: .text(ComponentTextPropertyID()),
+            group: nil, position: 0), document: document, pageID: definition.id, selected: entry.sourceNodeID))
+        let scene = CanvasViewportSceneID()
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: definition.id,
+            revision: document.revision, sceneID: scene, rendererGeneration: document.revision)
+        let context = TransformValidationContext(activePageID: definition.id, currentSceneID: scene,
+            rendererGeneration: document.revision, selectedNodeIDs: [entry.sourceNodeID], availableNodeIDs: [entry.sourceNodeID],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let edit = ComponentEdit.organizeProperty(nodeID: entry.sourceNodeID, property: entry.id, group: "Content", position: 0)
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: identity, in: document, context: context, cancelled: true))
+        var newer = document; newer.revision += 1
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: identity, in: newer, context: context))
+        for stale in [
+            DesignInspectorOperationIdentity(documentID: DocumentID(), pageID: definition.id, revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            DesignInspectorOperationIdentity(documentID: document.id, pageID: PageID(), revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            DesignInspectorOperationIdentity(documentID: document.id, pageID: definition.id, revision: document.revision, sceneID: CanvasViewportSceneID(), rendererGeneration: document.revision),
+            DesignInspectorOperationIdentity(documentID: document.id, pageID: definition.id, revision: document.revision, sceneID: scene, rendererGeneration: document.revision + 1)
+        ] {
+            XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: stale, in: document, context: context))
+        }
+        let mixed = TransformValidationContext(activePageID: definition.id, currentSceneID: scene, rendererGeneration: document.revision,
+            selectedNodeIDs: [entry.sourceNodeID, definition.rootNodeIDs[0]], availableNodeIDs: [entry.sourceNodeID],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: identity, in: document, context: mixed))
+        var invalid = document
+        let di = try XCTUnwrap(invalid.pages.firstIndex { $0.id == definition.id })
+        for item in entries.prefix(2) {
+            let ni = try XCTUnwrap(invalid.pages[di].nodes.firstIndex { $0.id == item.sourceNodeID })
+            invalid.pages[di].nodes[ni].properties.append(.init(key: .init(rawValue: CanonicalComponentOrganization.key(item.id.organizationKind, "order")),
+                value: .number(0), origin: .authored))
+            invalid.pages[di].nodes[ni].properties.append(.init(key: .init(rawValue: CanonicalComponentOrganization.key(item.id.organizationKind, "binding")),
+                value: .string(item.id.stableDescription), origin: .authored))
+        }
+        XCTAssertThrowsError(try invalid.validate(), "Duplicate authored ranks are invalid, not dictionary-order dependent")
+        for value in [PropertyValue.number(-1), .number(64), .number(0.5), .number(.infinity), .number(.nan), .string("0")] {
+            var malformed = document
+            let ni = try XCTUnwrap(malformed.pages[di].nodes.firstIndex { $0.id == entry.sourceNodeID })
+            malformed.pages[di].nodes[ni].properties.append(.init(key: .init(rawValue: CanonicalComponentOrganization.key(entry.id.organizationKind, "order")),
+                value: value, origin: .authored))
+            malformed.pages[di].nodes[ni].properties.append(.init(key: .init(rawValue: CanonicalComponentOrganization.key(entry.id.organizationKind, "binding")),
+                value: .string(entry.id.stableDescription), origin: .authored))
+            XCTAssertThrowsError(try malformed.validate())
+        }
+        var missing = document
+        missing.pages[di].nodes[0].properties.append(.init(key: .init(rawValue: CanonicalComponentOrganization.key("text", "group")),
+            value: .string("Orphan"), origin: .authored))
+        XCTAssertThrowsError(try missing.validate(), "Organization cannot invent a binding or live on an instance")
+        XCTAssertEqual(document.componentDefinitions[0], definition)
+    }
+
+    private func retainedComponentConflictSession() throws -> (DocumentSession, NodeID) {
+        let document = try organizedComponentFixture(), definition = document.componentDefinitions[0]
+        let session = DocumentSession(document: document), instance = document.websitePages[0].nodes[1]
+        let entries = CanonicalComponentOrganization.entries(in: definition)
+        for entry in entries {
+            let edit: ComponentEdit
+            switch entry.id {
+            case .text(let id): edit = .setTextOverride(instanceID: instance.id, propertyID: id, value: "Retained private title")
+            case .visibility(let id): edit = .setVisibilityOverride(instanceID: instance.id, propertyID: id, value: false)
+            case .choice(let id): edit = .setChoiceOverride(instanceID: instance.id, propertyID: id, value: .fill)
+            case .media(let id): edit = .setMediaOverride(instanceID: instance.id, propertyID: id, assetID: document.imageAssets[0].id)
+            case .action(let id): edit = .setActionOverride(instanceID: instance.id, propertyID: id, target: .external("https://example.invalid/retained"))
+            case .slot: continue
+            }
+            try session.execute(textCommand(edit, document: session.document, pageID: document.websitePages[0].id,
+                selected: instance.id).command)
+        }
+        for entry in entries {
+            let edit: ComponentEdit
+            switch entry.id {
+            case .text: edit = .removeTextProperty(entry.sourceNodeID)
+            case .visibility: edit = .removeVisibilityProperty(entry.sourceNodeID)
+            case .choice: edit = .removeChoiceProperty(entry.sourceNodeID)
+            case .media: edit = .removeMediaProperty(entry.sourceNodeID)
+            case .action: edit = .removeActionProperty(entry.sourceNodeID)
+            case .slot: continue
+            }
+            try session.execute(textCommand(edit, document: session.document, pageID: definition.id,
+                selected: entry.sourceNodeID).command)
+        }
+        return (session, instance.id)
+    }
+
+    func testComponentConflictRecoveryAllTypesResetOneAllExactHistoryAndPersistence() throws {
+        let (session, instanceID) = try retainedComponentConflictSession()
+        let pageID = session.document.websitePages[0].id
+        func conflicts() throws -> [ComponentOverrideConflictFinding] {
+            let instance = try XCTUnwrap(session.document.websitePages[0].nodes.first { $0.id == instanceID })
+            return try CanonicalComponentOverrides.conflicts(instance: instance, document: session.document)
+        }
+        let findings = try conflicts(), retained = session.document.pages
+        XCTAssertEqual(Set(findings.map { $0.property.organizationKind }), ["text", "visibility", "choice", "media", "action"])
+        XCTAssertTrue(findings.allSatisfy { $0.reason == .missingProperty && $0.path == nil })
+        let first = try XCTUnwrap(findings.first)
+        try session.execute(textCommand(.resetOverrideConflicts(instanceID: instanceID, expectedPropertyIDs: [first.authoredPropertyID], confirmed: true),
+            document: session.document, pageID: pageID, selected: instanceID).command)
+        XCTAssertEqual(try conflicts().count, 4)
+        XCTAssertFalse(session.document.websitePages[0].nodes[1].properties.contains { $0.id == first.authoredPropertyID })
+        try session.undo(); XCTAssertEqual(session.document.pages, retained)
+        try session.redo(); XCTAssertEqual(try conflicts().count, 4)
+        let beforeAll = session.document.pages, remaining = try conflicts()
+        try session.execute(textCommand(.resetOverrideConflicts(instanceID: instanceID,
+            expectedPropertyIDs: remaining.map(\.authoredPropertyID), confirmed: true), document: session.document,
+            pageID: pageID, selected: instanceID).command)
+        XCTAssertTrue(try conflicts().isEmpty)
+        XCTAssertEqual(session.document.componentDefinitions.map(\.nodes), retained.filter { $0.role == .componentDefinition }.map(\.nodes))
+        XCTAssertEqual(session.document.websitePages[0].nodes[1].id, instanceID)
+        try session.undo(); XCTAssertEqual(session.document.pages, beforeAll)
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(session.document))
+        XCTAssertEqual(reopened, session.document)
+        XCTAssertEqual(try CanonicalComponentOverrides.conflicts(instance: reopened.websitePages[0].nodes[1], document: reopened), remaining)
+    }
+
+    func testComponentConflictRecoveryMissingDefinitionAndOriginalBindingRestoration() throws {
+        let session = try exposedTextSession(), definition = session.document.componentDefinitions[0]
+        let binding = try XCTUnwrap(CanonicalComponentText.properties(in: definition).first)
+        let instance = session.document.websitePages[0].nodes[1], pageID = session.document.websitePages[0].id
+        try session.execute(textCommand(.setTextOverride(instanceID: instance.id, propertyID: binding.id, value: "Preserve original intent"),
+            document: session.document, pageID: pageID, selected: instance.id).command)
+        let originalInstance = session.document.websitePages[0].nodes[1]
+        try session.execute(textCommand(.removeTextProperty(binding.sourceNodeID), document: session.document,
+            pageID: definition.id, selected: binding.sourceNodeID).command)
+        XCTAssertEqual(try CanonicalComponentOverrides.conflicts(instance: session.document.websitePages[0].nodes[1], document: session.document).count, 1)
+        try session.undo()
+        XCTAssertTrue(try CanonicalComponentOverrides.conflicts(instance: session.document.websitePages[0].nodes[1], document: session.document).isEmpty)
+        XCTAssertEqual(session.document.websitePages[0].nodes[1], originalInstance)
+        let restored = try XCTUnwrap(CanonicalComponentText.properties(in: session.document.componentDefinitions[0]).first)
+        XCTAssertEqual(restored.id, binding.id); XCTAssertEqual(restored.sourceNodeID, binding.sourceNodeID)
+        var missing = session.document; missing.pages.removeAll { $0.id == definition.id }
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(missing))
+        let conflict = try XCTUnwrap(CanonicalComponentOverrides.conflicts(instance: reopened.websitePages[0].nodes[1], document: reopened).first)
+        XCTAssertEqual(conflict.reason, .missingDefinition); XCTAssertNil(conflict.path)
+        XCTAssertEqual(conflict.retainedValue, .text("Preserve original intent"))
+        let missingSession = DocumentSession(document: reopened)
+        try missingSession.execute(textCommand(.resetOverrideConflicts(instanceID: instance.id,
+            expectedPropertyIDs: [conflict.authoredPropertyID], confirmed: true), document: reopened, pageID: pageID, selected: instance.id).command)
+        XCTAssertEqual(CanonicalComponentReference.definitionID(for: missingSession.document.websitePages[0].nodes[1]), definition.id)
+        XCTAssertTrue(try CanonicalComponentOverrides.requiresRecovery(instance: missingSession.document.websitePages[0].nodes[1], document: missingSession.document),
+            "Resetting a value must not fabricate or retarget its missing definition")
+        try missingSession.undo(); XCTAssertEqual(missingSession.document.pages, reopened.pages)
+    }
+
+    func testComponentConflictRecoveryRejectsUnconfirmedCancelledStaleHealthyAndDuplicateTargets() throws {
+        let (session, instanceID) = try retainedComponentConflictSession()
+        let document = session.document, pageID = document.websitePages[0].id
+        let conflicts = try CanonicalComponentOverrides.conflicts(instance: document.websitePages[0].nodes[1], document: document)
+        let first = try XCTUnwrap(conflicts.first)
+        for ids in [[], [PropertyID()], [first.authoredPropertyID, first.authoredPropertyID]] {
+            XCTAssertThrowsError(try textCommand(.resetOverrideConflicts(instanceID: instanceID, expectedPropertyIDs: ids, confirmed: true),
+                document: document, pageID: pageID, selected: instanceID))
+        }
+        XCTAssertThrowsError(try textCommand(.resetOverrideConflicts(instanceID: instanceID, expectedPropertyIDs: [first.authoredPropertyID], confirmed: false),
+            document: document, pageID: pageID, selected: instanceID))
+        let scene = CanvasViewportSceneID()
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: pageID, revision: document.revision,
+            sceneID: scene, rendererGeneration: document.revision)
+        let context = TransformValidationContext(activePageID: pageID, currentSceneID: scene, rendererGeneration: document.revision,
+            selectedNodeIDs: [instanceID], availableNodeIDs: [instanceID], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let edit = ComponentEdit.resetOverrideConflicts(instanceID: instanceID, expectedPropertyIDs: [first.authoredPropertyID], confirmed: true)
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: identity, in: document, context: context, cancelled: true))
+        var newer = document; newer.revision += 1
+        XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: identity, in: newer, context: context))
+        for stale in [
+            DesignInspectorOperationIdentity(documentID: DocumentID(), pageID: pageID, revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            DesignInspectorOperationIdentity(documentID: document.id, pageID: PageID(), revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            DesignInspectorOperationIdentity(documentID: document.id, pageID: pageID, revision: document.revision, sceneID: CanvasViewportSceneID(), rendererGeneration: document.revision),
+            DesignInspectorOperationIdentity(documentID: document.id, pageID: pageID, revision: document.revision, sceneID: scene, rendererGeneration: document.revision + 1)
+        ] {
+            XCTAssertThrowsError(try ComponentCommandRegistry().prepare(edit, identity: stale, in: document, context: context))
+        }
+        let healthy = try exposedTextSession(), definition = healthy.document.componentDefinitions[0]
+        let binding = try XCTUnwrap(CanonicalComponentText.properties(in: definition).first), instance = healthy.document.websitePages[0].nodes[1]
+        try healthy.execute(textCommand(.setTextOverride(instanceID: instance.id, propertyID: binding.id, value: "Healthy"),
+            document: healthy.document, pageID: healthy.document.websitePages[0].id, selected: instance.id).command)
+        let propertyID = try XCTUnwrap(healthy.document.websitePages[0].nodes[1].properties.first { $0.key.rawValue == CanonicalComponentText.overrideKey(binding.id) }?.id)
+        XCTAssertThrowsError(try textCommand(.resetOverrideConflicts(instanceID: instance.id, expectedPropertyIDs: [propertyID], confirmed: true),
+            document: healthy.document, pageID: healthy.document.websitePages[0].id, selected: instance.id))
+        XCTAssertEqual(session.document, document)
+    }
+
+    func testComponentConflictRecoveryPreviewAndStaticOutputFailClosedWithoutDisclosingValues() async throws {
+        let (session, _) = try retainedComponentConflictSession()
+        let document = session.document
+        let result = StaticBuildCompiler.compile(document: document, profileSelection: .init(profile: .development),
+            resourceDescriptors: [:], resourceData: [:])
+        XCTAssertNil(result.plan)
+        XCTAssertTrue(result.findings.contains { $0.code == "component-override-conflict" && $0.requirementID == "SF-0905-004" })
+        XCTAssertFalse(result.redactedSummary.contains("Retained private title"))
+        XCTAssertFalse(result.redactedSummary.contains("https://example.invalid/retained"))
+        do {
+            _ = try await LocalPreviewRuntimeCompiler().compile(document: document, imageResourceData: [:], pixelRatio: CanvasPixelRatio(1))
+            XCTFail("Preview must not publish a snapshot of unresolved authored intent")
+        } catch { XCTAssertEqual(error as? LocalPreviewRuntimeError, .componentRecoveryRequired) }
+        XCTAssertEqual(session.document, document)
+    }
+
+    func testComponentConflictMissingActionDestinationSharesDependencyFindingAndPreservesHealthyOverrides() throws {
+        let initial = try organizedComponentFixture(), definition = initial.componentDefinitions[0]
+        let action = try XCTUnwrap(CanonicalComponentAction.properties(in: definition).first)
+        let text = try XCTUnwrap(CanonicalComponentText.properties(in: definition).first)
+        let instance = initial.websitePages[0].nodes[1], pageID = initial.websitePages[0].id
+        let removedPageID = try XCTUnwrap(initial.websitePages.last?.id)
+        XCTAssertNotEqual(pageID, removedPageID)
+        let session = DocumentSession(document: initial)
+        try session.execute(textCommand(.setActionOverride(instanceID: instance.id, propertyID: action.id, target: .page(removedPageID)),
+            document: session.document, pageID: pageID, selected: instance.id).command)
+        try session.execute(textCommand(.setTextOverride(instanceID: instance.id, propertyID: text.id, value: "Healthy remains"),
+            document: session.document, pageID: pageID, selected: instance.id).command)
+        var unavailable = session.document; unavailable.pages.removeAll { $0.id == removedPageID }
+        let loaded = try DocumentSerializer.decode(DocumentSerializer.encode(unavailable))
+        let findings = try CanonicalComponentOverrides.conflicts(instance: loaded.websitePages[0].nodes[1], document: loaded)
+        let conflict = try XCTUnwrap(findings.first)
+        XCTAssertEqual(findings.count, 1); XCTAssertEqual(conflict.property, .action(action.id))
+        XCTAssertEqual(conflict.reason, .missingActionDestination)
+        XCTAssertEqual(conflict.path?.sourceNodeID, action.sourceNodeID)
+        let details = try XCTUnwrap(ComponentDependencySnapshot.build(document: loaded).entry(for: definition.id))
+        XCTAssertEqual(details.overrideConflicts, findings); XCTAssertEqual(details.overrideConflictCount, 1)
+        let recovery = DocumentSession(document: loaded)
+        try recovery.execute(textCommand(.resetOverrideConflicts(instanceID: instance.id,
+            expectedPropertyIDs: [conflict.authoredPropertyID], confirmed: true), document: loaded,
+            pageID: pageID, selected: instance.id).command)
+        XCTAssertEqual(CanonicalComponentText.overrides(on: recovery.document.websitePages[0].nodes[1])[text.id], "Healthy remains")
+        XCTAssertTrue(CanonicalComponentAction.overrides(on: recovery.document.websitePages[0].nodes[1]).isEmpty)
+        try recovery.undo(); XCTAssertEqual(recovery.document.pages, loaded.pages)
+    }
+
+    func testComponentSlotFallbackBindingOrderingHistoryAndSchemaRoundTrip() throws {
+        let (document, slotID, children) = try componentSlotFallbackFixture()
+        let definitionID = document.componentDefinitions[0].id
+        let session = DocumentSession(document: document)
+        let prepared = try textCommand(.exposeSlot(nodeID: slotID, label: "Content"), document: document,
+            pageID: definitionID, selected: slotID)
+        XCTAssertEqual(prepared.selectedNodeID, slotID)
+        try session.execute(prepared.command)
+        let binding = try XCTUnwrap(CanonicalComponentSlot.properties(in: session.document.componentDefinitions[0]).first)
+        XCTAssertEqual(binding.defaultChildIDs, children)
+        let instance = session.document.websitePages[0].nodes[1]
+        XCTAssertTrue(instance.childIDs.isEmpty, "Fallback slots must preserve the approved childless-instance contract")
+        let values = try CanonicalComponentOverrides.resolve(instance: instance, document: session.document)
+        XCTAssertTrue(values.contains { $0.property == .slot(binding.id) && $0.effectiveValue == .slotFallback(children) && $0.resolution == .inherited })
+        let metadata = try XCTUnwrap(session.document.componentDefinitions[0].nodes.first { $0.id == slotID }).properties
+        try session.execute(textCommand(.exposeSlot(nodeID: slotID, label: "Renamed Content"), document: session.document,
+            pageID: definitionID, selected: slotID).command)
+        XCTAssertEqual(CanonicalComponentSlot.properties(in: session.document.componentDefinitions[0]).first?.id, binding.id)
+        try session.undo()
+        XCTAssertEqual(session.document.componentDefinitions[0].nodes.first { $0.id == slotID }?.properties, metadata)
+        try session.execute(textCommand(.removeSlotProperty(slotID), document: session.document,
+            pageID: definitionID, selected: slotID).command)
+        XCTAssertEqual(session.document.componentDefinitions[0].nodes.first { $0.id == slotID }?.childIDs, children)
+        XCTAssertTrue(CanonicalComponentSlot.properties(in: session.document.componentDefinitions[0]).isEmpty)
+        try session.undo()
+        XCTAssertEqual(session.document.componentDefinitions[0].nodes.first { $0.id == slotID }?.properties, metadata)
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
+        let forged = Data(String(decoding: encoded, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":13").utf8)
+        XCTAssertThrowsError(try DocumentSerializer.decode(forged))
+        XCTAssertTrue(CanonicalComponentSlot.properties(in: try componentTextFixture().componentDefinitions[0]).isEmpty)
+        var empty = session.document
+        let definitionIndex = try XCTUnwrap(empty.pages.firstIndex { $0.id == definitionID })
+        empty.pages[definitionIndex].nodes.removeAll { children.contains($0.id) }
+        let slotIndex = try XCTUnwrap(empty.pages[definitionIndex].nodes.firstIndex { $0.id == slotID })
+        empty.pages[definitionIndex].nodes[slotIndex].childIDs = []
+        try empty.validate()
+        XCTAssertEqual(CanonicalComponentSlot.properties(in: empty.componentDefinitions[0]).first?.defaultChildIDs, [])
+        let emptyProjection = try ComponentGraphResolver.resolvedPage(empty.websitePages[0], in: empty, breakpoint: .desktop)
+        XCTAssertEqual(emptyProjection.nodes.count, 5, "Page root plus two instance roots and two empty authored slot containers remain")
+    }
+
+    func testComponentSlotFallbackRejectsCancelledStaleNestedCyclicAndSuppliedOwnership() throws {
+        let (document, slotID, children) = try componentSlotFallbackFixture()
+        let definition = document.componentDefinitions[0], scene = CanvasViewportSceneID()
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: definition.id,
+            revision: document.revision, sceneID: scene, rendererGeneration: document.revision)
+        let context = TransformValidationContext(activePageID: definition.id, currentSceneID: scene,
+            rendererGeneration: document.revision, selectedNodeIDs: [slotID], availableNodeIDs: [slotID],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let registry = ComponentCommandRegistry(), edit = ComponentEdit.exposeSlot(nodeID: slotID, label: "Content")
+        XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: document, context: context, cancelled: true))
+        let stale = DesignInspectorOperationIdentity(documentID: DocumentID(), pageID: definition.id,
+            revision: document.revision, sceneID: scene, rendererGeneration: document.revision)
+        XCTAssertThrowsError(try registry.prepare(edit, identity: stale, in: document, context: context))
+        let staleIdentities: [DesignInspectorOperationIdentity] = [
+            .init(documentID: document.id, pageID: PageID(), revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: definition.id, revision: document.revision + 1, sceneID: scene, rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: definition.id, revision: document.revision, sceneID: CanvasViewportSceneID(), rendererGeneration: document.revision),
+            .init(documentID: document.id, pageID: definition.id, revision: document.revision, sceneID: scene, rendererGeneration: document.revision + 1)]
+        for captured in staleIdentities { XCTAssertThrowsError(try registry.prepare(edit, identity: captured, in: document, context: context)) }
+        XCTAssertThrowsError(try textCommand(.exposeSlot(nodeID: definition.rootNodeIDs[0], label: "Root"),
+            document: document, pageID: definition.id, selected: definition.rootNodeIDs[0]))
+        let session = DocumentSession(document: document)
+        try session.execute(try registry.prepare(edit, identity: identity, in: document, context: context).command)
+        let before = session.document
+        let page = before.websitePages[0], instance = page.nodes[1]
+        XCTAssertThrowsError(try session.execute(.setProperty(.init(pageID: page.id, nodeID: instance.id,
+            property: .init(key: .init(rawValue: CanonicalComponentSlot.unsupportedOverrideNamespace + ComponentSlotPropertyID().description),
+                value: .string("unsupported supplied content"), origin: .authored)))))
+        XCTAssertEqual(session.document, before)
+        var nested = before
+        let index = try XCTUnwrap(nested.pages.firstIndex { $0.id == definition.id })
+        let nestedIndex = try XCTUnwrap(nested.pages[index].nodes.firstIndex { $0.id == children[0] })
+        nested.pages[index].nodes[nestedIndex].kind = .frame
+        nested.pages[index].nodes[nestedIndex].properties.removeAll { $0.key.rawValue == "content.text" }
+        nested.pages[index].nodes[nestedIndex].properties += [
+            .init(key: .init(rawValue: CanonicalComponentSlot.namespace + "id"), value: .string(ComponentSlotPropertyID().description), origin: .authored),
+            .init(key: .init(rawValue: CanonicalComponentSlot.namespace + "label"), value: .string("Outer"), origin: .authored),
+            .init(key: .init(rawValue: CanonicalComponentSlot.namespace + "type"), value: .string("ordered-fallback-children"), origin: .authored)]
+        XCTAssertThrowsError(try nested.validate())
+        var cyclic = before
+        let slotIndex = try XCTUnwrap(cyclic.pages[index].nodes.firstIndex { $0.id == slotID })
+        cyclic.pages[index].nodes[slotIndex].childIDs.append(definition.rootNodeIDs[0])
+        XCTAssertThrowsError(try cyclic.validate())
+        var retargeted = before.pages[index]
+        let oldSlot = retargeted.nodes[slotIndex]
+        retargeted.nodes[slotIndex].properties.removeAll { CanonicalComponentSlot.metadataKeys.contains($0.key.rawValue) }
+        let replacementID = NodeID()
+        let replacement = DocumentNode(id: replacementID, kind: .frame, name: "Retargeted slot", parent: .node(definition.rootNodeIDs[0]),
+            properties: oldSlot.properties.map { .init(id: PropertyID(), key: $0.key, value: $0.value, origin: $0.origin) })
+        retargeted.nodes.append(replacement)
+        retargeted.nodes[0].childIDs.append(replacementID)
+        XCTAssertThrowsError(try session.execute(.batch([.removePage(.init(pageID: definition.id)),
+            .insertPage(.init(page: retargeted, index: index))])))
+        XCTAssertEqual(session.document, before, "A retained slot identity cannot silently point to another source container")
+    }
+
+    func testComponentSlotFallbackDefinitionUpdatesDetachAndOutputKeepChildIdentity() async throws {
+        let (document, slotID, children) = try componentSlotFallbackFixture()
+        let session = DocumentSession(document: document), definitionID = document.componentDefinitions[0].id
+        try session.execute(textCommand(.exposeSlot(nodeID: slotID, label: "Content"), document: document,
+            pageID: definitionID, selected: slotID).command)
+        let page = session.document.websitePages[0], instance = page.nodes[1]
+        let childIDs = children.map { NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue, label: "component-child:" + $0.description)) }
+        let expanded = try ComponentGraphResolver.resolvedPage(page, in: session.document, breakpoint: .desktop)
+        let projectedSlotID = NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue, label: "component-child:" + slotID.description))
+        XCTAssertEqual(expanded.nodes.first { $0.id == projectedSlotID }?.childIDs, childIDs)
+        XCTAssertTrue(expanded.nodes.allSatisfy { !$0.properties.contains { $0.key.rawValue.hasPrefix(CanonicalComponentSlot.namespace) } })
+        let viewport = try CanvasViewportState(viewportSize: .init(width: 1_000, height: 700),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 900)), pixelRatio: .init(2))
+        let prepared = try await WorkspaceScenePreparationWorker().prepare(.init(document: session.document,
+            activePageID: page.id, activeContainerID: nil, viewport: viewport, surfaceID: CanvasRenderSurfaceID()))
+        XCTAssertTrue(childIDs.allSatisfy { id in prepared.renderScene.objects.contains { $0.id == id } })
+        let plan = try CanvasRendererCore().prepare(scene: prepared.renderScene, overlays: prepared.overlays, viewport: viewport, previous: nil)
+        XCTAssertTrue(childIDs.allSatisfy { id in plan.accessibilityElements.contains { $0.objectID == id } })
+        let staticPlan = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        XCTAssertTrue(staticPlan.files.contains { $0.contents.contains("Fallback 1") && $0.contents.contains("Fallback 2") })
+        let property = try XCTUnwrap(session.document.componentDefinitions[0].nodes.first { $0.id == children[0] }?.insertionProperty("content.text"))
+        var changed = property; changed.value = .string("Updated fallback")
+        try session.execute(.setProperty(.init(pageID: definitionID, nodeID: children[0], property: changed)))
+        let updated = try ComponentGraphResolver.resolvedPage(session.document.websitePages[0], in: session.document, breakpoint: .desktop)
+        XCTAssertEqual(updated.nodes.first { $0.id == childIDs[0] }?.insertionStringProperty("content.text"), "Updated fallback")
+        try session.undo()
+        XCTAssertEqual(session.document.componentDefinitions[0].nodes.first { $0.id == children[0] }?.insertionProperty("content.text"), property)
+        let detached = try XCTUnwrap(ComponentGraphResolver.detachedNodes(instance, definition: session.document.componentDefinitions[0], page: page))
+        XCTAssertTrue(childIDs.allSatisfy { id in detached.contains { $0.id == id } })
+        XCTAssertFalse(detached.flatMap(\.properties).contains { $0.key.rawValue.hasPrefix(CanonicalComponentSlot.namespace) })
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
     }
 
     func testComponentVisibilityDefaultOverrideResetHistoryAndPersistence() throws {
@@ -78,7 +983,7 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertTrue(try derived(first).selectionBooleanProperty("hidden"))
     }
 
-    func testComponentVisibilityStrictValidationStaleCancellationAndRemovalGuard() throws {
+    func testComponentVisibilityStrictValidationStaleCancellationAndConflictRecovery() throws {
         let session = try exposedVisibilitySession()
         let document = session.document, definition = document.componentDefinitions[0]
         let child = definition.nodes[1]
@@ -121,13 +1026,18 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertThrowsError(try DocumentSerializer.encode(malformed))
         try session.execute(textCommand(edit, document: session.document, pageID: page.id,
             selected: first.id).command)
-        XCTAssertThrowsError(try textCommand(.removeVisibilityProperty(child.id),
-            document: session.document, pageID: definition.id, selected: child.id))
-        try session.execute(textCommand(.resetVisibilityOverride(instanceID: first.id,
-            propertyID: binding.id), document: session.document, pageID: page.id, selected: first.id).command)
         try session.execute(textCommand(.removeVisibilityProperty(child.id),
             document: session.document, pageID: definition.id, selected: child.id).command)
         XCTAssertNil(CanonicalComponentVisibility.property(on: session.document.componentDefinitions[0].nodes[1]))
+        let conflicted = try XCTUnwrap(CanonicalComponentOverrides.resolve(
+            instance: session.document.websitePages[0].nodes[1], document: session.document).first)
+        XCTAssertEqual(conflicted.effectiveValue, .visibility(true))
+        guard case .conflict(.missingProperty, _) = conflicted.resolution else {
+            return XCTFail("Expected a retained visibility override conflict")
+        }
+        try session.execute(textCommand(.resetAllVisibilityOverrides(first.id),
+            document: session.document, pageID: page.id, selected: first.id).command)
+        XCTAssertTrue(CanonicalComponentVisibility.overrides(on: session.document.websitePages[0].nodes[1]).isEmpty)
     }
 
     func testComponentVisibilityRendererAccessibilityAndStaticOutputShareEffectiveState() async throws {
@@ -219,7 +1129,7 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertEqual(document.websitePages, legacy.websitePages)
         let encoded = try DocumentSerializer.encode(document)
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(String(decoding: encoded, as: UTF8.self)
-            .replacingOccurrences(of: "\"schemaVersion\":11", with: "\"schemaVersion\":7").utf8)))
+            .replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":7").utf8)))
         for (suffix, value) in [("id", "not-an-id"), ("type", "media"), ("label", " "), ("label", "Title\n")] {
             var invalid = document
             let index = invalid.pages[2].nodes[1].properties.firstIndex { $0.key.rawValue == CanonicalComponentText.namespace + suffix }!
@@ -326,38 +1236,41 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertFalse(String(describing: diagnostics.records).contains(first.id.description))
     }
 
-    func testComponentTextSourceRemovalGuardAndUnresolvedIntentPreservation() throws {
+    func testComponentOverridePathConflictPreservesIntentAndResetRestoresExactHistory() throws {
         let session = try exposedTextSession(), definition = session.document.componentDefinitions[0]
         let text = definition.nodes[1], binding = CanonicalComponentText.properties(in: definition)[0]
         let first = session.document.pages[0].nodes[1], pageID = session.document.pages[0].id
         try session.execute(textCommand(.setTextOverride(instanceID: first.id, propertyID: binding.id, value: "Retain"),
             document: session.document, pageID: pageID, selected: first.id).command)
-        let before = session.document
-        XCTAssertThrowsError(try textCommand(.removeTextProperty(text.id), document: before, pageID: definition.id, selected: text.id))
-        for command: DocumentCommand in [
-            .removeNode(.init(pageID: definition.id, nodeID: text.id)),
-            .removePage(.init(pageID: definition.id)),
-            .setProperty(.init(pageID: pageID, nodeID: first.id, property: .init(
-                id: first.insertionProperty(CanonicalComponentReference.key)!.id,
-                key: .init(rawValue: CanonicalComponentReference.key), value: .string(PageID().description)))),
-            .batch(text.properties.filter { CanonicalComponentText.metadataKeys.contains($0.key.rawValue) }.map {
-                .removeProperty(.init(pageID: definition.id, nodeID: text.id, propertyID: $0.id))
-            })
-        ] {
-            XCTAssertThrowsError(try session.execute(command))
-            XCTAssertEqual(session.document, before)
-        }
-        var unresolved = before
-        unresolved.pages[2].nodes[1].properties.removeAll { CanonicalComponentText.metadataKeys.contains($0.key.rawValue) }
+        let authored = session.document
+        let path = try XCTUnwrap(CanonicalComponentOverrides.resolve(instance: authored.pages[0].nodes[1], document: authored).first)
+        XCTAssertEqual(path.path?.definitionID, definition.id)
+        XCTAssertEqual(path.path?.sourceNodeID, text.id)
+        guard case .authored(let stablePropertyID) = path.resolution else { return XCTFail("Expected authored override") }
+
+        try session.execute(textCommand(.removeTextProperty(text.id), document: session.document,
+            pageID: definition.id, selected: text.id).command)
+        let unresolved = session.document
         let loaded = try DocumentSerializer.decode(DocumentSerializer.encode(unresolved))
         XCTAssertEqual(CanonicalComponentText.unresolvedOverrides(on: loaded.pages[0].nodes[1], definition: loaded.pages[2]), [binding.id])
+        let conflict = try XCTUnwrap(CanonicalComponentOverrides.resolve(instance: loaded.pages[0].nodes[1], document: loaded).first)
+        XCTAssertEqual(conflict.effectiveValue, .text("Retain"))
+        XCTAssertNil(conflict.path)
+        XCTAssertEqual(conflict.resolution, .conflict(.missingProperty, propertyID: stablePropertyID))
         XCTAssertNil(ComponentGraphResolver.detachedNodes(loaded.pages[0].nodes[1], definition: loaded.pages[2], page: loaded.pages[0]))
-        try session.execute(textCommand(.resetAllTextOverrides(first.id), document: before, pageID: pageID, selected: first.id).command)
-        try session.execute(textCommand(.removeTextProperty(text.id), document: session.document, pageID: definition.id, selected: text.id).command)
-        XCTAssertTrue(CanonicalComponentText.properties(in: session.document.componentDefinitions[0]).isEmpty)
-        XCTAssertEqual(session.document.pages[2].nodes[1].insertionStringProperty("content.text"), "Original")
+        try session.execute(textCommand(.resetAllOverrides(first.id), document: session.document,
+            pageID: pageID, selected: first.id).command)
+        XCTAssertTrue(CanonicalComponentText.overrides(on: session.document.pages[0].nodes[1]).isEmpty)
+        let reset = session.document
+        try session.undo()
+        var expectedUnresolved = unresolved; expectedUnresolved.revision = session.document.revision
+        XCTAssertEqual(session.document, expectedUnresolved)
+        try session.redo()
+        var expectedReset = reset; expectedReset.revision = session.document.revision
+        XCTAssertEqual(session.document, expectedReset)
         try session.undo(); try session.undo()
-        XCTAssertEqual(session.document.pages, before.pages)
+        var expectedAuthored = authored; expectedAuthored.revision = session.document.revision
+        XCTAssertEqual(session.document, expectedAuthored)
     }
 
     func testComponentTextMultipleBindingsResetAllAndNoOpPreserveExactPresence() throws {
@@ -532,11 +1445,11 @@ final class CommandKernelTests: XCTestCase {
         document.pages[0].nodes.append(instance)
         let bytes = try DocumentSerializer.encode(document)
         XCTAssertEqual(try DocumentSerializer.decode(bytes), document)
-        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":11", with: "\"schemaVersion\":6")
+        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":6")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(old.utf8)))
-        let future = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":11", with: "\"schemaVersion\":12")
+        let future = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion + 1)")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(future.utf8))) {
-            XCTAssertEqual($0 as? DocumentSerializationError, .unsupportedSchema(12))
+            XCTAssertEqual($0 as? DocumentSerializationError, .unsupportedSchema(DocumentSerializer.currentSchemaVersion + 1))
         }
         var invalid = document
         invalid.pages[0].nodes[1].properties[0].value = .string("invalid")
@@ -1090,7 +2003,10 @@ final class CommandKernelTests: XCTestCase {
         var frameProperties = properties(frameLayers)
         frameProperties.append(.init(key: .init(rawValue: "style.opacity"), value: .number(0.5), origin: .authored))
         let frame = DocumentNode(id: frameID, kind: .frame, name: "Frame", parent: .page(pageID), properties: frameProperties)
-        let section = DocumentNode(id: sectionID, kind: .section, name: "Section", parent: .page(pageID), properties: properties(sectionLayers))
+        let section = DocumentNode(id: sectionID, kind: .section, name: "Section", parent: .page(pageID), properties: properties(sectionLayers) + [
+            .init(key: .init(rawValue: "layout.container.kind"), value: .string("section"), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.padding"), value: .number(48), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.axis"), value: .string("vertical"), origin: .defaulted)])
         let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
                                 rootNodeIDs: [frameID, sectionID], nodes: [frame, section])
         let plan = try MultiPageStaticBuildPlanner.plan(document: .init(pages: [page]))
@@ -1107,7 +2023,7 @@ final class CommandKernelTests: XCTestCase {
         let layer = CanonicalFillLayer.solid(color: fallback)
         let properties = CanonicalFillLayerCodec.propertyValues(for: [layer]).map {
             NodeProperty(key: .init(rawValue: $0.key), value: $0.value, origin: .authored)
-        } + [NodeProperty(key: .init(rawValue: LocalColorTokenBinding.key), value: .string(token.id.description), origin: .authored)]
+        } + [NodeProperty(key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)), value: .string(token.id.description), origin: .authored)]
         let frame = DocumentNode(id: nodeID, kind: .frame, name: "Frame", parent: .page(pageID), properties: properties)
         let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
                                 rootNodeIDs: [nodeID], nodes: [frame])
@@ -1143,7 +2059,12 @@ final class CommandKernelTests: XCTestCase {
                 .init(key: .init(rawValue: "layout.height"), value: .number(64), origin: .authored),
                 property("minHeight", .number(40)),
                 .init(key: .init(rawValue: CanonicalImageStyle.namespace + "assetID"),
-                    value: .string(asset.id.description), origin: .authored)])
+                    value: .string(asset.id.description), origin: .authored),
+                .init(key: .init(rawValue: CanonicalImageStyle.namespace + "fit"), value: .string("fit"), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.x"), value: .number(0.5), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.y"), value: .number(0.5), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalImageStyle.namespace + "alt"), value: .string(""), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalImageStyle.namespace + "decorative"), value: .boolean(true), origin: .defaulted)])
         let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
             rootNodeIDs: [frameID, imageID], nodes: [frame, image])
         let document = CanonicalDocument(pages: [page], imageAssets: [asset])
@@ -1603,7 +2524,7 @@ final class CommandKernelTests: XCTestCase {
 
         XCTAssertEqual(first, second)
         let json = String(decoding: first, as: UTF8.self)
-        XCTAssertTrue(json.contains("\"schemaVersion\":11"))
+        XCTAssertTrue(json.contains("\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)"))
         XCTAssertTrue(json.contains("\"origin\":\"authored\""))
     }
 
@@ -1617,7 +2538,7 @@ final class CommandKernelTests: XCTestCase {
     // SF-0302-004, SF-1702-004, SF-1702-008
     func testUnknownMalformedAndInvalidSchemaInputsAreRejected() throws {
         let valid = String(decoding: try DocumentSerializer.encode(populatedDocument()), as: UTF8.self)
-        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":11", with: "\"schemaVersion\":99").utf8)
+        let unknown = Data(valid.replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":99").utf8)
         XCTAssertThrowsError(try DocumentSerializer.decode(unknown)) { error in
             XCTAssertEqual(error as? DocumentSerializationError, .unsupportedSchema(99))
         }

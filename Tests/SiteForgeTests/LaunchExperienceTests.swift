@@ -3,6 +3,17 @@ import XCTest
 
 @MainActor
 final class LaunchExperienceTests: XCTestCase {
+    func testNativeLaunchRequestTransfersOnceWithoutReplacingPendingIntent() {
+        let queue = WorkspaceLaunchRequestQueue()
+        let url = URL(fileURLWithPath: "/temporary-owned-project.siteforge")
+        XCTAssertTrue(queue.enqueue(.open(url)))
+        XCTAssertFalse(queue.enqueue(.new))
+        XCTAssertEqual(queue.take(), .open(url))
+        XCTAssertNil(queue.take())
+        XCTAssertTrue(queue.enqueue(.new))
+        XCTAssertEqual(queue.take(), .new)
+        XCTAssertNil(queue.take())
+    }
     nonisolated(unsafe) private var fixtureDirectory: URL!
     nonisolated(unsafe) private var fixtureLease: ApplicationOwnedTestFixture!
 
@@ -41,6 +52,48 @@ final class LaunchExperienceTests: XCTestCase {
         XCTAssertEqual(controller.lifecycle.session.document.pages.map(\.route.rawValue), ["/", "/404"])
         XCTAssertFalse(controller.lifecycle.session.canUndo)
         XCTAssertEqual(controller.lifecycle.phase, .clean)
+    }
+
+    // SF-AUTHORING-106 / SF-0204-001...008
+    func testStarterCreationUsesSameAtomicLifecycleWithCanonicalTemplateProvenance() async throws {
+        let controller = makeController()
+        await controller.createStarterProjectAndWait()
+
+        XCTAssertEqual(controller.state, .workspace)
+        XCTAssertEqual(controller.transitionHistory, [.welcome, .creating, .loadingNonCancelable, .workspace])
+        let document = controller.lifecycle.session.document
+        XCTAssertEqual(document.creationKind, .template)
+        XCTAssertEqual(document.templateID, StarterSiteTemplate.id)
+        XCTAssertEqual(document.pages.map(\.name), ["Home", "About"])
+        XCTAssertEqual(document.pages.map(\.route.rawValue), ["/", "/about"])
+        XCTAssertFalse(document.pages.contains { $0.role == .notFound })
+        XCTAssertFalse(controller.lifecycle.session.canUndo)
+        XCTAssertEqual(controller.lifecycle.phase, .clean)
+        try document.validate()
+
+        let diagnostics = await controller.diagnostics.snapshot()
+        XCTAssertEqual(diagnostics.last?.result, .success)
+        XCTAssertTrue(StarterSiteTemplate.requirementIDs.isSubset(of: Set(diagnostics.last?.requirementIDs ?? [])))
+    }
+
+    // SF-AUTHORING-106 / SF-0204-004/006 — choosing a template never bypasses
+    // the existing destructive-transition decision or replaces current work
+    // after cancellation.
+    func testStarterCreationCancellationPreservesCurrentProjectAndReportsCancellation() async throws {
+        let controller = makeController()
+        try addPage("Current Work", to: controller.lifecycle.session)
+        let before = controller.lifecycle.session.document
+
+        controller.createStarterProject()
+        try await waitUntil { controller.lifecycle.pendingUnsavedChangesPrompt != nil }
+        let prompt = try XCTUnwrap(controller.lifecycle.pendingUnsavedChangesPrompt)
+        XCTAssertEqual(prompt.transition, .newDocument)
+        controller.lifecycle.resolveUnsavedChanges(.cancel, promptID: prompt.id)
+        try await waitUntil { controller.state == .welcome }
+
+        XCTAssertEqual(controller.lifecycle.session.document, before)
+        let diagnostics = await controller.diagnostics.snapshot()
+        XCTAssertEqual(diagnostics.last?.result, .cancelled)
     }
 
     // SF-AUTHORING-105 / SF-0201-002/003/004/006, SF-0204-002/003/004/006
@@ -243,6 +296,35 @@ final class LaunchExperienceTests: XCTestCase {
         XCTAssertNil(discarder.lifecycle.recoveryCandidate)
     }
 
+    func testWelcomeRecoveryReviewAndLaterPreserveBytesAndDoNotLoop() async throws {
+        let debouncer = ManualLifecycleAutosaveDebouncer()
+        let writer = makeController(autosaveDebouncer: debouncer)
+        try addPage("Retained work", to: writer.lifecycle.session)
+        await debouncer.waitUntilPending(); debouncer.fireAll()
+        while writer.lifecycle.hasPendingAutosaveWork { await Task.yield() }
+        let recovery = DocumentLifecycleBackend.recoveryURL(for: writer.lifecycle.currentProjectID,
+            in: fixtureDirectory.appendingPathComponent("recovery", isDirectory: true))
+        let bytes = try Data(contentsOf: recovery)
+        let reader = makeController()
+        let baseline = reader.lifecycle.session.document
+        await reader.discoverInitialRecovery()
+        XCTAssertEqual(reader.state, .welcome)
+        XCTAssertTrue(reader.recoveryAvailableAtWelcome)
+        XCTAssertEqual(reader.lifecycle.recoveryCandidate?.package.projectID, writer.lifecycle.currentProjectID)
+        reader.reviewWelcomeRecovery(); XCTAssertEqual(reader.state.kind, .recovery)
+        reader.deferRecovery(); XCTAssertEqual(reader.state, .welcome)
+        await reader.discoverInitialRecovery()
+        XCTAssertEqual(reader.state, .welcome)
+        XCTAssertEqual(reader.lifecycle.session.document, baseline)
+        XCTAssertEqual(try Data(contentsOf: recovery), bytes)
+        reader.reviewWelcomeRecovery(); XCTAssertEqual(reader.state.kind, .recovery)
+        XCTAssertTrue(reader.recoveryAvailableAtWelcome)
+        reader.deferRecovery()
+        await reader.createBlankProjectAndWait()
+        XCTAssertEqual(reader.state, .workspace)
+        XCTAssertEqual(try Data(contentsOf: recovery), bytes, "Starting fresh must not consume the separately owned recovery")
+    }
+
     func testStateMessagesAreAccessibleSpecificAndPathFree() {
         for update in ProjectLoadUpdate.allCases {
             XCTAssertFalse(update.status.accessibilityLabel.isEmpty)
@@ -273,7 +355,7 @@ final class LaunchExperienceTests: XCTestCase {
         controller.announceCurrentState()
 
         XCTAssertEqual(messages, [
-            "SiteForge is ready. Create a blank project or open an existing project.",
+            "SiteForge is ready. Choose Blank Site or Starter Site, or open an existing project.",
             "Project ready.",
         ])
     }
@@ -398,7 +480,8 @@ final class LaunchExperienceTests: XCTestCase {
 
     private var expectedRequirementIDs: Set<String> {
         ["SF-0201-002", "SF-0201-003", "SF-0201-004", "SF-0201-006", "SF-0201-007", "SF-0201-008",
-         "SF-0204-002", "SF-0204-003", "SF-0204-004", "SF-0204-006",
+         "SF-0204-001", "SF-0204-002", "SF-0204-003", "SF-0204-004",
+         "SF-0204-005", "SF-0204-006", "SF-0204-007", "SF-0204-008",
          "SF-0301-002", "SF-0301-004", "SF-0301-006", "SF-0301-007", "SF-0301-008",
          "SF-1602-004", "SF-1602-006", "SF-1602-007", "SF-1602-008"]
     }

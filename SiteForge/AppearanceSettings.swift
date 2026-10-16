@@ -225,27 +225,32 @@ struct AppearanceSettingsView: View {
     @ObservedObject var store: AppearanceSettingsStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Appearance").font(.title2).bold()
-            Text("Application · This Mac").font(.headline)
-            Text("Changes SiteForge’s native appearance, not your website or project files.")
-                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Picker("Appearance", selection: Binding(get: { store.choice }, set: { store.preview($0) })) {
-                ForEach(ApplicationAppearance.allCases, id: \.self) { choice in
-                    Text(choice.title).tag(choice)
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
+            SiteForgeSettingsHeader(
+                title: "Appearance",
+                scope: "Application · This Mac",
+                detail: "Changes SiteForge’s native appearance, not your website or project files.",
+                systemImage: "circle.lefthalf.filled"
+            )
+            GroupBox("Interface") {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                    Picker("Appearance", selection: Binding(get: { store.choice }, set: { store.preview($0) })) {
+                        ForEach(ApplicationAppearance.allCases, id: \.self) { choice in
+                            Text(choice.title).tag(choice)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+                    .accessibilityIdentifier("settings.appearance.choice")
+                    Text(store.status).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel(store.status)
+                        .accessibilityIdentifier("settings.appearance.status")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .pickerStyle(.radioGroup)
-            .accessibilityIdentifier("settings.appearance.choice")
-            Text(store.provenance).accessibilityLabel(store.provenance)
-                .accessibilityIdentifier("settings.appearance.provenance")
-            Text(store.status).font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel(store.status)
-                .accessibilityIdentifier("settings.appearance.status")
-            Divider()
             HStack {
                 Button("Reset to macOS") { store.reset() }
+                    .accessibilityValue(store.draft == nil ? "Already default" : "Reset available")
                     .accessibilityIdentifier("settings.appearance.reset")
                 Button("Restore Previous") { store.restorePrevious() }
                     .disabled(!store.canRestore)
@@ -255,7 +260,6 @@ struct AppearanceSettingsView: View {
             HStack {
                 Spacer()
                 Button("Close") { store.closeWindow() }
-                    .keyboardShortcut("w", modifiers: .command)
                     .accessibilityIdentifier("settings.appearance.close")
                 Button("Cancel") { store.cancel() }.keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("settings.appearance.cancel")
@@ -264,8 +268,8 @@ struct AppearanceSettingsView: View {
                     .accessibilityIdentifier("settings.appearance.apply")
             }
         }
-        .padding(24)
-        .frame(width: 460)
+        .padding(SiteForgeVisualSystem.settingsFormPadding)
+        .frame(maxWidth: SiteForgeVisualSystem.settingsContentMaxWidth, alignment: .topLeading)
         // Native close, not SwiftUI appearance-driven view replacement, owns
         // draft rollback. The host never changes window geometry or content.
         .background(AppearanceSettingsWindowHost(store: store).frame(width: 0, height: 0))
@@ -283,11 +287,24 @@ private struct AppearanceSettingsWindowHost: NSViewRepresentable {
 
     final class Host: NSView {
         private let store: AppearanceSettingsStore
+        private var attachmentGeneration: UInt64 = 0
         init(store: AppearanceSettingsStore) { self.store = store; super.init(frame: .zero) }
         required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let window { store.attach(to: window) }
+            guard attachmentGeneration < UInt64.max else { return }
+            attachmentGeneration += 1
+            let generation = attachmentGeneration
+            guard let targetWindow = window else { return }
+            // `viewDidMoveToWindow` can run while SwiftUI is installing the
+            // Settings subtree. Publish the initial draft after that native
+            // installation boundary, guarded against host reuse or teardown.
+            Task { @MainActor [weak self, weak targetWindow] in
+                guard let self, let targetWindow,
+                      self.attachmentGeneration == generation,
+                      self.window === targetWindow else { return }
+                self.store.attach(to: targetWindow)
+            }
         }
     }
 }

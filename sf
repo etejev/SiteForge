@@ -25,7 +25,24 @@ if [[ -z "$CODEX_BIN" ]]; then
 fi
 
 typeset -ga CONTAINER_ARGS
+typeset -ga TEST_BUILD_IDENTITY_ARGS
 typeset -g SITEFORGE_UI_PROCESS_ENUMERATION_AVAILABLE=1
+
+# The installed controller and its tests must not share a running app identity.
+# An explicit local testing identity uses the same project settings as the
+# detached collector; ordinary developer commands retain their existing default.
+if [[ -n ${SITEFORGE_APP_BUNDLE_IDENTIFIER:-} ]]; then
+  [[ "$SITEFORGE_APP_BUNDLE_IDENTIFIER" == app.siteforge.SiteForge.OwnerTesting ]] || {
+    print -u2 "Unsupported SiteForge test application identity."; exit 2
+  }
+  TEST_BUILD_IDENTITY_ARGS+=("SITEFORGE_APP_BUNDLE_IDENTIFIER=$SITEFORGE_APP_BUNDLE_IDENTIFIER")
+fi
+if [[ -n ${SITEFORGE_APP_INFO_PLIST:-} ]]; then
+  [[ -f "$SITEFORGE_APP_INFO_PLIST" && ${#TEST_BUILD_IDENTITY_ARGS} -gt 0 ]] || {
+    print -u2 "Test metadata requires the isolated test identity and a real plist."; exit 2
+  }
+  TEST_BUILD_IDENTITY_ARGS+=("SITEFORGE_APP_INFO_PLIST=$SITEFORGE_APP_INFO_PLIST")
+fi
 
 resolve_container() {
   if [[ -n ${SITEFORGE_WORKSPACE:-} ]]; then
@@ -57,7 +74,7 @@ resolve_container() {
 
 build_app() {
   resolve_container
-  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" build
+  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" "${TEST_BUILD_IDENTITY_ARGS[@]}" build
 }
 
 test_app() {
@@ -124,7 +141,7 @@ test_app() {
   local test_status log_path
   log_path="${result_bundle:r}.log"
   set +e
-  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" -resultBundlePath "$result_bundle" test "${test_arguments[@]}" 2>&1 | tee "$log_path"
+  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" -resultBundlePath "$result_bundle" "${TEST_BUILD_IDENTITY_ARGS[@]}" test "${test_arguments[@]}" 2>&1 | tee "$log_path"
   test_status=${pipestatus[1]}
   set -e
   cleanup_test_fixtures
@@ -219,6 +236,7 @@ SiteForge local commands
   ./sf test [level]    Run quick, changed, half, focused, or full tests
   ./sf test focused <XCTest selector> [selector...]
   ./sf verify          Run repository checks, build, and tests
+  ./sf testing [full|ui]  Start one detached local testing collector
   ./sf watch           Re-run verification when source files change
   ./sf next            Ask Codex to complete the next ready queue item
   ./sf loop [count]    Let Codex process up to count items (default 5)
@@ -247,6 +265,9 @@ case ${1:-help} in
     "$ROOT/scripts/check-repository.sh"
     build_app
     test_app full
+    ;;
+  testing)
+    exec /bin/zsh "$ROOT/scripts/run-full-verification-unattended.sh" --mode "${2:-full}"
     ;;
   watch)
     exec "$ROOT/scripts/watch-and-verify.sh"

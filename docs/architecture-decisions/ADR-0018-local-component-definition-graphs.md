@@ -65,7 +65,49 @@ it. Reset or explicit detach resolves that intent. Loaded unresolved values
 remain inspectable; detach is rejected until restoration or explicit reset.
 No destructive migration is inferred.
 
+### Action-property integration addendum — source only, SF-AUTHORING-116/117
+
+Schema v13 stores one stable Button/Link action binding on the definition and
+one typed destination override on an instance. The default remains the
+definition's canonical link target. Existing atomic commands and exact
+inverses own metadata/override changes; drafts and current Inspector state
+remain scene-local. Binding removal leaves retained missing-property conflicts;
+reusing the same stable binding for another source while values survive is
+rejected. This matches SF-AUTHORING-113's intent-preserving reconciliation.
+
+Transfer maps action identities and destinations only through explicit copied
+page/node or imported/equivalent definition mappings. Unsupported references
+fail before mutation. Immutable expansion feeds canvas/Preview/static output;
+virtual section availability is checked in the resolved graph, with no second
+canonical store. Native Content fields share the existing Interactions editor.
+Tests and runtime acceptance are deferred to the owner's Prompt-10 gate.
+
+## Named fallback slots — SF-AUTHORING-118 source-only clarification
+
+Schema v14 adds optional stable slot metadata on non-root definition containers.
+The existing ordered childIDs are the only fallback content store. The native
+Inspector edits the binding and routes users to canonical definition editing;
+immutable expansion/detach strips slot metadata while retaining child identity.
+Instances remain childless, and supplied-content state is not introduced.
+OD-018 records the unresolved storage/cardinality decision before that broader
+architecture can change. These source additions are unverified until Prompt 10.
+
 ## Deferred
 
-Nested authoring, variants, slots, per-child overrides, remote libraries,
+Source-only SF-AUTHORING-120 derives recovery findings from the original stable
+override projection. Native confirmation compiles identified property removals
+through the existing registry/kernel; original data restoration retains IDs.
+Valid conflicts remain serializable in schema v15. Output/transfer fail closed;
+no recovery store, tombstone, guessed retarget or type conversion is added.
+OD-019 records the policy boundary before enabling broader migration. Tests
+and runtime acceptance are deferred to Prompt 10.
+
+Source-only SF-AUTHORING-119 adds optional schema-v15 flat group/order metadata
+on existing definition source nodes, indexed by binding type. Typed exposed IDs
+remain the stable references; groups are presentation labels, not content or
+new entity graphs. Central property batches preserve exact history, while
+projection/detach removes organization. No instance-child or slot ownership
+decision changes; runtime verification remains deferred to Prompt 10.
+
+Nested authoring, variants, supplied/nested slots, per-child overrides, remote libraries,
 preview/export and release acceptance. Broader component modules remain Partial.

@@ -7,6 +7,8 @@ final class SiteForgeApplicationDelegate: NSObject, NSApplicationDelegate {
     let appearanceSettings = AppearanceSettingsStore()
     let canvasSettings = CanvasSettingsStore()
     let supportSettings = SupportSettingsStore()
+    let updateSettings = UpdateSettingsStore()
+    let settingsNavigation = SettingsNavigationModel()
     lazy var applicationSettingsGroup = ApplicationSettingsGroupStore(
         appearance: appearanceSettings, canvas: canvasSettings)
 
@@ -39,17 +41,16 @@ struct SiteForgeApp: App {
             SiteForgeCommands()
         }
         Settings {
-            TabView {
-                AppearanceSettingsView(store: applicationDelegate.appearanceSettings)
-                    .tabItem { Label("Appearance", systemImage: "paintbrush") }
-                CanvasSettingsView(store: applicationDelegate.canvasSettings)
-                    .tabItem { Label("Canvas", systemImage: "circle.grid.2x2") }
-                ApplicationSettingsGroupView(store: applicationDelegate.applicationSettingsGroup)
-                    .tabItem { Label("Reset", systemImage: "arrow.uturn.backward") }
-                SupportSettingsView(store: applicationDelegate.supportSettings)
-                    .tabItem { Label("Support", systemImage: "lifepreserver") }
-            }
-            .accessibilityIdentifier("settings.tabs")
+            SiteForgeSettingsRootView(
+                navigation: applicationDelegate.settingsNavigation,
+                appearance: applicationDelegate.appearanceSettings,
+                canvas: applicationDelegate.canvasSettings,
+                defaults: applicationDelegate.applicationSettingsGroup,
+                updates: applicationDelegate.updateSettings,
+                support: applicationDelegate.supportSettings
+            )
         }
+        .defaultSize(width: SiteForgeVisualSystem.settingsIdealWidth, height: SiteForgeVisualSystem.settingsIdealHeight)
+        .windowResizability(.contentSize)
     }
 }

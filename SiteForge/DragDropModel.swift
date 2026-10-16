@@ -187,6 +187,14 @@ struct DragDropCommandRegistry: Sendable {
         guard !source.dragBoolean("locked") else { throw DragDropError.lockedSource }
         guard !source.dragBoolean("hidden") else { throw DragDropError.hiddenSource }
         let destination = try resolve(command.destination, hierarchy: hierarchy, context: context)
+        if let role = CanonicalPageFlow.role(source) {
+            guard role == .body else { throw DragDropError.incompatibleContainer }
+            if case .node(let parentID) = destination.parent, let parent = hierarchy.nodes[parentID],
+               let parentRole = CanonicalPageFlow.role(parent), parentRole == .header || parentRole == .footer {
+                throw DragDropError.incompatibleContainer
+            }
+        }
+        if CanonicalPageFlow.isNavigationLink(source), destination.parent != source.parent { throw DragDropError.incompatibleContainer }
         guard destination.parent != .node(source.id),
               !(try hierarchy.isDescendant(destination.parent, of: source.id, cancellation: cancellation)) else {
             throw DragDropError.cycle

@@ -950,6 +950,25 @@ enum ComponentEdit: Sendable {
     case removeVisibilityProperty(NodeID)
     case setVisibilityOverride(instanceID: NodeID, propertyID: ComponentVisibilityPropertyID, value: Bool)
     case resetVisibilityOverride(instanceID: NodeID, propertyID: ComponentVisibilityPropertyID)
+    case resetAllVisibilityOverrides(NodeID)
+    case exposeChoice(nodeID: NodeID, label: String)
+    case removeChoiceProperty(NodeID)
+    case setChoiceOverride(instanceID: NodeID, propertyID: ComponentChoicePropertyID, value: ImageFitMode)
+    case resetChoiceOverride(instanceID: NodeID, propertyID: ComponentChoicePropertyID)
+    case exposeMedia(nodeID: NodeID, label: String)
+    case removeMediaProperty(NodeID)
+    case setMediaOverride(instanceID: NodeID, propertyID: ComponentMediaPropertyID, assetID: AssetID)
+    case resetMediaOverride(instanceID: NodeID, propertyID: ComponentMediaPropertyID)
+    case exposeAction(nodeID: NodeID, label: String)
+    case removeActionProperty(NodeID)
+    case setActionOverride(instanceID: NodeID, propertyID: ComponentActionPropertyID, target: CanonicalLinkTarget)
+    case resetActionOverride(instanceID: NodeID, propertyID: ComponentActionPropertyID)
+    case exposeSlot(nodeID: NodeID, label: String)
+    case removeSlotProperty(NodeID)
+    case organizeProperty(nodeID: NodeID, property: ComponentOverridePropertyIdentity, group: String?, position: Int)
+    case resetPropertyOrganization(nodeID: NodeID, property: ComponentOverridePropertyIdentity)
+    case resetAllOverrides(NodeID)
+    case resetOverrideConflicts(instanceID: NodeID, expectedPropertyIDs: [PropertyID], confirmed: Bool)
 }
 
 struct PreparedComponentEdit: Sendable {
@@ -961,6 +980,207 @@ struct PreparedComponentEdit: Sendable {
 /// All UI component actions compile complete graph changes into the existing
 /// atomic command kernel. Graph replacement preserves storage order as well as
 /// ownership order, and therefore has an exact existing-command inverse.
+enum PageStructureEdit: Sendable {
+    case convert(NodeID, confirmed: Bool)
+    case reorder(NodeID, pointerY: Double)
+    case height(NodeID, Double, ResponsiveBreakpoint)
+    case padding(NodeID, Double, ResponsiveBreakpoint)
+    case alignment(NodeID, ContainerLayoutAlignment)
+    case hamburger(NodeID, Bool)
+    case editableContents(NodeID)
+    case automaticLayout(NodeID)
+    case title(NodeID, text: String)
+    case showTitle(NodeID, Bool)
+    case includePage(NodeID, PageID, Bool)
+    case contentLayout(NodeID, axis: ContainerLayoutAxis, gap: Double, alignment: ContainerLayoutAlignment)
+    case addLink(owner: NodeID, pageID: PageID)
+    case editLink(owner: NodeID, link: NodeID, pageID: PageID, label: String)
+    case removeLink(owner: NodeID, link: NodeID)
+    case reorderLink(owner: NodeID, link: NodeID, offset: Int)
+}
+
+struct PageStructureCommandRegistry {
+    func prepare(_ edit: PageStructureEdit, identity: DesignInspectorOperationIdentity,
+                 document: CanonicalDocument, context: TransformValidationContext,
+                 viewportWidth: Double, breakpoint: ResponsiveBreakpoint, cancelled: Bool = false) throws -> DocumentCommand {
+        guard !cancelled else { throw TransformError.cancelled }
+        guard context.isLifecycleAvailable else { throw TransformError.lifecycleUnavailable("Page structure editing is unavailable.") }
+        guard identity.documentID == document.id else { throw TransformError.staleDocument }
+        guard identity.revision == document.revision else { throw TransformError.staleRevision }
+        guard document.revision < UInt64.max - 1 else { throw TransformError.revisionExhausted }
+        guard identity.sceneID == context.currentSceneID, identity.rendererGeneration == context.rendererGeneration,
+              identity.rendererGeneration == document.revision else { throw TransformError.staleRenderer }
+        guard identity.pageID == context.activePageID, let pageIndex = document.pages.firstIndex(where: { $0.id == identity.pageID }),
+              document.pages[pageIndex].role != .componentDefinition else { throw TransformError.pageUnavailable }
+        let page = document.pages[pageIndex]
+        let id: NodeID
+        switch edit {
+        case .convert(let value, _), .reorder(let value, _), .height(let value, _, _), .padding(let value, _, _),
+             .alignment(let value, _), .hamburger(let value, _), .title(let value, _),
+             .showTitle(let value, _), .includePage(let value, _, _), .contentLayout(let value, _, _, _),
+             .editableContents(let value), .automaticLayout(let value): id = value
+        case .addLink(let value, _), .editLink(let value, _, _, _), .removeLink(let value, _), .reorderLink(let value, _, _): id = value
+        }
+        guard context.selectedNodeIDs == [id], let owner = page.nodes.first(where: { $0.id == id }) else { throw TransformError.selectionMismatch }
+        guard context.availableNodeIDs.contains(id), !owner.selectionBooleanProperty("hidden") else { throw TransformError.unavailableTarget }
+        guard !owner.selectionBooleanProperty("locked") else { throw TransformError.lockedTarget }
+        var commands: [DocumentCommand] = []
+        func set(_ node: DocumentNode, _ key: String, _ value: PropertyValue, origin: PropertyOrigin = .authored) {
+            let old = node.insertionProperty(key)
+            guard old?.value != value || old?.origin != origin else { return }
+            commands.append(.setProperty(.init(pageID: page.id, nodeID: node.id,
+                property: .init(id: old?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: origin))))
+        }
+        func requireNavigation() throws {
+            guard let role = CanonicalPageFlow.role(owner), role == .header || role == .footer else { throw TransformError.incompatibleGeometry }
+        }
+        func chromeNode(_ key: String) throws -> DocumentNode {
+            try requireNavigation()
+            guard let childID = CanonicalPageChrome.reference(key, on: owner),
+                  let child = page.nodes.first(where: { $0.id == childID }),
+                  !child.selectionBooleanProperty("locked") else { throw TransformError.missingTarget }
+            return child
+        }
+        let navigationContainer = CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner)
+            .flatMap { reference in page.nodes.first { $0.id == reference } } ?? owner
+        func link(_ id: NodeID) throws -> DocumentNode {
+            try requireNavigation()
+            guard let node = page.nodes.first(where: { $0.id == id }), node.parent == .node(navigationContainer.id), CanonicalPageFlow.isNavigationLink(node),
+                  !node.selectionBooleanProperty("locked") else { throw TransformError.missingTarget }
+            return node
+        }
+        switch edit {
+        case .convert(_, let confirmed):
+            guard confirmed else { throw TransformError.cancelled }
+            guard owner.kind == .section, CanonicalPageFlow.role(owner) == nil, owner.insertionGeometry != nil else { throw TransformError.incompatibleGeometry }
+            let semantic = CanonicalSemanticElement.resolved(for: owner)?.0
+            let role: PageFlowRole = semantic == .header ? .header : semantic == .footer ? .footer : .body
+            if role != .body { guard owner.parent == .node(page.rootNodeIDs[0]) else { throw TransformError.incompatibleGeometry } }
+            set(owner, CanonicalPageFlow.roleKey, .string(role.rawValue))
+            if role != .body {
+                commands.append(.moveNode(.init(pageID: page.id, nodeID: id, destination: owner.parent,
+                    index: role == .header ? 0 : (page.nodes.first { $0.id == page.rootNodeIDs[0] }?.childIDs.count ?? 0))))
+            }
+        case .reorder(_, let y):
+            guard y.isFinite, CanonicalPageFlow.role(owner) == .body, case .node(let parentID) = owner.parent,
+                  let parent = page.nodes.first(where: { $0.id == parentID }) else { throw TransformError.incompatibleGeometry }
+            let index = CanonicalPageFlow.insertionIndex(role: .body, parent: parent, page: page, pointerY: y,
+                breakpoint: breakpoint, width: viewportWidth, excluding: id)
+            let current = parent.childIDs.firstIndex(of: id) ?? -1
+            let destination = index - (current < index ? 1 : 0)
+            if destination != current { commands.append(.moveNode(.init(pageID: page.id, nodeID: id, destination: owner.parent, index: index))) }
+        case .height(_, let value, let scope):
+            guard CanonicalPageFlow.role(owner) != nil, scope == breakpoint, value.isFinite,
+                  value >= 1, value <= LayoutPolicy.maximumDimension else { throw TransformError.incompatibleGeometry }
+            let key = scope == .desktop ? "layout.height" : ResponsiveGeometryResolver.key(.height, breakpoint: scope)
+            set(owner, key, .number(value))
+        case .padding(_, let value, let scope):
+            guard CanonicalPageFlow.role(owner) != nil, scope == breakpoint, value.isFinite, (0...10_000).contains(value),
+                  DesignBoxStyleCommandRegistry.resolvedStyle(for: owner)?.padding == nil else { throw TransformError.incompatibleGeometry }
+            let key = scope == .desktop ? "layout.padding" : ResponsiveContainerLayoutResolver.key(.padding, breakpoint: scope)
+            set(owner, key, .number(value))
+        case .alignment(_, let alignment): try requireNavigation(); set(owner, CanonicalPageFlow.alignmentKey, .string(alignment.rawValue))
+        case .hamburger(_, let enabled): try requireNavigation(); set(owner, CanonicalPageFlow.hamburgerKey, .boolean(enabled))
+        case .editableContents:
+            try requireNavigation()
+            guard CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner) == nil else { break }
+            let contents = CanonicalPageChrome.defaults(ownerID: owner.id, document: document)
+            let newNodes = [contents.content, contents.title, contents.navigation]
+            guard !page.nodes.contains(where: { candidate in newNodes.contains { $0.id == candidate.id } }),
+                  document.pages.reduce(0, { $0 + $1.nodes.count }) + newNodes.count <= InsertionPolicy.maximumNodeCount else {
+                throw TransformError.invalidResult
+            }
+            for (key, value) in contents.references { set(owner, key, value) }
+            for original in [contents.content, contents.title, contents.navigation] {
+                var inserted = original; inserted.childIDs = []
+                commands.append(.insertNode(.init(pageID: page.id, node: inserted,
+                    index: original.id == contents.content.id ? owner.childIDs.count : original.id == contents.title.id ? 0 : 1)))
+            }
+            var contentIndex = 2, linkIndex = 0
+            for childID in owner.childIDs {
+                guard let child = page.nodes.first(where: { $0.id == childID }), !child.selectionBooleanProperty("locked") else {
+                    throw TransformError.lockedTarget
+                }
+                let isLink = CanonicalPageFlow.isNavigationLink(child)
+                commands.append(.moveNode(.init(pageID: page.id, nodeID: child.id,
+                    destination: .node(isLink ? contents.navigation.id : contents.content.id), index: isLink ? linkIndex : contentIndex)))
+                if isLink { linkIndex += 1 } else { contentIndex += 1 }
+            }
+        case .automaticLayout:
+            let content = try chromeNode(CanonicalPageChrome.contentKey)
+            set(content, "layout.axis", .string("horizontal"), origin: .defaulted)
+            set(content, "layout.padding", .number(0), origin: .defaulted)
+            set(content, "layout.gap", .number(24), origin: .defaulted)
+            set(content, "layout.align", .string("center"), origin: .defaulted)
+            set(owner, CanonicalPageChrome.arrangementKey, .string("automatic"))
+        case .title(_, let text):
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 256,
+                  !text.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw TransformError.incompatibleGeometry }
+            set(try chromeNode(CanonicalPageChrome.titleKey), "content.text", .string(text))
+        case .showTitle(_, let visible):
+            let title = try chromeNode(CanonicalPageChrome.titleKey)
+            if title.selectionBooleanProperty("hidden") == visible { set(title, "hidden", .boolean(!visible)) }
+        case .includePage(_, let pageID, let included):
+            try requireNavigation()
+            guard document.websitePages.contains(where: { $0.id == pageID && $0.role != .notFound }) else { throw TransformError.missingTarget }
+            let matches = CanonicalPageChrome.links(owner: owner, page: page).filter {
+                $0.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == pageID.description
+            }
+            if matches.isEmpty, included {
+                commands.append(try prepare(.addLink(owner: owner.id, pageID: pageID), identity: identity,
+                    document: document, context: context, viewportWidth: viewportWidth, breakpoint: breakpoint))
+            } else {
+                for node in matches {
+                    guard !node.selectionBooleanProperty("locked") else { throw TransformError.lockedTarget }
+                    if node.selectionBooleanProperty("hidden") == included { set(node, "hidden", .boolean(!included)) }
+                }
+            }
+        case .contentLayout(_, let axis, let gap, let alignment):
+            guard gap.isFinite, (0...10_000).contains(gap) else { throw TransformError.incompatibleGeometry }
+            let content = try chromeNode(CanonicalPageChrome.contentKey)
+            set(owner, CanonicalPageChrome.arrangementKey, .string("custom"))
+            set(content, "layout.axis", .string(axis.rawValue))
+            set(content, "layout.gap", .number(gap))
+            set(content, "layout.align", .string(alignment.rawValue))
+        case .addLink(_, let pageID):
+            try requireNavigation()
+            guard let destination = document.websitePages.first(where: { $0.id == pageID && $0.role != .notFound }),
+                  CanonicalPageChrome.links(owner: owner, page: page).count < CanonicalPageFlow.maximumLinks else { throw TransformError.missingTarget }
+            let nodeID = NodeID()
+            let node = DocumentNode(id: nodeID, kind: .link, name: "Navigation Link", parent: .node(navigationContainer.id), properties: [
+                .init(key: .init(rawValue: CanonicalPageFlow.memberKey), value: .boolean(true), origin: .authored),
+                .init(key: .init(rawValue: CanonicalLinkTarget.namespace + "kind"), value: .string("page"), origin: .authored),
+                .init(key: .init(rawValue: CanonicalLinkTarget.namespace + "pageID"), value: .string(pageID.description), origin: .authored),
+                .init(key: .init(rawValue: CanonicalLinkTarget.labelKey), value: .string(destination.name), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.x"), value: .number(0), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.y"), value: .number(0), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.width"), value: .number(160), origin: .defaulted),
+                .init(key: .init(rawValue: "layout.height"), value: .number(32), origin: .defaulted)])
+            commands.append(.insertNode(.init(pageID: page.id, node: node, index: navigationContainer.childIDs.count)))
+        case .editLink(_, let linkID, let destinationID, let label):
+            let node = try link(linkID)
+            guard document.websitePages.contains(where: { $0.id == destinationID && $0.role != .notFound }),
+                  !label.isEmpty, label.utf8.count <= 256, !label.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+                throw TransformError.missingTarget
+            }
+            set(node, CanonicalLinkTarget.namespace + "pageID", .string(destinationID.description))
+            set(node, CanonicalLinkTarget.labelKey, .string(label))
+        case .removeLink(_, let linkID):
+            _ = try link(linkID); commands.append(.removeNode(.init(pageID: page.id, nodeID: linkID)))
+        case .reorderLink(_, let linkID, let offset):
+            _ = try link(linkID)
+            let links = navigationContainer.childIDs.filter { child in page.nodes.first { $0.id == child }.map(CanonicalPageFlow.isNavigationLink) == true }
+            guard let current = links.firstIndex(of: linkID), [-1, 1].contains(offset), links.indices.contains(current + offset),
+                  let target = navigationContainer.childIDs.firstIndex(of: links[current + offset]) else { throw TransformError.incompatibleGeometry }
+            commands.append(.moveNode(.init(pageID: page.id, nodeID: linkID, destination: .node(navigationContainer.id), index: offset > 0 ? target + 1 : target)))
+        }
+        let command = DocumentCommand.batch(commands)
+        if commands.isEmpty { return command }
+        guard CommandRegistry().availability(for: command, in: document).isEnabled else { throw TransformError.invalidResult }
+        return command
+    }
+}
+
 struct ComponentCommandRegistry {
     static func draftIdentity(document: CanonicalDocument, pageID: PageID?,
                               renderer: CanvasRenderRequestIdentity?) -> DesignInspectorOperationIdentity? {
@@ -986,7 +1206,10 @@ struct ComponentCommandRegistry {
               let index = document.pages.firstIndex(where: { $0.id == identity.pageID }) else { throw TransformError.pageUnavailable }
         var page = document.pages[index]
         switch edit {
-        case .exposeText, .removeTextProperty, .exposeVisibility, .removeVisibilityProperty:
+        case .exposeText, .removeTextProperty, .exposeVisibility, .removeVisibilityProperty,
+             .exposeChoice, .removeChoiceProperty, .exposeMedia, .removeMediaProperty,
+             .exposeAction, .removeActionProperty, .exposeSlot, .removeSlotProperty,
+             .organizeProperty, .resetPropertyOrganization:
             guard page.role == .componentDefinition else { throw TransformError.incompatibleGeometry }
         default:
             guard page.role != .componentDefinition else {
@@ -1005,6 +1228,17 @@ struct ComponentCommandRegistry {
             return node
         }
         func properties(_ node: DocumentNode, setting: [(String, PropertyValue)] = [], removing: Set<String> = []) throws -> PreparedComponentEdit {
+            var removing = removing
+            // Removing a binding removes only its organization, not instance intent.
+            for (bindingNamespace, kind) in [
+                (CanonicalComponentText.namespace, "text"), (CanonicalComponentVisibility.namespace, "visibility"),
+                (CanonicalComponentChoice.namespace, "choice"), (CanonicalComponentMedia.namespace, "media"),
+                (CanonicalComponentAction.namespace, "action"), (CanonicalComponentSlot.namespace, "slot")]
+                where removing.contains(bindingNamespace + "id") {
+                removing.insert(CanonicalComponentOrganization.key(kind, "group"))
+                removing.insert(CanonicalComponentOrganization.key(kind, "order"))
+                removing.insert(CanonicalComponentOrganization.key(kind, "binding"))
+            }
             var commands: [DocumentCommand] = []
             var updated = node
             for property in node.properties where removing.contains(property.key.rawValue) {
@@ -1025,10 +1259,59 @@ struct ComponentCommandRegistry {
             try candidate.validate()
             try CanonicalComponentText.validateTransition(from: document, to: candidate)
             try CanonicalComponentVisibility.validateTransition(from: document, to: candidate)
+            try CanonicalComponentChoice.validateTransition(from: document, to: candidate)
+            try CanonicalComponentMedia.validateTransition(from: document, to: candidate)
+            try CanonicalComponentAction.validateTransition(from: document, to: candidate)
+            try CanonicalComponentSlot.validateTransition(from: document, to: candidate)
             return .init(command: .batch(commands), selectedNodeID: node.id,
                          definitionID: page.role == .componentDefinition ? page.id : CanonicalComponentReference.definitionID(for: node))
         }
         switch edit {
+        case .organizeProperty(let id, let binding, let group, let position):
+            _ = try selected(id)
+            var entries = CanonicalComponentOrganization.entries(in: page)
+            guard let prior = entries.firstIndex(where: { $0.id == binding && $0.sourceNodeID == id }),
+                  entries.indices.contains(position), group == nil || CanonicalComponentOrganization.validGroup(group!) else {
+                throw CommandExecutionError.disabled("Choose an exposed property, a valid position, and a group of at most 64 bytes without control characters.")
+            }
+            let entry = entries.remove(at: prior)
+            entries.insert(entry, at: position)
+            var candidate = document
+            var commands: [DocumentCommand] = []
+            for (rank, item) in entries.enumerated() {
+                guard let nodeIndex = page.nodes.firstIndex(where: { $0.id == item.sourceNodeID }) else { throw TransformError.missingTarget }
+                var node = candidate.pages[index].nodes[nodeIndex]
+                let fields: [(String, PropertyValue?)] = [
+                    (CanonicalComponentOrganization.key(item.id.organizationKind, "binding"), .string(item.id.stableDescription)),
+                    (CanonicalComponentOrganization.key(item.id.organizationKind, "order"), .number(Double(rank))),
+                    (CanonicalComponentOrganization.key(item.id.organizationKind, "group"),
+                     (item.id == binding ? group : item.group).map { .string($0) })]
+                for (key, value) in fields {
+                    let old = node.properties.first { $0.key.rawValue == key }
+                    if let value {
+                        guard old?.value != value || old?.origin != .authored else { continue }
+                        guard !node.selectionBooleanProperty("locked") else { throw TransformError.lockedTarget }
+                        let property = NodeProperty(id: old?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored)
+                        commands.append(.setProperty(.init(pageID: page.id, nodeID: node.id, property: property)))
+                        node.properties.removeAll { $0.key.rawValue == key }; node.properties.append(property)
+                    } else if let old {
+                        guard !node.selectionBooleanProperty("locked") else { throw TransformError.lockedTarget }
+                        commands.append(.removeProperty(.init(pageID: page.id, nodeID: node.id, propertyID: old.id)))
+                        node.properties.removeAll { $0.id == old.id }
+                    }
+                }
+                candidate.pages[index].nodes[nodeIndex] = node
+            }
+            try candidate.validate()
+            return .init(command: .batch(commands), selectedNodeID: id, definitionID: page.id)
+        case .resetPropertyOrganization(let id, let binding):
+            let node = try selected(id)
+            guard CanonicalComponentOrganization.bindings(on: node).contains(where: { $0.0 == binding }) else {
+                throw TransformError.missingTarget
+            }
+            return try properties(node, removing: [CanonicalComponentOrganization.key(binding.organizationKind, "group"),
+                                                   CanonicalComponentOrganization.key(binding.organizationKind, "binding"),
+                                                   CanonicalComponentOrganization.key(binding.organizationKind, "order")])
         case .rename(let definitionID, let draft):
             guard let definition = document.componentDefinitions.first(where: { $0.id == definitionID }) else {
                 throw TransformError.missingTarget
@@ -1127,6 +1410,138 @@ struct ComponentCommandRegistry {
             let node = try selected(id)
             guard node.kind == .component else { throw TransformError.incompatibleGeometry }
             return try properties(node, removing: [CanonicalComponentVisibility.overrideKey(propertyID)])
+        case .resetAllVisibilityOverrides(let id):
+            let node = try selected(id)
+            guard node.kind == .component else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: Set(node.properties.map(\.key.rawValue).filter {
+                $0.hasPrefix(CanonicalComponentVisibility.overrideNamespace)
+            }))
+        case .exposeChoice(let id, let label):
+            let node = try selected(id)
+            guard node.kind == .image, CanonicalComponentText.validLabel(label),
+                  CanonicalImageStyle.resolve(node) != nil else {
+                throw CommandExecutionError.disabled("Select an Image in the component definition and use a nonempty property name.")
+            }
+            let propertyID = CanonicalComponentChoice.property(on: node)?.id ?? ComponentChoicePropertyID()
+            return try properties(node, setting: [
+                (CanonicalComponentChoice.namespace + "id", .string(propertyID.description)),
+                (CanonicalComponentChoice.namespace + "label", .string(label)),
+                (CanonicalComponentChoice.namespace + "type", .string("image-fit"))])
+        case .removeChoiceProperty(let id):
+            let node = try selected(id)
+            guard CanonicalComponentChoice.property(on: node) != nil else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: CanonicalComponentChoice.metadataKeys)
+        case .setChoiceOverride(let id, let propertyID, let value):
+            let node = try selected(id)
+            guard let definitionID = CanonicalComponentReference.definitionID(for: node),
+                  let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+                  CanonicalComponentChoice.properties(in: definition).contains(where: { $0.id == propertyID }) else {
+                throw CommandExecutionError.disabled("The choice binding is missing. Restore it before editing this instance.")
+            }
+            return try properties(node, setting: [(CanonicalComponentChoice.overrideKey(propertyID), .string(value.rawValue))])
+        case .resetChoiceOverride(let id, let propertyID):
+            let node = try selected(id)
+            guard node.kind == .component else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: [CanonicalComponentChoice.overrideKey(propertyID)])
+        case .exposeMedia(let id, let label):
+            let node = try selected(id)
+            guard node.kind == .image, CanonicalComponentText.validLabel(label),
+                  CanonicalImageStyle.resolve(node) != nil else {
+                throw CommandExecutionError.disabled("Select an Image in the component definition and use a nonempty property name.")
+            }
+            let propertyID = CanonicalComponentMedia.property(on: node)?.id ?? ComponentMediaPropertyID()
+            return try properties(node, setting: [
+                (CanonicalComponentMedia.namespace + "id", .string(propertyID.description)),
+                (CanonicalComponentMedia.namespace + "label", .string(label)),
+                (CanonicalComponentMedia.namespace + "type", .string("image-asset"))])
+        case .removeMediaProperty(let id):
+            let node = try selected(id)
+            guard CanonicalComponentMedia.property(on: node) != nil else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: CanonicalComponentMedia.metadataKeys)
+        case .setMediaOverride(let id, let propertyID, let assetID):
+            let node = try selected(id)
+            guard document.imageAssets.contains(where: { $0.id == assetID }),
+                  let definitionID = CanonicalComponentReference.definitionID(for: node),
+                  let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+                  CanonicalComponentMedia.properties(in: definition).contains(where: { $0.id == propertyID }) else {
+                throw CommandExecutionError.disabled("The media binding or selected image asset is unavailable.")
+            }
+            return try properties(node, setting: [(CanonicalComponentMedia.overrideKey(propertyID), .string(assetID.description))])
+        case .resetMediaOverride(let id, let propertyID):
+            let node = try selected(id)
+            guard node.kind == .component else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: [CanonicalComponentMedia.overrideKey(propertyID)])
+        case .exposeAction(let id, let label):
+            let node = try selected(id)
+            guard node.kind.isLinkControl, CanonicalComponentText.validLabel(label),
+                  (try? CanonicalLinkTarget.resolve(node)) != nil else {
+                throw CommandExecutionError.disabled("Select a Button or Link in the component definition and use a nonempty property name.")
+            }
+            let propertyID = CanonicalComponentAction.property(on: node)?.id ?? ComponentActionPropertyID()
+            return try properties(node, setting: [
+                (CanonicalComponentAction.namespace + "id", .string(propertyID.description)),
+                (CanonicalComponentAction.namespace + "label", .string(label)),
+                (CanonicalComponentAction.namespace + "type", .string("link-target"))])
+        case .removeActionProperty(let id):
+            let node = try selected(id)
+            guard CanonicalComponentAction.property(on: node) != nil else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: CanonicalComponentAction.metadataKeys)
+        case .setActionOverride(let id, let propertyID, let target):
+            let node = try selected(id)
+            if case .external(let url) = target, !CanonicalLinkTarget.validateExternal(url) {
+                throw CommandExecutionError.disabled("Use a valid HTTP(S) destination without credentials or whitespace.")
+            }
+            guard CanonicalComponentAction.decode(CanonicalComponentAction.encode(target)) == target,
+                  !target.isMissing(in: document),
+                  let definitionID = CanonicalComponentReference.definitionID(for: node),
+                  let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+                  CanonicalComponentAction.properties(in: definition).contains(where: { $0.id == propertyID }) else {
+                throw CommandExecutionError.disabled("The action binding or selected destination is unavailable.")
+            }
+            return try properties(node, setting: [(CanonicalComponentAction.overrideKey(propertyID), .string(CanonicalComponentAction.encode(target)))])
+        case .resetActionOverride(let id, let propertyID):
+            let node = try selected(id)
+            guard node.kind == .component else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: [CanonicalComponentAction.overrideKey(propertyID)])
+        case .exposeSlot(let id, let label):
+            let node = try selected(id)
+            guard CanonicalComponentSlot.supportedKinds.contains(node.kind), !page.rootNodeIDs.contains(id),
+                  CanonicalComponentText.validLabel(label) else {
+                throw CommandExecutionError.disabled("Select a non-root Frame, Section, Stack or Grid in the definition and use a unique nonempty slot name.")
+            }
+            let propertyID = CanonicalComponentSlot.property(on: node)?.id ?? ComponentSlotPropertyID()
+            return try properties(node, setting: [
+                (CanonicalComponentSlot.namespace + "id", .string(propertyID.description)),
+                (CanonicalComponentSlot.namespace + "label", .string(label)),
+                (CanonicalComponentSlot.namespace + "type", .string("ordered-fallback-children"))])
+        case .removeSlotProperty(let id):
+            let node = try selected(id)
+            guard CanonicalComponentSlot.property(on: node) != nil else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: CanonicalComponentSlot.metadataKeys)
+        case .resetOverrideConflicts(let id, let expected, let confirmed):
+            let node = try selected(id)
+            guard confirmed else { throw TransformError.cancelled }
+            guard node.kind == .component, !expected.isEmpty, Set(expected).count == expected.count else {
+                throw TransformError.incompatibleGeometry
+            }
+            let conflicts = try CanonicalComponentOverrides.conflicts(instance: node, document: document)
+            let liveIDs = Set(conflicts.map(\.authoredPropertyID))
+            guard Set(expected).isSubset(of: liveIDs) else {
+                throw CommandExecutionError.disabled("The retained conflicts changed. Review the current values before resetting.")
+            }
+            let keys = Set(node.properties.filter { expected.contains($0.id) }.map(\.key.rawValue))
+            guard keys.count == expected.count else { throw TransformError.missingTarget }
+            return try properties(node, removing: keys)
+        case .resetAllOverrides(let id):
+            let node = try selected(id)
+            guard node.kind == .component else { throw TransformError.incompatibleGeometry }
+            return try properties(node, removing: Set(node.properties.map(\.key.rawValue).filter {
+                $0.hasPrefix(CanonicalComponentText.overrideNamespace)
+                    || $0.hasPrefix(CanonicalComponentVisibility.overrideNamespace)
+                    || $0.hasPrefix(CanonicalComponentChoice.overrideNamespace)
+                    || $0.hasPrefix(CanonicalComponentMedia.overrideNamespace)
+                    || $0.hasPrefix(CanonicalComponentAction.overrideNamespace)
+            }))
         case .create(let id):
             let root = try selected(id)
             guard root.kind.acceptsAuthoredChildren, let rootGeometry = root.insertionGeometry,
@@ -1138,11 +1553,20 @@ struct ComponentCommandRegistry {
                 guard included.insert(next).inserted, let node = byID[next], node.kind != .component else {
                     throw CommandExecutionError.disabled("Nested component authoring is unavailable.")
                 }
+                guard !CanonicalPageFlow.isManaged(node) else {
+                    throw CommandExecutionError.disabled("Connected page structure/navigation must remain page-owned; it cannot become component content in this version.")
+                }
                 pending += node.childIDs
             }
             let descendants = included.subtracting([id])
             for otherPage in document.pages {
                 for node in otherPage.nodes where !included.contains(node.id) {
+                    if CanonicalComponentAction.overrides(on: node).values.contains(where: {
+                        if case .section(_, let targetID) = $0 { return descendants.contains(targetID) }
+                        return false
+                    }) {
+                        throw CommandExecutionError.disabled("Reset or replace inbound component action destinations before creating this component.")
+                    }
                     if let target = node.insertionStringProperty(CanonicalLinkTarget.namespace + "nodeID"),
                        let targetID = NodeID(uuidString: target), descendants.contains(targetID) {
                         throw CommandExecutionError.disabled("Remove inbound links to child sections before creating this component.")
@@ -1525,6 +1949,328 @@ struct DesignInspectorCommandRegistry: Sendable {
             skippedReasons: skippedReasons,
             documentCommand: documentCommand
         )
+    }
+}
+
+// MARK: - SF-0504 / SF-0510 / SF-0511 positioning and reusable/state styles
+
+enum PositionInsetEdge: String, CaseIterable, Sendable { case top, right, bottom, left }
+
+enum AdvancedStyleEdit: Sendable {
+    case positionMode(CanonicalPositionMode)
+    case positionInset(PositionInsetEdge, Double?)
+    case zIndex(Int)
+    case createReusableStyle(id: ReusableStyleID, name: String, fill: CanonicalSolidColor?, opacity: Double?)
+    case updateReusableStyle(id: ReusableStyleID, name: String, fill: CanonicalSolidColor?, opacity: Double?)
+    case removeReusableStyle(ReusableStyleID)
+    case applyReusableStyles([ReusableStyleID])
+    case setState(state: CanonicalInteractionStyleState, id: UUID, fill: CanonicalSolidColor?, opacity: Double?)
+    case removeState(CanonicalInteractionStyleState)
+}
+
+struct AdvancedStyleCommand: Sendable {
+    let identity: DesignInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let edit: AdvancedStyleEdit
+    let provenance: DesignInspectorProvenance
+    let cancelled: Bool
+}
+
+enum AdvancedStyleCommandError: Error, LocalizedError, Equatable, Sendable {
+    case stale, cancelled, invalidValue, noSelection, duplicateTarget, unavailable(String), noChanges
+    var errorDescription: String? { switch self {
+    case .stale: "The document, selection, or canvas changed before the style edit could commit."
+    case .cancelled: "The style draft was cancelled; committed content is unchanged."
+    case .invalidValue: "Enter a complete finite value supported by the selected style property."
+    case .noSelection: "Select an applicable object before editing positioning or styles."
+    case .duplicateTarget: "The same object cannot appear twice in one style edit."
+    case .unavailable(let reason): reason
+    case .noChanges: "The selected objects already have that positioning or style value."
+    } }
+}
+
+struct AdvancedStyleCommandRegistry: Sendable {
+    static let requirementIDs = Set(
+        (1...8).map { String(format: "SF-0504-%03d", $0) }
+        + (1...8).map { String(format: "SF-0510-%03d", $0) }
+        + (1...8).map { String(format: "SF-0511-%03d", $0) }
+    )
+    static let appearanceKinds: Set<NodeKind> = [.frame, .section, .stack, .grid, .button]
+
+    func prepare(
+        _ command: AdvancedStyleCommand,
+        in document: CanonicalDocument,
+        context: TransformValidationContext
+    ) throws -> PreparedDesignInspectorEdit {
+        guard !command.cancelled else { throw AdvancedStyleCommandError.cancelled }
+        guard context.isLifecycleAvailable else {
+            throw AdvancedStyleCommandError.unavailable(
+                context.lifecycleDisabledReason ?? "Style editing is unavailable during the current document operation."
+            )
+        }
+        guard command.identity.documentID == document.id,
+              command.identity.revision == document.revision,
+              command.identity.pageID == context.activePageID,
+              command.identity.sceneID == context.currentSceneID,
+              command.identity.rendererGeneration == context.rendererGeneration,
+              command.orderedNodeIDs == context.selectedNodeIDs else {
+            throw AdvancedStyleCommandError.stale
+        }
+        guard document.revision < UInt64.max else {
+            throw AdvancedStyleCommandError.unavailable("The document revision cannot accept another style edit.")
+        }
+        guard !command.orderedNodeIDs.isEmpty else { throw AdvancedStyleCommandError.noSelection }
+        guard Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count else {
+            throw AdvancedStyleCommandError.duplicateTarget
+        }
+        guard let page = document.pages.first(where: { $0.id == command.identity.pageID }) else {
+            throw AdvancedStyleCommandError.unavailable("The active page is unavailable.")
+        }
+        let index = try CanonicalReusableStyleIndex(document: document)
+
+        switch command.edit {
+        case .createReusableStyle(let id, let name, let fill, let opacity):
+            guard index.byID[id] == nil else { throw AdvancedStyleCommandError.invalidValue }
+            return try definitionEdit(id: id, name: name, fill: fill, opacity: opacity,
+                page: page, ownerNode: nil, existing: nil)
+        case .updateReusableStyle(let id, let name, let fill, let opacity):
+            guard let existing = index.byID[id] else {
+                throw AdvancedStyleCommandError.unavailable("The reusable style no longer exists.")
+            }
+            guard let owner = definitionOwner(id: id, in: document),
+                  let ownerPage = document.pages.first(where: { $0.id == owner.pageID }) else {
+                throw AdvancedStyleCommandError.unavailable("The reusable style owner is unavailable.")
+            }
+            return try definitionEdit(id: id, name: name, fill: fill, opacity: opacity,
+                page: ownerPage, ownerNode: owner.node, existing: existing)
+        case .removeReusableStyle(let id):
+            guard index.byID[id] != nil else {
+                throw AdvancedStyleCommandError.unavailable("The reusable style no longer exists.")
+            }
+            guard !document.pages.flatMap(\.nodes).contains(where: {
+                (try? CanonicalReusableStyleIndex.strictlyDecodedAppliedIDs($0).contains(id)) == true
+            }) else {
+                throw AdvancedStyleCommandError.unavailable("Detach this reusable style from its objects before deleting it.")
+            }
+            guard let owner = definitionOwner(id: id, in: document) else {
+                throw AdvancedStyleCommandError.unavailable("The reusable style owner is unavailable.")
+            }
+            let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(id.description)."
+            let commands = owner.node.properties.filter { $0.key.rawValue.hasPrefix(prefix) }.map {
+                DocumentCommand.removeProperty(.init(pageID: owner.pageID, nodeID: owner.node.id, propertyID: $0.id))
+            }
+            guard !commands.isEmpty else { throw AdvancedStyleCommandError.noChanges }
+            return .init(applicableNodeIDs: [owner.node.id], skippedNodeIDs: [], skippedReasons: [:],
+                         documentCommand: .batch(commands))
+        default:
+            return try selectedNodeEdit(command.edit, page: page, document: document,
+                                        context: context, index: index,
+                                        orderedNodeIDs: command.orderedNodeIDs)
+        }
+    }
+
+    private func definitionEdit(
+        id: ReusableStyleID, name: String, fill: CanonicalSolidColor?, opacity: Double?,
+        page: DocumentPage, ownerNode: DocumentNode?, existing: CanonicalReusableStyleDefinition?
+    ) throws -> PreparedDesignInspectorEdit {
+        guard CanonicalReusableStyleIndex.validName(name), fill?.isValid ?? true,
+              opacity.map({ $0.isFinite && (0...1).contains($0) }) ?? true,
+              fill != nil || opacity != nil else { throw AdvancedStyleCommandError.invalidValue }
+        guard existing.map({ $0.name != name || $0.fill != fill || $0.opacity != opacity }) ?? true else {
+            throw AdvancedStyleCommandError.noChanges
+        }
+        guard let root = ownerNode ?? page.rootNodeIDs.first.flatMap({ rootID in
+            page.nodes.first(where: { $0.id == rootID })
+        }) else {
+            throw AdvancedStyleCommandError.unavailable("The active page has no stable style owner.")
+        }
+        let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(id.description)."
+        let values: [(String, PropertyValue?)] = [
+            ("name", .string(name)),
+            ("fill", fill.map { .string($0.hexadecimalRGBA) }),
+            ("opacity", opacity.map { .number($0) }),
+        ]
+        var commands: [DocumentCommand] = []
+        for (suffix, value) in values {
+            let key = prefix + suffix
+            let current = root.insertionProperty(key)
+            if let value {
+                if current?.value == value, current?.origin == .authored { continue }
+                commands.append(.setProperty(.init(pageID: page.id, nodeID: root.id,
+                    property: .init(id: current?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored))))
+            } else if let current {
+                commands.append(.removeProperty(.init(pageID: page.id, nodeID: root.id, propertyID: current.id)))
+            }
+        }
+        guard !commands.isEmpty else { throw AdvancedStyleCommandError.noChanges }
+        return .init(applicableNodeIDs: [root.id], skippedNodeIDs: [], skippedReasons: [:],
+                     documentCommand: .batch(commands))
+    }
+
+    private func selectedNodeEdit(
+        _ edit: AdvancedStyleEdit, page: DocumentPage, document: CanonicalDocument,
+        context: TransformValidationContext, index: CanonicalReusableStyleIndex,
+        orderedNodeIDs: [NodeID]
+    ) throws -> PreparedDesignInspectorEdit {
+        var applicable: [NodeID] = [], skipped: [NodeID] = [], reasons: [NodeID: String] = [:]
+        var commands: [DocumentCommand] = []
+        for id in orderedNodeIDs {
+            guard let node = page.nodes.first(where: { $0.id == id }) else {
+                throw AdvancedStyleCommandError.unavailable("A selected object no longer exists.")
+            }
+            guard context.availableNodeIDs.contains(id), !node.selectionBooleanProperty("hidden"),
+                  !node.selectionBooleanProperty("locked") else {
+                throw AdvancedStyleCommandError.unavailable("A selected object is unavailable, hidden, or locked.")
+            }
+            let supportsPosition = CanonicalPositioning.supportedKinds.contains(node.kind) && node.insertionGeometry != nil
+                && !CanonicalPageChrome.ownsFrame(of: node, in: page)
+            let supportsAppearance = Self.appearanceKinds.contains(node.kind)
+            let applies: Bool
+            switch edit {
+            case .positionMode, .positionInset, .zIndex: applies = supportsPosition
+            case .applyReusableStyles, .setState, .removeState: applies = supportsAppearance
+            default: applies = false
+            }
+            guard applies else {
+                skipped.append(id); reasons[id] = "This object kind does not support the selected positioning or style property."; continue
+            }
+            applicable.append(id)
+            switch edit {
+            case .positionMode(let mode):
+                appendSet(key: CanonicalPositioning.namespace + "mode", value: .string(mode.rawValue), node: node, page: page, to: &commands)
+                if mode == .static {
+                    for edge in PositionInsetEdge.allCases { appendRemove(key: CanonicalPositioning.namespace + edge.rawValue, node: node, page: page, to: &commands) }
+                }
+            case .positionInset(let edge, let value):
+                guard value.map({ $0.isFinite && (-1_000_000...1_000_000).contains($0) }) ?? true,
+                      CanonicalPositioning.resolve(node)?.mode != .static else { throw AdvancedStyleCommandError.invalidValue }
+                if let value { appendSet(key: CanonicalPositioning.namespace + edge.rawValue, value: .number(value), node: node, page: page, to: &commands) }
+                else { appendRemove(key: CanonicalPositioning.namespace + edge.rawValue, node: node, page: page, to: &commands) }
+            case .zIndex(let value):
+                guard (-1_000_000...1_000_000).contains(value) else { throw AdvancedStyleCommandError.invalidValue }
+                appendSet(key: CanonicalPositioning.namespace + "zIndex", value: .number(Double(value)), node: node, page: page, to: &commands)
+            case .applyReusableStyles(let ids):
+                guard ids.count <= 32, Set(ids).count == ids.count, ids.allSatisfy({ index.byID[$0] != nil }) else { throw AdvancedStyleCommandError.invalidValue }
+                if ids.isEmpty { appendRemove(key: CanonicalReusableStyleIndex.appliedKey, node: node, page: page, to: &commands) }
+                else { appendSet(key: CanonicalReusableStyleIndex.appliedKey, value: .string(ids.map(\.description).joined(separator: ",")), node: node, page: page, to: &commands) }
+            case .setState(let state, let variantID, let fill, let opacity):
+                guard state != .default, fill?.isValid ?? true,
+                      opacity.map({ $0.isFinite && (0...1).contains($0) }) ?? true,
+                      fill != nil || opacity != nil else { throw AdvancedStyleCommandError.invalidValue }
+                let prefix = CanonicalReusableStyleIndex.stateNamespace + state.rawValue + "."
+                appendSet(key: prefix + "id", value: .string(variantID.uuidString.lowercased()), node: node, page: page, to: &commands)
+                if let fill { appendSet(key: prefix + "fill", value: .string(fill.hexadecimalRGBA), node: node, page: page, to: &commands) }
+                else { appendRemove(key: prefix + "fill", node: node, page: page, to: &commands) }
+                if let opacity { appendSet(key: prefix + "opacity", value: .number(opacity), node: node, page: page, to: &commands) }
+                else { appendRemove(key: prefix + "opacity", node: node, page: page, to: &commands) }
+            case .removeState(let state):
+                guard state != .default else { throw AdvancedStyleCommandError.invalidValue }
+                let prefix = CanonicalReusableStyleIndex.stateNamespace + state.rawValue + "."
+                for suffix in ["id", "fill", "opacity"] { appendRemove(key: prefix + suffix, node: node, page: page, to: &commands) }
+            default: throw AdvancedStyleCommandError.invalidValue
+            }
+        }
+        guard !applicable.isEmpty else { throw AdvancedStyleCommandError.unavailable("The selection has no applicable objects.") }
+        guard !commands.isEmpty else { throw AdvancedStyleCommandError.noChanges }
+        return .init(applicableNodeIDs: applicable, skippedNodeIDs: skipped, skippedReasons: reasons,
+                     documentCommand: .batch(commands))
+    }
+
+    private func appendSet(key: String, value: PropertyValue, node: DocumentNode, page: DocumentPage,
+                           to commands: inout [DocumentCommand]) {
+        let existing = node.insertionProperty(key)
+        guard existing?.value != value || existing?.origin != .authored else { return }
+        commands.append(.setProperty(.init(pageID: page.id, nodeID: node.id,
+            property: .init(id: existing?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored))))
+    }
+
+    private func appendRemove(key: String, node: DocumentNode, page: DocumentPage,
+                              to commands: inout [DocumentCommand]) {
+        guard let existing = node.insertionProperty(key) else { return }
+        commands.append(.removeProperty(.init(pageID: page.id, nodeID: node.id, propertyID: existing.id)))
+    }
+
+    private func definitionOwner(id: ReusableStyleID, in document: CanonicalDocument) -> (pageID: PageID, node: DocumentNode)? {
+        let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(id.description)."
+        for page in document.pages {
+            if let node = page.nodes.first(where: { $0.properties.contains(where: { $0.key.rawValue.hasPrefix(prefix) }) }) {
+                return (page.id, node)
+            }
+        }
+        return nil
+    }
+}
+
+enum AdvancedStyleDiagnosticResult: String, Codable, Sendable {
+    case success, failure, cancelled, stale
+}
+
+struct AdvancedStyleDiagnosticRecord: Codable, Equatable, Sendable {
+    let requirementIDs: [String]
+    let operationType: String
+    let provenance: DesignInspectorProvenance
+    let sanitizedIdentifiers: [String]
+    let durationMilliseconds: Double
+    let parentRevision: UInt64
+    let resultRevision: UInt64?
+    let result: AdvancedStyleDiagnosticResult
+    let failureCategory: String?
+}
+
+actor AdvancedStyleDiagnostics {
+    private var buffer = BoundedDiagnosticBuffer<AdvancedStyleDiagnosticRecord>()
+    func append(_ record: AdvancedStyleDiagnosticRecord) { buffer.append(record) }
+    func snapshot() -> [AdvancedStyleDiagnosticRecord] { buffer.snapshot() }
+    func droppedRecordCount() -> UInt64 { buffer.droppedRecordCount }
+}
+
+enum AdvancedStyleDiagnosticFactory {
+    static func make(
+        command: AdvancedStyleCommand,
+        durationMilliseconds: Double = 0,
+        resultRevision: UInt64?,
+        result: AdvancedStyleDiagnosticResult,
+        failure: AdvancedStyleCommandError?
+    ) -> AdvancedStyleDiagnosticRecord {
+        .init(
+            requirementIDs: AdvancedStyleCommandRegistry.requirementIDs.sorted(),
+            operationType: operationType(command.edit),
+            provenance: command.provenance,
+            sanitizedIdentifiers: command.orderedNodeIDs.map {
+                DiagnosticStableIdentifier.sanitize($0.description, domain: .advancedStyle, kind: "node")
+            },
+            durationMilliseconds: max(0, durationMilliseconds),
+            parentRevision: command.identity.revision,
+            resultRevision: resultRevision,
+            result: result,
+            failureCategory: failure.map(category)
+        )
+    }
+
+    private static func operationType(_ edit: AdvancedStyleEdit) -> String {
+        switch edit {
+        case .positionMode: "position.mode"
+        case .positionInset: "position.inset"
+        case .zIndex: "position.z-index"
+        case .createReusableStyle: "reusable.create"
+        case .updateReusableStyle: "reusable.update"
+        case .removeReusableStyle: "reusable.remove"
+        case .applyReusableStyles: "reusable.apply"
+        case .setState(let state, _, _, _): "state.\(state.rawValue).set"
+        case .removeState(let state): "state.\(state.rawValue).remove"
+        }
+    }
+
+    private static func category(_ error: AdvancedStyleCommandError) -> String {
+        switch error {
+        case .stale: "stale-identity"
+        case .cancelled: "cancelled"
+        case .invalidValue: "invalid-value"
+        case .noSelection: "no-selection"
+        case .duplicateTarget: "duplicate-target"
+        case .unavailable: "unavailable"
+        case .noChanges: "no-changes"
+        }
     }
 }
 
@@ -2002,6 +2748,44 @@ enum GeometryInspectorValue: Equatable, Sendable {
     case mixed
 }
 
+/// SF-0702/0703: closed property-value clipboard, not an executable command or
+/// a second property store. Resolved source numbers become explicit destination
+/// values; source IDs, provenance and breakpoint ownership are never copied.
+struct InspectorGeometryTransfer: Equatable, Sendable {
+    static let maximumBytes = 2048
+    let field: GeometryInspectorField
+    let value: Double
+    private struct Wire: Codable { let version: Int; let field: String; let value: Double }
+    func encoded() throws -> Data {
+        guard GeometryInspectorCommandRegistry.isValid(value, for: field) else { throw GeometryInspectorError.invalidValue }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(Wire(version: 1, field: field.rawValue, value: value == 0 ? 0 : value))
+    }
+    static func decode(_ data: Data) throws -> Self {
+        guard !data.isEmpty, data.count <= maximumBytes,
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              Set(object.keys) == Set(["version", "field", "value"]),
+              let wire = try? JSONDecoder().decode(Wire.self, from: data), wire.version == 1,
+              let field = GeometryInspectorField(rawValue: wire.field),
+              GeometryInspectorCommandRegistry.isValid(wire.value, for: field) else {
+            throw GeometryInspectorError.invalidValue
+        }
+        let transfer = Self(field: field, value: wire.value)
+        // This private clipboard flavor accepts only the deterministic encoding
+        // written above: duplicate keys, alternate numeric forms and hidden
+        // trailing/unknown content cannot acquire ambiguous interpretation.
+        guard try transfer.encoded() == data else { throw GeometryInspectorError.invalidValue }
+        return transfer
+    }
+    func prepare(identity: GeometryInspectorOperationIdentity, orderedNodeIDs: [NodeID],
+                 document: CanonicalDocument, context: TransformValidationContext,
+                 breakpoint: ResponsiveBreakpoint, cancellation: TransformCancellation = .never) throws -> PreparedGeometryInspectorEdit {
+        try GeometryInspectorCommandRegistry().prepare(.init(identity: identity, orderedNodeIDs: orderedNodeIDs,
+            field: field, value: value, provenance: .keyboard, breakpoint: breakpoint),
+            in: document, context: context, cancellation: cancellation)
+    }
+}
+
 struct GeometryInspectorCommandRegistry: Sendable {
     static let requirementIDs: Set<String> = [
         "SF-0403-001", "SF-0403-002", "SF-0403-003", "SF-0403-004",
@@ -2032,6 +2816,11 @@ struct GeometryInspectorCommandRegistry: Sendable {
         let nodes = context.selectedNodeIDs.compactMap { id in
             document.pages.first(where: { $0.id == context.activePageID })?.nodes.first(where: { $0.id == id })
         }.filter { Self.supportsFixedGeometry($0.kind) }
+            .filter { !CanonicalPageFlow.isNavigationLink($0) && (CanonicalPageFlow.role($0) == nil || field == .height) }
+            .filter { node in
+                guard let page = document.pages.first(where: { $0.id == context.activePageID }) else { return false }
+                return !CanonicalPageChrome.ownsFrame(of: node, in: page)
+            }
         guard !nodes.isEmpty else {
             return .unavailable("The selected objects do not support fixed geometry editing.")
         }
@@ -2088,6 +2877,10 @@ struct GeometryInspectorCommandRegistry: Sendable {
             guard Self.supportsFixedGeometry(node.kind) else {
                 skipped.append(id)
                 continue
+            }
+            if CanonicalPageChrome.ownsFrame(of: node, in: page) || CanonicalPageFlow.isNavigationLink(node)
+                || (CanonicalPageFlow.role(node) != nil && command.field != .height) {
+                skipped.append(id); continue
             }
             guard !node.insertionBooleanProperty("locked") else { throw GeometryInspectorError.lockedTarget }
             guard !node.insertionBooleanProperty("hidden") else { throw GeometryInspectorError.hiddenTarget }
@@ -2442,6 +3235,9 @@ struct TransformCommandRegistry: Sendable {
             guard let original = node.insertionGeometry?.frame else {
                 throw TransformError.incompatibleGeometry
             }
+            guard !CanonicalPageFlow.isManaged(node), !CanonicalPageChrome.ownsFrame(of: node, in: page) else {
+                throw TransformError.incompatibleGeometry
+            }
             let sizing: CanonicalSizingConstraints? = [.frame, .image].contains(node.kind)
                 ? CanonicalSizingConstraints.resolved(for: node) : nil
             let preview = try Self.resolve(original, operation: command.operation, sizing: sizing)
@@ -2708,6 +3504,9 @@ struct FluidValueCommandRegistry: Sendable {
                 throw FluidValueCommandError.missingTarget
             }
             guard command.target.supports(node.kind) else { skipped.append(id); continue }
+            if [.width, .height].contains(command.target), CanonicalPageChrome.ownsFrame(of: node, in: page) {
+                skipped.append(id); continue
+            }
             guard !node.insertionBooleanProperty("locked") else { throw FluidValueCommandError.lockedTarget }
             guard !node.insertionBooleanProperty("hidden") else { throw FluidValueCommandError.hiddenTarget }
             guard context.availableNodeIDs.contains(id) else { throw FluidValueCommandError.unavailableTarget }
