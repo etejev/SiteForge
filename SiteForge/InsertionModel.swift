@@ -311,6 +311,17 @@ enum StaticLayoutOutputEmitter {
 /// deterministic two-segment linear clamp matching the canvas resolver's
 /// Mobile → Tablet → Desktop anchors. No authored CSS text crosses this edge.
 enum StaticFluidValueOutputEmitter {
+    /// One continuous expression for connected CSS rules that themselves
+    /// span the 768-point fluid anchor. Both clamps reuse the existing emitter
+    /// math; subtracting the shared anchor prevents double-counting it.
+    static func expression(for value: CanonicalFluidValue) -> String? {
+        guard value.isValid else { return nil }
+        let lower = segment(start: value.minimum, end: value.preferred,
+            from: CanonicalFluidValue.lowerViewport, to: CanonicalFluidValue.preferredViewport)
+        let upper = segment(start: value.preferred, end: value.maximum,
+            from: CanonicalFluidValue.preferredViewport, to: CanonicalFluidValue.upperViewport)
+        return "calc(\(lower) + \(upper) - \(number(value.preferred))px)"
+    }
     static func emit(nodes: [DocumentNode], targets: Set<FluidValueTarget> = Set(FluidValueTarget.allCases)) -> String {
         nodes.sorted { $0.id.description < $1.id.description }.flatMap { node in
             FluidValueTarget.allCases.filter(targets.contains).compactMap { target -> String? in
@@ -642,7 +653,7 @@ enum AuthoringInsertionCommand: Equatable, Sendable {
     }
 }
 
-struct InsertionValidationContext: Sendable {
+struct InsertionValidationContext: Equatable, Sendable {
     let activePageID: PageID
     let activeRoute: PageRoute
     let operationGeneration: UInt64
@@ -1347,13 +1358,14 @@ enum ComponentGraphResolver {
 
 enum ConnectedPageOutput {
     static let menuCSS = """
-    .sf-connected-page { position:relative;width:100%;min-height:900px;overflow:hidden; }
+    .sf-connected-page { position:relative;width:100%;min-height:100vh;overflow:hidden; }
     body.sf-connected-body { margin:0; }
     .sf-page-navigation { position:absolute;box-sizing:border-box;font:14px system-ui; }
+    :where(.sf-page-navigation a) { color:inherit;text-decoration:none; }
     .sf-nav-inline { display:flex;align-items:center;min-width:0; }
     .sf-nav-inline a { flex:none;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
     .sf-nav-menu { display:none;position:relative;width:max-content;max-width:100%; }
-    .sf-nav-menu summary { list-style:none;cursor:pointer; }
+    .sf-nav-menu summary { list-style:none;cursor:pointer;white-space:nowrap; }
     .sf-nav-menu summary::-webkit-details-marker { display:none; }
     @media (width < 600px) { .sf-nav-responsive { display:none; } .sf-nav-menu { display:block; } .sf-nav-menu[open] nav { display:flex;position:absolute;z-index:100;min-width:160px;max-width:min(320px,80vw);max-height:50vh;overflow:auto;flex-direction:column;gap:8px;padding:12px;background:Canvas;color:CanvasText;box-shadow:0 4px 16px #0003; } footer .sf-nav-menu[open] nav { bottom:100%; } }
     """
@@ -1364,18 +1376,21 @@ enum ConnectedPageOutput {
     document.addEventListener('toggle',function(event){const menu=event.target;if(!(menu instanceof HTMLDetailsElement)||!menu.matches(selector))return;const summary=menu.querySelector('summary');if(summary)summary.setAttribute('aria-expanded',String(menu.open));if(menu.open)document.querySelectorAll(selector+'[open]').forEach(function(other){if(other!==menu)close(other,false);});},true);
     document.addEventListener('keydown',function(event){if(event.key!=='Escape')return;const menu=(event.target instanceof Element?event.target.closest(selector):null)||document.querySelector(selector+'[open]');if(menu&&menu.open){close(menu,true);event.preventDefault();}});
     document.addEventListener('click',function(event){const target=event.target;if(!(target instanceof Element))return;document.querySelectorAll(selector+'[open]').forEach(function(menu){if(!menu.contains(target)||target.closest('[data-siteforge-nav-link]'))close(menu,false);});});
-    document.addEventListener('focusin',function(event){document.querySelectorAll(selector+'[open]').forEach(function(menu){if(!menu.contains(event.target))close(menu,false);});});
+    document.addEventListener('focusin',function(event){if(event.target===document.body||event.target===document.documentElement)return;document.querySelectorAll(selector+'[open]').forEach(function(menu){if(!menu.contains(event.target))close(menu,false);});});
     window.matchMedia('(width < 600px)').addEventListener('change',function(event){if(event.matches)return;document.querySelectorAll(selector+'[open]').forEach(function(menu){const focused=menu.contains(document.activeElement);close(menu,false);if(focused){const owner=menu.closest('.sf-page-navigation');const first=owner&&Array.from(owner.querySelectorAll('.sf-nav-inline a[href]')).find(function(link){return link.getClientRects().length>0;});if(first)first.focus();else document.body.focus();}});});
     }());
     """
-    static func css(pages: [DocumentPage]) -> String {
+    static func css(pages: [DocumentPage], colorTokens: [LocalColorToken] = []) -> String {
         var rules: [String] = []
-        for page in pages where page.nodes.contains(where: { CanonicalPageFlow.role($0) != nil }) {
+        for page in pages where page.usesConnectedOutput {
             let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            let automaticNavigationIDs = Set(page.nodes.filter { !CanonicalPageChrome.isCustom($0) }
+                .compactMap { CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: $0) })
             for breakpoint in ResponsiveBreakpoint.allCases {
                 let width = CanonicalPageFlow.pageWidth(breakpoint, nil)
                 let snapshot = ConnectedPageLayoutSnapshot(page: page, breakpoint: breakpoint, width: width)
-                var current = [".sf-page-\(page.id) { height:\(snapshot.contentHeight)px; }"]
+                let automatic = page.hasAutomaticSizing
+                var current = [".sf-page-\(page.id) { height:\(automatic ? "auto" : "\(snapshot.contentHeight)px"); }"]
                 for node in page.canonicalDepthFirstNodes() {
                     let selector = CanonicalCSSRule.selector(for: node.id)
                     if CanonicalPageFlow.isNavigationLink(node) {
@@ -1388,7 +1403,10 @@ enum ConnectedPageOutput {
                     }
                     let frame = snapshot.frames[node.id]
                     if page.rootNodeIDs.contains(node.id), frame == nil {
-                        current.append("\(selector) { display:flow-root;position:relative;left:0;top:0;width:100%;height:\(snapshot.contentHeight)px;box-sizing:border-box;padding:0;margin:0; }")
+                        // The real authored page root owns its background.
+                        // Give that root the viewport minimum too, rather than
+                        // leaving unpainted space in a decorative wrapper.
+                        current.append("\(selector) { display:flow-root;position:relative;left:0;top:0;width:100%;height:\(automatic ? "auto" : "\(snapshot.contentHeight)px");min-height:100vh;box-sizing:border-box;padding:0;margin:0; }")
                         continue
                     }
                     guard let frame else {
@@ -1403,7 +1421,7 @@ enum ConnectedPageOutput {
                     let policy = parentID.flatMap { snapshot.policies[$0] }
                     let localX = frame.origin.x - (parentFrame?.origin.x ?? 0)
                     let localY = frame.origin.y - (parentFrame?.origin.y ?? 0)
-                    var declarations = ["display:block", "position:absolute", "box-sizing:border-box", "padding:0", "margin:0",
+                    var declarations = ["display:\([.button, .link].contains(node.kind) ? "flex" : "block")", "position:absolute", "box-sizing:border-box", "padding:0", "margin:0",
                         "left:\(localX)px", "top:\(localY)px", "width:\(frame.size.width)px", "height:\(frame.size.height)px"]
                     if let parent, let policy,
                        parent.kind == .grid || parent.kind == .stack || parent.kind == .section || parent.kind == .form
@@ -1411,10 +1429,13 @@ enum ConnectedPageOutput {
                         let index = snapshot.childIndices[node.id] ?? 0
                         if parent.kind == .grid {
                             let cell = "calc(max(1px,calc(100% - \(2 * policy.padding + Double(policy.columns - 1) * policy.gap)px)) / \(policy.columns))"
-                            declarations += ["width:\(cell)", "left:calc(\(policy.padding)px + \(index % policy.columns) * (\(cell) + \(policy.gap)px))"]
+                            if CanonicalSizingConstraints.dimensionResolution(.width, node: node,
+                                breakpoint: breakpoint, width: width).numericSource == nil { declarations.append("width:\(cell)") }
+                            declarations.append("left:calc(\(policy.padding)px + \(index % policy.columns) * (\(cell) + \(policy.gap)px))")
                         } else if policy.axis == .vertical {
                             let basis = ResponsiveGeometryResolver.geometry(for: node, breakpoint: breakpoint, viewportWidth: width)?.size.width ?? frame.size.width
-                            let childWidth = CanonicalPageFlow.role(node) != nil || policy.alignment == .stretch
+                            let managedChromeContent = CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: parent) == node.id
+                            let childWidth = CanonicalPageFlow.role(node) != nil || policy.alignment == .stretch || managedChromeContent
                                 ? "max(1px,calc(100% - \(2 * policy.padding)px))"
                                 : "min(\(basis)px,max(1px,calc(100% - \(2 * policy.padding)px)))"
                             let x = policy.alignment == .center ? "calc((100% - \(childWidth)) / 2)"
@@ -1424,6 +1445,12 @@ enum ConnectedPageOutput {
                             let basis = ResponsiveGeometryResolver.geometry(for: node, breakpoint: breakpoint, viewportWidth: width)?.size.width ?? 1
                             declarations += ["position:relative", "left:auto", "top:auto", "width:\(basis)px",
                                 "flex:0 1 \(basis)px", "min-width:1px", "max-width:none"]
+                            if automaticNavigationIDs.contains(node.id) {
+                                // The same automatic chrome owner gives this
+                                // child the remaining native row width. Its
+                                // stored default width is not a fixed basis.
+                                declarations += ["width:auto", "flex:1 1 0px"]
+                            }
                         }
                     }
                     if let ownPolicy = snapshot.policies[node.id], ownPolicy.naturalFlow {
@@ -1445,6 +1472,27 @@ enum ConnectedPageOutput {
                     if page.rootNodeIDs.contains(node.id) {
                         declarations.append("width:min(100%,\(frame.size.width)px)")
                     }
+                    declarations += automaticSizingDeclarations(node: node, parent: parent,
+                        snapshot: snapshot, breakpoint: breakpoint, width: width, localX: localX, localY: localY)
+                    // Connected layout rules come after generic fluid CSS.
+                    // Do not pin a winning fluid value to one sampled preset.
+                    for target in [FluidValueTarget.width, .height, .padding, .gap] {
+                        guard let value = CanonicalFluidValueCodec.value(for: target, node: node)?.0,
+                              let expression = StaticFluidValueOutputEmitter.expression(for: value) else { continue }
+                        let wins: Bool
+                        switch target {
+                        case .width, .height:
+                            wins = CanonicalSizingConstraints.dimensionResolution(target == .width ? .width : .height,
+                                node: node, breakpoint: breakpoint, width: width).numericSource == .fluid
+                        case .padding:
+                            wins = DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.padding == nil
+                                && ResponsiveContainerLayoutResolver.value(for: .padding, node: node, breakpoint: breakpoint, viewportWidth: width)?.2 == .fluid
+                        case .gap:
+                            wins = ResponsiveContainerLayoutResolver.value(for: .gap, node: node, breakpoint: breakpoint, viewportWidth: width)?.2 == .fluid
+                        default: wins = false
+                        }
+                        if wins { declarations.append(target.rawValue + ":" + expression) }
+                    }
                     var values: [String: String] = [:], order: [String] = []
                     for declaration in declarations {
                         guard let separator = declaration.firstIndex(of: ":") else { continue }
@@ -1462,16 +1510,31 @@ enum ConnectedPageOutput {
                             continue
                         }
                         let padding = settings.id == node.id ? CanonicalPageFlow.padding(node, breakpoint: breakpoint, width: width) : 0
-                        let alignment = settings.insertionStringProperty(CanonicalPageFlow.alignmentKey) ?? "start"
+                        let alignment = CanonicalPageChrome.navigationAlignment(surface: node, settings: settings)
                         let justify = alignment == "end" ? "flex-end" : alignment == "center" ? "center" : "flex-start"
-                        let gap = count > 1 ? "min(16px,max(0px,calc((100% - \(count)px) / \(count - 1))))" : "0px"
+                        let authoredGap = CanonicalPageChrome.navigationGap(surface: node, settings: settings, breakpoint: breakpoint, width: width)
+                        let gap = count > 1 ? "min(\(authoredGap)px,max(0px,calc((100% - \(count)px) / \(count - 1))))" : "0px"
                         let itemWidth = "calc((100% - \(count - 1) * \(gap)) / \(count))"
                         current.append(".sf-page-navigation-\(node.id) { display:block;left:\(padding)px;top:\(padding)px;width:max(1px,calc(100% - \(2 * padding)px));height:\(min(32, max(1, frame.size.height - 2 * padding)))px; }")
                         current.append(".sf-page-navigation-\(node.id) .sf-nav-inline { gap:\(gap);justify-content:\(justify); }")
                         current.append(".sf-page-navigation-\(node.id) .sf-nav-inline a { width:\(alignment == "stretch" ? itemWidth : "min(160px,\(itemWidth))"); }")
                         current.append(".sf-page-navigation-\(node.id) .sf-nav-menu { margin-left:\(alignment == "end" || alignment == "center" ? "auto" : "0");margin-right:\(alignment == "center" ? "auto" : "0"); }")
+                        if breakpoint == .mobile {
+                            // The automatic title may retain a wider authored
+                            // box than its glyphs. Keep the menu intrinsic and
+                            // align its full hit area, not a wrapped fragment,
+                            // within the remaining navigation edge.
+                            current.append(".sf-page-navigation-\(node.id) { display:flex;justify-content:\(justify); }")
+                            current.append(".sf-page-navigation-\(node.id) .sf-nav-menu { flex:none;max-width:none;margin:0; }")
+                        }
                         let panelAlignment = alignment == "end" ? "right:0;left:auto;" : alignment == "center" ? "left:50%;transform:translateX(-50%);" : "left:0;right:auto;"
                         current.append(".sf-page-navigation-\(node.id) .sf-nav-menu[open] nav { \(panelAlignment) }")
+                        if let color = CanonicalPageChrome.navigationForeground(surface: node, page: page, tokens: colorTokens) {
+                            current.append(".sf-page-navigation-\(node.id) .sf-nav-menu > summary { color:\(color.hexadecimalRGBA); }")
+                        }
+                        if let color = CanonicalPageChrome.opaqueNavigationSurface(surface: node, page: page, tokens: colorTokens) {
+                            current.append(".sf-page-navigation-\(node.id) .sf-nav-menu[open] nav { background:\(color.hexadecimalRGBA); }")
+                        }
                     }
                 }
                 let joined = current.joined(separator: "\n")
@@ -1479,6 +1542,81 @@ enum ConnectedPageOutput {
             }
         }
         return rules.isEmpty ? "" : (rules + [menuCSS]).joined(separator: "\n")
+    }
+
+    /// Width is resolved before intrinsic height in both native and browser
+    /// layout. Emit containing-block rules, not sampled preset-height literals.
+    private static func automaticSizingDeclarations(node: DocumentNode, parent: DocumentNode?,
+        snapshot: ConnectedPageLayoutSnapshot, breakpoint: ResponsiveBreakpoint,
+        width: Double, localX: Double, localY: Double) -> [String] {
+        func mode(_ node: DocumentNode, _ dimension: SizingDimension) -> CanonicalSizingMode {
+            CanonicalSizingConstraints.effectiveMode(dimension, node: node, breakpoint: breakpoint, width: width)
+        }
+        let ownWidth = mode(node, .width), ownHeight = mode(node, .height)
+        let sizing = CanonicalSizingConstraints.resolved(for: node)
+        var result: [String] = []
+        if ownWidth == .fill {
+            let inset = parent.flatMap { parent in snapshot.policies[parent.id].map {
+                ResponsiveSizingLayout.padding(parent, policy: $0, breakpoint: breakpoint, width: width)
+            } } ?? 0
+            result += ["width:max(1px,calc(100% - \(inset * 2)px))", "min-width:1px"]
+            if let maximum = sizing.maxWidth { result += ["max-width:\(maximum)px"] }
+        }
+        if ownHeight == .hug { result += ["height:auto", "min-height:1px"] }
+        if ownHeight == .fill { result += ["height:100%"] }
+        if ownHeight == .hug, [.text, .link].contains(node.kind) {
+            result += ["padding-inline:4px", "white-space:pre-wrap", "overflow-wrap:normal"]
+        }
+        if ownHeight == .hug, node.kind == .button { result += ["padding:8px 4px", "min-height:28px"] }
+        if ownHeight == .hug, let policy = snapshot.policies[node.id] {
+            if node.kind == .stack || node.kind == .section
+                || (node.kind == .frame && DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.padding != nil) {
+                let axis = node.kind == .stack && policy.axis == .horizontal ? "row" : "column"
+                let align = policy.alignment == .center ? "center" : policy.alignment == .end ? "flex-end"
+                    : policy.alignment == .stretch ? "stretch" : "flex-start"
+                result += ["display:flex", "flex-direction:\(axis)", "gap:\(policy.gap)px",
+                    "padding:\(policy.padding)px", "align-items:\(align)"]
+            } else if node.kind == .grid {
+                result += ["display:grid", "grid-template-columns:repeat(\(policy.columns),minmax(0,1fr))",
+                    "gap:\(policy.gap)px", "padding:\(policy.padding)px", "align-items:start"]
+            } else if node.kind == .frame, !policy.naturalFlow {
+                // The overlay grid must hug its actual, width-resolved content.
+                // Safari's default auto track can retain a larger intrinsic
+                // measurement from before percentage-width text has wrapped.
+                result += ["display:grid", "grid-template-columns:minmax(0,1fr)",
+                    "grid-template-rows:max-content", "align-content:start"]
+            }
+        }
+        if let parent, mode(parent, .height) == .hug, let policy = snapshot.policies[parent.id] {
+            if ownHeight == .fill {
+                // Fill-height backgrounds do not contribute to intrinsic height.
+                let padding = ResponsiveSizingLayout.padding(parent, policy: policy, breakpoint: breakpoint, width: width)
+                result += ["position:absolute", "top:\(padding)px", "bottom:\(padding)px", "height:auto"]
+            } else if parent.kind == .stack || parent.kind == .section || parent.kind == .grid
+                || (parent.kind == .frame && DesignBoxStyleCommandRegistry.resolvedStyle(for: parent)?.padding != nil) {
+                // Each breakpoint must reset the entire flex basis. A Desktop
+                // row's width basis otherwise cascades into Mobile's column
+                // as a height, stretching a fixed-height Button unexpectedly.
+                result += ["position:relative", "left:auto", "top:auto", "margin:0", "flex:0 0 auto"]
+                if policy.axis == .horizontal, ownWidth != .fill, parent.kind != .grid {
+                    let basis = ResponsiveGeometryResolver.geometry(for: node, breakpoint: breakpoint, viewportWidth: width)?.size.width ?? 1
+                    result += ["flex:0 0 \(basis)px"]
+                }
+                if parent.kind == .grid,
+                   CanonicalSizingConstraints.dimensionResolution(.width, node: node,
+                    breakpoint: breakpoint, width: width).numericSource == nil { result += ["width:100%"] }
+                else if ownWidth == .fill {
+                    result += ["width:100%"]
+                    if policy.axis == .horizontal { result += ["width:auto", "flex:1 1 0px"] }
+                }
+            } else if parent.kind == .frame, !policy.naturalFlow {
+                result += ["position:relative", "grid-area:1 / 1", "top:auto", "left:auto",
+                    "margin-top:\(max(0, localY))px", "align-self:start"]
+                if ownWidth == .fill { result += ["justify-self:center"] }
+                else { result += ["margin-left:\(max(0, localX))px"] }
+            }
+        }
+        return result
     }
 }
 
@@ -1577,6 +1715,13 @@ struct ConnectedPageLayoutSnapshot: Sendable {
 }
 
 extension DocumentPage {
+    var hasAutomaticSizing: Bool {
+        nodes.contains { node in
+            let sizing = CanonicalSizingConstraints.resolved(for: node)
+            return sizing.widthMode != .fixed || sizing.heightMode != .fixed
+        }
+    }
+    var usesConnectedOutput: Bool { hasAutomaticSizing || nodes.contains { CanonicalPageFlow.role($0) != nil } }
     /// A hidden container suppresses its complete authored subtree at the
     /// active breakpoint without deleting or rewriting descendants. Hidden
     /// children do not consume Stack/Grid placement slots.
@@ -1623,6 +1768,14 @@ extension DocumentPage {
     func resolvedStructuralGeometry(
         breakpoint: ResponsiveBreakpoint = .desktop,
         viewportWidth: Double? = nil
+    ) -> [NodeID: InsertionGeometry] {
+        let fixed = fixedStructuralGeometry(breakpoint: breakpoint, viewportWidth: viewportWidth)
+        return ResponsiveSizingLayout.resolve(page: self, fixed: fixed, breakpoint: breakpoint, width: viewportWidth)
+    }
+
+    private func fixedStructuralGeometry(
+        breakpoint: ResponsiveBreakpoint,
+        viewportWidth: Double?
     ) -> [NodeID: InsertionGeometry] {
         let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
         let visibleNodeIDs = effectiveVisibleNodeIDs(breakpoint: breakpoint)
@@ -1758,7 +1911,11 @@ extension DocumentPage {
                             x: parentGeometry.origin.x + padding + Double(column) * (cellWidth + gap),
                             y: rowOffsets[row]
                         ),
-                        size: .init(width: cellWidth, height: rowHeights[row])
+                        size: .init(
+                            width: CanonicalSizingConstraints.dimensionResolution(.width, node: child,
+                                breakpoint: breakpoint, width: viewportWidth).numericSource == nil ? cellWidth : geometry.size.width,
+                            height: CanonicalSizingConstraints.dimensionResolution(.height, node: child,
+                                breakpoint: breakpoint, width: viewportWidth).numericSource == nil ? rowHeights[row] : geometry.size.height)
                     )
                     result[child.id] = geometry
                 }
@@ -1770,8 +1927,10 @@ extension DocumentPage {
                 let inset = settings.id == parent.id ? CanonicalPageFlow.padding(parent, breakpoint: breakpoint, width: viewportWidth) : 0
                 let available = max(1, parentGeometry.size.width - 2 * inset)
                 let height = min(32, max(1, parentGeometry.size.height - 2 * inset))
-                let alignment = settings.insertionStringProperty(CanonicalPageFlow.alignmentKey) ?? (settings.id == parent.id ? "start" : "end")
-                let navigationLayout = CanonicalPageFlow.navigationLayout(availableWidth: available, count: links.count, alignment: alignment)
+                let alignment = CanonicalPageChrome.navigationAlignment(surface: parent, settings: settings)
+                let navigationLayout = CanonicalPageFlow.navigationLayout(availableWidth: available, count: links.count, alignment: alignment,
+                    requestedGap: CanonicalPageChrome.navigationGap(surface: parent, settings: settings,
+                        breakpoint: breakpoint, width: viewportWidth))
                 for (index, link) in links.enumerated() {
                     result[link.id] = .init(origin: .init(x: parentGeometry.origin.x + inset + navigationLayout.offset + Double(index) * (navigationLayout.width + navigationLayout.gap),
                                                         y: parentGeometry.origin.y + inset), size: .init(width: navigationLayout.width, height: height))
@@ -1841,6 +2000,191 @@ struct InsertionSession: Equatable, Sendable {
         generation &+= 1
         identity = nil
         phase = .inactive
+    }
+}
+
+/// The existing structural snapshot remains the only geometry source. Opt-in
+/// sizing first resolves containing widths, then intrinsic heights bottom-up,
+/// then positions top-down. Stored fixed frames and breakpoint intent are never
+/// rewritten by measurement; old documents take the unchanged fixed path.
+enum ResponsiveSizingLayout {
+    static func padding(_ parent: DocumentNode, policy: ResolvedContainerLayoutPolicy,
+                        breakpoint: ResponsiveBreakpoint, width: Double?) -> Double {
+        if parent.kind == .frame, DesignBoxStyleCommandRegistry.resolvedStyle(for: parent)?.padding == nil {
+            return CanonicalPageFlow.role(parent) == nil ? 0
+                : CanonicalPageFlow.padding(parent, breakpoint: breakpoint, width: width)
+        }
+        return policy.padding
+    }
+    static func resolve(page: DocumentPage, fixed: [NodeID: InsertionGeometry],
+                        breakpoint: ResponsiveBreakpoint, width: Double?) -> [NodeID: InsertionGeometry] {
+        func mode(_ node: DocumentNode, _ dimension: SizingDimension) -> CanonicalSizingMode {
+            CanonicalSizingConstraints.effectiveMode(dimension, node: node, breakpoint: breakpoint, width: width)
+        }
+        let automatic = page.nodes.filter { mode($0, .width) != .fixed || mode($0, .height) != .fixed }
+        guard !automatic.isEmpty else { return fixed }
+        let ordered = page.canonicalDepthFirstNodes()
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        let visible = page.effectiveVisibleNodeIDs(breakpoint: breakpoint)
+        var affected = Set<NodeID>(), descendants = Set<NodeID>()
+        for node in automatic {
+            var pending = [node.id]
+            while let id = pending.popLast() {
+                guard descendants.insert(id).inserted else { continue }
+                pending.append(contentsOf: byID[id]?.childIDs ?? [])
+            }
+            var current: DocumentNode? = node
+            while let item = current, affected.insert(item.id).inserted {
+                if case .node(let id) = item.parent { current = byID[id] } else { current = nil }
+            }
+        }
+        affected.formUnion(descendants)
+        var result = fixed
+        func children(_ parent: DocumentNode) -> [DocumentNode] {
+            parent.childIDs.filter(visible.contains).compactMap { byID[$0] }.filter { result[$0.id] != nil }
+        }
+        func policy(_ parent: DocumentNode) -> ResolvedContainerLayoutPolicy {
+            .resolve(parent, children: children(parent), breakpoint: breakpoint, viewportWidth: width)
+        }
+        func inset(_ parent: DocumentNode, _ policy: ResolvedContainerLayoutPolicy) -> Double {
+            padding(parent, policy: policy, breakpoint: breakpoint, width: width)
+        }
+        func free(_ parent: DocumentNode, _ policy: ResolvedContainerLayoutPolicy) -> Bool {
+            parent.kind == .frame && !policy.naturalFlow
+                && DesignBoxStyleCommandRegistry.resolvedStyle(for: parent)?.padding == nil
+        }
+        func bounds(_ parent: DocumentNode) -> InsertionGeometry {
+            result[parent.id] ?? .init(origin: .init(x: 0, y: 0),
+                size: .init(width: CanonicalPageFlow.pageWidth(breakpoint, width), height: 900))
+        }
+        func constrained(_ value: Double, node: DocumentNode, dimension: SizingDimension) -> Double {
+            let sizing = CanonicalSizingConstraints.resolved(for: node)
+            let minimum = dimension == .width ? sizing.minWidth : sizing.minHeight
+            let maximum = dimension == .width ? sizing.maxWidth : sizing.maxHeight
+            return min(CanonicalSizingConstraints.maximum,
+                max(max(1, minimum ?? 1), min(value, maximum ?? CanonicalSizingConstraints.maximum)))
+        }
+        func update(_ id: NodeID, x: Double? = nil, y: Double? = nil, w: Double? = nil, h: Double? = nil) {
+            guard let old = result[id] else { return }
+            result[id] = .init(origin: .init(x: x ?? old.origin.x, y: y ?? old.origin.y),
+                size: .init(width: w ?? old.size.width, height: h ?? old.size.height))
+        }
+        for node in ordered where descendants.contains(node.id) {
+            guard let raw = ResponsiveGeometryResolver.geometry(for: node, breakpoint: breakpoint, viewportWidth: width),
+                  !CanonicalPageChrome.ownsFrame(of: node, in: page) else { continue }
+            update(node.id, w: CanonicalPageFlow.role(node) == nil ? raw.size.width : nil, h: raw.size.height)
+        }
+        // Widths precede wrapping; Grid allocates its track before measuring
+        // Text. Fill siblings in a horizontal Stack share the remaining width.
+        for parent in ordered where affected.contains(parent.id) {
+            let items = children(parent), layout = policy(parent), padding = inset(parent, layout)
+            let available = max(1, bounds(parent).size.width - padding * 2)
+            let fills = items.filter { mode($0, .width) == .fill }
+            let fixedWidth = items.filter { mode($0, .width) != .fill }.reduce(0.0) { $0 + (result[$1.id]?.size.width ?? 1) }
+            let share = max(1, (available - fixedWidth - Double(max(0, items.count - 1)) * layout.gap) / Double(max(1, fills.count)))
+            for child in items {
+                if parent.kind == .grid {
+                    let cell = max(1, (available - Double(layout.columns - 1) * layout.gap) / Double(layout.columns))
+                    // Tracks own default placement, not explicit numeric intent.
+                    // Preserve the winning breakpoint/fluid width before text
+                    // measurement and use the same condition in CSS projection.
+                    if CanonicalSizingConstraints.dimensionResolution(.width, node: child,
+                        breakpoint: breakpoint, width: width).numericSource == nil {
+                        update(child.id, w: constrained(cell, node: child, dimension: .width))
+                    }
+                } else if mode(child, .width) == .fill {
+                    let value = parent.kind == .stack && layout.axis == .horizontal ? share : available
+                    update(child.id, w: constrained(value, node: child, dimension: .width))
+                }
+            }
+        }
+        for node in ordered.reversed() where mode(node, .height) == .hug {
+            guard let own = result[node.id] else { continue }
+            let layout = policy(node), padding = inset(node, layout)
+            let items = children(node).filter { mode($0, .height) != .fill }
+            let height: Double
+            if [.text, .button, .link].contains(node.kind) {
+                let typography = TypographyCommandRegistry.resolvedTypography(for: node, viewportWidth: width) ?? .defaultValue
+                let text = node.kind.isLinkControl ? node.controlLabel : node.insertionStringProperty("content.text") ?? ""
+                height = ResponsiveTextMetrics.height(text: text, width: own.size.width, typography: typography)
+                    + (node.kind == .button ? 16 : 0)
+            } else if free(node, layout) {
+                height = items.reduce(padding, { max($0, (fixed[$1.id]?.origin.y ?? own.origin.y)
+                    - (fixed[node.id]?.origin.y ?? own.origin.y) + (result[$1.id]?.size.height ?? 0)) }) + padding
+            } else if node.kind == .grid {
+                var rows: [Double] = []
+                for (index, child) in items.enumerated() {
+                    if index % layout.columns == 0 { rows.append(0) }
+                    rows[rows.count - 1] = max(rows[rows.count - 1], result[child.id]?.size.height ?? 1)
+                }
+                height = rows.reduce(0, +) + Double(max(0, rows.count - 1)) * layout.gap + padding * 2
+            } else if node.kind == .stack && layout.axis == .horizontal {
+                height = (items.compactMap { result[$0.id]?.size.height }.max() ?? 0) + padding * 2
+            } else {
+                height = items.reduce(0) { $0 + (result[$1.id]?.size.height ?? 1) }
+                    + Double(max(0, items.count - 1)) * layout.gap + padding * 2
+            }
+            update(node.id, h: constrained(node.kind == .button ? max(28, height) : height, node: node, dimension: .height))
+        }
+        for parent in ordered {
+            let items = children(parent), layout = policy(parent), padding = inset(parent, layout), own = bounds(parent)
+            let oldOrigin = fixed[parent.id]?.origin ?? own.origin
+            let delta = LayoutPoint(x: own.origin.x - oldOrigin.x, y: own.origin.y - oldOrigin.y)
+            guard affected.contains(parent.id) else {
+                for child in items {
+                    if let old = fixed[child.id] { update(child.id, x: old.origin.x + delta.x, y: old.origin.y + delta.y) }
+                }
+                continue
+            }
+            if layout.naturalFlow {
+                var y = own.origin.y + padding
+                let flow = CanonicalPageFlow.ordered(items)
+                for child in flow {
+                    update(child.id, x: own.origin.x + padding, y: y,
+                        w: max(1, own.size.width - padding * 2))
+                    y += result[child.id]?.size.height ?? 1
+                }
+                continue
+            }
+            let availableWidth = max(1, own.size.width - padding * 2)
+            let availableHeight = max(1, own.size.height - padding * 2)
+            if free(parent, layout) {
+                for child in items {
+                    guard let value = result[child.id], let old = fixed[child.id] else { continue }
+                    update(child.id,
+                        x: mode(child, .width) == .fill ? own.origin.x + padding + (availableWidth - value.size.width) / 2 : old.origin.x + delta.x,
+                        y: mode(child, .height) == .fill ? own.origin.y + padding : old.origin.y + delta.y,
+                        h: mode(child, .height) == .fill ? constrained(availableHeight, node: child, dimension: .height) : nil)
+                }
+            } else if parent.kind == .grid {
+                let cell = max(1, (availableWidth - Double(layout.columns - 1) * layout.gap) / Double(layout.columns))
+                var y = own.origin.y + padding, rowHeight = 0.0
+                for (index, child) in items.enumerated() {
+                    if index > 0, index % layout.columns == 0 { y += rowHeight + layout.gap; rowHeight = 0 }
+                    update(child.id, x: own.origin.x + padding + Double(index % layout.columns) * (cell + layout.gap), y: y)
+                    rowHeight = max(rowHeight, result[child.id]?.size.height ?? 1)
+                }
+            } else {
+                var cursor = layout.axis == .vertical ? own.origin.y + padding : own.origin.x + padding
+                let filled = items.filter { mode($0, .height) == .fill }
+                let fixedHeight = items.filter { mode($0, .height) != .fill }.reduce(0.0) { $0 + (result[$1.id]?.size.height ?? 1) }
+                let share = max(1, (availableHeight - fixedHeight - Double(max(0, items.count - 1)) * layout.gap) / Double(max(1, filled.count)))
+                for child in items {
+                    guard let value = result[child.id] else { continue }
+                    let height = mode(child, .height) == .fill ? constrained(layout.axis == .vertical ? share : availableHeight, node: child, dimension: .height) : value.size.height
+                    if layout.axis == .vertical {
+                        let x = own.origin.x + padding + (layout.alignment == .center ? (availableWidth - value.size.width) / 2 : layout.alignment == .end ? availableWidth - value.size.width : 0)
+                        update(child.id, x: x, y: cursor, h: height)
+                        cursor += height + layout.gap
+                    } else {
+                        let y = own.origin.y + padding + (layout.alignment == .center ? (availableHeight - height) / 2 : layout.alignment == .end ? availableHeight - height : 0)
+                        update(child.id, x: cursor, y: y, h: layout.alignment == .stretch ? availableHeight : height)
+                        cursor += value.size.width + layout.gap
+                    }
+                }
+            }
+        }
+        return result
     }
 }
 

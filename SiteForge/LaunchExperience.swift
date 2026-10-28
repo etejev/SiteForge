@@ -55,8 +55,16 @@ enum NativeImageOpenPanel {
         panel.allowedContentTypes = [.png, .jpeg, .gif, .tiff, .heic]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Choose a replacement image. Existing Image nodes keep their stable asset reference."
-        panel.prompt = "Replace"
+        panel.message = "Replace this shared asset everywhere it is referenced. To change only one object, cancel and use Choose from Assets or Import Image beside that object."
+        panel.prompt = "Replace Everywhere"
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+    static func chooseImageForUse() -> URL? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .tiff, .heic]
+        panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
+        panel.message = "Import and use a local image only for the captured selection. Other uses keep their current image."
+        panel.prompt = "Import and Use"
         return panel.runModal() == .OK ? panel.url : nil
     }
 }
@@ -175,7 +183,7 @@ enum LaunchExperienceState: Equatable, Sendable {
 
     var announcement: String {
         switch self {
-        case .welcome: "SiteForge is ready. Choose Blank Site or Starter Site, or open an existing project."
+        case .welcome: "SiteForge is ready. Choose Blank Site, Starter Site or Aurora Editorial, or open an existing project."
         case .working(let status): status.accessibilityLabel
         case .failure(let failure): "Project loading failed. \(failure.message)"
         case .recovery(let recovery): "Recovery candidate found. \(recovery.revisionSummary)"
@@ -244,13 +252,20 @@ final class LaunchExperienceController: ObservableObject {
     @Published private(set) var transitionHistory: [LaunchExperienceStateKind]
     @Published private(set) var recentProjects: [RecentProjectReference] = []
     @Published private(set) var recentProjectsMessage: String?
+    @Published private(set) var isUpdatingRecentProjects = false
     @Published private(set) var recoveryAvailableAtWelcome = false
+    @Published private(set) var recoveryHistoryMessage: String?
+    @Published private(set) var isResolvingRecovery = false
+    private var recoveryActionID = UUID()
     private var checkedInitialRecovery = false
     let lifecycle: DocumentLifecycleController
     let diagnostics: LaunchExperienceDiagnostics
 
     private var operationTask: Task<Void, Never>?
     private var operationID = UUID()
+    private var recentProjectsTask: Task<Void, Never>?
+    private var recentProjectsRequestID = UUID()
+    private var pendingRecentProjectOperations = 0
     private var returnState: LaunchExperienceState = .welcome
     private var lastOpenURL: URL?
     private(set) var isPreviewScenario = false
@@ -347,7 +362,7 @@ final class LaunchExperienceController: ObservableObject {
     func createBlankProjectAndWait() async {
         let id = UUID()
         operationID = id
-        returnState = state == .workspace ? .workspace : .welcome
+        captureOperationReturnState()
         await performCreation(.blank, operationID: id, start: .now)
     }
 
@@ -361,8 +376,21 @@ final class LaunchExperienceController: ObservableObject {
     func createStarterProjectAndWait() async {
         let id = UUID()
         operationID = id
-        returnState = state == .workspace ? .workspace : .welcome
+        captureOperationReturnState()
         await performCreation(.starter, operationID: id, start: .now)
+    }
+
+    func createAuroraProject() {
+        startOperation(.new) { [weak self] id, start in
+            await self?.performCreation(.aurora, operationID: id, start: start)
+        }
+    }
+
+    func createAuroraProjectAndWait() async {
+        let id = UUID()
+        operationID = id
+        captureOperationReturnState()
+        await performCreation(.aurora, operationID: id, start: .now)
     }
 
     func openProject(_ url: URL, userSelected: Bool = false) {
@@ -380,23 +408,24 @@ final class LaunchExperienceController: ObservableObject {
         lastOpenURL = url
         let id = UUID()
         operationID = id
-        returnState = state == .workspace ? .workspace : .welcome
+        captureOperationReturnState()
         await performOpen(url, userSelected: userSelected, rememberOnSuccess: userSelected, operationID: id, start: .now)
     }
 
     func loadRecentProjects() async {
-        do {
-            recentProjects = try await recentProjectStore.load()
-            recentProjectsMessage = nil
-        } catch {
-            recentProjects = []
-            recentProjectsMessage = "Recent projects are unavailable. Blank Site, Starter Site, and Open Project remain available."
-        }
+        await enqueueRecentProjects { owner in
+            do {
+                owner.recentProjects = try await owner.recentProjectStore.load()
+                owner.recentProjectsMessage = nil
+            } catch {
+                owner.recentProjectsMessage = "Recent projects could not be refreshed. The last valid list is retained; Open Project remains available."
+            }
+        }.value
     }
 
     func openRecentProject(_ reference: RecentProjectReference) {
         startOperation(.open) { [weak self] id, start in
-            guard let self else { return }
+            guard let self, id == self.operationID else { return }
             self.transition(to: .working(ProjectLoadingStatus(
                 title: "Locating recent project…",
                 detail: "Restoring authorized local access without exposing its path.",
@@ -407,7 +436,7 @@ final class LaunchExperienceController: ObservableObject {
             do {
                 let url = try await self.lifecycle.resolveAuthorizedProject(bookmarkKey: reference.bookmarkKey)
                 guard id == self.operationID, !Task.isCancelled else {
-                    await self.finishCancelled(.open, start: start)
+                    await self.finishCancelled(.open, start: start, operationID: id)
                     return
                 }
                 self.lastOpenURL = url
@@ -417,11 +446,13 @@ final class LaunchExperienceController: ObservableObject {
                 )
             } catch let failure as DocumentLifecycleFailure {
                 guard id == self.operationID else { return }
+                if Task.isCancelled { await self.finishCancelled(.open, start: start, operationID: id); return }
                 self.recentProjectsMessage = "Access to \(reference.displayName) needs to be restored with Open Project."
                 self.transition(to: .welcome)
                 await self.record(.open, start: start, result: .failure, failure: failure)
             } catch {
                 guard id == self.operationID else { return }
+                if Task.isCancelled { await self.finishCancelled(.open, start: start, operationID: id); return }
                 self.recentProjectsMessage = "Access to \(reference.displayName) needs to be restored with Open Project."
                 self.transition(to: .welcome)
                 await self.record(.open, start: start, result: .failure, failure: .staleSecurityScope)
@@ -430,15 +461,38 @@ final class LaunchExperienceController: ObservableObject {
     }
 
     func forgetRecentProject(_ reference: RecentProjectReference) {
-        let next = RecentProjectPolicy.removing(reference.id, from: recentProjects)
-        recentProjectsMessage = nil
-        Task {
+        enqueueRecentProjects { owner in
+            let next = RecentProjectPolicy.removing(reference.id, from: owner.recentProjects)
+            guard next != owner.recentProjects else { return }
             do {
-                try await recentProjectStore.save(next)
-                recentProjects = next
+                try await owner.recentProjectStore.save(next)
+                owner.recentProjects = next
+                owner.recentProjectsMessage = nil
             }
-            catch { recentProjectsMessage = "The recent-project list could not be updated. Project access was not changed." }
+            catch { owner.recentProjectsMessage = "The recent-project list could not be updated. Project access was not changed." }
         }
+    }
+
+    /// One ordering boundary for the existing store. Compute each mutation
+    /// after earlier persistence completes, so a late load/remove cannot
+    /// resurrect a forgotten entry or overwrite a successful later open.
+    @discardableResult
+    private func enqueueRecentProjects(_ work: @escaping @MainActor (LaunchExperienceController) async -> Void) -> Task<Void, Never> {
+        let previous = recentProjectsTask, id = UUID()
+        recentProjectsRequestID = id
+        pendingRecentProjectOperations += 1; isUpdatingRecentProjects = true
+        let task = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self else { return }
+            defer {
+                pendingRecentProjectOperations -= 1
+                isUpdatingRecentProjects = pendingRecentProjectOperations > 0
+                if recentProjectsRequestID == id { recentProjectsTask = nil }
+            }
+            await work(self)
+        }
+        recentProjectsTask = task
+        return task
     }
 
     func cancelCurrentOperation() {
@@ -463,22 +517,54 @@ final class LaunchExperienceController: ObservableObject {
         transition(to: returnState)
     }
 
+    var canReturnToCurrentProject: Bool { isPreviewScenario || returnState == .workspace }
+
     func restoreRecovery() {
         if isPreviewScenario {
             transition(to: .workspace)
             return
         }
-        Task {
-            if await lifecycle.requestRestoreRecovery() == .completed {
-                transition(to: .workspace)
+        guard case .recovery = state, !isResolvingRecovery, let candidate = lifecycle.recoveryCandidate else { return }
+        let action = UUID(), launch = operationID
+        recoveryActionID = action; isResolvingRecovery = true; recoveryHistoryMessage = nil
+        Task { [weak self] in
+            guard let self else { return }
+            defer { if recoveryActionID == action { isResolvingRecovery = false } }
+            guard launch == operationID, case .recovery = state else { return }
+            guard lifecycle.recoveryCandidate?.fingerprint == candidate.fingerprint else {
+                recoveryHistoryMessage = "The recovery candidate changed. Choose Later and review again; the old Restore action did not run."
+                return
+            }
+            let result = await lifecycle.requestRestoreRecovery()
+            guard launch == operationID, case .recovery = state else { return }
+            switch result {
+            case .completed: transition(to: .workspace)
+            case .cancelled: recoveryHistoryMessage = "Restore cancelled. The recovery candidate is retained."
+            case .failed(let failure): recoveryHistoryMessage = failure.localizedDescription
             }
         }
     }
 
     func discardRecovery() {
-        Task {
+        if isPreviewScenario { transition(to: .workspace); return }
+        guard case .recovery = state, !isResolvingRecovery, let candidate = lifecycle.recoveryCandidate else { return }
+        let action = UUID(), launch = operationID
+        recoveryActionID = action; isResolvingRecovery = true; recoveryHistoryMessage = nil
+        Task { [weak self] in
+            guard let self else { return }
+            defer { if recoveryActionID == action { isResolvingRecovery = false } }
+            guard launch == operationID, case .recovery = state else { return }
+            guard lifecycle.recoveryCandidate?.fingerprint == candidate.fingerprint else {
+                recoveryHistoryMessage = "The recovery candidate changed. Choose Later and review again; the old Discard action did not run."
+                return
+            }
             await lifecycle.discardRecovery()
-            transition(to: .workspace)
+            guard launch == operationID, case .recovery = state else { return }
+            if lifecycle.recoveryCandidate == nil, lifecycle.failure == nil { transition(to: .workspace) }
+            else {
+                recoveryHistoryMessage = lifecycle.failure?.localizedDescription
+                    ?? "Recovery was not discarded. Inspect or try again; the retained candidate is unchanged."
+            }
         }
     }
 
@@ -488,25 +574,68 @@ final class LaunchExperienceController: ObservableObject {
 
     func reviewWelcomeRecovery() {
         guard recoveryAvailableAtWelcome, let candidate = lifecycle.recoveryCandidate else { return }
+        recoveryHistoryMessage = nil
         transition(to: .recovery(.init(title: "Unsaved project recovery available",
             message: "Your earlier work is preserved. Restore it, inspect it, or return without changing it.",
             revisionSummary: candidate.summary)))
     }
 
+    func reviewRecoveryHistory() {
+        guard state == .welcome else { return }
+        startOperation(.discoverRecovery) { [weak self] id, start in
+            guard let self, id == self.operationID else { return }
+            // Manual history inspection is read-only and cancellation-safe.
+            // Do not reuse the non-cancellable automatic launch transition.
+            self.transition(to: .working(ProjectLoadingStatus(
+                title: "Reviewing recovery history…",
+                detail: "Inspecting retained snapshots without changing the current project.",
+                progress: nil, canCancel: true,
+                accessibilityLabel: "Reviewing recovery history, cancel available")))
+            await self.lifecycle.discoverUntitledRecoveryCandidate()
+            guard self.operationID == id else { return }
+            if Task.isCancelled {
+                self.recoveryAvailableAtWelcome = self.lifecycle.recoveryCandidate != nil
+                self.recoveryHistoryMessage = "Recovery review cancelled. Retained snapshots are unchanged."
+                await self.finishCancelled(.discoverRecovery, start: start, operationID: id)
+                return
+            }
+            self.recoveryAvailableAtWelcome = self.lifecycle.recoveryCandidate != nil
+            self.transition(to: .welcome)
+            if self.recoveryAvailableAtWelcome {
+                self.recoveryHistoryMessage = nil
+                self.reviewWelcomeRecovery()
+            } else {
+                self.recoveryHistoryMessage = self.lifecycle.failure?.localizedDescription
+                    ?? "No valid retained recovery snapshot is available."
+            }
+            await self.record(.discoverRecovery, start: start,
+                result: self.lifecycle.failure == nil ? .success : .failure, failure: self.lifecycle.failure)
+        }
+    }
+
     func deferRecovery() {
-        guard case .recovery = state else { return }
+        guard case .recovery = state, !isResolvingRecovery else { return }
         recoveryAvailableAtWelcome = lifecycle.recoveryCandidate != nil
         // A deliberately opened saved project is already safe to inspect.
         // Untitled discovery returns to Welcome without consuming the bytes.
         transition(to: lifecycle.fileURL == nil ? .welcome : .workspace)
     }
 
-    func presentOpenPanel() {
-        guard let url = NativeProjectOpenPanel.chooseProject() else {
+    @discardableResult
+    func presentOpenPanel(chooseProject: @MainActor () -> URL? = { NativeProjectOpenPanel.chooseProject() }) -> Bool {
+        let origin = (lifecycle.session.document.id, lifecycle.session.document.revision, operationID)
+        let url = chooseProject()
+        guard origin.2 == operationID else { return false }
+        guard lifecycle.session.document.id == origin.0, lifecycle.session.document.revision == origin.1 else {
+            lifecycle.noteNativePanelContextChanged(.open, originatingDocumentID: origin.0)
+            return false
+        }
+        guard let url else {
             lifecycle.noteCancellation()
-            return
+            return false
         }
         openProject(url, userSelected: true)
+        return true
     }
 
     static func usesAnimatedIndeterminateProgress(reduceMotion: Bool) -> Bool { !reduceMotion }
@@ -524,7 +653,8 @@ final class LaunchExperienceController: ObservableObject {
     func discoverInitialRecovery() async {
         guard state == .welcome, !isPreviewScenario, !checkedInitialRecovery else { return }
         checkedInitialRecovery = true
-        await lifecycle.discoverUntitledRecoveryCandidate()
+        await lifecycle.discoverUntitledRecoveryCandidate(automaticCrashOnly: true)
+        guard state == .welcome else { return }
         recoveryAvailableAtWelcome = lifecycle.recoveryCandidate != nil
     }
 
@@ -535,22 +665,41 @@ final class LaunchExperienceController: ObservableObject {
         operationTask?.cancel()
         let id = UUID()
         operationID = id
-        returnState = state == .workspace ? .workspace : .welcome
+        captureOperationReturnState()
         let start = ContinuousClock.now
         operationTask = Task { await work(id, start) }
     }
 
-    private enum CreationChoice: Equatable {
-        case blank, starter
-
-        var title: String { self == .blank ? "blank project" : "Starter Site" }
-        var detail: String {
-            self == .blank
-                ? "Preparing the approved Home and Not Found page baseline."
-                : "Preparing editable Home and About pages with semantic site structure."
+    private func captureOperationReturnState() {
+        switch state {
+        case .workspace: returnState = .workspace
+        case .welcome: returnState = .welcome
+        case .working, .failure: break // Keep the actual origin across retries/replacement work.
+        case .recovery: returnState = lifecycle.fileURL == nil ? .welcome : .workspace
         }
-        var document: CanonicalDocument {
-            switch self { case .blank: ProjectCreation.blank(); case .starter: StarterSiteTemplate.document() }
+    }
+
+    private enum CreationChoice: Equatable {
+        case blank, starter, aurora
+
+        var title: String {
+            switch self { case .blank: "blank project"; case .starter: "Starter Site"; case .aurora: "Aurora Editorial" }
+        }
+        var detail: String {
+            switch self {
+            case .blank: "Preparing the approved Home and Not Found page baseline."
+            case .starter: "Preparing editable Home and About pages with semantic site structure."
+            case .aurora: "Loading an editable four-page editorial website and its local coastal image."
+            }
+        }
+        func package() async throws -> ProjectPackage {
+            switch self {
+            case .blank: return ProjectPackage(document: ProjectCreation.blank())
+            case .starter: return ProjectPackage(document: StarterSiteTemplate.document())
+            case .aurora:
+                guard let url = BundledSiteTemplates.auroraURL() else { throw ProjectPackageError.packageUnavailable }
+                return try await PackagedSiteTemplateLoader().load(from: url, templateID: BundledSiteTemplates.auroraID)
+            }
         }
     }
 
@@ -559,6 +708,7 @@ final class LaunchExperienceController: ObservableObject {
         operationID id: UUID,
         start: ContinuousClock.Instant
     ) async {
+        guard id == operationID else { return }
         transition(to: .working(ProjectLoadingStatus(
             title: "Creating \(choice.title)…",
             detail: choice.detail,
@@ -568,7 +718,23 @@ final class LaunchExperienceController: ObservableObject {
         )))
         await Task.yield()
         guard id == operationID, !Task.isCancelled else {
-            await finishCancelled(.new, start: start)
+            await finishCancelled(.new, start: start, operationID: id)
+            return
+        }
+        let package: ProjectPackage
+        do {
+            package = try await choice.package()
+        } catch is CancellationError {
+            await finishCancelled(.new, start: start, operationID: id)
+            return
+        } catch {
+            guard id == operationID else { return }
+            transition(to: .failure(Self.presentation(for: .malformedPackage)))
+            await record(.new, start: start, result: .failure, failure: .malformedPackage)
+            return
+        }
+        guard id == operationID, !Task.isCancelled else {
+            await finishCancelled(.new, start: start, operationID: id)
             return
         }
         transition(to: .working(ProjectLoadingStatus(
@@ -578,12 +744,14 @@ final class LaunchExperienceController: ObservableObject {
             canCancel: false,
             accessibilityLabel: "Creating \(choice.title), final non-cancelable step"
         )))
-        switch await lifecycle.requestNewDocument(choice.document) {
+        let result = await lifecycle.requestNewDocument(package.document, resourceMembers: package.optionalMembers)
+        guard id == operationID else { return }
+        switch result {
         case .completed:
             transition(to: .workspace)
             await record(.new, start: start, result: .success, failure: nil)
         case .cancelled:
-            await finishCancelled(.new, start: start)
+            await finishCancelled(.new, start: start, operationID: id)
         case .failed(let failure):
             transition(to: .failure(Self.presentation(for: failure)))
             await record(.new, start: start, result: .failure, failure: failure)
@@ -597,17 +765,20 @@ final class LaunchExperienceController: ObservableObject {
         operationID id: UUID,
         start: ContinuousClock.Instant
     ) async {
+        guard id == operationID else { return }
         let result = await lifecycle.requestOpen(url, userSelected: userSelected) { [weak self] update in
             await self?.receive(update, operationID: id)
         }
         guard id == operationID else { return }
         if Task.isCancelled {
-            await finishCancelled(.open, start: start)
+            await finishCancelled(.open, start: start, operationID: id)
             return
         }
         switch result {
         case .completed:
             if rememberOnSuccess { await rememberRecentProject(url) }
+            guard id == operationID else { return }
+            if Task.isCancelled { await finishCancelled(.open, start: start, operationID: id); return }
             if let candidate = lifecycle.recoveryCandidate {
                 transition(to: .recovery(LaunchRecoveryPresentation(
                     title: "Newer recovery available",
@@ -619,7 +790,7 @@ final class LaunchExperienceController: ObservableObject {
             }
             await record(.open, start: start, result: .success, failure: nil)
         case .cancelled:
-            await finishCancelled(.open, start: start)
+            await finishCancelled(.open, start: start, operationID: id)
         case .failed(let failure):
             transition(to: .failure(Self.presentation(for: failure)))
             await record(.open, start: start, result: .failure, failure: failure)
@@ -627,15 +798,17 @@ final class LaunchExperienceController: ObservableObject {
     }
 
     private func rememberRecentProject(_ url: URL) async {
-        let next = RecentProjectPolicy.recording(url, in: recentProjects)
-        guard next != recentProjects else { return }
-        do {
-            try await recentProjectStore.save(next)
-            recentProjects = next
-            recentProjectsMessage = nil
-        } catch {
-            recentProjectsMessage = "The project opened, but the recent-project list could not be updated."
-        }
+        await enqueueRecentProjects { owner in
+            let next = RecentProjectPolicy.recording(url, in: owner.recentProjects)
+            guard next != owner.recentProjects else { return }
+            do {
+                try await owner.recentProjectStore.save(next)
+                owner.recentProjects = next
+                owner.recentProjectsMessage = nil
+            } catch {
+                owner.recentProjectsMessage = "The project opened, but the recent-project list could not be updated."
+            }
+        }.value
     }
 
     private func receive(_ update: ProjectLoadUpdate, operationID id: UUID) {
@@ -643,7 +816,8 @@ final class LaunchExperienceController: ObservableObject {
         transition(to: .working(update.status))
     }
 
-    private func finishCancelled(_ operation: LifecycleOperation, start: ContinuousClock.Instant) async {
+    private func finishCancelled(_ operation: LifecycleOperation, start: ContinuousClock.Instant, operationID id: UUID) async {
+        guard id == operationID else { return }
         transition(to: returnState)
         await record(operation, start: start, result: .cancelled, failure: nil)
     }
@@ -725,7 +899,7 @@ final class LaunchExperienceController: ObservableObject {
 }
 
 private enum LaunchFocus: Hashable {
-    case newProject, starterProject, openProject, cancel, primaryFailure, chooseAnother
+    case newProject, starterProject, auroraProject, openProject, cancel, primaryFailure, chooseAnother
     case restoreRecovery, discardRecovery, inspectRecovery
 }
 
@@ -753,6 +927,7 @@ struct LaunchExperienceView: View {
             minWidth: WorkspaceMetrics.effectiveMinimumWindowSize().width,
             minHeight: WorkspaceMetrics.effectiveMinimumWindowSize().height
         )
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launch.experience")
         .task {
 #if DEBUG
@@ -853,6 +1028,13 @@ struct LaunchExperienceView: View {
             .foregroundStyle(.secondary)
             .padding(.top, 4)
             recentProjectsSection
+            Button("Review Recovery History…", action: controller.reviewRecoveryHistory)
+                .accessibilityHint("Inspect retained snapshots, including older sessions. Nothing is restored or removed until you choose an action.")
+                .accessibilityIdentifier("launch.recovery.history")
+            if let message = controller.recoveryHistoryMessage {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("launch.recovery.history.message")
+            }
             if controller.recoveryAvailableAtWelcome {
                 GroupBox("Recoverable work") {
                     VStack(spacing: SiteForgeVisualSystem.compactSpacing) {
@@ -880,6 +1062,7 @@ struct LaunchExperienceView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(width: 210, alignment: .leading)
         }
@@ -900,6 +1083,7 @@ struct LaunchExperienceView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(width: 210, alignment: .leading)
         }
@@ -908,6 +1092,20 @@ struct LaunchExperienceView: View {
         .accessibilityLabel("Starter Site")
         .accessibilityHint("Creates editable Home and About pages with Header, Main, and Footer sections")
         .accessibilityIdentifier("launch.newStarterProject")
+
+        Button { controller.createAuroraProject() } label: {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+                Label("Aurora Editorial", systemImage: "sun.horizon").font(.headline)
+                Text("Editable coastal website · four linked pages")
+                    .fixedSize(horizontal: false, vertical: true)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }.frame(width: 210, alignment: .leading)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel("Aurora Editorial sample")
+        .focused($focus, equals: .auroraProject)
+        .accessibilityHint("Creates an independent editable copy with a local image and responsive content; the original is unchanged")
+        .accessibilityIdentifier("launch.newAuroraProject")
     }
 
     @ViewBuilder
@@ -969,6 +1167,7 @@ struct LaunchExperienceView: View {
                                     .help("Remove \(project.displayName) from Recent Projects")
                                     .accessibilityLabel("Remove \(project.displayName) from Recent Projects")
                                     .accessibilityIdentifier("launch.recentProject.remove.\(project.id.rawValue)")
+                                    .disabled(controller.isUpdatingRecentProjects)
                                 }
                                 .padding(.horizontal, SiteForgeVisualSystem.panePadding)
                                 .padding(.vertical, SiteForgeVisualSystem.compactSpacing)
@@ -978,6 +1177,10 @@ struct LaunchExperienceView: View {
                     }
                     .frame(maxHeight: 168)
                     .accessibilityIdentifier("launch.recentProjects.scroll")
+                }
+                if controller.isUpdatingRecentProjects {
+                    ProgressView("Updating recent projects…").controlSize(.small)
+                        .accessibilityIdentifier("launch.recentProjects.progress")
                 }
                 if let message = controller.recentProjectsMessage {
                     Text(message)
@@ -1067,7 +1270,7 @@ struct LaunchExperienceView: View {
                 Button("Choose Another Project…") { controller.presentOpenPanel() }
                     .focused($focus, equals: .chooseAnother)
                     .accessibilityIdentifier("launch.chooseAnother")
-                if controller.isPreviewScenario || controller.lifecycle.fileURL != nil {
+                if controller.canReturnToCurrentProject {
                     Button("Return to Current Project") { controller.returnToCurrentProject() }
                         .accessibilityIdentifier("launch.returnToProject")
                 }
@@ -1091,6 +1294,15 @@ struct LaunchExperienceView: View {
             Text(recovery.revisionSummary)
                 .font(.callout.monospacedDigit())
                 .accessibilityIdentifier("launch.recovery.summary")
+            if let message = controller.recoveryHistoryMessage {
+                Text(message).font(.callout).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityValue(message).accessibilityIdentifier("launch.recovery.status")
+            }
+            if controller.isResolvingRecovery {
+                ProgressView("Completing recovery action…").controlSize(.small)
+                    .accessibilityIdentifier("launch.recovery.progress")
+            }
             HStack(spacing: SiteForgeVisualSystem.standardSpacing) {
                 Button("Inspect Recovery") { controller.inspectRecovery() }
                     .focused($focus, equals: .inspectRecovery)
@@ -1108,6 +1320,7 @@ struct LaunchExperienceView: View {
                     .help("Keep all recovery data and return without restoring or discarding it")
                     .accessibilityIdentifier("launch.recovery.later")
             }
+            .disabled(controller.isResolvingRecovery)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launch.recovery")

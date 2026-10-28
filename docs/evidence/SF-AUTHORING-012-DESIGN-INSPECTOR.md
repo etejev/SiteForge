@@ -49,7 +49,9 @@ remains the external confirmation for this correction.
   `Tests/Fixtures/Legacy/schema-v4-legacy-surface.siteforge.b64`.
 - Focused production-tile/color and coordinate checks passed 4/4:
   `testAuthoredSolidFillAndOpacityUseExactTilePixelsWithoutEditorOverlayContamination`,
-  `testNativeTileFrameNamePixelsStayWithinItsAuthoredFrame`,
+  `testNativeTileFrameNamePixelsStayWithinItsAuthoredFrame` (historical;
+  superseded by `testNativeTileStructuralNamesNeverEnterAuthoredPixels` in
+  SF-LOCAL-BUILDER-001, which keeps editor names out of authored pixels),
   `testFrameAndTextUseOneUprightTopLeftTileConventionAcrossViewportMatrix`,
   and `testSharedTextLayoutKeepsGlyphsInsideOneViewportRectAcrossMatrix`.
   The pixel test covers opaque, 50%-opaque, and transparent authored fills at

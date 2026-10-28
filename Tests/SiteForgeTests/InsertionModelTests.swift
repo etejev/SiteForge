@@ -5,6 +5,758 @@ import XCTest
 
 @MainActor
 final class InsertionModelTests: XCTestCase {
+    private func responsiveCardPage() throws -> (CanonicalDocument, [String: NodeID]) {
+        var document = ProjectCreation.blank()
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Fixture image", originalFilename: "fixture.png",
+            format: .png, pixelWidth: 120, pixelHeight: 64, byteCount: 1, contentHash: String(repeating: "a", count: 64))
+        document.imageAssets = [asset]
+        let pageID = document.pages[0].id, rootID = document.pages[0].rootNodeIDs[0]
+        var nodes: [DocumentNode] = [], ids: [String: NodeID] = [:]
+        func property(_ key: String, _ value: PropertyValue) -> NodeProperty {
+            .init(key: .init(rawValue: key), value: value, origin: .authored)
+        }
+        func add(_ name: String, kind: NodeKind, parent: NodeID, width: Double = 1100, height: Double = 600,
+                 automatic: Bool = true, extra: [NodeProperty] = []) -> NodeID {
+            let id = NodeID(); ids[name] = id
+            var properties = [property("layout.x", .number(0)), property("layout.y", .number(0)),
+                property("layout.width", .number(width)), property("layout.height", .number(height))] + extra
+            if automatic { properties += [property(CanonicalSizingConstraints.prefix + "widthMode", .string("fill")),
+                property(CanonicalSizingConstraints.prefix + "heightMode", .string("hug"))] }
+            nodes.append(.init(id: id, kind: kind, name: name, parent: .node(parent), properties: properties))
+            if let index = nodes.firstIndex(where: { $0.id == parent }) { nodes[index].childIDs.append(id) }
+            return id
+        }
+        func container(_ kind: String, padding: Double, gap: Double) -> [NodeProperty] {
+            let common = [property("layout.container.kind", .string(kind)), property("layout.padding", .number(padding))]
+            if kind == "section" { return common + [property("layout.axis", .string("vertical"))] }
+            if kind == "grid" { return common + [property("layout.gap", .number(gap))] }
+            return common + [property("layout.gap", .number(gap)), property("layout.axis", .string("vertical")), property("layout.align", .string("start"))]
+        }
+        let section = add("Section", kind: .section, parent: rootID,
+            extra: container("section", padding: 16, gap: 12) + [property(CanonicalSizingConstraints.prefix + "maxWidth", .number(1100))])
+        _ = add("Heading", kind: .text, parent: section, extra: [property("content.text", .string("A useful responsive collection of independent cards"))])
+        let grid = add("Cards", kind: .grid, parent: section, extra: container("grid", padding: 8, gap: 16) + [
+            property("layout.grid.columns", .number(2)), property("layout.grid.placement", .string("row-major")),
+            property(ResponsiveContainerLayoutResolver.key(.columns, breakpoint: .mobile), .number(1))])
+        for index in 1...2 {
+            let card = add("Card \(index)", kind: .stack, parent: grid, extra: container("stack", padding: 12, gap: 8))
+            _ = add("Title \(index)", kind: .text, parent: card,
+                extra: [property("content.text", .string("Thoughtful writing with enough words to wrap in a narrower card without moving the authored fallback."))])
+            _ = add("Image \(index)", kind: .image, parent: card, width: 120, height: 64, automatic: false, extra: [
+                property(CanonicalImageStyle.namespace + "assetID", .string(asset.id.description)),
+                property(CanonicalImageStyle.namespace + "fit", .string("fit")),
+                property(CanonicalImageStyle.namespace + "alt", .string("Fixture image")),
+                property(CanonicalImageStyle.namespace + "decorative", .boolean(false)),
+                property(CanonicalImageStyle.namespace + "focal.x", .number(0.5)), property(CanonicalImageStyle.namespace + "focal.y", .number(0.5))])
+            _ = add("Button \(index)", kind: .button, parent: card, width: 100, height: 28, automatic: false,
+                extra: [property("content.text", .string("Read story"))])
+            _ = add("Optional \(index)", kind: .text, parent: card, extra: [property("content.text", .string("Additional detail")),
+                property(ResponsiveVisibilityResolver.key(.mobile), .boolean(false))])
+        }
+        let footer = add("Closing Section", kind: .section, parent: section, extra: container("section", padding: 10, gap: 0))
+        _ = add("Closing text", kind: .text, parent: footer, extra: [property("content.text", .string("End of the collection. Content height follows wrapping; fixed image and button dimensions stay intentional."))])
+        document.pages[0].nodes[0].childIDs = [section]
+        document.pages[0].nodes += nodes
+        XCTAssertEqual(document.pages[0].id, pageID)
+        try document.validate()
+        return (document, ids)
+    }
+
+    func testResponsiveCardSubtreeReflowsAtFreeWidthsWithoutRewritingIntent() async throws {
+        let (document, ids) = try responsiveCardPage(), page = document.pages[0]
+        let before = try DocumentSerializer.encode(document)
+        let worker = WorkspaceScenePreparationWorker(), surface = CanvasRenderSurfaceID()
+        var firstScene: CanvasRenderSceneSnapshot?
+        for width in [320.0, 375, 390, 430, 574, 768, 1024, 1440] {
+            let breakpoint = ResponsiveBreakpoint.resolving(width: width)
+            let frames = page.resolvedStructuralGeometry(breakpoint: breakpoint, viewportWidth: width)
+            var reordered = page; reordered.nodes.reverse()
+            XCTAssertEqual(reordered.resolvedStructuralGeometry(breakpoint: breakpoint, viewportWidth: width), frames)
+            let section = try XCTUnwrap(frames[ids["Section"]!]), grid = try XCTUnwrap(frames[ids["Cards"]!])
+            XCTAssertEqual(section.size.width, min(width, 1100), accuracy: 0.001)
+            XCTAssertEqual(grid.size.width, section.size.width - 32, accuracy: 0.001)
+            let columns = breakpoint == .mobile ? 1 : 2
+            let cell = (grid.size.width - 16 - Double(columns - 1) * 16) / Double(columns)
+            for index in 1...2 {
+                let card = try XCTUnwrap(frames[ids["Card \(index)"]!]), text = try XCTUnwrap(frames[ids["Title \(index)"]!])
+                XCTAssertEqual(card.size.width, cell, accuracy: 0.001)
+                XCTAssertEqual(text.size.width, cell - 24, accuracy: 0.001)
+                XCTAssertEqual(frames[ids["Image \(index)"]!]?.size, .init(width: 120, height: 64))
+                XCTAssertEqual(frames[ids["Button \(index)"]!]?.size, .init(width: 100, height: 28))
+                let titleNode = try XCTUnwrap(page.nodes.first { $0.id == ids["Title \(index)"] })
+                XCTAssertEqual(text.size.height, ResponsiveTextMetrics.height(text: titleNode.insertionStringProperty("content.text")!,
+                    width: text.size.width, typography: .defaultValue), accuracy: 0.001)
+                let visible = page.effectiveVisibleNodeIDs(breakpoint: breakpoint)
+                XCTAssertEqual(visible.contains(ids["Optional \(index)"]!), breakpoint != .mobile)
+                let optionalHeight = breakpoint == .mobile ? 0 : try XCTUnwrap(frames[ids["Optional \(index)"]!]).size.height
+                XCTAssertEqual(card.size.height, text.size.height + 64 + 28 + optionalHeight + 24 + (breakpoint == .mobile ? 16 : 24), accuracy: 0.001)
+            }
+            let firstCard = try XCTUnwrap(frames[ids["Card 1"]!]), secondCard = try XCTUnwrap(frames[ids["Card 2"]!])
+            XCTAssertEqual(grid.size.height, (columns == 1 ? firstCard.size.height + secondCard.size.height + 16 : max(firstCard.size.height, secondCard.size.height)) + 16, accuracy: 0.001)
+            let heading = try XCTUnwrap(frames[ids["Heading"]!]), closing = try XCTUnwrap(frames[ids["Closing Section"]!])
+            XCTAssertEqual(section.size.height, heading.size.height + grid.size.height + closing.size.height + 32, accuracy: 0.001)
+            XCTAssertEqual(grid.origin.y, heading.frame.maxY, accuracy: 0.001)
+            XCTAssertEqual(closing.origin.y, grid.frame.maxY, accuracy: 0.001)
+            let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0), viewportSize: .init(width: 1200, height: 900),
+                contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: width, height: 2000)), pixelRatio: .init(2))
+            let prepared = try await worker.prepare(.init(document: document, activePageID: page.id,
+                activeContainerID: nil, viewport: viewport, surfaceID: surface, breakpoint: breakpoint, viewportWidth: width))
+            for name in ["Section", "Cards", "Card 1", "Title 1", "Closing Section"] {
+                let id = ids[name]!
+                XCTAssertEqual(prepared.renderScene.objects.first { $0.id == id }?.frame, frames[id]?.frame)
+            }
+            XCTAssertEqual(prepared.renderScene.objects.contains { $0.id == ids["Optional 1"] }, breakpoint != .mobile)
+            if let firstScene { XCTAssertEqual(firstScene.objects.first { $0.id == ids["Section"] }?.frame.size.width, 320) }
+            else { firstScene = prepared.renderScene }
+        }
+        XCTAssertEqual(try DocumentSerializer.encode(document), before)
+        let css = ConnectedPageOutput.css(pages: document.pages)
+        XCTAssertTrue(css.contains("grid-template-columns:repeat(1,minmax(0,1fr))"))
+        XCTAssertTrue(css.contains("height:auto"))
+        XCTAssertFalse(css.contains("canvas.grid"))
+    }
+
+    func testResponsiveGridNumericDimensionWinnerIsNotReplacedByTrackWidth() throws {
+        var (document, ids) = try responsiveCardPage()
+        let index = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == ids["Card 1"] })
+        let card = document.pages[0].nodes[index]
+        document.pages[0].nodes[index].properties.append(.init(
+            key: .init(rawValue: ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)), value: .number(180), origin: .authored))
+        document.pages[0].nodes[index].properties.append(.init(
+            key: .init(rawValue: ResponsiveGeometryResolver.key(.height, breakpoint: .mobile)), value: .number(300), origin: .authored))
+        try document.validate()
+        let frames = document.pages[0].resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: 390)
+        XCTAssertEqual(frames[card.id]?.size.width, 180)
+        XCTAssertEqual(frames[card.id]?.size.height, 300)
+        XCTAssertEqual(frames[ids["Title 1"]!]?.size.width, 156)
+        let css = ConnectedPageOutput.css(pages: document.pages)
+        let rules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: card.id) + " {") }
+        XCTAssertTrue(rules.last?.contains("width:180.0px;") == true)
+        XCTAssertFalse(rules.last?.contains("width:100%;") == true)
+        var fixed = document
+        for i in fixed.pages[0].nodes.indices {
+            fixed.pages[0].nodes[i].properties.removeAll { $0.key.rawValue.hasPrefix(CanonicalSizingConstraints.prefix) }
+        }
+        try fixed.validate()
+        let fixedFrames = fixed.pages[0].resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: 390)
+        XCTAssertEqual(fixedFrames[card.id]?.size, .init(width: 180, height: 300),
+            "An explicit breakpoint size also survives legacy fixed Grid track fitting")
+    }
+
+    // SF-0501-003/005/006, SF-0502-003/006: connected ownership must
+    // not hide its existing fluid spacing editor or expose ignored fixed edits.
+    func testManagedSectionFluidPaddingUsesLiveInspectorAndPreservesFlowHistory() async throws {
+        let (session, header, bodies, footer) = try connectedPageSession()
+        let body = try XCTUnwrap(bodies.first), pageID = session.document.pages[0].id
+        let padding = CanonicalFluidValue(minimum: 8, preferred: 16, maximum: 32)
+        try session.execute(.setProperty(.init(pageID: pageID, nodeID: body,
+            property: .init(key: .init(rawValue: CanonicalFluidValueCodec.key(.padding)),
+                value: .string(try CanonicalFluidValueCodec.encode(padding, target: .padding)), origin: .authored))))
+        let baseline = session.document.pages
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        func adopt() async {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while (state.canvasRenderPlan?.identity.revision != session.document.revision
+                || state.canvasRenderPlan?.identity.viewportGeneration != state.viewportState.generation),
+                ContinuousClock.now < deadline { await Task.yield() }
+            XCTAssertEqual(state.canvasRenderPlan?.identity.revision, session.document.revision)
+            XCTAssertEqual(state.canvasRenderPlan?.identity.viewportGeneration, state.viewportState.generation)
+        }
+        await adopt(); state.selectLayer(body)
+        XCTAssertTrue(state.hasManagedPageStructureSelection)
+        XCTAssertEqual(state.supportedFluidValueTargets, [.padding])
+        XCTAssertEqual(state.containerLayoutValue(for: .padding),
+            .single(.number(32), .authored, applicableCount: 1, skippedCount: 0))
+        XCTAssertEqual(state.containerLayoutResponsiveSource(for: .padding), "Fluid responsive value")
+        XCTAssertFalse(state.containerLayoutAvailability(for: .padding).isEnabled)
+        XCTAssertFalse(state.commitContainerLayout(field: .padding, value: .number(99), provenance: .keyboard))
+        XCTAssertEqual(session.document.pages, baseline)
+        let desktopScope = state.layoutInspectorDraftScope
+        state.reviewBreakpoint(.tablet); await adopt()
+        XCTAssertEqual(state.containerLayoutValue(for: .padding),
+            .single(.number(16), .authored, applicableCount: 1, skippedCount: 0))
+        XCTAssertFalse(state.commitContainerLayout(field: .padding, value: .number(9), provenance: .keyboard,
+            draftScope: desktopScope), "A retained Desktop draft cannot become a Tablet override")
+        XCTAssertTrue(state.commitContainerLayout(field: .padding, value: .number(10), provenance: .keyboard,
+            draftScope: state.layoutInspectorDraftScope))
+        await adopt()
+        XCTAssertEqual(state.containerLayoutResponsiveSource(for: .padding), "Authored for Tablet")
+        XCTAssertTrue(state.commitContainerLayout(field: .padding, value: nil, provenance: .keyboard,
+            draftScope: state.layoutInspectorDraftScope))
+        await adopt()
+        XCTAssertEqual(session.document.pages, baseline)
+        XCTAssertEqual(state.containerLayoutResponsiveSource(for: .padding), "Fluid responsive value")
+        try session.undo(); await adopt()
+        XCTAssertEqual(state.containerLayoutValue(for: .padding),
+            .single(.number(10), .authored, applicableCount: 1, skippedCount: 0))
+        try session.redo(); await adopt()
+        let originalOrder = session.document.pages[0].nodes.first { $0.id == session.document.pages[0].rootNodeIDs[0] }?.childIDs
+        try session.execute(pageStructureCommand(.reorder(bodies[1], pointerY: 121),
+            document: session.document, selected: bodies[1]))
+        let reordered = session.document.pages
+        for breakpoint in ResponsiveBreakpoint.allCases {
+            let frames = session.document.pages[0].resolvedStructuralGeometry(breakpoint: breakpoint,
+                viewportWidth: CanonicalPageFlow.pageWidth(breakpoint, nil))
+            XCTAssertLessThan(try XCTUnwrap(frames[header]).origin.y, try XCTUnwrap(frames[bodies[1]]).origin.y)
+            XCTAssertLessThan(try XCTUnwrap(frames[bodies[1]]).origin.y, try XCTUnwrap(frames[body]).origin.y)
+            XCTAssertLessThan(try XCTUnwrap(frames[body]).origin.y, try XCTUnwrap(frames[footer]).origin.y)
+        }
+        try session.undo(); XCTAssertEqual(session.document.pages, baseline)
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == session.document.pages[0].rootNodeIDs[0] }?.childIDs, originalOrder)
+        try session.redo(); XCTAssertEqual(session.document.pages, reordered)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    // SF-0501-003/005, SF-0502-003/005, SF-0503-003/005, SF-0505-003:
+    // real nested widths precede Hug measurement; style/visibility never rewrite
+    // fallback geometry, aspect intent, stable children or fluid records.
+    func testNestedFluidContainersShareHugConstraintsHiddenChildrenAndOutputGeometry() async throws {
+        var (document, ids) = try responsiveCardPage()
+        let fluid = CanonicalFluidValue(minimum: 4, preferred: 8, maximum: 16)
+        for (name, target) in [("Section", FluidValueTarget.padding), ("Cards", .gap), ("Card 1", .padding)] {
+            let index = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == ids[name] })
+            // Each authored record retains its own stable identity.
+            let record = CanonicalFluidValue(minimum: fluid.minimum, preferred: fluid.preferred, maximum: fluid.maximum)
+            document.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: CanonicalFluidValueCodec.key(target)),
+                value: .string(try CanonicalFluidValueCodec.encode(record, target: target)), origin: .authored))
+        }
+        let imageIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == ids["Image 1"] })
+        let prefix = CanonicalSizingConstraints.prefix
+        document.pages[0].nodes[imageIndex].properties += [
+            .init(key: .init(rawValue: prefix + "minWidth"), value: .number(80)),
+            .init(key: .init(rawValue: prefix + "maxWidth"), value: .number(160)),
+            .init(key: .init(rawValue: prefix + "minHeight"), value: .number(40)),
+            .init(key: .init(rawValue: prefix + "maxHeight"), value: .number(100)),
+            .init(key: .init(rawValue: prefix + "aspectRatio"), value: .number(120.0 / 64)),
+            .init(key: .init(rawValue: prefix + "aspectEnabled"), value: .boolean(true))
+        ]
+        try document.validate()
+        let before = try DocumentSerializer.encode(document), page = document.pages[0]
+        let worker = WorkspaceScenePreparationWorker(), surface = CanvasRenderSurfaceID()
+        for width in [320.0, 390, 574, 768, 1024, 1440] {
+            let breakpoint = ResponsiveBreakpoint.resolving(width: width)
+            let frames = page.resolvedStructuralGeometry(breakpoint: breakpoint, viewportWidth: width)
+            let spacing = try XCTUnwrap(fluid.resolved(viewportWidth: width))
+            let section = try XCTUnwrap(frames[ids["Section"]!]), grid = try XCTUnwrap(frames[ids["Cards"]!])
+            XCTAssertEqual(grid.size.width, section.size.width - 2 * spacing, accuracy: 0.001)
+            let columns = breakpoint == .mobile ? 1 : 2
+            let track = (grid.size.width - 16 - Double(columns - 1) * spacing) / Double(columns)
+            let card = try XCTUnwrap(frames[ids["Card 1"]!]), title = try XCTUnwrap(frames[ids["Title 1"]!])
+            XCTAssertEqual(card.size.width, track, accuracy: 0.001)
+            XCTAssertEqual(title.size.width, track - 2 * spacing, accuracy: 0.001)
+            let visible = page.effectiveVisibleNodeIDs(breakpoint: breakpoint)
+            let optionalHeight = visible.contains(ids["Optional 1"]!)
+                ? try XCTUnwrap(frames[ids["Optional 1"]!]).size.height : 0
+            XCTAssertEqual(card.size.height, title.size.height + 64 + 28 + optionalHeight
+                + 2 * spacing + (breakpoint == .mobile ? 16 : 24), accuracy: 0.001)
+            XCTAssertEqual(frames[ids["Image 1"]!]?.size, .init(width: 120, height: 64))
+            let viewport = try CanvasViewportState(worldOrigin: .init(x: -20, y: 12),
+                viewportSize: .init(width: 1200, height: 900),
+                contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: width, height: 3000)), pixelRatio: .init(2))
+            let prepared = try await worker.prepare(.init(document: document, activePageID: page.id,
+                activeContainerID: nil, viewport: viewport, surfaceID: surface,
+                breakpoint: breakpoint, viewportWidth: width))
+            for name in ["Section", "Cards", "Card 1", "Title 1", "Image 1", "Closing Section"] {
+                XCTAssertEqual(prepared.renderScene.objects.first { $0.id == ids[name] }?.frame, frames[ids[name]!]?.frame)
+            }
+            XCTAssertEqual(prepared.renderScene.objects.contains { $0.id == ids["Optional 1"] }, breakpoint != .mobile)
+        }
+        let reopened = try DocumentSerializer.decode(before)
+        XCTAssertEqual(ConnectedPageOutput.css(pages: reopened.pages), ConnectedPageOutput.css(pages: document.pages))
+        let css = ConnectedPageOutput.css(pages: document.pages)
+        XCTAssertTrue(css.contains("padding:calc(clamp("))
+        XCTAssertTrue(css.contains("gap:calc(clamp("))
+        XCTAssertTrue(css.contains("height:auto"))
+        XCTAssertEqual(try DocumentSerializer.encode(document), before)
+        XCTAssertNil(CanonicalPageFlow.role(page.nodes.first { $0.id == ids["Section"] }!),
+            "Inspecting existing nested content must not silently convert legacy flow ownership")
+    }
+
+    // SF-0603-002/006, SF-0604-002/006: delayed native callbacks may
+    // not turn an old draft into an edit of a different visible context.
+    func testResponsiveInspectorCapturedContextRejectsSelectionPageRevisionAndBreakpointRetargeting() async throws {
+        var (document, ids) = try responsiveCardPage()
+        let secondPage = DocumentPage(name: "Other responsive context")
+        document.pages.append(secondPage)
+        try document.validate()
+        let session = DocumentSession(document: document)
+        let state = WorkspaceShellState(documentSession: session)
+        let live = state.documentSession
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        func adopt() async {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while (state.canvasRenderPlan?.identity.revision != live.document.revision
+                || state.canvasRenderPlan?.identity.viewportGeneration != state.viewportState.generation),
+                ContinuousClock.now < deadline { await Task.yield() }
+            XCTAssertEqual(state.canvasRenderPlan?.identity.revision, live.document.revision)
+            XCTAssertEqual(state.canvasRenderPlan?.identity.viewportGeneration, state.viewportState.generation)
+        }
+        await adopt(); state.selectLayer(ids["Title 1"]!)
+        XCTAssertTrue(state.commitFluidValue(.init(minimum: 12, preferred: 16, maximum: 20), target: .fontSize,
+            provenance: .keyboard, expectedContext: state.responsiveInspectorEditContext))
+        await adopt()
+        let desktop = state.responsiveInspectorEditContext
+        state.reviewBreakpoint(.mobile); await adopt()
+        let before = live.document
+        XCTAssertFalse(state.commitFluidValue(.init(minimum: 10, preferred: 14, maximum: 18), target: .fontSize,
+            provenance: .focusLoss, expectedContext: desktop))
+        XCTAssertEqual(state.fluidValueFailure, .stale)
+        XCTAssertFalse(state.commitResponsiveVisibility(false, provenance: .pointer, expectedContext: desktop))
+        XCTAssertEqual(live.document, before)
+        XCTAssertTrue(state.fluidValueEffectiveSummary(for: .fontSize).contains("Fluid responsive value"))
+        let mobile = state.responsiveInspectorEditContext
+        state.selectLayer(ids["Title 2"]!)
+        XCTAssertFalse(state.commitFluidValue(nil, target: .fontSize, provenance: .pointer, expectedContext: mobile))
+        XCTAssertFalse(state.commitResponsiveVisibility(false, provenance: .pointer, expectedContext: mobile))
+        XCTAssertEqual(live.document, before)
+        XCTAssertEqual(state.currentFluidValueAnnouncement(for: .lineHeight), "Fluid values inactive",
+            "Feedback for one property cannot masquerade as another property's result")
+        let oldRevision = state.responsiveInspectorEditContext
+        let oldText = try XCTUnwrap(live.document.pages[0].nodes.first { $0.id == ids["Title 2"] }?.insertionProperty("content.text"))
+        try live.execute(.setProperty(.init(pageID: document.pages[0].id, nodeID: ids["Title 2"]!,
+            property: .init(id: oldText.id, key: oldText.key, value: .string("New committed revision")))))
+        await adopt()
+        let revised = live.document
+        XCTAssertEqual(oldRevision.scope, state.responsiveInspectorEditContext.scope)
+        XCTAssertFalse(state.commitFluidValue(.init(minimum: 10, preferred: 14, maximum: 18), target: .fontSize,
+            provenance: .focusLoss, expectedContext: oldRevision))
+        XCTAssertFalse(state.commitResponsiveVisibility(false, provenance: .pointer, expectedContext: oldRevision))
+        XCTAssertEqual(live.document, revised)
+        let oldPage = state.responsiveInspectorEditContext
+        state.selectPage(secondPage.id); await adopt()
+        XCTAssertFalse(state.commitFluidValue(nil, target: .fontSize, provenance: .pointer, expectedContext: oldPage))
+        XCTAssertFalse(state.commitResponsiveVisibility(false, provenance: .pointer, expectedContext: oldPage))
+        XCTAssertEqual(live.document, revised)
+        let replacement = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank()))
+        let replacementBefore = replacement.documentSession.document
+        XCTAssertFalse(replacement.commitFluidValue(nil, target: .fontSize, provenance: .pointer, expectedContext: oldPage))
+        XCTAssertFalse(replacement.commitResponsiveVisibility(false, provenance: .pointer, expectedContext: oldPage))
+        XCTAssertEqual(replacement.documentSession.document, replacementBefore)
+    }
+
+    // SF-0603-003/005, SF-0604-003/005: a hidden container removes
+    // descendants from layout/render participation, not from canonical ownership.
+    func testHiddenResponsiveFluidTextKeepsRendererOutputAndLayoutParticipationConsistent() async throws {
+        var (document, ids) = try responsiveCardPage()
+        let sectionIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == ids["Section"] })
+        document.pages[0].nodes[sectionIndex].properties.append(.init(
+            key: .init(rawValue: CanonicalPageFlow.roleKey), value: .string("body")))
+        let font = CanonicalFluidValue(minimum: 12, preferred: 16, maximum: 20)
+        let line = CanonicalFluidValue(minimum: 18, preferred: 24, maximum: 30)
+        for name in ["Title 1", "Title 2"] {
+            let index = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == ids[name] })
+            for (target, value) in [(FluidValueTarget.fontSize, font), (.lineHeight, line)] {
+                let record = CanonicalFluidValue(minimum: value.minimum, preferred: value.preferred, maximum: value.maximum)
+                document.pages[0].nodes[index].properties.append(.init(
+                    key: .init(rawValue: CanonicalFluidValueCodec.key(target)),
+                    value: .string(try CanonicalFluidValueCodec.encode(record, target: target)), origin: .authored))
+            }
+        }
+        try document.validate()
+        let session = DocumentSession(document: document), card = ids["Card 1"]!, scene = CanvasViewportSceneID()
+        func visibility(_ visible: Bool?) throws -> DocumentCommand {
+            let current = session.document
+            let context = TransformValidationContext(activePageID: current.pages[0].id, currentSceneID: scene,
+                rendererGeneration: current.revision, selectedNodeIDs: [card],
+                availableNodeIDs: Set(current.pages[0].nodes.map(\.id)), isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+            return try ResponsiveVisibilityCommandRegistry().prepare(.init(identity: .init(editID: GeometryInspectorEditID(),
+                documentID: current.id, pageID: current.pages[0].id, revision: current.revision,
+                sceneID: scene, rendererGeneration: current.revision), orderedNodeIDs: [card], breakpoint: .mobile,
+                visible: visible, provenance: .keyboard, cancelled: false), in: current, context: context).documentCommand
+        }
+        try session.execute(try visibility(false))
+        let hidden = session.document, worker = WorkspaceScenePreparationWorker(), surface = CanvasRenderSurfaceID()
+        for width in [390.0, 599, 600, 768, 1023, 1024, 1440] {
+            let breakpoint = ResponsiveBreakpoint.resolving(width: width), page = hidden.pages[0]
+            let frames = page.resolvedStructuralGeometry(breakpoint: breakpoint, viewportWidth: width)
+            let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0), viewportSize: .init(width: 1000, height: 800),
+                contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: width, height: 3000)), pixelRatio: .init(2))
+            let prepared = try await worker.prepare(.init(document: hidden, activePageID: page.id, activeContainerID: nil,
+                viewport: viewport, surfaceID: surface, breakpoint: breakpoint, viewportWidth: width))
+            for name in ["Card 1", "Title 1", "Image 1", "Button 1", "Optional 1"] {
+                XCTAssertEqual(prepared.renderScene.objects.contains { $0.id == ids[name] }, breakpoint != .mobile)
+            }
+            let text = try XCTUnwrap(prepared.renderScene.objects.first { $0.id == ids["Title 2"] })
+            XCTAssertEqual(text.frame, frames[ids["Title 2"]!]?.frame)
+            XCTAssertEqual(try XCTUnwrap(text.typography).size, try XCTUnwrap(font.resolved(viewportWidth: width)), accuracy: 0.001)
+            XCTAssertEqual(try XCTUnwrap(text.typography).lineHeight, try XCTUnwrap(line.resolved(viewportWidth: width)), accuracy: 0.001)
+            if breakpoint == .mobile {
+                let grid = try XCTUnwrap(frames[ids["Cards"]!]), remaining = try XCTUnwrap(frames[ids["Card 2"]!])
+                XCTAssertEqual(remaining.origin.y, grid.origin.y + 8, accuracy: 0.001)
+            }
+        }
+        let plan = try MultiPageStaticBuildPlanner.plan(document: hidden)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        let cardRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: card) + " {") }
+        XCTAssertTrue(cardRules.last?.contains("display:none") == true)
+        XCTAssertTrue(css.contains("font-size: clamp(12px"))
+        XCTAssertTrue(css.contains("line-height: clamp(18px"))
+        XCTAssertEqual(try MultiPageStaticBuildPlanner.plan(document: DocumentSerializer.decode(DocumentSerializer.encode(hidden))).files, plan.files)
+        XCTAssertEqual(hidden.pages[0].nodes.map(\.id), document.pages[0].nodes.map(\.id))
+        XCTAssertEqual(hidden.imageAssets, document.imageAssets)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(hidden)), hidden)
+        try session.undo(); XCTAssertEqual(session.document.pages, document.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, hidden.pages)
+        try session.execute(try visibility(nil))
+        XCTAssertEqual(session.document.pages, document.pages)
+    }
+
+    func testConnectedResponsiveFluidDimensionsAndGapRemainContinuousBetweenPresets() throws {
+        var (document, ids) = try responsiveCardPage()
+        let cardID = ids["Card 1"]!, gridID = ids["Cards"]!
+        let cardIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == cardID })
+        let gridIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == gridID })
+        let fluidWidth = CanonicalFluidValue(minimum: 150, preferred: 210, maximum: 300)
+        let fluidGap = CanonicalFluidValue(minimum: 8, preferred: 16, maximum: 24)
+        document.pages[0].nodes[cardIndex].properties.append(.init(key: .init(rawValue: CanonicalFluidValueCodec.key(.width)),
+            value: .string(try CanonicalFluidValueCodec.encode(fluidWidth, target: .width))))
+        document.pages[0].nodes[gridIndex].properties.append(.init(key: .init(rawValue: CanonicalFluidValueCodec.key(.gap)),
+            value: .string(try CanonicalFluidValueCodec.encode(fluidGap, target: .gap))))
+        try document.validate()
+        let before = document
+        for width in [320.0, 375, 390, 430, 574, 768, 1024, 1440] {
+            let frames = document.pages[0].resolvedStructuralGeometry(breakpoint: .resolving(width: width), viewportWidth: width)
+            let actual = try XCTUnwrap(frames[cardID])
+            XCTAssertEqual(actual.size.width, try XCTUnwrap(fluidWidth.resolved(viewportWidth: width)), accuracy: 0.0001)
+            XCTAssertEqual(try XCTUnwrap(frames[ids["Title 1"]!]).size.width, actual.size.width - 24, accuracy: 0.0001)
+            let grid = try XCTUnwrap(frames[gridID]), columns = width < 600 ? 1 : 2
+            let gap = try XCTUnwrap(fluidGap.resolved(viewportWidth: width))
+            XCTAssertEqual(try XCTUnwrap(frames[ids["Card 2"]!]).size.width,
+                (grid.size.width - 16 - Double(columns - 1) * gap) / Double(columns), accuracy: 0.0001)
+        }
+        let css = ConnectedPageOutput.css(pages: document.pages)
+        let cardRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: cardID) + " {") }
+        let gridRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: gridID) + " {") }
+        XCTAssertEqual(cardRules.count, 3)
+        XCTAssertTrue(cardRules.allSatisfy { $0.contains("width:calc(clamp(") })
+        XCTAssertTrue(gridRules.allSatisfy { $0.contains("gap:calc(clamp(") })
+        document.pages[0].nodes[cardIndex].properties.append(.init(key: .init(rawValue: ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)), value: .number(180)))
+        let overriddenCSS = ConnectedPageOutput.css(pages: document.pages)
+        let overriddenRules = overriddenCSS.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: cardID) + " {") }
+        XCTAssertTrue(overriddenRules.last?.contains("width:180.0px;") == true)
+        XCTAssertFalse(overriddenRules.last?.contains("width:calc(clamp(") == true)
+        XCTAssertEqual(before.pages[0].nodes[cardIndex].insertionNumberProperty("layout.width"), 1100)
+        XCTAssertNil(StaticFluidValueOutputEmitter.expression(for: .init(minimum: 300, preferred: 100, maximum: 200)))
+    }
+
+    func testSizingInspectorShowsWinningOverrideAndRejectsDraftFromPreviousBreakpoint() async throws {
+        var (document, ids) = try responsiveCardPage()
+        let cardID = ids["Card 1"]!, pageID = document.pages[0].id
+        let index = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == cardID })
+        let override = NodeProperty(key: .init(rawValue: ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)), value: .number(180))
+        document.pages[0].nodes[index].properties.append(override)
+        let fixture = try ApplicationOwnedTestFixture.create("sizing-inspector-adoption")
+        defer { try? fixture.cleanup() }
+        let session = DocumentSession(document: document)
+        let lifecycle = DocumentLifecycleController(session: session,
+            recoveryDirectory: fixture.url.appendingPathComponent("recovery"), autosaveDebouncer: ManualLifecycleAutosaveDebouncer())
+        let state = WorkspaceShellState(documentSession: session, lifecycle: lifecycle)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        func waitForAdoption() async {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while (state.canvasRenderPlan?.identity.revision != session.document.revision
+                || state.canvasRenderPlan?.identity.viewportGeneration != state.viewportState.generation), ContinuousClock.now < deadline { await Task.yield() }
+            XCTAssertEqual(state.canvasRenderPlan?.identity.revision, session.document.revision)
+            XCTAssertEqual(state.canvasRenderPlan?.identity.viewportGeneration, state.viewportState.generation)
+        }
+        await waitForAdoption()
+        state.selectLayer(cardID)
+        XCTAssertEqual(state.selectionState.orderedIDs, [cardID])
+        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Effective Fill"))
+        let desktopScope = state.layoutInspectorDraftScope
+        state.reviewBreakpoint(.mobile)
+        await waitForAdoption()
+        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Effective Fixed"))
+        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Mobile"))
+        let before = session.document
+        XCTAssertFalse(state.commitGeometryInspectorValue(999, field: .width, provenance: .keyboard, draftScope: desktopScope))
+        XCTAssertFalse(state.commitSizingConstraint(.setMode(.width, .fixed), draftScope: desktopScope))
+        XCTAssertEqual(session.document, before)
+        XCTAssertTrue(state.resetSizingDimensionOverride(.width, expectedScope: state.layoutInspectorDraftScope))
+        await waitForAdoption()
+        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Effective Fill"))
+        XCTAssertNil(session.document.pages[0].nodes[index].insertionProperty(override.key.rawValue))
+        XCTAssertEqual(session.document.pages[0].nodes[index].insertionGeometry, document.pages[0].nodes[index].insertionGeometry)
+        XCTAssertEqual(session.document.pages[0].id, pageID)
+        try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes[index].insertionProperty(override.key.rawValue), override)
+    }
+
+    // SF-0502-003/005, SF-0602-003/005, SF-1201-003: changing
+    // flex direction must not reinterpret a Desktop width as Mobile height.
+    func testHugStackBreakpointOutputResetsFlexBasisAndPreservesButtonLabelAlignment() throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let rootID = NodeID(), stackID = NodeID(), buttonID = NodeID()
+        func property(_ key: String, _ value: PropertyValue) -> NodeProperty {
+            .init(key: .init(rawValue: key), value: value, origin: .authored)
+        }
+        let stack = DocumentNode(id: stackID, kind: .stack, name: "Actions", parent: .node(rootID), childIDs: [buttonID], properties: [
+            property("layout.x", .number(0)), property("layout.y", .number(0)),
+            property("layout.width", .number(580)), property("layout.height", .number(64)),
+            property("layout.container.kind", .string("stack")), property("layout.axis", .string("horizontal")),
+            property("layout.align", .string("center")),
+            property("layout.padding", .number(0)), property("layout.gap", .number(24)),
+            property(CanonicalSizingConstraints.prefix + "widthMode", .string("fill")),
+            property(CanonicalSizingConstraints.prefix + "heightMode", .string("hug")),
+            property(ResponsiveContainerLayoutResolver.key(.axis, breakpoint: .mobile), .string("vertical"))])
+        let button = DocumentNode(id: buttonID, kind: .button, name: "Action", parent: .node(stackID), properties: [
+            property("layout.x", .number(0)), property("layout.y", .number(0)),
+            property("layout.width", .number(260)), property("layout.height", .number(64)),
+            property("content.label", .string("Explore Journal"))])
+        let root = DocumentNode(id: rootID, kind: .frame, name: "Root", parent: .page(pageID), childIDs: [stackID], properties: [
+            property("layout.x", .number(0)), property("layout.y", .number(0)),
+            property("layout.width", .number(1440)), property("layout.height", .number(800)),
+            property(CanonicalSizingConstraints.prefix + "heightMode", .string("hug"))])
+        document.pages[0].nodes = [root, stack, button]
+        document.pages[0].rootNodeIDs = [rootID]
+        try document.validate()
+        let before = document
+        let css = ConnectedPageOutput.css(pages: document.pages)
+        let rules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: buttonID) + " {") }
+        XCTAssertEqual(rules.count, 3)
+        XCTAssertTrue(rules.allSatisfy { $0.contains("display:flex;") && $0.contains("height:64.0px;") }, css)
+        XCTAssertTrue(rules[0].contains("flex:0 0 260.0px;"), css)
+        XCTAssertTrue(rules[1].contains("flex:0 0 260.0px;"), css)
+        XCTAssertTrue(rules[2].contains("flex:0 0 auto;"), "Mobile must reset the inherited Desktop flex-basis: \(css)")
+        let rootRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: rootID) + " {") }
+        XCTAssertEqual(rootRules.count, 3)
+        XCTAssertTrue(rootRules.allSatisfy { $0.contains("grid-template-rows:max-content;") && $0.contains("align-content:start;") },
+            "An opt-in free Frame must hug the width-resolved content, not Safari's earlier intrinsic auto track")
+        for width in [320.0, 390, 768, 1440] {
+            let frames = document.pages[0].resolvedStructuralGeometry(breakpoint: .resolving(width: width), viewportWidth: width)
+            XCTAssertEqual(try XCTUnwrap(frames[buttonID]).size.height, 64)
+        }
+        XCTAssertEqual(document, before)
+    }
+
+    func testResponsiveFillAndHugUseContainingWidthAndPropagateWrappedHeightWithoutMutatingIntent() throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let rootID = NodeID(), stackID = NodeID(), headingID = NodeID(), copyID = NodeID()
+        func property(_ key: String, _ value: PropertyValue) -> NodeProperty {
+            .init(key: .init(rawValue: key), value: value, origin: .authored)
+        }
+        func geometry(_ width: Double, _ height: Double) -> [NodeProperty] {
+            [property("layout.x", .number(0)), property("layout.y", .number(0)),
+             property("layout.width", .number(width)), property("layout.height", .number(height))]
+        }
+        let prefix = CanonicalSizingConstraints.prefix
+        let heading = DocumentNode(id: headingID, kind: .text, name: "Heading", parent: .node(stackID),
+            properties: geometry(1100, 280) + [property("content.text", .string("Thoughtful writing for a curious world.")),
+                property(CanonicalTypography.namespace + "size", .number(40)),
+                property(CanonicalTypography.namespace + "lineHeight", .number(48)),
+                property(prefix + "widthMode", .string("fill")), property(prefix + "heightMode", .string("hug"))])
+        let copy = DocumentNode(id: copyID, kind: .text, name: "Copy", parent: .node(stackID),
+            properties: geometry(1100, 120) + [property("content.text", .string("Essays and perspectives on design, culture, and the places that shape us.")),
+                property(prefix + "widthMode", .string("fill")), property(prefix + "heightMode", .string("hug"))])
+        let stack = DocumentNode(id: stackID, kind: .stack, name: "Content", parent: .node(rootID),
+            childIDs: [headingID, copyID], properties: geometry(1100, 600) + [
+                property("layout.container.kind", .string("stack")),
+                property("layout.padding", .number(24)), property("layout.gap", .number(16)),
+                property("layout.axis", .string("vertical")), property("layout.align", .string("start")),
+                property(prefix + "maxWidth", .number(1100)), property(prefix + "widthMode", .string("fill")),
+                property(prefix + "heightMode", .string("hug"))])
+        let root = DocumentNode(id: rootID, kind: .frame, name: "Root", parent: .page(pageID), childIDs: [stackID])
+        document.pages[0].nodes = [root, stack, heading, copy]
+        document.pages[0].rootNodeIDs = [rootID]
+        try document.validate()
+        let before = document
+        let originalIDs = document.pages[0].nodes.map(\.id)
+        var previousHeight = Double.greatestFiniteMagnitude
+        var reordered = document
+        reordered.pages[0].nodes.reverse()
+        for width in [320.0, 375, 390, 430, 574, 768, 1024, 1440] {
+            let frames = document.pages[0].resolvedStructuralGeometry(breakpoint: .resolving(width: width), viewportWidth: width)
+            XCTAssertEqual(reordered.pages[0].resolvedStructuralGeometry(breakpoint: .resolving(width: width), viewportWidth: width), frames,
+                "Canonical child ownership, not incidental storage order, determines responsive layout")
+            let parent = try XCTUnwrap(frames[stackID]), title = try XCTUnwrap(frames[headingID]), body = try XCTUnwrap(frames[copyID])
+            XCTAssertEqual(parent.size.width, min(width, 1100), accuracy: 0.001)
+            XCTAssertEqual(title.size.width, parent.size.width - 48, accuracy: 0.001)
+            XCTAssertEqual(body.origin.y, title.frame.maxY + 16, accuracy: 0.001)
+            XCTAssertEqual(parent.size.height, title.size.height + body.size.height + 48 + 16, accuracy: 0.001)
+            XCTAssertLessThanOrEqual(parent.size.height, previousHeight)
+            XCTAssertLessThan(parent.size.height, 600)
+            previousHeight = parent.size.height
+        }
+        XCTAssertEqual(document, before)
+        XCTAssertEqual(document.pages[0].nodes.map(\.id), originalIDs)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(document)), document)
+        let css = ConnectedPageOutput.css(pages: document.pages)
+        XCTAssertTrue(css.contains("height:auto"))
+        XCTAssertTrue(css.contains("flex-direction:column"))
+        XCTAssertTrue(css.contains("position:relative;box-sizing:border-box"), css)
+        XCTAssertTrue(css.contains("padding-inline:4px"))
+        let stackRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: stackID) + " {") }
+        XCTAssertTrue(stackRules.allSatisfy { $0.contains("calc(100% - 0.0px)") },
+            "An unpadded free Frame must not acquire structural default padding only in browser output")
+        XCTAssertTrue(document.pages[0].usesConnectedOutput)
+        var historical = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(document)) as? [String: Any])
+        historical["schemaVersion"] = 18
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: historical)))
+        var overridden = document
+        overridden.pages[0].nodes[2].properties.append(property(
+            ResponsiveGeometryResolver.key(.height, breakpoint: .mobile), .number(280)))
+        XCTAssertEqual(overridden.pages[0].resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: 390)[headingID]?.size.height, 280)
+    }
+
+    func testConnectedHugHeightUsesResolvedInspectorAndRejectsFallbackMutation() async throws {
+        let (session, _, bodies, _) = try connectedPageSession()
+        let body = try XCTUnwrap(bodies.first)
+        let pageID = session.document.pages[0].id
+        try session.execute(.setProperty(.init(pageID: pageID, nodeID: body,
+            property: .init(key: .init(rawValue: CanonicalSizingConstraints.prefix + "heightMode"),
+                value: .string("hug"), origin: .authored))))
+        let before = session.document
+        XCTAssertThrowsError(try pageStructureCommand(.height(body, 500, .desktop), document: before, selected: body))
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        let ready = ContinuousClock.now + .seconds(3)
+        while !state.layerTargets.contains(where: { $0.id == body }), ContinuousClock.now < ready { await Task.yield() }
+        state.selectLayer(body)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while state.resolvedSelectedGeometrySummary == nil, ContinuousClock.now < deadline { await Task.yield() }
+        let object = try XCTUnwrap(state.canvasRenderPlan?.authoredObjects.first { $0.id == body })
+        guard case .computed(let height, _) = state.geometryInspectorValue(for: .height) else {
+            return XCTFail("The Inspector must expose computed Hug height, not the stored fallback")
+        }
+        XCTAssertEqual(height, object.frame.size.height)
+        XCTAssertEqual(state.transformGeometrySummary, state.resolvedSelectedGeometrySummary)
+        XCTAssertFalse(state.geometryInspectorAvailability(for: .height).isEnabled)
+        XCTAssertEqual(session.document, before)
+        try session.execute(pageStructureCommand(.height(body, 240, .mobile), document: session.document,
+            selected: body, breakpoint: .mobile))
+        let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == body })
+        XCTAssertEqual(CanonicalSizingConstraints.effectiveMode(.height, node: node, breakpoint: .mobile, width: 390), .fixed)
+        XCTAssertEqual(CanonicalSizingConstraints.resolved(for: node).heightMode, .hug)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, before.pages)
+    }
+
+    // SF-0501-003, SF-1201-003, SF-1204-003: the browser must not borrow
+    // the legacy leading default or a stored fixed navigation width when
+    // native editable Header/Footer layout gives it the remaining row.
+    func testAutomaticChromeNavigationSharesTrailingDefaultAndRemainingWidthWithStaticOutput() throws {
+        let (session, headerID, _, footerID) = try connectedPageSession()
+        let document = session.document
+        let page = document.pages[0]
+        let css = ConnectedPageOutput.css(pages: [page])
+        for ownerID in [headerID, footerID] {
+            let owner = try XCTUnwrap(page.nodes.first { $0.id == ownerID })
+            let navigationID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner))
+            let navigation = try XCTUnwrap(page.nodes.first { $0.id == navigationID })
+            let contentID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner))
+            let contentRules = css.components(separatedBy: "\n").filter {
+                $0.hasPrefix(CanonicalCSSRule.selector(for: contentID) + " {")
+            }
+            XCTAssertFalse(contentRules.isEmpty)
+            XCTAssertTrue(contentRules.allSatisfy { $0.contains("width:max(1px,calc(100% - ") },
+                          "Managed chrome content must fill the same padded owner width as native layout")
+            XCTAssertEqual(CanonicalPageChrome.navigationAlignment(surface: navigation, settings: owner), "end")
+            for breakpoint in ResponsiveBreakpoint.allCases {
+                let snapshot = try XCTUnwrap(CanonicalPageFlow.navigation(owner: owner, page: page,
+                    document: document, breakpoint: breakpoint))
+                XCTAssertEqual(snapshot.alignment, "end")
+            }
+            let selector = CanonicalCSSRule.selector(for: navigationID)
+            let navigationRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(selector + " {") }
+            XCTAssertFalse(navigationRules.isEmpty)
+            XCTAssertTrue(navigationRules.allSatisfy { $0.contains("width:auto;") && $0.contains("flex:1 1 0px;") })
+            XCTAssertTrue(css.contains(".sf-page-navigation-\(navigationID) .sf-nav-inline { gap:"))
+            XCTAssertTrue(css.contains("justify-content:flex-end"))
+        }
+        XCTAssertEqual(session.document, document, "Output projection cannot rewrite canonical authored geometry")
+    }
+
+    // SF-0501-003, SF-0507-003, SF-0806-003, SF-1201-003: derived menu
+    // chrome resolves the same typed color context in native and shared output.
+    func testDarkNavigationSharesAuthoredForegroundAndOpaqueSurfaceWithoutMutation() async throws {
+        let fixture = makeFixture()
+        var initial = fixture.document
+        initial.pages[0].nodes.removeAll { $0.id == fixture.textParentID }
+        initial.pages[0].nodes[0].childIDs.removeAll { $0 == fixture.textParentID }
+        let session = DocumentSession(document: initial)
+        let pageID = initial.pages[0].id
+        let addition = try PageCommandRegistry().prepare(.create(name: "Journal", route: "/journal"),
+            identity: .init(documentID: initial.id, revision: initial.revision, pageID: pageID),
+            in: initial, isAvailable: true)
+        try session.execute(addition.command)
+        let headerID = NodeID()
+        let current = fixture.with(document: session.document)
+        let insertion = command(.section, fixture: current, nodeID: headerID,
+            geometry: .init(origin: .init(x: 0, y: 0), size: .init(width: 1440, height: 120)), provenance: .menu)
+        try session.execute(InsertionCommandRegistry().prepare(insertion, in: session.document,
+            context: current.context, template: .header).documentCommand)
+        var document = session.document
+        let dark = CanonicalSolidColor(red: 16.0 / 255, green: 11.0 / 255, blue: 28.0 / 255, alpha: 1)
+        let white = CanonicalSolidColor(red: 250.0 / 255, green: 247.0 / 255, blue: 1, alpha: 1)
+        let surfaceToken = LocalColorToken(name: "Surface", color: dark)
+        let textToken = LocalColorToken(name: "Foreground", color: white)
+        document.colorTokens = [surfaceToken, textToken]
+        let ownerIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == headerID })
+        document.pages[0].nodes[ownerIndex].properties.removeAll { $0.key.rawValue.hasPrefix("style.fill") }
+        document.pages[0].nodes[ownerIndex].properties += CanonicalFillLayerCodec.propertyValues(for: [
+            .solid(id: FillLayerID(), color: .legacySurface)
+        ]).map { .init(key: .init(rawValue: $0.0), value: $0.1, origin: .authored) }
+        document.pages[0].nodes[ownerIndex].properties.append(.init(
+            key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)), value: .string(surfaceToken.id.description)))
+        let owner = document.pages[0].nodes[ownerIndex]
+        let links = CanonicalPageChrome.links(owner: owner, page: document.pages[0])
+        XCTAssertEqual(links.count, 2)
+        for link in links {
+            let index = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == link.id })
+            document.pages[0].nodes[index].properties += CanonicalTextForeground.values(white).map {
+                .init(key: .init(rawValue: $0.0), value: $0.1, origin: .authored)
+            }
+            document.pages[0].nodes[index].properties.append(.init(
+                key: .init(rawValue: LocalColorTokenBinding.key(for: .textForeground)), value: .string(textToken.id.description)))
+        }
+        try document.validate()
+        let before = try DocumentSerializer.encode(document)
+        let page = document.pages[0]
+        let navID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner))
+        let nav = try XCTUnwrap(page.nodes.first { $0.id == navID })
+        XCTAssertEqual(CanonicalPageChrome.navigationForeground(surface: nav, page: page, tokens: document.colorTokens), white)
+        XCTAssertEqual(CanonicalPageChrome.opaqueNavigationSurface(surface: nav, page: page, tokens: document.colorTokens), dark)
+        let plan = try MultiPageStaticBuildPlanner.plan(document: document)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains(".sf-page-navigation-\(navID) .sf-nav-menu > summary { color:#FAF7FFFF; }"))
+        XCTAssertTrue(css.contains(".sf-page-navigation-\(navID) .sf-nav-menu[open] nav { background:#100B1CFF; }"))
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        for link in links {
+            let selector = "[data-siteforge-nav-link=\"\(link.id)\"]"
+            let rule = try XCTUnwrap(css.components(separatedBy: "\n").first { $0.contains(selector + " {") })
+            XCTAssertTrue(rule.contains("color: rgba(250.0, 247.0, 255.0, 1.0);"))
+            XCTAssertEqual(html.components(separatedBy: "data-siteforge-nav-link=\"\(link.id)\"").count - 1, 2,
+                "Inline and collapsed copies share authored text styling, not absolute node geometry")
+            XCTAssertFalse(html.contains("data-siteforge-node=\"\(link.id)\""))
+        }
+        let viewport = try CanvasViewportState(viewportSize: .init(width: 1000, height: 700),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 390, height: 900)), pixelRatio: .init(2))
+        let scene = try await WorkspaceScenePreparationWorker().prepare(.init(document: document,
+            activePageID: pageID, activeContainerID: nil, viewport: viewport, surfaceID: CanvasRenderSurfaceID(),
+            breakpoint: .mobile, viewportWidth: 390))
+        let menu = try XCTUnwrap(scene.renderScene.objects.first { $0.id == navID })
+        XCTAssertEqual(menu.plainText, "☰ Menu")
+        XCTAssertEqual(menu.typography?.foregroundRGBA, [white.red, white.green, white.blue, white.alpha])
+        let resolved = ConnectedPageLayoutSnapshot(page: page, breakpoint: .mobile, width: 390)
+        XCTAssertEqual(menu.frame, resolved.frames[navID]?.frame)
+        XCTAssertEqual(try DocumentSerializer.encode(document), before)
+        var mixed = document
+        let mixedIndex = try XCTUnwrap(mixed.pages[0].nodes.firstIndex { $0.id == links[0].id })
+        mixed.pages[0].nodes[mixedIndex].properties.removeAll {
+            $0.key.rawValue.hasPrefix(CanonicalTextForeground.prefix)
+                || $0.key.rawValue == LocalColorTokenBinding.key(for: .textForeground)
+        }
+        mixed.pages[0].nodes[mixedIndex].properties += CanonicalTextForeground.values(.init(red: 0, green: 0, blue: 0, alpha: 1)).map {
+            .init(key: .init(rawValue: $0.0), value: $0.1, origin: .authored)
+        }
+        XCTAssertNil(CanonicalPageChrome.uniformNavigationTextSource(surface: nav, page: mixed.pages[0], tokens: mixed.colorTokens))
+        XCTAssertEqual(CanonicalPageChrome.navigationForeground(surface: nav, page: mixed.pages[0], tokens: mixed.colorTokens),
+            .init(red: 1, green: 1, blue: 1, alpha: 1), "Mixed links use readable surface contrast, not the first black link")
+    }
+
     // SF-0205-002/003/004 — discovery cannot change catalogue order or
     // accidentally turn an unavailable element into an insertion command.
     func testElementCatalogSearchPreservesOrderCategoriesAndAvailability() {
@@ -176,6 +928,166 @@ final class InsertionModelTests: XCTestCase {
 
     // SF-AUTHORING-086–089: site/line templates remain single canonical
     // Frame/Section commands with stable IDs and exact history inverses.
+    // SF-SOURCE-BATCH-20261027-02: source coverage only; owner testing hold.
+    func testHeaderNavigationGapSharesResponsiveFramesCSSAndExactHistory() throws {
+        let (session, headerID, _, _) = try connectedPageSession()
+        let pageID = session.document.pages[0].id
+        @MainActor func page() -> DocumentPage { session.document.pages[0] }
+        @MainActor func header() throws -> DocumentNode { try XCTUnwrap(page().nodes.first { $0.id == headerID }) }
+        @MainActor func navigation() throws -> DocumentNode {
+            let id = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: header()))
+            return try XCTUnwrap(page().nodes.first { $0.id == id })
+        }
+        for _ in 0..<2 where CanonicalPageChrome.links(owner: try header(), page: page()).count < 2 {
+            try session.execute(pageStructureCommand(.addLink(owner: headerID, pageID: pageID), document: session.document, selected: headerID))
+        }
+        let before = session.document.pages
+        let nodeIDs = page().nodes.map(\.id)
+        try session.execute(pageStructureCommand(.navigationGap(headerID, 40, .desktop), document: session.document, selected: headerID))
+        let desktop = session.document.pages
+        try session.execute(pageStructureCommand(.navigationGap(headerID, 6.5, .tablet), document: session.document, selected: headerID, breakpoint: .tablet))
+        let overridden = session.document.pages
+        XCTAssertEqual(CanonicalPageChrome.navigationGap(surface: try navigation(), settings: try header(), breakpoint: .desktop, width: 1440), 40)
+        XCTAssertEqual(CanonicalPageChrome.navigationGap(surface: try navigation(), settings: try header(), breakpoint: .tablet, width: 768), 6.5)
+        XCTAssertTrue(ConnectedPageOutput.css(pages: [page()]).contains("min(6.5px"))
+        let frames = page().resolvedStructuralGeometry(breakpoint: .tablet, viewportWidth: 768)
+        let links = CanonicalPageChrome.links(owner: try header(), page: page()).filter { !$0.selectionBooleanProperty("hidden") }
+        guard links.count >= 2 else { XCTFail("Two visible links are required to assert resolved spacing"); return }
+        let first = try XCTUnwrap(frames[links[0].id]), second = try XCTUnwrap(frames[links[1].id])
+        XCTAssertEqual(second.frame.minX - first.frame.maxX, 6.5, accuracy: 0.001)
+        let tree = try InternalDocumentRenderTreeCompiler.compile(page: page(), documentID: session.document.id,
+            revision: session.document.revision, breakpoint: .tablet, viewportWidth: 768)
+        XCTAssertEqual(tree.nodes.first { $0.id == links[0].id }?.frame, first.frame)
+        XCTAssertEqual(page().nodes.map(\.id), nodeIDs)
+        try session.execute(pageStructureCommand(.navigationGap(headerID, nil, .tablet), document: session.document, selected: headerID, breakpoint: .tablet))
+        XCTAssertNil(try navigation().insertionProperty(ResponsiveContainerLayoutResolver.key(.gap, breakpoint: .tablet)))
+        XCTAssertEqual(CanonicalPageChrome.navigationGap(surface: try navigation(), settings: try header(), breakpoint: .tablet, width: 768), 40)
+        let reopened = try DocumentSerializer.decode(DocumentSerializer.encode(session.document))
+        XCTAssertEqual(reopened, session.document)
+        XCTAssertEqual(ConnectedPageOutput.css(pages: reopened.pages), ConnectedPageOutput.css(pages: session.document.pages))
+        try session.undo(); XCTAssertEqual(session.document.pages, overridden)
+        try session.undo(); XCTAssertEqual(session.document.pages, desktop)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); try session.redo(); try session.redo()
+        XCTAssertEqual(page().nodes.map(\.id), nodeIDs)
+    }
+
+    func testHeaderNavigationGapRejectsInvalidCancelledLockedAndWrongScope() throws {
+        let (session, headerID, _, _) = try connectedPageSession()
+        let before = session.document
+        for value in [-1.0, .nan, .infinity, 10_001] {
+            XCTAssertThrowsError(try pageStructureCommand(.navigationGap(headerID, value, .desktop), document: before, selected: headerID))
+        }
+        XCTAssertThrowsError(try pageStructureCommand(.navigationGap(headerID, 12, .mobile), document: before, selected: headerID, breakpoint: .tablet))
+        XCTAssertThrowsError(try pageStructureCommand(.navigationGap(headerID, 12, .desktop), document: before, selected: headerID, cancelled: true))
+        var locked = before
+        let owner = try XCTUnwrap(locked.pages[0].nodes.first { $0.id == headerID })
+        let navigationID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner))
+        let index = try XCTUnwrap(locked.pages[0].nodes.firstIndex { $0.id == navigationID })
+        locked.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: "locked"), value: .boolean(true)))
+        XCTAssertThrowsError(try pageStructureCommand(.navigationGap(headerID, 12, .desktop), document: locked, selected: headerID))
+        var later = before
+        later.revision += 1
+        let scene = CanvasViewportSceneID()
+        XCTAssertThrowsError(try PageStructureCommandRegistry().prepare(.navigationGap(headerID, 12, .desktop),
+            identity: .init(documentID: before.id, pageID: before.pages[0].id, revision: before.revision,
+                            sceneID: scene, rendererGeneration: before.revision),
+            document: later, context: .init(activePageID: before.pages[0].id, currentSceneID: scene,
+                rendererGeneration: later.revision, selectedNodeIDs: [headerID], availableNodeIDs: [headerID],
+                isLifecycleAvailable: true, lifecycleDisabledReason: nil), viewportWidth: 1440, breakpoint: .desktop))
+        XCTAssertEqual(session.document, before)
+    }
+
+    func testNavigationGapPolicyHandlesZeroOneManyAndNarrowBounds() {
+        for count in [0, 1, 2, 32] {
+            for width in [1.0, 390, 768, 1440] {
+                let layout = CanonicalPageFlow.navigationLayout(availableWidth: width, count: count, alignment: "end", requestedGap: 44)
+                XCTAssertTrue(layout.width.isFinite && layout.gap.isFinite && layout.offset.isFinite)
+                XCTAssertGreaterThanOrEqual(layout.gap, 0)
+                if count <= 1 { XCTAssertEqual(layout.gap, 0) }
+                if count > 0 {
+                    XCTAssertLessThanOrEqual(Double(count) * layout.width + Double(count - 1) * layout.gap, max(1, width) + 0.001)
+                }
+            }
+        }
+    }
+
+    func testHeaderImageVisibilityRetainsResponsiveIntentAndExactInverse() throws {
+        let (session, headerID, _, _) = try connectedPageSession()
+        let pageID = session.document.pages[0].id
+        let owner = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == headerID })
+        let contentID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner))
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Logo", originalFilename: "logo.png", format: .png,
+            pixelWidth: 72, pixelHeight: 32, byteCount: 1, contentHash: String(repeating: "a", count: 64))
+        try session.execute(.insertImageAsset(.init(asset: asset, index: 0)))
+        let image = DocumentNode(kind: .image, name: "Brand mark", parent: .node(contentID), properties: [
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "assetID"), value: .string(asset.id.description)),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "fit"), value: .string("fit")),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "alt"), value: .string("Brand")),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "decorative"), value: .boolean(false)),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.x"), value: .number(0.5)),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.y"), value: .number(0.5)),
+            .init(key: .init(rawValue: "layout.x"), value: .number(0)), .init(key: .init(rawValue: "layout.y"), value: .number(0)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(72)), .init(key: .init(rawValue: "layout.height"), value: .number(32)),
+            .init(key: .init(rawValue: ResponsiveVisibilityResolver.key(.mobile)), value: .boolean(false))])
+        try session.execute(.insertNode(.init(pageID: pageID, node: image, index: 0)))
+        let before = session.document.pages
+        try session.execute(pageStructureCommand(.showContentImage(headerID, image.id, false), document: session.document, selected: headerID))
+        let changed = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == image.id })
+        XCTAssertTrue(changed.selectionBooleanProperty("hidden"))
+        XCTAssertEqual(changed.insertionProperty(ResponsiveVisibilityResolver.key(.mobile)), image.insertionProperty(ResponsiveVisibilityResolver.key(.mobile)))
+        XCTAssertEqual(session.document.imageAssets, [asset])
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo()
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        XCTAssertThrowsError(try pageStructureCommand(.showContentImage(headerID, NodeID(), false), document: session.document, selected: headerID))
+    }
+
+    func testHeaderIncludedLinksKeepIdentityAcrossZeroOneManyAndPageLifecycle() throws {
+        let (session, headerID, _, _) = try connectedPageSession()
+        let pageID = session.document.pages[0].id
+        @MainActor func apply(_ edit: PageStructureEdit) throws {
+            try session.execute(pageStructureCommand(edit, document: session.document, selected: headerID))
+        }
+        @MainActor func snapshot(_ breakpoint: ResponsiveBreakpoint) throws -> PageNavigationSnapshot? {
+            let page = session.document.pages[0]
+            let owner = try XCTUnwrap(page.nodes.first { $0.id == headerID })
+            let navigationID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner))
+            let surface = try XCTUnwrap(page.nodes.first { $0.id == navigationID })
+            return CanonicalPageFlow.navigation(owner: surface, page: page, document: session.document,
+                breakpoint: breakpoint, width: CanonicalPageFlow.pageWidth(breakpoint, nil))
+        }
+        let eligible = session.document.websitePages.filter { $0.role != .notFound }
+        for page in eligible { try apply(.includePage(headerID, page.id, false)) }
+        XCTAssertNil(try snapshot(.mobile), "No links means no empty mobile menu")
+        try apply(.includePage(headerID, pageID, true))
+        let one = try XCTUnwrap(snapshot(.mobile))
+        XCTAssertEqual(one.links.count, 1)
+        XCTAssertTrue(one.usesHamburger)
+        XCTAssertFalse(try XCTUnwrap(snapshot(.desktop)).usesHamburger)
+        let stableLinkID = one.links[0].id
+        try apply(.includePage(headerID, pageID, false)); try apply(.includePage(headerID, pageID, true))
+        XCTAssertEqual(try snapshot(.mobile)?.links.first?.id, stableLinkID)
+        let create = try PageCommandRegistry().prepare(.create(name: "More", route: "/more"), identity: .init(
+            documentID: session.document.id, revision: session.document.revision, pageID: pageID), in: session.document, isAvailable: true)
+        try session.execute(create.command)
+        try apply(.includeAllPages(headerID))
+        let more = try XCTUnwrap(snapshot(.mobile)?.links.first { $0.pageID == create.selectedPageID })
+        XCTAssertGreaterThan(try XCTUnwrap(snapshot(.mobile)).links.count, 1)
+        try apply(.editLink(owner: headerID, link: more.id, pageID: more.pageID, label: "Our custom label"))
+        let rename = try PageCommandRegistry().prepare(.rename("Renamed"), identity: .init(documentID: session.document.id,
+            revision: session.document.revision, pageID: more.pageID), in: session.document, isAvailable: true)
+        try session.execute(rename.command)
+        XCTAssertEqual(try snapshot(.mobile)?.links.first { $0.id == more.id }?.label, "Our custom label")
+        let remove = try PageCommandRegistry().prepare(.delete, identity: .init(documentID: session.document.id,
+            revision: session.document.revision, pageID: more.pageID), in: session.document, isAvailable: true)
+        try session.execute(remove.command)
+        XCTAssertEqual(try snapshot(.mobile)?.links.first { $0.id == more.id }?.isAvailable, false)
+        try session.undo()
+        XCTAssertEqual(try snapshot(.mobile)?.links.first { $0.id == more.id }?.isAvailable, true)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
     private func connectedPageSession() throws -> (DocumentSession, NodeID, [NodeID], NodeID) {
         let fixture = makeFixture(), session = DocumentSession(document: fixture.document)
         let header = NodeID(), footer = NodeID(), bodies = [NodeID(), NodeID()]
@@ -189,6 +1101,211 @@ final class InsertionModelTests: XCTestCase {
             try session.execute(prepared.documentCommand)
         }
         return (session, header, bodies, footer)
+    }
+
+    // SF-0502-003, SF-1201-003: short pages keep the authored root
+    // background across the browser viewport without changing saved geometry.
+    func testConnectedPageViewportMinimumBelongsToAuthoredRootWithoutMutation() throws {
+        let (session, _, _, _) = try connectedPageSession()
+        let original = session.document
+        let page = original.pages[0]
+        let css = ConnectedPageOutput.css(pages: [page])
+        XCTAssertTrue(ConnectedPageOutput.menuCSS.contains("min-height:100vh;"))
+        XCTAssertFalse(ConnectedPageOutput.menuCSS.contains("min-height:900px;"))
+        for rootID in page.rootNodeIDs {
+            let selector = CanonicalCSSRule.selector(for: rootID)
+            let roots = css.components(separatedBy: "\n").filter { $0.hasPrefix(selector + " { display:flow-root;") }
+            XCTAssertEqual(roots.count, ResponsiveBreakpoint.allCases.count)
+            XCTAssertTrue(roots.allSatisfy { $0.contains("min-height:100vh;") })
+        }
+        XCTAssertEqual(session.document, original)
+    }
+
+    // SF-0303-002/003/005, SF-0308-003/005: one independent page-copy transaction.
+    func testNamedPageReusePreservesStructureMetadataHistoryAndSerialization() throws {
+        let (session, _, _, _) = try connectedPageSession()
+        let pageID = session.document.pages[0].id
+        try session.execute(.setWebsiteMetadata(.init(documentID: session.document.id,
+            metadata: .init(siteName: "Studio", pages: [.init(pageID: pageID,
+                title: "Authored title", description: "Authored description", allowsIndexing: false)]))))
+        let before = session.document
+        let historyCount = session.historySnapshot().undoEntries.count
+        let prepared = try PageCommandRegistry().prepare(.duplicateNamed(name: " Related ", route: " /Related "),
+            identity: .init(documentID: before.id, revision: before.revision, pageID: pageID),
+            in: before, isAvailable: true)
+        try session.execute(prepared.command)
+        let after = session.document
+        let copy = try XCTUnwrap(after.pages.first { $0.id == prepared.selectedPageID })
+        XCTAssertEqual(copy.name, "Related"); XCTAssertEqual(copy.route.rawValue, "/related")
+        XCTAssertEqual(after.pages.first { $0.id == pageID }, before.pages[0])
+        XCTAssertEqual(copy.nodes.count, before.pages[0].nodes.count)
+        XCTAssertTrue(Set(copy.nodes.map(\.id)).isDisjoint(with: before.pages[0].nodes.map(\.id)))
+        XCTAssertEqual(copy.nodes.map(\.kind), before.pages[0].nodes.map(\.kind))
+        let copiedIDs = Dictionary(uniqueKeysWithValues: zip(before.pages[0].nodes, copy.nodes).map { ($0.id, $1.id) })
+        for (original, copied) in zip(before.pages[0].nodes, copy.nodes) {
+            XCTAssertEqual(copied.name, original.name)
+            XCTAssertEqual(copied.childIDs, original.childIDs.map { copiedIDs[$0]! })
+            XCTAssertEqual(copied.properties.map(\.key), original.properties.map(\.key))
+            for (old, new) in zip(original.properties, copied.properties) {
+                XCTAssertNotEqual(new.id, old.id)
+                XCTAssertEqual(new.origin, old.origin)
+                if !CanonicalPageChrome.referenceKeys.contains(old.key.rawValue),
+                   ![CanonicalLinkTarget.namespace + "pageID", CanonicalLinkTarget.namespace + "nodeID"].contains(old.key.rawValue) {
+                    XCTAssertEqual(new.value, old.value, "Copy must preserve authored geometry, responsive modes, styles and content")
+                }
+            }
+        }
+        let settings = try XCTUnwrap(after.websiteMetadata?.pages.first { $0.pageID == copy.id })
+        XCTAssertEqual(settings.title, "Authored title"); XCTAssertEqual(settings.description, "Authored description")
+        XCTAssertEqual(settings.allowsIndexing, false)
+        XCTAssertEqual(after.websiteMetadata?.siteName, before.websiteMetadata?.siteName)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, historyCount + 1)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(after)), after)
+        XCTAssertNoThrow(try MultiPageStaticBuildPlanner.plan(document: after))
+        try session.undo()
+        XCTAssertEqual(session.document.pages, before.pages)
+        XCTAssertEqual(session.document.websiteMetadata, before.websiteMetadata)
+        try session.redo()
+        XCTAssertEqual(session.document.pages, after.pages)
+        XCTAssertEqual(session.document.websiteMetadata, after.websiteMetadata)
+    }
+
+    func testHeaderTitleProvenanceMatchesSiteHomeAndLegacyFallbackResolution() {
+        var document = BlankProjectDefaults.document()
+        var title = DocumentNode(kind: .text, name: "Site title", parent: .node(document.pages[0].rootNodeIDs[0]),
+            properties: [.init(key: .init(rawValue: "content.text"), value: .string("Stored"), origin: .defaulted)])
+        XCTAssertEqual(CanonicalPageChrome.resolvedTitle(title, in: document).provenance, "Defaulted from Home page")
+        document.websiteMetadata = .init(siteName: "Studio")
+        XCTAssertEqual(CanonicalPageChrome.titleText(title, in: document), "Studio")
+        XCTAssertEqual(CanonicalPageChrome.resolvedTitle(title, in: document).provenance, "Defaulted from Site Name")
+        document.websiteMetadata = nil; document.pages[0].role = .standard
+        XCTAssertEqual(CanonicalPageChrome.titleText(title, in: document), "Stored")
+        XCTAssertEqual(CanonicalPageChrome.resolvedTitle(title, in: document).provenance, "Stored default title")
+        title.properties = [.init(key: .init(rawValue: "content.text"), value: .string("Custom"), origin: .authored)]
+        XCTAssertEqual(CanonicalPageChrome.resolvedTitle(title, in: document).provenance, "Authored title")
+        XCTAssertEqual(CanonicalPageChrome.titleText(title, in: document), "Custom")
+    }
+
+    func testNamedPageReuseInvalidCancelledStaleAndUnavailableAreNeutral() throws {
+        let (session, _, _, _) = try connectedPageSession()
+        let before = session.document, registry = PageCommandRegistry()
+        let identity = PageEditIdentity(documentID: before.id, revision: before.revision, pageID: before.pages[0].id)
+        for edit in [PageEdit.duplicateNamed(name: "", route: "/related"),
+                     .duplicateNamed(name: "Related", route: before.pages[0].route.rawValue),
+                     .duplicateNamed(name: "Related", route: "/../bad")] {
+            XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: before, isAvailable: true))
+        }
+        let valid = PageEdit.duplicateNamed(name: "Related", route: "/related")
+        XCTAssertThrowsError(try registry.prepare(valid, identity: identity, in: before, isAvailable: true, cancelled: true))
+        XCTAssertThrowsError(try registry.prepare(valid, identity: identity, in: before, isAvailable: false))
+        for stale in [PageEditIdentity(documentID: DocumentID(), revision: before.revision, pageID: identity.pageID),
+                      .init(documentID: before.id, revision: before.revision + 1, pageID: identity.pageID),
+                      .init(documentID: before.id, revision: before.revision, pageID: PageID())] {
+            XCTAssertThrowsError(try registry.prepare(valid, identity: stale, in: before, isAvailable: true))
+        }
+        XCTAssertEqual(session.document, before)
+    }
+
+    // SF-0502-003/005, SF-0806-003/005: preserve custom labels and link order.
+    func testIncludeAllPagesIsAtomicOrderedAndPreservesCustomNavigation() throws {
+        let (session, header, _, _) = try connectedPageSession()
+        let first = session.document.pages[0]
+        let owner = try XCTUnwrap(first.nodes.first { $0.id == header })
+        let initial = CanonicalPageChrome.links(owner: owner, page: first)
+        let retained = try XCTUnwrap(initial.first)
+        let target = try XCTUnwrap(retained.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID").flatMap(PageID.init(uuidString:)))
+        try session.execute(pageStructureCommand(.editLink(owner: header, link: retained.id, pageID: target,
+            label: "Custom destination"), document: session.document, selected: header))
+        try session.execute(pageStructureCommand(.includePage(header, target, false), document: session.document, selected: header))
+        for name in ["Journal", "Contact"] {
+            try session.execute(.insertPage(.init(page: .minimum(name: name, route: "/" + name.lowercased(),
+                role: .standard, provenance: .authored), index: session.document.pages.count)))
+        }
+        let before = session.document, historyCount = session.historySnapshot().undoEntries.count
+        try session.execute(pageStructureCommand(.includeAllPages(header), document: before, selected: header))
+        let after = session.document, page = after.pages[0]
+        let updatedOwner = try XCTUnwrap(page.nodes.first { $0.id == header })
+        let links = CanonicalPageChrome.links(owner: updatedOwner, page: page)
+        XCTAssertEqual(Array(links.prefix(initial.count).map(\.id)), initial.map(\.id))
+        XCTAssertEqual(links.first { $0.id == retained.id }?.insertionStringProperty(CanonicalLinkTarget.labelKey), "Custom destination")
+        XCTAssertTrue(links.allSatisfy { !$0.selectionBooleanProperty("hidden") })
+        XCTAssertEqual(Array(links.suffix(2)).compactMap { $0.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") },
+                       Array(after.pages.suffix(2)).map { $0.id.description })
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, historyCount + 1)
+        let unchanged = try pageStructureCommand(.includeAllPages(header), document: after, selected: header)
+        if case .batch(let commands) = unchanged {
+            // Nested empty operations must not masquerade as real history.
+            XCTAssertTrue(commands.isEmpty)
+        } else { XCTFail("No-change Include All must remain history-neutral") }
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(after)), after)
+        XCTAssertNoThrow(try MultiPageStaticBuildPlanner.plan(document: after))
+        try session.undo(); XCTAssertEqual(session.document.pages, before.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, after.pages)
+    }
+
+    func testIncludeAllPagesRejectsLockedCancelledStaleAndCapacityWithoutMutation() throws {
+        let (session, header, _, _) = try connectedPageSession()
+        let owner = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == header })
+        let link = try XCTUnwrap(CanonicalPageChrome.links(owner: owner, page: session.document.pages[0]).first)
+        try setConnectedFixtureProperty("hidden", value: .boolean(true), nodeID: link.id, session: session)
+        try setConnectedFixtureProperty("locked", value: .boolean(true), nodeID: link.id, session: session)
+        let before = session.document
+        XCTAssertThrowsError(try pageStructureCommand(.includeAllPages(header), document: before, selected: header))
+        XCTAssertThrowsError(try pageStructureCommand(.includeAllPages(header), document: before, selected: header, cancelled: true))
+        let scene = CanvasViewportSceneID()
+        XCTAssertThrowsError(try PageStructureCommandRegistry().prepare(.includeAllPages(header), identity: .init(
+            documentID: before.id, pageID: before.pages[0].id, revision: before.revision - 1,
+            sceneID: scene, rendererGeneration: before.revision), document: before,
+            context: .init(activePageID: before.pages[0].id, currentSceneID: scene, rendererGeneration: before.revision,
+                selectedNodeIDs: [header], availableNodeIDs: Set(before.pages[0].nodes.map(\.id)),
+                isLifecycleAvailable: true, lifecycleDisabledReason: nil), viewportWidth: 1440, breakpoint: .desktop))
+        XCTAssertEqual(session.document, before)
+        var oversized = before
+        for index in 0...CanonicalPageFlow.maximumLinks {
+            oversized.pages.append(.minimum(name: "Destination \(index)", route: "/destination-\(index)", role: .standard, provenance: .authored))
+        }
+        XCTAssertThrowsError(try pageStructureCommand(.includeAllPages(header), document: oversized, selected: header)) {
+            XCTAssertTrue($0 is PageStructureEditError)
+        }
+        XCTAssertEqual(session.document, before)
+    }
+
+    func testNamedPageReusePackageRecoveryHistoryAndBranching() async throws {
+        let (session, _, _, _) = try connectedPageSession()
+        try session.execute(.setWebsiteMetadata(.init(documentID: session.document.id,
+            metadata: .init(pages: [.init(pageID: session.document.pages[0].id,
+                title: "Related page settings", allowsIndexing: false)]))))
+        let source = session.document
+        let prepared = try PageCommandRegistry().prepare(.duplicateNamed(name: "Related", route: "/related"),
+            identity: .init(documentID: source.id, revision: source.revision, pageID: source.pages[0].id),
+            in: source, isAvailable: true)
+        try session.execute(prepared.command)
+        let committed = session.document
+        let package = try await PersistedHistoryStore().package(
+            ProjectPackage(createdAt: .init(date: Date(timeIntervalSince1970: 1)), document: committed), with: session.historySnapshot())
+        let store = ProjectPackageStore()
+        let encoded = try await store.encode(package)
+        let encodedAgain = try await store.encode(package)
+        XCTAssertEqual(encoded, encodedAgain)
+        let reopened = try await store.decode(encoded)
+        XCTAssertEqual(reopened.document, committed)
+        guard case .restored(let history) = try await PersistedHistoryStore().load(from: reopened) else {
+            return XCTFail("Related page must retain package/recovery history")
+        }
+        let restored = DocumentSession(document: reopened.document)
+        try restored.installValidatedHistory(history)
+        try restored.undo(); XCTAssertEqual(restored.document.pages, source.pages)
+        XCTAssertEqual(restored.document.websiteMetadata, source.websiteMetadata)
+        try restored.redo(); XCTAssertEqual(restored.document.pages, committed.pages)
+        XCTAssertEqual(restored.document.websiteMetadata, committed.websiteMetadata)
+        try restored.undo()
+        try restored.execute(.renamePage(.init(pageID: source.pages[0].id, name: "Branch")))
+        XCTAssertFalse(restored.canRedo)
+        let diagnostics = CommandDiagnostics()
+        diagnostics.recordPagePreparationFailure(.duplicateNamed(name: "Private copied title", route: "/private-route"),
+            pageID: source.pages[0].id, durationMilliseconds: 1)
+        XCTAssertFalse(String(describing: diagnostics.records).contains("Private copied title"))
+        XCTAssertFalse(String(describing: diagnostics.records).contains("/private-route"))
     }
     private func pageStructureCommand(_ edit: PageStructureEdit, document: CanonicalDocument, selected: NodeID,
                                       breakpoint: ResponsiveBreakpoint = .desktop, cancelled: Bool = false) throws -> DocumentCommand {
@@ -529,13 +1646,21 @@ final class InsertionModelTests: XCTestCase {
     func testSchema16RemainsReadableWithoutChromeAndCannotForgeSchema17References() throws {
         let legacy = makeFixture().document
         let bytes = try DocumentSerializer.encode(legacy)
-        let old = Data(String(decoding: bytes, as: UTF8.self).replacingOccurrences(
-            of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":16").utf8)
+        var oldEnvelope = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        oldEnvelope["schemaVersion"] = 16
+        var oldDocument = try XCTUnwrap(oldEnvelope["document"] as? [String: Any])
+        oldDocument.removeValue(forKey: "websiteMetadata") // Not part of schema 16.
+        oldEnvelope["document"] = oldDocument
+        let old = try JSONSerialization.data(withJSONObject: oldEnvelope)
         XCTAssertEqual(try DocumentSerializer.decode(old), legacy)
         let (session, _, _, _) = try connectedPageSession()
         let authored = try DocumentSerializer.encode(session.document)
-        let forged = Data(String(decoding: authored, as: UTF8.self).replacingOccurrences(
-            of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":16").utf8)
+        var forgedEnvelope = try XCTUnwrap(JSONSerialization.jsonObject(with: authored) as? [String: Any])
+        forgedEnvelope["schemaVersion"] = 16
+        var forgedDocument = try XCTUnwrap(forgedEnvelope["document"] as? [String: Any])
+        forgedDocument.removeValue(forKey: "websiteMetadata")
+        forgedEnvelope["document"] = forgedDocument
+        let forged = try JSONSerialization.data(withJSONObject: forgedEnvelope)
         XCTAssertThrowsError(try DocumentSerializer.decode(forged))
         XCTAssertEqual(try DocumentSerializer.decode(authored), session.document)
     }
@@ -690,6 +1815,10 @@ final class InsertionModelTests: XCTestCase {
         let owner = try XCTUnwrap(page.nodes.first { $0.id == headerID })
         let navigationID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner))
         let memberIDs = Set(CanonicalPageChrome.links(owner: owner, page: page).map(\.id))
+        let css = ConnectedPageOutput.css(pages: [page])
+        XCTAssertTrue(ConnectedPageOutput.menuCSS.contains("cursor:pointer;white-space:nowrap;"))
+        XCTAssertTrue(css.contains(".sf-page-navigation-\(navigationID) { display:flex;justify-content:flex-end; }"))
+        XCTAssertTrue(css.contains(".sf-page-navigation-\(navigationID) .sf-nav-menu { flex:none;max-width:none;margin:0; }"))
         for breakpoint in ResponsiveBreakpoint.allCases {
             let width = CanonicalPageFlow.pageWidth(breakpoint, nil)
             let viewport = try CanvasViewportState(worldOrigin: .init(x: -30, y: 40), viewportSize: .init(width: 700, height: 500),
@@ -753,6 +1882,9 @@ final class InsertionModelTests: XCTestCase {
         let navigationID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner))
         XCTAssertTrue(css.contains(".sf-page-navigation-\(navigationID) { display:none; }"))
         let script = try XCTUnwrap(plan.files.first { $0.path == "siteforge-navigation.js" }?.contents)
+        // Safari AX activation can focus the document before its target link.
+        // That transient focus must not dismiss the link before activation.
+        XCTAssertTrue(script.contains("if(event.target===document.body||event.target===document.documentElement)return"))
         XCTAssertTrue(script.contains("aria-expanded")); XCTAssertTrue(script.contains("matchMedia")); XCTAssertTrue(script.contains("Escape"))
         for id in linkIDs {
             try session.execute(pageStructureCommand(.removeLink(owner: header, link: id), document: session.document, selected: header))
@@ -1271,6 +2403,7 @@ final class InsertionModelTests: XCTestCase {
         var legacyDocument = try XCTUnwrap(legacyEnvelope["document"] as? [String: Any])
         legacyDocument.removeValue(forKey: "imageAssets")
         legacyDocument.removeValue(forKey: "colorTokens")
+        legacyDocument.removeValue(forKey: "websiteMetadata")
         legacyEnvelope["document"] = legacyDocument
         let legacy = try JSONSerialization.data(withJSONObject: legacyEnvelope)
         XCTAssertEqual(try DocumentSerializer.decode(legacy), fixture.document)

@@ -27,9 +27,25 @@ enum CanonicalPageChrome {
         owner.insertionStringProperty(key).flatMap(NodeID.init(uuidString:))
     }
     static func isCustom(_ owner: DocumentNode) -> Bool { owner.insertionStringProperty(arrangementKey) == "custom" }
+    struct TitleResolution: Equatable, Sendable {
+        let text: String
+        let provenance: String
+    }
+    static func resolvedTitle(_ title: DocumentNode, in document: CanonicalDocument) -> TitleResolution {
+        guard let property = title.insertionProperty("content.text"), case .string(let stored) = property.value else {
+            return .init(text: "", provenance: "Missing title content. Restore it with Undo.")
+        }
+        if property.origin == .authored { return .init(text: stored, provenance: "Authored title") }
+        if let name = document.websiteMetadata?.siteName { return .init(text: name, provenance: "Defaulted from Site Name") }
+        if let home = document.websitePages.first(where: { $0.role == .home }) {
+            return .init(text: home.name, provenance: "Defaulted from Home page")
+        }
+        return .init(text: stored, provenance: stored.isEmpty
+            ? "No title source. Enter a title or set Site Name in Site Settings."
+            : "Stored default title")
+    }
     static func titleText(_ title: DocumentNode, in document: CanonicalDocument) -> String {
-        guard let property = title.insertionProperty("content.text"), case .string(let stored) = property.value else { return "" }
-        return property.origin == .authored ? stored : document.websitePages.first(where: { $0.role == .home })?.name ?? stored
+        resolvedTitle(title, in: document).text
     }
     static func ownsFrame(of node: DocumentNode, in page: DocumentPage) -> Bool {
         guard let owner = owner(of: node, in: page) else { return false }
@@ -61,6 +77,52 @@ enum CanonicalPageChrome {
             return reference(navigationKey, on: surface) == nil ? surface : nil
         }
         return page.nodes.first { reference(navigationKey, on: $0) == surface.id && [.header, .footer].contains(CanonicalPageFlow.role($0)) }
+    }
+    /// The collapsed menu is derived chrome for this authored navigation.
+    /// Inherit only a genuinely shared link typography/color; mixed links
+    /// never borrow the first link's styling as an implicit winning value.
+    static func uniformNavigationTextSource(surface: DocumentNode, page: DocumentPage,
+                                            tokens: [LocalColorToken]) -> DocumentNode? {
+        let members = links(owner: surface, page: page)
+        guard navigationSettings(for: surface, page: page) != nil,
+              let first = members.first,
+              let typography = TypographyCommandRegistry.resolvedTypography(for: first),
+              let foreground = LocalColorTokenResolver.textForeground(for: first, tokens: tokens),
+              members.allSatisfy({ TypographyCommandRegistry.resolvedTypography(for: $0) == typography
+                  && LocalColorTokenResolver.textForeground(for: $0, tokens: tokens) == foreground }) else { return nil }
+        return first
+    }
+    static func opaqueNavigationSurface(surface: DocumentNode, page: DocumentPage,
+                                        tokens: [LocalColorToken]) -> CanonicalSolidColor? {
+        guard let owner = navigationSettings(for: surface, page: page) else { return nil }
+        let layers = LocalColorTokenResolver.resolvedLayers(for: owner, tokens: tokens).filter(\.isEnabled)
+        guard layers.count == 1, let color = layers.first?.solidColor, color.alpha == 1 else { return nil }
+        return color
+    }
+    static func navigationForeground(surface: DocumentNode, page: DocumentPage,
+                                     tokens: [LocalColorToken]) -> CanonicalSolidColor? {
+        if let source = uniformNavigationTextSource(surface: surface, page: page, tokens: tokens) {
+            return LocalColorTokenResolver.textForeground(for: source, tokens: tokens)
+        }
+        guard let color = opaqueNavigationSurface(surface: surface, page: page, tokens: tokens) else { return nil }
+        let luminance = 0.2126 * color.red + 0.7152 * color.green + 0.0722 * color.blue
+        let channel = luminance > 0.5 ? 0.0 : 1.0
+        return .init(red: channel, green: channel, blue: channel, alpha: 1)
+    }
+    /// Editable nested navigation defaults to the trailing side of its
+    /// Header/Footer row; legacy navigation directly on the owner starts at
+    /// its padding. Native layout, Preview and CSS must share this default.
+    static func navigationAlignment(surface: DocumentNode, settings: DocumentNode) -> String {
+        settings.insertionStringProperty(CanonicalPageFlow.alignmentKey)
+            ?? (settings.id == surface.id ? "start" : "end")
+    }
+    static func navigationGap(surface: DocumentNode, settings: DocumentNode,
+                              breakpoint: ResponsiveBreakpoint, width: Double?) -> Double {
+        guard settings.id != surface.id,
+              let resolved = ResponsiveContainerLayoutResolver.value(for: .gap, node: surface,
+                  breakpoint: breakpoint, viewportWidth: width),
+              case .number(let value) = resolved.0 else { return CanonicalPageFlow.navigationGap }
+        return value
     }
     static func resolvedLabels(in page: DocumentPage, document: CanonicalDocument) -> DocumentPage {
         var result = page
@@ -191,10 +253,12 @@ enum CanonicalPageFlow {
     static let alignmentKey = navigationNamespace + "alignment"
     static let maximumLinks = 32
     static let navigationGap = 16.0
-    static func navigationLayout(availableWidth: Double, count: Int, alignment: String) -> (width: Double, gap: Double, offset: Double) {
+    static func navigationLayout(availableWidth: Double, count: Int, alignment: String,
+                                 requestedGap: Double? = nil) -> (width: Double, gap: Double, offset: Double) {
         guard count > 0 else { return (0, 0, 0) }
         let available = max(1, availableWidth)
-        let gap = count > 1 ? min(navigationGap, max(0, (available - Double(count)) / Double(count - 1))) : 0
+        let preferred = requestedGap.flatMap { $0.isFinite && (0...10_000).contains($0) ? $0 : nil } ?? navigationGap
+        let gap = count > 1 ? min(preferred, max(0, (available - Double(count)) / Double(count - 1))) : 0
         let width = min(alignment == "stretch" ? Double.greatestFiniteMagnitude : 160,
                         (available - gap * Double(count - 1)) / Double(count))
         let total = width * Double(count) + gap * Double(count - 1)
@@ -319,7 +383,7 @@ enum CanonicalPageFlow {
         let height = bounds?.size.height ?? ResponsiveGeometryResolver.value(for: .height, node: owner, breakpoint: breakpoint, viewportWidth: width)?.0 ?? 120
         var snapshot = PageNavigationSnapshot(ownerID: settings.id, links: links, hamburgerEnabled: enabled,
             usesHamburger: enabled && (width.map { $0 < 600 } ?? (breakpoint == .mobile)),
-            alignment: settings.insertionStringProperty(alignmentKey) ?? "start",
+            alignment: CanonicalPageChrome.navigationAlignment(surface: owner, settings: settings),
             padding: inset, currentPageID: page.id, rowHeight: min(32, max(1, height - 2 * inset)))
         if let bounds {
             snapshot.rowHeight = bounds.size.height
@@ -560,6 +624,11 @@ struct LocalColorToken: Codable, Equatable, Identifiable, Sendable {
 
 enum LocalColorTarget: String, CaseIterable, Sendable {
     case fill, border, outerShadow, textForeground
+    /// Scene-local initial context only; never chooses a primary object's
+    /// value or changes applicability/canonical token fallback semantics.
+    static func initialInspectorTarget(for kinds: [NodeKind]) -> Self {
+        !kinds.isEmpty && kinds.allSatisfy { $0 == .text } ? .textForeground : .fill
+    }
     var displayName: String {
         switch self {
         case .fill: "Fill"
@@ -614,6 +683,16 @@ enum LocalColorTokenBinding {
 
 /// Base-only fixed sizing policy. Omitted properties mean unconstrained;
 /// authored values retain their NodeProperty identity and origin.
+enum SizingDimension: String, CaseIterable, Sendable { case width, height }
+enum CanonicalSizingMode: String, CaseIterable, Sendable { case fixed, fill, hug }
+
+struct SizingDimensionResolution: Equatable, Sendable {
+    let declaredMode: CanonicalSizingMode
+    let effectiveMode: CanonicalSizingMode
+    let modeOrigin: PropertyOrigin?
+    let numericSource: ResponsiveGeometrySource?
+}
+
 struct CanonicalSizingConstraints: Equatable, Sendable {
     static let prefix = "layout.sizing.v1."
     static let maximum = 100_000.0
@@ -625,6 +704,57 @@ struct CanonicalSizingConstraints: Equatable, Sendable {
     var maxHeight: Double?
     var aspectRatio: Double?
     var aspectEnabled: Bool
+    var widthMode: CanonicalSizingMode = .fixed
+    var heightMode: CanonicalSizingMode = .fixed
+    static let supportedKinds: Set<NodeKind> = [.frame, .image, .text, .section, .stack, .grid, .button, .link]
+    static let boundsSupportedKinds: Set<NodeKind> = [.frame, .image, .section, .stack, .grid]
+
+    func mode(_ dimension: SizingDimension) -> CanonicalSizingMode {
+        dimension == .width ? widthMode : heightMode
+    }
+
+    static func isLayoutResolved(_ field: GeometryInspectorField, node: DocumentNode,
+        page: DocumentPage, breakpoint: ResponsiveBreakpoint, width: Double?,
+        nodesByID: [NodeID: DocumentNode]? = nil) -> Bool {
+        switch field {
+        case .width: return effectiveMode(.width, node: node, breakpoint: breakpoint, width: width) != .fixed
+        case .height: return effectiveMode(.height, node: node, breakpoint: breakpoint, width: width) != .fixed
+        case .x, .y:
+            if field == .x, effectiveMode(.width, node: node, breakpoint: breakpoint, width: width) == .fill { return true }
+            if field == .y, effectiveMode(.height, node: node, breakpoint: breakpoint, width: width) == .fill { return true }
+            let byID = nodesByID ?? Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            var parent = node.parent, visited = Set<NodeID>()
+            while case .node(let id) = parent, visited.insert(id).inserted, let ancestor = byID[id] {
+                let value = resolved(for: ancestor)
+                if value.widthMode != .fixed || value.heightMode != .fixed { return true }
+                parent = ancestor.parent
+            }
+            return false
+        }
+    }
+
+    static func effectiveMode(_ dimension: SizingDimension, node: DocumentNode,
+                              breakpoint: ResponsiveBreakpoint, width: Double?) -> CanonicalSizingMode {
+        dimensionResolution(dimension, node: node, breakpoint: breakpoint, width: width).effectiveMode
+    }
+
+    /// Inspector and layout report the same winner. A declared automatic mode
+    /// remains authored intent when a deliberate numeric dimension takes over.
+    static func dimensionResolution(_ dimension: SizingDimension, node: DocumentNode,
+                                    breakpoint: ResponsiveBreakpoint, width: Double?) -> SizingDimensionResolution {
+        let field: GeometryInspectorField = dimension == .width ? .width : .height
+        let fluidTarget: FluidValueTarget = dimension == .width ? .width : .height
+        let mode = resolved(for: node).mode(dimension)
+        let origin = node.insertionProperty(prefix + dimension.rawValue + "Mode")?.origin
+        let source = ResponsiveGeometryResolver.value(for: field, node: node,
+            breakpoint: breakpoint, viewportWidth: width)?.2
+        let winner: ResponsiveGeometrySource?
+        if case .override = source { winner = source }
+        else if CanonicalFluidValueCodec.value(for: fluidTarget, node: node) != nil { winner = .fluid }
+        else { winner = nil }
+        return .init(declaredMode: mode, effectiveMode: winner == nil ? mode : .fixed,
+            modeOrigin: origin, numericSource: winner)
+    }
 
     static let unconstrained = Self(minWidth: nil, minHeight: nil,
         maxWidth: nil, maxHeight: nil, aspectRatio: nil, aspectEnabled: false)
@@ -634,10 +764,14 @@ struct CanonicalSizingConstraints: Equatable, Sendable {
         return .init(minWidth: number("minWidth"), minHeight: number("minHeight"),
             maxWidth: number("maxWidth"), maxHeight: number("maxHeight"),
             aspectRatio: number("aspectRatio"),
-            aspectEnabled: node.insertionBooleanProperty(prefix + "aspectEnabled"))
+            aspectEnabled: node.insertionBooleanProperty(prefix + "aspectEnabled"),
+            widthMode: node.insertionStringProperty(prefix + "widthMode").flatMap(CanonicalSizingMode.init(rawValue:)) ?? .fixed,
+            heightMode: node.insertionStringProperty(prefix + "heightMode").flatMap(CanonicalSizingMode.init(rawValue:)) ?? .fixed)
     }
 
     var isValid: Bool {
+        guard widthMode != .hug,
+              !aspectEnabled || (widthMode == .fixed && heightMode == .fixed) else { return false }
         let bounds = [minWidth, minHeight, maxWidth, maxHeight].compactMap { $0 }
         guard bounds.allSatisfy({ $0.isFinite && (0...Self.maximum).contains($0) }),
               maxWidth.map({ $0 >= 1 }) ?? true,
@@ -663,20 +797,32 @@ enum CanonicalSizingNamespaceValidator {
     static func validate(_ node: DocumentNode) throws {
         let owned = node.properties.filter { $0.key.rawValue.hasPrefix(CanonicalSizingConstraints.prefix) }
         guard !owned.isEmpty else { return }
-        guard [.frame, .image].contains(node.kind) else { throw ModelValidationError.invalidSizingConstraints }
+        guard CanonicalSizingConstraints.supportedKinds.contains(node.kind) else { throw ModelValidationError.invalidSizingConstraints }
         let keys = owned.map { String($0.key.rawValue.dropFirst(CanonicalSizingConstraints.prefix.count)) }
         guard Set(keys).count == keys.count,
-              Set(keys).isSubset(of: ["minWidth", "minHeight", "maxWidth", "maxHeight", "aspectRatio", "aspectEnabled"]) else {
+              Set(keys).isSubset(of: ["minWidth", "minHeight", "maxWidth", "maxHeight", "aspectRatio", "aspectEnabled", "widthMode", "heightMode"]) else {
             throw ModelValidationError.invalidSizingConstraints
         }
         for property in owned {
-            if property.key.rawValue == CanonicalSizingConstraints.prefix + "aspectEnabled" {
+            if ["widthMode", "heightMode"].contains(String(property.key.rawValue.dropFirst(CanonicalSizingConstraints.prefix.count))) {
+                guard case .string(let raw) = property.value, CanonicalSizingMode(rawValue: raw) != nil else {
+                    throw ModelValidationError.invalidSizingConstraints
+                }
+            } else if property.key.rawValue == CanonicalSizingConstraints.prefix + "aspectEnabled" {
+                guard boundsSupportedKindsContain(node.kind) else { throw ModelValidationError.invalidSizingConstraints }
                 guard case .boolean = property.value else { throw ModelValidationError.invalidSizingConstraints }
             } else {
+                guard boundsSupportedKindsContain(node.kind) else { throw ModelValidationError.invalidSizingConstraints }
                 guard case .number = property.value else { throw ModelValidationError.invalidSizingConstraints }
             }
         }
-        guard CanonicalSizingConstraints.resolved(for: node).isValid else { throw ModelValidationError.invalidSizingConstraints }
+        let sizing = CanonicalSizingConstraints.resolved(for: node)
+        guard sizing.isValid,
+              node.kind != .image || sizing.heightMode != .hug else { throw ModelValidationError.invalidSizingConstraints }
+    }
+
+    private static func boundsSupportedKindsContain(_ kind: NodeKind) -> Bool {
+        CanonicalSizingConstraints.boundsSupportedKinds.contains(kind)
     }
 }
 
@@ -1270,9 +1416,11 @@ struct CanonicalResolvedAppearance: Equatable, Sendable {
             if let value = definition.fill { fill = value }
             if let value = definition.opacity { opacity = value }
         }
-        if let local = CanonicalFillLayerCodec.layers(for: node)?.last(where: {
-            $0.isEnabled && $0.kind == .solid
-        })?.solidColor ?? CanonicalFillLayerCodec.legacySolidLayer(for: node)?.solidColor {
+        if let layers = CanonicalFillLayerCodec.layers(for: node) {
+            // An explicit empty fill stack means None, not permission to
+            // resurrect an inherited solid behind a gradient/transparent page.
+            fill = layers.last(where: { $0.isEnabled && $0.kind == .solid })?.solidColor
+        } else if let local = CanonicalFillLayerCodec.legacySolidLayer(for: node)?.solidColor {
             fill = local
         }
         if let localOpacity = node.insertionNumberProperty("style.opacity") { opacity = localOpacity }
@@ -2099,6 +2247,145 @@ extension DocumentPage {
     }
 }
 
+/// SF-1207: optional fields are omitted intent, never equivalent authored
+/// literals. Effective defaults/provenance are resolved without rewriting them.
+struct PageWebsiteMetadata: Codable, Equatable, Sendable {
+    let pageID: PageID
+    var title: String?
+    var description: String?
+    var allowsIndexing: Bool?
+
+    init(pageID: PageID, title: String? = nil, description: String? = nil, allowsIndexing: Bool? = nil) {
+        self.pageID = pageID; self.title = title; self.description = description; self.allowsIndexing = allowsIndexing
+    }
+    var isEmpty: Bool { title == nil && description == nil && allowsIndexing == nil }
+    var isValid: Bool {
+        WebsiteMetadata.validText(title, maximumBytes: 512)
+            && WebsiteMetadata.validText(description, maximumBytes: 2_048)
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case pageID, title, description, allowsIndexing }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        pageID = try values.decode(PageID.self, forKey: .pageID)
+        title = try values.decodeIfPresent(String.self, forKey: .title)
+        description = try values.decodeIfPresent(String.self, forKey: .description)
+        allowsIndexing = try values.decodeIfPresent(Bool.self, forKey: .allowsIndexing)
+        guard isValid else { throw ModelValidationError.invalidWebsiteMetadata }
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(pageID, forKey: .pageID)
+        try values.encode(title, forKey: .title)
+        try values.encode(description, forKey: .description)
+        try values.encode(allowsIndexing, forKey: .allowsIndexing)
+    }
+}
+
+struct WebsiteMetadata: Codable, Equatable, Sendable {
+    static let currentVersion = 1
+    let version: Int
+    var siteName: String?
+    var titlePattern: String?
+    var defaultDescription: String?
+    var faviconAssetID: AssetID?
+    var allowsIndexing: Bool?
+    var pages: [PageWebsiteMetadata]
+
+    init(siteName: String? = nil, titlePattern: String? = nil, defaultDescription: String? = nil,
+         faviconAssetID: AssetID? = nil, allowsIndexing: Bool? = nil, pages: [PageWebsiteMetadata] = []) {
+        version = Self.currentVersion
+        self.siteName = siteName; self.titlePattern = titlePattern; self.defaultDescription = defaultDescription
+        self.faviconAssetID = faviconAssetID; self.allowsIndexing = allowsIndexing
+        self.pages = pages.sorted { $0.pageID.description < $1.pageID.description }
+    }
+    var isEmpty: Bool {
+        siteName == nil && titlePattern == nil && defaultDescription == nil
+            && faviconAssetID == nil && allowsIndexing == nil && pages.isEmpty
+    }
+    /// Empty page drafts mean inheritance, not an otherwise meaningless
+    /// serialized override. Preserve every other page's authored metadata.
+    func replacingPageOverride(_ override: PageWebsiteMetadata) -> Self {
+        var result = self
+        result.pages.removeAll { $0.pageID == override.pageID }
+        if !override.isEmpty { result.pages.append(override) }
+        result.pages.sort { $0.pageID.description < $1.pageID.description }
+        return result
+    }
+    static func validText(_ value: String?, maximumBytes: Int) -> Bool {
+        guard let value else { return true }
+        return !value.isEmpty && value.utf8.count <= maximumBytes
+            && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+            && value == value.precomposedStringWithCanonicalMapping
+            && value.rangeOfCharacter(from: .controlCharacters) == nil
+    }
+    var isValid: Bool {
+        let remaining = (titlePattern ?? "").replacingOccurrences(of: "{page}", with: "")
+            .replacingOccurrences(of: "{site}", with: "")
+        return version == Self.currentVersion && Self.validText(siteName, maximumBytes: 256)
+            && Self.validText(titlePattern, maximumBytes: 512)
+            && Self.validText(defaultDescription, maximumBytes: 2_048)
+            && !remaining.contains("{") && !remaining.contains("}")
+            && Set(pages.map(\.pageID)).count == pages.count && pages.allSatisfy(\.isValid)
+            && pages.map(\.pageID.description) == pages.map(\.pageID.description).sorted()
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case version, siteName, titlePattern, defaultDescription, faviconAssetID, allowsIndexing, pages
+    }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        siteName = try values.decodeIfPresent(String.self, forKey: .siteName)
+        titlePattern = try values.decodeIfPresent(String.self, forKey: .titlePattern)
+        defaultDescription = try values.decodeIfPresent(String.self, forKey: .defaultDescription)
+        faviconAssetID = try values.decodeIfPresent(AssetID.self, forKey: .faviconAssetID)
+        allowsIndexing = try values.decodeIfPresent(Bool.self, forKey: .allowsIndexing)
+        pages = try values.decode([PageWebsiteMetadata].self, forKey: .pages)
+        guard isValid else { throw ModelValidationError.invalidWebsiteMetadata }
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(version, forKey: .version)
+        try values.encode(siteName, forKey: .siteName)
+        try values.encode(titlePattern, forKey: .titlePattern)
+        try values.encode(defaultDescription, forKey: .defaultDescription)
+        try values.encode(faviconAssetID, forKey: .faviconAssetID)
+        try values.encode(allowsIndexing, forKey: .allowsIndexing)
+        try values.encode(pages, forKey: .pages)
+    }
+}
+
+enum WebsiteMetadataSource: String, Equatable, Sendable { case authored, inherited, defaulted, omitted }
+struct ResolvedWebsiteMetadata: Equatable, Sendable {
+    let siteName: String
+    let title: String
+    let description: String?
+    let faviconAssetID: AssetID?
+    let allowsIndexing: Bool
+    let titleSource: WebsiteMetadataSource
+    let descriptionSource: WebsiteMetadataSource
+}
+enum WebsiteMetadataResolver {
+    static func resolve(page: DocumentPage, document: CanonicalDocument) -> ResolvedWebsiteMetadata {
+        let metadata = document.websiteMetadata
+        let overrides = metadata?.pages.first { $0.pageID == page.id }
+        let siteName = metadata?.siteName ?? document.pages.first(where: { $0.role == .home })?.name ?? "Untitled Site"
+        let pattern = metadata?.titlePattern ?? "{page}"
+        // Substitute once: an authored site/page name containing braces is text,
+        // not a second template evaluation or executable expression.
+        let title = overrides?.title ?? pattern.components(separatedBy: "{page}")
+            .map { $0.components(separatedBy: "{site}").joined(separator: siteName) }.joined(separator: page.name)
+        return .init(siteName: siteName, title: title,
+                     description: overrides?.description ?? metadata?.defaultDescription,
+                     faviconAssetID: metadata?.faviconAssetID,
+                     allowsIndexing: overrides?.allowsIndexing ?? metadata?.allowsIndexing ?? true,
+                     titleSource: overrides?.title != nil ? .authored : (metadata?.titlePattern != nil ? .inherited : .defaulted),
+                     descriptionSource: overrides?.description != nil ? .authored
+                        : (metadata?.defaultDescription != nil ? .inherited : .omitted))
+    }
+}
+
 struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
     let id: DocumentID
     var revision: UInt64
@@ -2108,6 +2395,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
     var guides: [AuthoredGuide]
     var imageAssets: [ImageAsset]
     var colorTokens: [LocalColorToken]
+    var websiteMetadata: WebsiteMetadata?
 
     init(
         id: DocumentID = DocumentID(),
@@ -2117,7 +2405,8 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         pages: [DocumentPage]? = nil,
         guides: [AuthoredGuide] = [],
         imageAssets: [ImageAsset] = [],
-        colorTokens: [LocalColorToken] = []
+        colorTokens: [LocalColorToken] = [],
+        websiteMetadata: WebsiteMetadata? = nil
     ) {
         self.id = id
         self.revision = revision
@@ -2127,15 +2416,23 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         self.guides = guides
         self.imageAssets = imageAssets
         self.colorTokens = colorTokens
+        self.websiteMetadata = websiteMetadata
     }
 
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, revision, creationKind, templateID, pages, guides, imageAssets, colorTokens, websiteMetadata
+    }
+    private enum PreMetadataCodingKeys: String, CodingKey, CaseIterable {
         case id, revision, creationKind, templateID, pages, guides, imageAssets, colorTokens
     }
 
     init(from decoder: Decoder) throws {
-        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        if (decoder.userInfo[SiteForgeDecodingPolicy.sourceDocumentSchema] as? Int ?? 18) < 18 {
+            try requireExactKeys(PreMetadataCodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        } else {
+            try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(DocumentID.self, forKey: .id)
         revision = try container.decode(UInt64.self, forKey: .revision)
@@ -2154,6 +2451,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         guides = try container.decode([AuthoredGuide].self, forKey: .guides)
         imageAssets = try container.decode([ImageAsset].self, forKey: .imageAssets)
         colorTokens = try container.decode([LocalColorToken].self, forKey: .colorTokens)
+        websiteMetadata = try container.decodeIfPresent(WebsiteMetadata.self, forKey: .websiteMetadata)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -2170,6 +2468,7 @@ struct CanonicalDocument: Codable, Equatable, Identifiable, Sendable {
         try container.encode(guides, forKey: .guides)
         try container.encode(imageAssets, forKey: .imageAssets)
         try container.encode(colorTokens, forKey: .colorTokens)
+        try container.encode(websiteMetadata, forKey: .websiteMetadata)
     }
 }
 
@@ -3457,6 +3756,7 @@ enum StarterSiteTemplate {
 }
 
 enum ModelValidationError: Error, Equatable, LocalizedError {
+    case invalidWebsiteMetadata
     case componentTextIntentWouldBeLost
     case componentVisibilityIntentWouldBeLost
     case revisionNotIncrementable
@@ -3554,8 +3854,9 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
         case .duplicateAssetContent: "Duplicate image bytes must resolve to the existing asset identity."
         case .invalidImageAsset: "The document contains invalid image asset metadata."
         case .invalidImageReference: "An Image node must reference an existing canonical image asset."
+        case .invalidWebsiteMetadata: "Website metadata must contain valid values and unique existing page identities."
         case .invalidColorToken: "The project contains invalid local color token state."
-        case .invalidSizingConstraints: "The project contains invalid fixed sizing constraints."
+        case .invalidSizingConstraints: "The project contains an invalid sizing mode or constraint."
         }
     }
 }
@@ -4049,6 +4350,15 @@ extension CanonicalDocument {
               Set(colorTokens.map { $0.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX")) }).count == colorTokens.count,
               colorTokens.allSatisfy(\.isValid) else { throw ModelValidationError.invalidColorToken }
 
+        if let websiteMetadata {
+            let websitePages = Set(pages.filter { $0.role != .componentDefinition }.map(\.id))
+            guard websiteMetadata.isValid,
+                  websiteMetadata.pages.count <= websitePages.count,
+                  websiteMetadata.pages.allSatisfy({ websitePages.contains($0.pageID) }) else {
+                throw ModelValidationError.invalidWebsiteMetadata
+            }
+        }
+
         guard imageAssets.count <= ImageAsset.maximumAssetCount else {
             throw ModelValidationError.invalidImageAsset
         }
@@ -4242,6 +4552,14 @@ private extension DocumentPage {
             try CanonicalComponentOrganization.validate(node, inDefinition: role == .componentDefinition)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalSizingNamespaceValidator.validate(node)
+            if case .node(let parentID) = node.parent, let parent = nodesByID[parentID],
+               [.stack, .grid, .section].contains(parent.kind) {
+                for breakpoint in ResponsiveBreakpoint.allCases {
+                    guard !(CanonicalSizingConstraints.effectiveMode(.height, node: node, breakpoint: breakpoint, width: nil) == .fill
+                        && CanonicalSizingConstraints.effectiveMode(.height, node: parent, breakpoint: breakpoint, width: nil) == .hug)
+                    else { throw ModelValidationError.invalidSizingConstraints }
+                }
+            }
             try CanonicalTypographyNamespaceValidator.validate(node)
             try CanonicalSemanticElementValidator.validate(node)
             try CanonicalAccessibilityMetadata.validate(node)
@@ -4370,7 +4688,7 @@ enum DocumentSerializer {
     // definition fallback slots without changing instance child ownership.
     // Schema 15 adds optional definition-owned property presentation metadata.
     // Historical schemas cannot acquire newer closed namespaces by permissive decoding.
-    static let currentSchemaVersion = 17
+    static let currentSchemaVersion = 19
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -4679,6 +4997,7 @@ enum DocumentSerializer {
             do {
                 let historicalDecoder = JSONDecoder()
                 historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                historicalDecoder.userInfo[SiteForgeDecodingPolicy.sourceDocumentSchema] = header.schemaVersion
                 document = try historicalDecoder.decode(SchemaOneEnvelope.self, from: data).document.migrated()
             } catch {
                 throw DocumentSerializationError.malformedInput
@@ -4687,6 +5006,7 @@ enum DocumentSerializer {
             do {
                 let historicalDecoder = JSONDecoder()
                 historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                historicalDecoder.userInfo[SiteForgeDecodingPolicy.sourceDocumentSchema] = header.schemaVersion
                 document = try historicalDecoder.decode(SchemaTwoEnvelope.self, from: data).document.migrated()
             } catch {
                 throw DocumentSerializationError.malformedInput
@@ -4695,6 +5015,7 @@ enum DocumentSerializer {
             do {
                 let historicalDecoder = JSONDecoder()
                 historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                historicalDecoder.userInfo[SiteForgeDecodingPolicy.sourceDocumentSchema] = header.schemaVersion
                 document = try historicalDecoder.decode(SchemaThreeEnvelope.self, from: data).document.migrated()
             } catch {
                 throw DocumentSerializationError.malformedInput
@@ -4703,6 +5024,7 @@ enum DocumentSerializer {
             do {
                 let historicalDecoder = JSONDecoder()
                 historicalDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                historicalDecoder.userInfo[SiteForgeDecodingPolicy.sourceDocumentSchema] = header.schemaVersion
                 document = try historicalDecoder.decode(SchemaFourEnvelope.self, from: data).document.migrated()
             } catch {
                 throw DocumentSerializationError.malformedInput
@@ -4711,6 +5033,7 @@ enum DocumentSerializer {
             do {
                 let strictDecoder = JSONDecoder()
                 strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                strictDecoder.userInfo[SiteForgeDecodingPolicy.sourceDocumentSchema] = header.schemaVersion
                 document = try strictDecoder.decode(SchemaEightEnvelope.self, from: data).document.migrated()
                 if header.schemaVersion == 5,
                    document.pages.contains(where: { $0.nodes.contains { [.button, .link].contains($0.kind) } }) {
@@ -4721,6 +5044,7 @@ enum DocumentSerializer {
             do {
                 let strictDecoder = JSONDecoder()
                 strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                strictDecoder.userInfo[SiteForgeDecodingPolicy.sourceDocumentSchema] = header.schemaVersion
                 document = try strictDecoder.decode(CurrentEnvelope.self, from: data).document
                 for pageIndex in document.pages.indices {
                     for nodeIndex in document.pages[pageIndex].nodes.indices {
@@ -4740,10 +5064,11 @@ enum DocumentSerializer {
                     }
                 }
             } catch { throw DocumentSerializationError.malformedInput }
-        case 10, 11, 12, 13, 14, 15, 16, currentSchemaVersion:
+        case 10, 11, 12, 13, 14, 15, 16, 17, 18, currentSchemaVersion:
             do {
                 let strictDecoder = JSONDecoder()
                 strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+                strictDecoder.userInfo[SiteForgeDecodingPolicy.sourceDocumentSchema] = header.schemaVersion
                 document = try strictDecoder.decode(CurrentEnvelope.self, from: data).document
             } catch {
                 throw DocumentSerializationError.malformedInput
@@ -4752,6 +5077,13 @@ enum DocumentSerializer {
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
         try checkpoint()
+        if header.schemaVersion < 19, document.pages.contains(where: { page in page.nodes.contains { node in
+            let sizing = node.properties.filter { $0.key.rawValue.hasPrefix(CanonicalSizingConstraints.prefix) }
+            return !sizing.isEmpty && (![NodeKind.frame, .image].contains(node.kind) || sizing.contains {
+                $0.key.rawValue == CanonicalSizingConstraints.prefix + "widthMode"
+                    || $0.key.rawValue == CanonicalSizingConstraints.prefix + "heightMode"
+            })
+        } }) { throw DocumentSerializationError.malformedInput }
         if header.schemaVersion < 17, document.pages.contains(where: { page in page.nodes.contains { node in
             node.properties.contains { $0.key.rawValue.hasPrefix(CanonicalPageChrome.namespace) }
         } }) { throw DocumentSerializationError.malformedInput }

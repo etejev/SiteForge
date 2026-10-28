@@ -1,5 +1,6 @@
 .DS_Store
 .build/
+__pycache__/
 Tests/Fixtures/.tmp/
 DerivedData/
 xcuserdata/

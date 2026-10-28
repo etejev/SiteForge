@@ -55,7 +55,7 @@ struct DragDropCommand: Equatable, Sendable {
     let provenance: DragDropProvenance
 }
 
-struct DragDropValidationContext: Sendable {
+struct DragDropValidationContext: Equatable, Sendable {
     let activePageID: PageID
     let sceneID: CanvasViewportSceneID
     let rendererGeneration: UInt64
@@ -89,7 +89,7 @@ enum DragDropError: Error, Equatable, LocalizedError, Sendable {
         case .unavailableDestination: "The destination is unavailable in the current scene."
         case .lockedDestination: "The destination container is locked."
         case .hiddenDestination: "The destination container is hidden."
-        case .incompatibleContainer: "Only frame containers accept nested objects."
+        case .incompatibleContainer: "Only authored containers accept nested objects."
         case .invalidIndex: "The requested insertion position is no longer valid."
         case .noOp: "This drop keeps the object in the same position."
         case .cycle: "An object cannot be nested inside itself or its descendant."
@@ -226,7 +226,7 @@ struct DragDropCommandRegistry: Sendable {
         case .container(let id, let index):
             guard let target = hierarchy.nodes[id] else { throw DragDropError.missingDestination }
             guard context.availableNodeIDs.contains(id) else { throw DragDropError.unavailableDestination }
-            guard target.kind == .frame else { throw DragDropError.incompatibleContainer }
+            guard target.kind.acceptsAuthoredChildren else { throw DragDropError.incompatibleContainer }
             guard !target.dragBoolean("locked") else { throw DragDropError.lockedDestination }
             guard !target.dragBoolean("hidden") else { throw DragDropError.hiddenDestination }
             guard (0...target.childIDs.count).contains(index) else { throw DragDropError.invalidIndex }

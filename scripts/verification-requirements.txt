@@ -1,0 +1,2 @@
+# Isolated icon verification; never import packages from the user's global Python.
+Pillow==11.3.0

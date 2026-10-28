@@ -4,6 +4,111 @@ import XCTest
 
 @MainActor
 final class DragDropModelTests: XCTestCase {
+    func testClearSelectionThenSiblingInsertionOffersCanonicalNesting() async throws {
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        try await waitForRenderPlan(in: state, revision: session.document.revision)
+        state.performDefaultInsertion(.stack, provenance: .menu)
+        try await waitForRenderPlan(in: state, revision: session.document.revision)
+        let stackID = try XCTUnwrap(state.selectionState.primaryID)
+        state.performSelectionCommand(.clear, provenance: .menu)
+        state.performDefaultInsertion(.text, provenance: .menu)
+        try await waitForRenderPlan(in: state, revision: session.document.revision)
+        let textID = try XCTUnwrap(state.selectionState.primaryID)
+        XCTAssertEqual(state.selectionState.orderedIDs, [textID])
+        let destination = try XCTUnwrap(state.dragDestination(nestingIn: stackID))
+        let availability = state.dragDropAvailability(sourceID: textID, destination: destination,
+                                                       provenance: .contextualMenu)
+        XCTAssertTrue(availability.isEnabled, availability.disabledReason ?? "Nesting must be available")
+        let before = session.document.pages
+        state.performDragDrop(sourceID: textID, destination: destination, provenance: .contextualMenu)
+        try await waitForRenderPlan(in: state, revision: session.document.revision)
+        XCTAssertEqual(node(textID, in: session.document).parent, .node(stackID))
+        XCTAssertEqual(state.selectionState.orderedIDs, [textID])
+        state.undo()
+        try await waitForRenderPlan(in: state, revision: session.document.revision)
+        XCTAssertEqual(session.document.pages, before)
+    }
+
+    func testExplicitNestingAndHistoryKeepSelectedNodeInItsCanonicalParent() async throws {
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        try await waitForRenderPlan(in: state, revision: session.document.revision)
+        let rootID = try XCTUnwrap(session.document.pages[0].rootNodeIDs.first)
+        state.performDefaultInsertion(.stack, provenance: .menu)
+        try await waitForRenderPlan(in: state, revision: session.document.revision)
+        let stackID = try XCTUnwrap(state.selectionState.primaryID)
+        state.selectLayer(rootID); state.performDefaultInsertion(.text, provenance: .menu)
+        try await waitForRenderPlan(in: state, revision: session.document.revision)
+        let textID = try XCTUnwrap(state.selectionState.primaryID)
+        let before = session.document.pages
+        state.performDragDrop(sourceID: textID, destination: .container(stackID, index: 0), provenance: .contextualMenu)
+        XCTAssertEqual(state.selectionState.orderedIDs, [textID])
+        XCTAssertEqual(state.selectionState.activeContainerID, stackID)
+        try await waitForRenderPlan(in: state, revision: session.document.revision)
+        XCTAssertEqual(state.selectionState.primaryID, textID)
+        XCTAssertEqual(state.selectionState.activeContainerID, stackID)
+        XCTAssertEqual(node(textID, in: session.document).parent, .node(stackID))
+        let after = session.document.pages
+        state.undo(); try await waitForRenderPlan(in: state, revision: session.document.revision)
+        XCTAssertEqual(session.document.pages, before)
+        XCTAssertEqual(state.selectionState.orderedIDs, [textID])
+        XCTAssertNil(state.selectionState.activeContainerID, "Geometry-less root uses page-level selection scope")
+        state.redo(); try await waitForRenderPlan(in: state, revision: session.document.revision)
+        XCTAssertEqual(session.document.pages, after)
+        XCTAssertEqual(state.selectionState.orderedIDs, [textID])
+        XCTAssertEqual(state.selectionState.activeContainerID, stackID)
+    }
+
+    // SF-0408-002/003/005/006: insertion, canonical moves and Layers nesting
+    // share the existing authored-container predicate, including structural nodes.
+    func testStructuralNestingUsesCanonicalContainerKindsAndExactHistory() throws {
+        let fixture = makeFixture()
+        for kind: InsertionKind in [.frame, .section, .stack, .grid] {
+            let targetID = NodeID()
+            let identity = InsertionOperationIdentity(documentID: fixture.document.id, pageID: fixture.page,
+                revision: fixture.document.revision, generation: 0)
+            let geometry = InsertionGeometry.defaultValue(for: kind, at: .init(x: 0, y: 0))
+            let insertion: AuthoringInsertionCommand = kind == .frame
+                ? .frame(.init(identity: identity, nodeID: targetID, parentID: fixture.root,
+                    index: 3, geometry: geometry, provenance: .automation))
+                : .container(.init(kind: kind, identity: identity, nodeID: targetID, parentID: fixture.root,
+                    index: 3, geometry: geometry, provenance: .automation))
+            let creation = try InsertionCommandRegistry().prepare(insertion, in: fixture.document,
+                context: .init(activePageID: fixture.page, activeRoute: fixture.document.pages[0].route,
+                    operationGeneration: 0, availableNodeIDs: fixture.context.availableNodeIDs))
+            let created = DocumentSession(document: fixture.document)
+            try created.execute(creation.documentCommand)
+            let document = created.document
+            let context = DragDropValidationContext(activePageID: fixture.page, sceneID: fixture.scene,
+                rendererGeneration: 1, availableNodeIDs: fixture.context.availableNodeIDs.union([targetID]),
+                isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+            for provenance: DragDropProvenance in [.contextualMenu, .accessibility, .keyboard] {
+                let session = DocumentSession(document: document)
+                let command = DragDropCommand(identity: .init(sessionID: DragSessionID(), documentID: document.id,
+                    pageID: fixture.page, revision: document.revision, sceneID: fixture.scene, rendererGeneration: 1),
+                    sourceNodeID: fixture.b, destination: .container(targetID, index: 0), provenance: provenance)
+                let prepared = try DragDropCommandRegistry().prepare(
+                    command, in: document, context: context)
+                try session.execute(prepared.command)
+                XCTAssertEqual(node(fixture.b, in: session.document).id, fixture.b)
+                XCTAssertEqual(node(fixture.b, in: session.document).parent, .node(targetID))
+                XCTAssertEqual(node(targetID, in: session.document).childIDs, [fixture.b])
+                let committed = session.document.pages
+                try session.undo(); XCTAssertEqual(session.document.pages, document.pages)
+                try session.redo(); XCTAssertEqual(session.document.pages, committed)
+                XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+            }
+        }
+        XCTAssertThrowsError(try DragDropCommandRegistry().prepare(
+            fixture.command(source: fixture.b, destination: .container(fixture.c, index: 0)),
+            in: fixture.document, context: fixture.context)) {
+            XCTAssertEqual($0 as? DragDropError, .incompatibleContainer)
+        }
+    }
+
     // SF-0408-001, SF-0408-002, SF-0408-003, SF-0408-004
     func testSameParentReorderCrossParentNestAndAdjustedPreviewMatchCommit() throws {
         let fixture = makeFixture()

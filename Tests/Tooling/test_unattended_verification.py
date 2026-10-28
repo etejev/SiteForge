@@ -30,6 +30,19 @@ class SourceFingerprintTests(unittest.TestCase):
             self.assertNotEqual(before, runner.source_fingerprint(root))
 
 class UnattendedVerificationTests(unittest.TestCase):
+    def test_progress_compile_failure_does_not_launch_or_claim_collector_ownership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(sys, "argv", ["runner", "--root", directory]), \
+                 patch.object(runner.subprocess, "run", return_value=SimpleNamespace(returncode=1, stderr="actor-isolation fixture")) as compile_check, \
+                 patch.object(runner.subprocess, "Popen") as launch:
+                self.assertEqual(runner.main(), 2)
+            compile_check.assert_called_once_with(
+                ["xcrun", "swiftc", "-typecheck", str(root.resolve() / "scripts/full-verification-progress.swift")],
+                capture_output=True, text=True)
+            launch.assert_not_called()
+            self.assertFalse((root / ".codex-loop/full-verification/active.json").exists())
+
     def test_isolated_test_app_does_not_become_the_website_document_handler(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "Info.plist"

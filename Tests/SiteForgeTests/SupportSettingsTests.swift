@@ -4,6 +4,31 @@ import AppKit
 @testable import SiteForge
 
 final class SupportSettingsTests: XCTestCase {
+    // SF-0206-002/003/006: one observed global destination owner and a
+    // truthful notice, without constructing a workspace or triggering tests.
+    @MainActor func testGlobalSettingsNavigationAndDraftNoticeHaveNoProjectScope() async {
+        let navigation = SettingsNavigationModel()
+        var selected: [SettingsDestination] = []
+        let observation = navigation.$selection.sink { selected.append($0) }
+        navigation.show(.canvas); navigation.show(.advanced); navigation.show(.appearance)
+        XCTAssertEqual(selected, [.appearance, .canvas, .advanced, .appearance])
+        XCTAssertEqual(navigation.selection, .appearance)
+        XCTAssertEqual(SettingsDraftNotice(appearanceDirty: true, canvasDirty: true).destinations, [.appearance, .canvas])
+        XCTAssertTrue(SettingsDraftNotice(appearanceDirty: true, canvasDirty: false).message.contains("Project files are unchanged"))
+        XCTAssertTrue(SettingsDraftNotice(appearanceDirty: false, canvasDirty: false).destinations.isEmpty)
+        XCTAssertEqual(SettingsDestination.allCases.map(\.rawValue),
+            ["appearance", "canvas", "accessibility", "defaults", "updates", "support", "advanced"])
+        XCTAssertEqual(SettingsWindowGeometry.preferred.contentSize, .init(width: 970, height: 740))
+        navigation.selectFromNativeList(.support)
+        navigation.show(.canvas)
+        navigation.selectFromNativeList(.appearance)
+        navigation.selectFromNativeList(.advanced)
+        let deadline = ContinuousClock.now + .seconds(2)
+        while navigation.selection != .advanced, ContinuousClock.now < deadline { await Task.yield() }
+        XCTAssertEqual(navigation.selection, .advanced, "Latest native selection wins; old list callbacks cannot overwrite Review")
+        withExtendedLifetime(observation) {}
+    }
+
     @MainActor
     func testSettingsFixedWindowGeometryFitsDisplaysAndNeverChangesDocumentWindows() throws {
         for visible in [NSRect(x: 0, y: 34, width: 1710, height: 1001),

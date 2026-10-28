@@ -1,6 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT=${0:A:h:h}
+/bin/zsh "$ROOT/scripts/verification-python.sh" --check
 OUT="$ROOT/.build/owner-local"
 DERIVED="$OUT/DerivedData"
 mkdir -p "$OUT"

@@ -10,7 +10,7 @@ The canonical document and atomic project package are already authoritative. Und
 
 ## Decision
 
-Package version 1 may contain an optional, integrity-declared `history.json` member. The member has its own `app.siteforge.persisted-history` format identifier and versioned schema. Current writes use history schema v2; the reader has an explicit schema-v1 compatibility adapter, including deterministic repair of the supported same-parent backward-move inverse index. It records the canonical document identity and revision, a minimum undo boundary, and ordered undo and redo entries.
+Package version 1 may contain an optional, integrity-declared `history.json` member. The member has its own `app.siteforge.persisted-history` format identifier and versioned schema. Current writes use history schema v3 (ADR-0022); schema v2 remains readable and the reader has an explicit schema-v1 compatibility adapter, including deterministic repair of the supported same-parent backward-move inverse index. It records the canonical document identity and revision, a minimum undo boundary, and ordered undo and redo entries.
 
 Each entry stores a stable transaction UUID, parent and result revisions, typed command name, registry-derived non-content label, RFC 3339 timestamp, affected typed stable identifiers, forward command, and supported inverse. Encoding uses sorted-key JSON. History is limited to 128 total entries and 512 KiB; deterministic retention removes the oldest reachable entries first and advances the minimum boundary.
 

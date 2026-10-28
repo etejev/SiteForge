@@ -256,6 +256,12 @@ struct SelectionTargetSnapshot: Equatable, Sendable {
     /// but they must never masquerade as visible canvas objects during hit
     /// testing, keyboard cycling, accessibility traversal, or overlay drawing.
     let participatesInCanvasTraversal: Bool
+    let isStructuralRoot: Bool
+
+    var layerVisibilityDescription: String? {
+        if !isVisible { return "Hidden at current breakpoint" }
+        return isStructuralRoot ? "Page structure" : nil
+    }
 
     init(
         id: NodeID,
@@ -270,7 +276,8 @@ struct SelectionTargetSnapshot: Equatable, Sendable {
         isVisible: Bool,
         isLocked: Bool,
         isAvailable: Bool,
-        participatesInCanvasTraversal: Bool = true
+        participatesInCanvasTraversal: Bool = true,
+        isStructuralRoot: Bool = false
     ) {
         self.id = id
         self.pageID = pageID
@@ -285,6 +292,7 @@ struct SelectionTargetSnapshot: Equatable, Sendable {
         self.isLocked = isLocked
         self.isAvailable = isAvailable
         self.participatesInCanvasTraversal = participatesInCanvasTraversal
+        self.isStructuralRoot = isStructuralRoot
     }
 
     var isFullyClipped: Bool {
@@ -350,6 +358,50 @@ struct SelectionState: Equatable, Sendable {
     }
 
     mutating func setContainer(_ id: NodeID?) { activeContainerID = id }
+}
+
+/// A scene-local navigation bookmark, never project or recovery content.
+/// Renderer adoption remains responsible for the final selectable-target check.
+struct ComponentDefinitionReturnContext: Equatable, Sendable {
+    enum Reason: Equatable, Sendable { case restored, selectionUnavailable, pageUnavailable }
+    struct Destination: Equatable, Sendable {
+        let pageID: PageID
+        let selection: SelectionState?
+        let reason: Reason
+    }
+    let documentID: DocumentID
+    let pageID: PageID
+    let selection: SelectionState
+    let componentReferences: [NodeID: PageID]
+
+    init?(document: CanonicalDocument, pageID: PageID, selection: SelectionState) {
+        guard let page = document.websitePages.first(where: { $0.id == pageID }) else { return nil }
+        self.documentID = document.id; self.pageID = pageID; self.selection = selection
+        componentReferences = Dictionary(uniqueKeysWithValues: page.nodes.compactMap { node in
+            guard selection.orderedIDs.contains(node.id), node.kind == .component,
+                  let definition = CanonicalComponentReference.definitionID(for: node) else { return nil }
+            return (node.id, definition)
+        })
+    }
+    var returnsToInstance: Bool { selection.count == 1 && componentReferences.count == 1 }
+
+    func resolve(in document: CanonicalDocument) -> Destination? {
+        guard document.id == documentID else { return nil }
+        guard let page = document.websitePages.first(where: { $0.id == pageID }) else {
+            return document.websitePages.first.map { .init(pageID: $0.id, selection: nil, reason: .pageUnavailable) }
+        }
+        let nodes = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        let valid = selection.orderedIDs.allSatisfy { id in
+            guard let node = nodes[id], !node.selectionBooleanProperty("locked"),
+                  !node.selectionBooleanProperty("hidden") || selection.provenance == .layersNavigator else { return false }
+            if let expected = componentReferences[id] {
+                return node.kind == .component && CanonicalComponentReference.definitionID(for: node) == expected
+            }
+            return true
+        }
+        return .init(pageID: page.id, selection: valid ? selection : nil,
+                     reason: valid ? .restored : .selectionUnavailable)
+    }
 }
 
 enum SelectionCommandName: String, CaseIterable, Sendable {

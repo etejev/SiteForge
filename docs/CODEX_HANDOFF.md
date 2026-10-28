@@ -1,5 +1,784 @@
 # Codex Continuation Handoff
 
+## Authoritative local acceptance checkpoint — 2026-10-28
+
+Final ./sf verify exits0 on the reviewed source batch:939 total,936 passes,
+0 failures,3 intentional owner-session skips;785 non-UI and151 UI passes.
+Result: full-e7ee511e-a6f5-4449-a0dd-15680fe3a7c8.xcresult, matching log under
+ignored source-batch-20261027-acceptance/results. Security, traceability440,
+architecture, build and focused3/3 corrections passed. Nine corrected originals
+were inspected; see the integration evidence for all exact paths/findings.
+
+The approved action is one reviewed LOCAL checkpoint commit after final
+documentation/hygiene checks. No push, installation, new feature/prompt11,
+schedule or owner-project mutation. Preserve/exclude coordinator-owned notes
+and superseded Aurora bitmap/prompt; report those intentionally uncommitted.
+Normative modules remain Partial; OD-018/019 and broader owner delivery are not
+resolved by this bounded batch. Seventy-two runtime QoS warnings remain observed;
+do not claim they are eliminated or invent a new app-owned call path.
+
+All pending/hold/authentication and failed receipts below are historical.
+
+## Historical policy and receipts — superseded by the verified checkpoint
+
+LATEST: authentication resolved by owner; corrected three pass3/3, result
+`focused-07cad6e0-4c7b-46f8-a4ad-30572e50049a.xcresult`. All nine originals
+were inspected. Final coherent ./sf verify is next; source/docs frozen during
+execution. No current authorization blocker, duplicate runner or local commit.
+Commit locally only after a genuinely green gate/review. No push/install.
+
+CURRENT owner-only boundary,2026-10-28: three remaining full-gate UI failures
+have bounded test-interaction corrections, compiled successfully. Focused
+`6c4a1ac5-8556-4392-a72c-d4d7bc602622` then failed initialization before any UI
+method: fresh testmanagerd “Enable UI Automation” LA request at11:21:49-0400,
+timeout11:22:49. No runner remains. Owner presence/system authentication during
+ONE isolated retry is required; do not replay tests unchanged or claim acceptance.
+No commit/push/install. Exact evidence and safe next step are in the integration
+receipt; all previous holds/waiting statements below are historical.
+
+2026-10-28 authoritative finished receipt: full8731db4c FAILED,939 total,
+933 passed/3 failed/3 intentional owner-session skips; non-UI785/785 passed,
+UI148 passed/3 failed/3 skipped. Three bounded UI interaction repairs are now
+being verified: reveal fluid Enable inside the Inspector, reveal Site Settings
+fields inside the native form before requiring focus, and allow the structural
+Page structure row while retaining zero authored-object/ghost assertions.
+Failure originals/hierarchies were inspected; no product geometry, state,
+timeout or assertion weakening is justified. Seventy recurring QoS warnings
+remain observed; no unsupported source attribution or elimination claim.
+Finish affected three, inspect changed originals, then one final ./sf verify
+and reviewed LOCAL commit only after green. No push or installation. This
+receipt supersedes older pending/authentication text below.
+
+CURRENT RESULT (supersedes waiting text below): native shell readiness passed
+1/1. All twelve new/prerequisite UI methods now passed affected acceptance after
+targeted corrections. Visual review additionally caught missing structural Root
+paint and incorrect calibrated-RGB conversion. Shared page-surface rendering and
+explicit sRGB now pass four exact native paint tests plus Page Background UI5/5.
+See evidence/SF-SOURCE-BATCH-20261027-10-INTEGRATION.md for results and inspected
+original screenshots. Finish Preview digest regression, reconcile docs, then
+one coherent final full gate and reviewed local commit only if green. Nothing
+pushed or installed. Historical failed-run/hold paragraphs below are superseded.
+
+The owner explicitly approved full local testing, fixes, and a local commit.
+This supersedes the earlier hold for the preserved Page Background and ten-item
+source batch. Finish Preview/export integration, run current-source verification,
+repair affected failures, review and commit only after green. No push, GitHub
+operation, installation, publication or scheduled follow-up. Older run/authentication
+instructions below are historical evidence, not instructions to replay. No current
+acceptance result or completion is claimed yet.
+
+Latest current-source attempt FINISHED, exit65: repository/security/traceability/
+architecture/build pass; non-UI784 executed,781 pass,3 failing methods. Those
+three are now corrected and pass affected3/3 (shipping text-system initializer,
+cancellable manual recovery review, validated recovery replacement fingerprint).
+Five new integration methods pass5/5. UI executed0: testmanagerd logged XCTest's
+Enable UI Automation authentication request and timed out enabling automation.
+Owner presence requested for ONE isolated retry; no lock state inferred, no
+unchanged full rerun. No active runner, local commit, push or installation.
+Read evidence/SF-SOURCE-BATCH-20261027-10-INTEGRATION.md for exact artifacts.
+Next: owner-present isolated native readiness, then changed-state UI/visual
+acceptance, one coherent final full gate, review and local commit only if green.
+
+## Current — SF-LOCAL-BUILDER-006 Aurora Dark Flow
+
+Development-only continuation implemented Page Background discoverability in
+source (not built/tested). Read evidence/SF-LOCAL-BUILDER-006-PAGE-BACKGROUND.md:
+exact Root navigation, reused fill/gradient/token controls, atomic None, truthful
+structural visibility, six UNRUN acceptance methods. Source now differs from the
+historical frozen partial gate; do not attribute its passes to these edits.
+Testing hold still applies to every test/check script/build-for-testing/UI or
+manual acceptance action. No launch/install/sign/commit/push. Await explicit
+approval before compilation and the six named selectors; keep006 IN PROGRESS.
+
+**OWNER HOLD ALL TESTING — effective immediately, 2026-10-27.** Do not run unit,
+integration, UI/readiness/visual tests, collectors or verification until explicit
+owner approval. No install on incomplete verification. No new feature/commit/push.
+The authoritative authenticated run was safely cancelled via SIGINT to its exact
+owned xcodebuild77761; collector80878 exited75. No runner/collector remains.
+Result: 733 non-UI +100 UI passes, three declared owner-session skips, one UI
+cancellation (not a product assertion), 38 UI methods not reached. Artifact
+`dark-flow-authenticated-final-results/full-006e2c73-8f20-4cd8-916d-c8736ec2cddb.xcresult`.
+Full gate is NOT green. Installed app unchanged; all owner data/evidence preserved.
+Only safe non-testing inspection/documentation is allowed. Earlier automatic
+verification/install plans below are historical and superseded by this hold.
+
+Readiness now demonstrated after owner authentication: exact native shell test
+passes 1/1, zero failures/skips, artifact
+`Test-SiteForge-2026.10.27_01-10-46--0400.xcresult`. macOS automation state changed
+to enabled; SiteForge genuinely launched. No runner remains. Source fingerprint
+unchanged4b3301f6…, 23 GiB free. Freeze this reconciliation for ONE ordinary-
+identity final ./sf verify, then approved safe owner-local install only if green.
+Do not duplicate, edit beneath the run or replay authoring/browser review. Prior
+startup timeout/waiting notes below are historical. No repository startup fix
+was necessary or justified; owner completed the actual system authentication.
+
+Latest reconciliation: the exact native readiness comparison FINISHED, not
+waiting. Bundle `Test-SiteForge-2026.10.27_00-55-21--0400.xcresult` records zero
+UI methods executed and one automation-mode initialization timeout. Xcode Stop
+is disabled; no collector/xcodebuild/UI runner remains. Previously inspected
+authentication dialog is no longer available. No authentication success is
+inferred. Native Xcode now reproduces the CLI startup boundary; no repository
+configuration correction is supported. Next requires an owner-present single
+native-method attempt with completion of the actual macOS authentication dialog,
+not another full run. Do not launch until that owner-assisted step is coordinated.
+No installed update, source edit, commit or push. Earlier waiting text is historical.
+
+Current native readiness comparison: exact shell practical-minimum method started
+through Xcode Test navigator; build completed. Runner75613 is awaiting the actual
+visible macOS UIAgent dialog “XCTest is trying to Enable UI Automation.” Owner
+asked once to complete Touch ID/password in macOS only. No test method has run
+yet; no duplicate/full run or app install. Inspect this exact session first.
+The older no-runner statement describes the completed CLI run, not this native
+comparison. Same scheme/destination/ordinary identities; no invocation fix proven.
+
+2026-10-27 current boundary: the post-cleanup collector completed, NOT green.
+733/733 non-UI passed; UI runner initialization timed out enabling automation
+before any UI method executed (one infrastructure failure, zero skips). No
+collector/xcodebuild/UI runner remains. See latest 006 evidence for the exact
+artifact. Source fingerprint remains 4b3301f6…. Do not repeat an unchanged broad
+run or install the app. OD-026/027 remain resolved; this is not a renewed owner
+permission request. Existing installed build is unchanged. All older pending
+run/decision paragraphs below are historical, not current instructions.
+
+Owner decisions OD-026/027 are now resolved: local-only ad-hoc signature after
+green verification, and build-cache cleanup only. Approximately 1.7 GiB of seven
+ignored regenerable intermediate/module-cache directories removed; all evidence,
+projects, recovery and app backups/products preserved. No process was active.
+Source remains 4b3301f6…. Reconcile then run ONE post-cleanup full gate; do not
+duplicate it or edit beneath it. After green use existing safe owner-local install
+workflow; no commit/push. Earlier STOP/pending-decision paragraphs are historical.
+
+STOP/HANDOFF at owner decisions OD-026/027, not an unfinished runner: isolated
+asset retry passes 1/1 (99.566s), unchanged source4b3301f6…. No app/test/xcodebuild
+process remains. Full gate still 871 passed/1 OS-cache-delete runner kill/3 skips,
+exit65; do not call complete or silently retry broad coverage. Docs/whitespace/
+440-record traceability reconciled. Preserve all 85 dirty entries and owner data.
+No cleanup/install/signing/commit/push occurred. Read latest 006 evidence and owner
+answers before next action; earlier active/failing notes below are historical.
+
+Latest frozen full run FINISHED: 733 non-UI + 138 UI passed; one external runner
+SIGKILL; three owner-session skips (871/1/3 total), exit65. No product assertion
+failure. Source 4b3301f6… unchanged. Bundle full-a222e0fc-7144-40ab-a9aa-a954a7421ac8.xcresult.
+System log proves cache_delete requested CacheDeleteAppContainerCaches termination
+of runner49948 at 02:27:30, not lock/authentication/app diagnosis. Remaining tests
+completed after Xcode runner restart. One isolated interrupted-asset retry runs;
+do not duplicate or repeat broad suite. OD-027 storage/evidence retention choice
+and OD-026 local ad-hoc-signature choice are pending; no deletion/install/service
+change/commit/push. Read latest 006 evidence before acting. Earlier notes historical.
+
+Newest: all nine formerly failing UI methods now pass focused coverage; two
+affected model methods pass. Native menu host observes current command state.
+Rename's stale focused edit value is cleared before sheet dismissal; failure
+diagnostics proved Text editing after no sheet, passing route is Grouped Edit.
+Exact history/persistence assertions retained; no blanket Undo or lifecycle patch.
+Corrected rename/nesting original-resolution screenshots reviewed. Freeze one
+final full gate after reconciliation; installed refresh additionally needs local
+ad-hoc-signature policy clarification (question sent, no signing/install done).
+No commit/push. Historical active/pending failures below remain audit evidence.
+
+2026-10-26: full ordinary-identity gate FINISHED, not green: 861 passed, 10 failed,
+3 owner-session skips (731/732 non-UI; 130/139 executed UI). No agent cancellation.
+Artifact full-a85a5d73-bc20-4115-96c6-dac8cb500538.xcresult. The two original
+journeys and earlier cancelled Button/Link coverage pass. Privacy substring
+collision corrected with content-independence equality (focused 1/1); exact
+clear-selection/sibling/nesting model passes 1/1. Recorded Footer field remained
+keyboard-focused at Undo. Real nonediting preset focus makes nested-layout menu
+Undo/Redo pass 1/1, preserving native text Undo and canonical assertions. Remaining
+eight affected UI methods run in one focused group; no result claimed yet.
+Layers recording shows disabled Nest In with Text selected; renderer-adoption and
+native enabled-state waits are under focused evaluation. Do not install or claim
+completion. Earlier pending/no-runner statements are historical snapshots.
+
+Newest native comparison: reuse passes 1/1 (235.493s), corrected conversion passes
+1/1 (97.941s), selected through exact Xcode Test navigator Run actions. Normal
+scheme identity app.siteforge.SiteForge, not prior CLI OwnerTesting. Conversion's
+real defect was the test reading a geometry field below the rebuilt Inspector's
+viewport; bounded shipping scroll + fresh readout query fixes it with assertions
+unchanged. Bundles/screenshots and QoS warning limits: latest 006 evidence. No app/
+runner remains. Freeze fingerprint 5ffff41c… for ONE full ./sf verify using this
+same ordinary identity/DerivedData; preserve owner data and private test fixtures.
+The earlier cancelled case was agent-initiated SIGINT, not a collector policy bug.
+No installed update or completion until the new full gate genuinely passes.
+
+Newest outcome supersedes pending/freeze wording below: repository/build and
+732/732 non-UI pass. UI: six pass, two assertion failures, one cancellation; NOT
+a full pass. Artifact: dark-flow-frozen-verify-results/full-af3502ef-9861-46f7-94e7-dc47c456a283.xcresult.
+One diagnostic pair compiled, 0/2: reuse Save now passes but Preview discovery
+fails; conversion fails before editing at selected-height discovery. Native
+read-only inspection concurrently exposed the complete shipping control tree
+while XCTest lost frames/identifiers. Recordings/006 evidence retain the boundary.
+No lifecycle patch, weakened assertions or timeout increase. No active runner.
+OD-025: exact Xcode-normal rerun of the pair, not another CLI/authentication loop.
+Installed app remains build 26.10.21 / ab18c663 / 85f0f55d…. Preserve the uncommitted
+tree and gate installed replacement on a genuinely green full run.
+
+Preserve the entire uncommitted tree, the independent Dark Flow owner package,
+original Editorial/Workflow Study resources and genuine recovery. No commit,
+push, GitHub operation, privacy/service change or installed-app overwrite is
+currently permitted. Installed replacement waits for final green verification
+and normal Saved/Quit plus source/provision checks.
+
+Current: direct supported native controls worked after the owner continuation.
+Dark Flow opened through the real Open panel, restored history and reached Saved.
+Preview/current-source export succeeded at revision 245. Contact/Not Found had
+transparent Root nodes despite dark child surfaces; real Add Solid + Dark Surface
+token bindings now author those two backgrounds. Normal Save/Preview/Export used
+the central shipping controls; no handwritten package/output or global theme.
+Original-resolution Desktop/Mobile captures prove dark viewport coverage and
+natural Contact scrolling/Footer ordering. Details: 006 evidence. The app was
+normally quit and process inspection confirms no app/test runner remains.
+Twenty-six affected code methods pass across focused runs. Freeze the reconciled
+tree for ONE accumulated ./sf verify; do not edit underneath it. Current full gate
+and installed delivery remain incomplete. Do not repeat accepted authoring/Menu QA.
+
+Historical boundary: the owner-authorized single authentication retry built but
+exited 65 before any test method, again timing out enabling automation mode.
+Evidence: dark-flow-browser-owner-auth-retry.xcresult and its matching log in
+ignored evidence storage. System logs prove the request/timeout, not a displayed
+or completed authentication dialog. No runner remains active. Ask what the owner
+actually saw before another UI retry; do not change privacy/services or replay
+authoring. Earlier readiness claims below are historical, not current proof.
+The new authored-root viewport minimum has one passing focused code test;
+actual refreshed-output visual acceptance is still pending. Distinct affected
+code methods now total 26, not the historical 25 below.
+
+Home's native exact three-stop
+45-degree gradient, foreground tokens and Mobile flow are saved. Journal,
+About, Contact and Not Found now have real editable editorial content. Journal
+confirmed-flow passes 1/1 (105.475s), About 1/1 (451.458s), Contact/Not Found
+1/1 (1176.261s). Original-resolution captures were reviewed; details and failures
+remain in evidence/SF-LOCAL-BUILDER-006-DARK-FLOW.md.
+
+Twenty-five distinct affected code methods pass; permanent native token-row,
+Select All and Layers parent/nesting/history regressions pass. Availability
+memoization is bounded and identity-gated; real commands always validate fully.
+Native Layers values expose the actual parent. Unchanged valid sizing drafts
+finish without false red errors or canonical/history mutation.
+
+Home expansion passed 1/1 (549.457s), normally saved/quit; its Desktop/Mobile
+original-resolution captures were reviewed. Two earlier attempts
+stopped before editing at the five-second blank-workspace readiness boundary.
+Fresh diagnostics found the correct shell at the final poll, no modal dialog.
+Use the existing eight-second real-package reopen budget for this owner package;
+do not change generic launch or text-entry timeouts.
+
+Current handoff: no test process is running. Fresh readiness was unlocked and
+the final export was opened directly in Safari; accepted authoring was not
+replayed. Eight real Responsive Design Mode widths were inspected in bounded
+Home regions. A 320-wide wrapped Menu affordance prompted a small shared output
+correction: intrinsic single-line summary and Mobile flex alignment, no canonical
+geometry change. The two affected code methods and native export-only journey
+pass (1 UI, 71.683s) in dark-flow-intrinsic-menu-native-export.xcresult. The fresh
+normal export is named Aurora — Dark Flow Website Reviewed. Native inventory then
+reported the Mac locked again. Request only physical unlock/keeping awake; do
+not repeat setup/authentication or accepted authoring. Resume actual browser
+review directly on that export, especially 320 Menu pointer/keyboard and all five
+destinations. Full frozen verification and safe installed delivery remain pending.
+Original Editorial/Workflow Study package and resource raw-file hashes match
+the consistent pre-review baseline in all four groups.
+
+Earlier partial review, dark-flow-review-native-output-final.xcresult, completed real
+history, save/close/reopen, exact gradient identity, shared-compiler Safari preview
+and native export Cancel/retry. Its final Safari address-entry event timed out;
+native inventory then explicitly reported the Mac locked. Owner unlock is needed,
+not another automation-authentication or Xcode setup retry. Capture the run's final
+result before another run. The final export exists through ordinary native commands;
+its navigation typography now targets generated link identities as well as normal
+text identities. Three affected output methods pass; visual confirmation remains
+pending. Then inspect actual Safari output
+at required widths/intermediates, reconcile factual evidence/traceability/docs,
+freeze sources and run ONE supported accumulated ./sf verify. Do not claim
+completion, browser parity or installed delivery before those steps succeed.
+
+## Historical — Connected local-builder integration polish
+
+Current observed owner boundary — 2026-10-24: supported native inspection of
+the selected Xcode shows an actual **Install Required** dialog: system-wide
+components must be installed to use Xcode (shared simulators/connected-device
+resources). Buttons are Quit and Install. The dialog is left open; no Install,
+agreement, authentication, component/platform selection or configuration action
+was performed. Owner must choose Install in Xcode and personally handle Apple's
+subsequent setup/authentication. Screenshot and exact evidence: OD-025 and 005.
+
+No tests/collector were rerun. Preserve the 13 passing focused UI workflows,
+nine affected code passes and reviewed visual limits; full verification/installed
+delivery remain incomplete. After the owner finishes, confirm read-only readiness
+succeeds, freeze current sources and run ONE supported accumulated collector.
+Do not bypass preflight, repeat unchanged focused runs, alter privacy/services,
+install over unknown owner work, commit or use GitHub. Production fingerprint
+remains `d3b06b9d…`; earlier active-run/authentication paragraphs below are historical.
+
+Earlier: all 13 distinct focused UI workflows now have passing results across
+serial runs; nine directly affected code regressions pass (overlapping older
+evidence, not additive to 717). Connected image/typography completes Save, native
+versus canonical Undo, actual reopen and preview (385.272s). Native export Cancel/
+retry/reopen passes; actual Safari mobile Journal navigation now works after a
+document-body transient-focus dismissal correction. The full eight-width browser
+review and original-resolution captures are recorded in the 005 evidence, with
+explicit fixed-template clipping at 320/1024 and no universal-parity claim.
+Current source fingerprint `d3b06b9d…`; no test process is left from these runs.
+Freeze sources/docs for the supported ONE accumulated collector. Do not bypass
+its Xcode readiness preflight, replace the ordinary installed app over unknown
+work, start another feature, commit or use GitHub. Installed delivery still needs
+full verification and normal owner Saved/Quit proof.
+
+Earlier: responsive sizing/draft/reopen workflow passes 1/1 (165.978s), plus three
+viewport focus/identity code regressions, at fingerprint `59ae7ba1…`. Twelve
+distinct native workflows now have passing results. Complete trace proved X
+never regained focus; speculative cancellation changes and temporary logs are
+removed. Native viewport focus publication now waits for the completed responder
+transition with window/request/responder guards; rejected presets mirror the real
+canonical value. Stronger focus/committed-value assertions pass. Tablet/reopened
+screenshots inspected and listed in 005 evidence. `connected-image-final.xcresult`
+is the sole active run (five affected code methods plus the last connected
+image/typography UI method); monitor it, do not duplicate or infer success.
+
+Earlier continuation, 2026-10-23: native automation is working; no current
+authentication request. Eleven distinct focused UI workflows have passed across
+the retained serial runs, including named components, component history/recovery,
+all seven Settings destinations, image/fill persistence, practical compact layout,
+native sizing bounds and two real Safari workflows. Two connected workflows are
+still being completed, not waived: practical image/typography and responsive
+sizing/draft cancellation. The most recent completed two-method run failed at
+an ambiguous unscoped Center menu query and Escape's native field-editor
+write-back recreating a cancelled geometry draft. The current build corrects
+those boundaries and strengthens the committed-value assertion. Five affected
+code regressions passed before that cancellation correction. Source fingerprint
+`351da51786edebf9195b95a0840faa9bf84e1a79fb2affae7f0c27194dc460fc`;
+`cancel-ui.xcresult` is the active isolated run under the ignored evidence root
+listed in the 005 evidence. Do not start a duplicate or infer its result.
+Eight-width independent Safari review, final accumulated collector, and safe
+installed delivery remain pending. Ordinary owner work is untouched.
+
+Historical 2026-10-23 17:19 isolated retry superseded the authentication blocker below:
+initialization succeeded; one component workflow executed and failed at line 5644.
+Named component creation succeeded, but the test queried Design-only provenance
+with Layout still selected (retained AX hierarchy). No prompt was confirmed visible.
+0 passes/1 assertion failure/0 skips; no second retry or source edit. Next bounded
+correction is explicit native Design-tab navigation before that provenance assertion,
+then the unfinished workflow; do not treat creation or authentication as failed.
+Retained result/hierarchy/recording: evidence document's Single isolated retry section.
+
+Historical 04:51 assessment (not the current blocker): isolated app/provision fingerprint
+`f601b53b…` builds and passes all 717 code tests, zero failures/skips. ONE pending
+component UI selector failed initialization before its method (automation-mode
+timeout; one runner error, not a product assertion). Computer-use tooling is
+separately unexposed. No current screenshots/Safari/full integrated pass. All
+owned runs exited, protected hashes match 4/4, installed build 26.10.21 is unchanged.
+The later retry above supersedes this initialization failure. No more source-only
+features; continue the existing acceptance inventory with demonstrated repairs.
+
+Historical traced prerequisite: runner session and test-daemon authorization succeed;
+automation-mode writer then requires device-owner authentication. LocalAuthentication
+reports “User interaction is required” and requests “Enable UI Automation”; no
+completion precedes the timeout. Developer mode is already enabled. Simulator
+mismatch causality is unproven (the 717-code pass has the same warning). Paths,
+provision and architecture do not demonstrate a repository launcher defect.
+No new tests were run during diagnosis. Owner readiness was requested for ONE
+isolated retry with the owner handling macOS authentication personally. Do not
+request credentials, alter permissions/services or recommend SiteForge reopening
+as a test-manager fix. Normal saved/quit proof is only a later install safeguard.
+Exact sanitized chain and alternatives: OD-025 and the evidence below.
+
+SF-LOCAL-BUILDER-005 is IN PROGRESS. Visible retained editors now participate in
+a synchronous user-action commit/validation boundary before Save/Preview/Close
+and context changes. Native text history remains separate from document Undo.
+Native panel origins and preview/build/open/export feedback are identity-gated;
+shared static output handles macOS temporary-path aliases without relaxing bounds.
+Reviewed affected group passes 24/24 code tests (ten new); app/UI targets compile.
+No native journey, screenshots, Safari or final changed-tree full gate executed.
+Exact source results and the ONE pending native/visual/Safari/Settings/installed
+inventory: `evidence/SF-LOCAL-BUILDER-005-INTEGRATION.md`. 002/003/004 remain
+IN PROGRESS; their groups overlap and the historical 815 gate predates them.
+
+Do not change privacy/services,
+force quit, replace the installed app or touch Aurora/genuine recovery. No commit/
+GitHub/release. After access genuinely returns, finish that inventory, inspect
+actual original-resolution/Safari output, freeze sources, then ONE accumulated
+full gate. A safe install requires normal Save/Quit proof and matching source/
+app/provision fingerprints. No unrelated feature starts next.
+
+## Prior — Practical image reuse and typography source checkpoint
+
+SF-LOCAL-BUILDER-004 is IN PROGRESS. Scoped chooser/import shares existing
+Image/fill/component registries and one atomic asset/reference command. Global
+replacement confirms canonical reference scope; usage reveal waits for adopted
+page identity. Thumbnail caching follows document/resource/request identity.
+Installed-font search and discovered weights reuse CoreText; retained typography
+drafts reject changed scope without losing unfinished input or missing intent.
+Final affected code group passes 22/22 (seven new); app/UI targets compile.
+New public-control UI journey is NOT executed. Exact evidence and a single
+pending inventory: `evidence/SF-LOCAL-BUILDER-004-ASSETS-TYPOGRAPHY.md`.
+
+No native retry, privacy change, app refresh, commit or GitHub operation. Keep
+002/003 IN PROGRESS, OD-025 independent, owner work unknown and protected. After
+access returns, finish 004/002/003 native/visual/Safari, seven Settings destinations,
+then ONE accumulated changed-tree full gate. Installed refresh requires normal
+Save/Quit proof and fingerprint checks. Historical 815 is not current coverage.
+No further slice starts now.
+
+## Prior source package — Practical responsive sizing source checkpoint
+
+SF-LOCAL-BUILDER-003 is IN PROGRESS. Effective winner/source, exact dimension
+reset, counted conversion confirmation and adjacent Layout controls are wired
+through existing registries. Numeric drafts preserve user intent across renderer
+adoption and reject changed context. Grid numeric precedence and continuous
+connected fluid CSS projection are corrected without a new cascade or schema.
+23 unique affected code tests pass (11 new), plus 2/2 strengthened height/reset
+reruns; app/UI targets compile. New native journey is NOT executed. Exact
+selectors/results and continuation:
+`evidence/SF-LOCAL-BUILDER-003-RESPONSIVE-SIZING.md`.
+
+No native retry, installed refresh, full gate, commit or GitHub operation.
+OD-025 remains independent; current owner work is unknown and preserved. After
+access returns: responsive/bounds and component journeys, Settings review,
+original-resolution visual/Safari acceptance, then ONE accumulated changed-tree
+gate. Safe installed refresh requires normal save/quit proof and fingerprint
+checks. SF-LOCAL-BUILDER-002 remains IN PROGRESS; the 815-test baseline is older
+than both packages, not current integration evidence. Do not begin another slice.
+
+## Prior source package — Practical component reuse, native acceptance pending
+
+SF-LOCAL-BUILDER-002 is owner-authorized and IN PROGRESS. Named component
+creation/shared eligibility, typed Return to Instance/Page, shared organized
+Design/Content controls and stable scene-local text drafts are implemented.
+Final focused source group passes 17/17, including seven new tests. Both test
+targets compile; the new public-control UI journey is compiled but NOT executed.
+Exact selectors/results and continuation:
+`evidence/SF-LOCAL-BUILDER-002-COMPONENT-REUSE.md`.
+
+Do not repeat the failed native binding or timeout. OD-025 remains independent;
+current owner work cannot be inspected. Keep the regular installed verified app
+untouched, preserve original Aurora/recovery, no commit/push. After normal native
+access returns, execute the named journey and existing two-instance/recovery
+journeys, inspect captures and actual Safari, then one final changed-tree gate.
+The 815-test result below is historical PRE-package evidence, not acceptance of
+these changed sources. Settings-only prohibitions below are superseded only for
+this explicitly authorized component package; no additional feature is started.
+
+## Historical baseline — 2026-10-21 final full gate PASSED
+
+Latest bounded continuation: a single fresh native SiteForge binding still fails.
+No UI actions or tests followed; do not assume the historical blank remains clean.
+Owner must use normal Save/Cancel/Quit, reopen regular SiteForge and show Settings
+or provide screenshots. Every Settings destination remains pending OD-025.
+No product change is justified; keep the current verified installed app as-is.
+Current comparison and exact next already-listed Practical component reuse package:
+`evidence/SF-LOCAL-BUILDER-001-INSTALLED-VISUAL-DELIVERY.md`. No feature starts now.
+
+`20261021-034253-d689cac6` completed: repository/build, 682 code + 133 UI =
+815 tests, zero failures/skips; failed-selectors is empty. Source fingerprint
+`85f0f55de2b76a6f016d8ffe0651278f108a66eef0276570e5b407f5d204bb79`
+matches installed app and testing provision. No source changed during collection.
+All new reuse/contextual/Safari/reopen and repaired recovery/token journeys pass
+in the complete target. No publish-during-update/invalid-geometry diagnostic;
+retained Apple QoS warnings are not silently reclassified or suppressed.
+
+Installed Aurora review passes 1/1, seven captures inspected; protected Editorial,
+Study and both resource sidecars match fresh before/after hashes. Nine controls
+and seven source-Aurora captures also reviewed. Work stays uncommitted; no GitHub.
+
+One additional installed Settings visual capture remains blocked, OD-025:
+the extra XCTest launch timed out before any test; native fallback retained the
+blank capture but its Settings shortcut/fresh app binding lost the native pipe.
+Finder remains readable, Mac unlocked, app main thread is idle in AppKit. Do not
+claim this extra journey passed or change product code/permissions speculatively.
+The last observed blank is historical; current saved/modified state is unknown.
+Do not force quit or touch retained recovery. Owner normal reopen/Settings confirmation
+or screenshot is the exact next action. Earlier pending/failure sections below
+are historical and superseded by this checkpoint, not instructions to rerun it.
+
+## Historical focused workflow checkpoint — superseded by final gate above
+
+Installed review also PASSED 1/1 (158.722s), `installed-aurora-review.xcresult`:
+the regular app opened the existing Study, native Save As created a new review
+project, then copy/navigation/presets/Safari/close/reopen completed. Seven installed
+captures inspected. Fresh before/after hashes match both protected packages and
+both resource sidecars. No conversion/padding replay or genuine recovery writes.
+Installed Info, testing provision and source fingerprint agree:
+`85f0f55de2b76a6f016d8ffe0651278f108a66eef0276570e5b407f5d204bb79`.
+Only final changed-tree unattended verification remains before acceptance.
+
+Independent named page copy, metadata preservation, current-owner Include All
+Pages and contextual Text Colors are implemented. Model group 8/8 and separate
+title-provenance regression 1/1 pass. Controls UI 3/3, existing foreground/token
+journey and normal Aurora copy/Safari/native-reopen 1/1 (142.149s) pass.
+Final Aurora bundle: `focused-8c05cb14-7563-40ec-b918-4fb401a850ed.xcresult`.
+All nine control and seven Aurora captures inspected. Actual matched pointer
+counts are page 10 -> 6 and navigation 2 -> 1; equal text entry excluded.
+Safari links expose title rather than label; native Go to Folder can autocomplete
+the project's resource sidecar, so Open now selects the exact file from its
+parent and waits for enabled/hittable state. No product saving workaround.
+
+Next: safely refresh only the regular installed app, review an independent
+native Save As copy of the existing Study without replaying conversion/padding,
+compare original bytes, verify installed/provision/source fingerprints, and run
+one final unattended accumulated gate. The earlier 804 pass predates these edits.
+Keep all work uncommitted; no GitHub, original/recovery mutation or new sharing
+architecture. New captures are ignored under the workflow-reuse-20261021 report.
+
+## Historical repair-checkpoint authority — superseded by final gate above
+
+Integrated repair checkpoint PASSED in `20261021-002649-dee2b04f`: all repository
+and build checks, 675 code tests and 129 UI tests (804 total), zero failures,
+skips or expected failures. Both repaired selectors pass in the full target.
+No active collector or runner. No publish-during-update/invalid view geometry
+message; Apple QoS diagnostics remain retained without reopening classification.
+Proceed with the approved page-copy/navigation/contextual-edit consolidation;
+this passing snapshot does not verify subsequent source edits. Preserve original
+Aurora and genuine recovery; work stays uncommitted, no GitHub/publication.
+
+Targeted repairs are green: repository checks pass, including the isolated
+Pillow 11.3.0 icon checker and two prerequisite regression cases. The two failed
+UI selectors now pass 2/2 in `focused-8fb70684-3db1-4096-af4f-853a1d7339b5.xcresult`:
+crash recovery 25.368s, text foreground/token/inline parity 178.210s. Seven
+captures were inspected from ignored
+`.codex-loop/full-verification/targeted-repair-20261021/captures/`.
+Recovery termination now validates the actual configured bundle, sibling Debug
+artifact, recorded current-run PID and executable; ordinary apps are ineligible.
+The token failure was a partly clipped field (Y=993, height=26); hittable did
+not mean pointer-visible. Strict live-control containment fixes reveal, keeping
+verified keyboard focus and all canonical assertions. No product recovery or
+typography model change. Next: one unattended integrated checkpoint, no source
+edits while it runs; no full pass yet. Original Aurora/recovery remain untouched.
+
+Preparation run `20261021-002446-9a5c34ca` was cancelled before build/tests after
+its progress helper exposed a Swift main-actor entry error. The helper now has
+one explicit main-actor lifecycle; launcher type-checks it before claiming a
+collector lock. Type-check and 21/21 affected tooling tests pass, including the
+new failure/no-launch/no-lock regression. No UI selector changed after its 2/2
+pass. Retain the cancelled report; it is not integrated acceptance.
+
+Collector `20261020-213032-8c1fc557` finished FAILED: build passed, 675 code tests
+passed; UI 127 passed, two failed, zero skipped. Repository failed because the
+ambient Python lacked Pillow. No collector remains. Plan: declare an isolated
+verification Python runtime with actionable prerequisite checks; bind the crash
+journey's termination to the launched OwnerTesting artifact/run/PID; fix the
+token journey's partly clipped field reveal without weakening keyboard focus.
+Run affected repository checks and only the two failed UI selectors, inspect
+captures, then one unattended integrated checkpoint. OD-024 remains resolved.
+No commit/push, owner project or genuine recovery mutation is authorized.
+
+## Previous focused record — 2026-10-20
+
+OD-024 is resolved by fresh evidence: the unchanged compact Button/Link journey
+passes 1/1 (52.649s), bundle `focused-75b3a453-d776-44f2-8d7c-cb50f82a0b96.xcresult`.
+Logs and two inspected 2200×1504 captures are retained under ignored
+`.codex-loop/full-verification/owner-clear-focused/`. Native pointer Undo
+restores Home; no toolbar obstruction, center fallback, publish-during-update
+or invalid-geometry message was observed. An Apple QoS warning remains recorded;
+the earlier classification is not reopened. No product/test changes were needed.
+Next: launch one unattended full checkpoint; no overlapping collector or source
+edits during collection. It is not yet a passing integrated gate.
+
+Collector `20261020-212952-c486fb09` was cancelled before tests after repository
+checking caught two documentation-only trailing blank lines. Those are fixed;
+`git diff --check` passes. Retain its report as cancelled, not passed. The next
+collector replaces this interrupted preparation, without changing source/tests.
+
+Owner confirmation on 2026-10-20: there is no notification and the screen is
+clear. OD-024's banner evidence is historical, not a current blocker. Its old
+temporary evidence directory is unavailable; retain new focused results in
+ignored report storage. Run the exact compact Button/Link journey now, preserving
+the pointer Undo and restored-target assertions; no passing result is implied.
+
+Historical external obstruction: OD-024, an unrelated calendar notification covers
+native title-bar Undo. Owner has been asked to dismiss that one banner normally;
+no preferences/permissions are changed. Fresh capture and exact pointer fallback
+are recorded in workflow evidence. The accumulated attempt
+`full-77de4af7-db9f-4e5c-a724-33f7a8e611e4.xcresult` passed all 675 models and eight
+UI journeys, then failed `testButtonLinkInternalTargetControlsAtPracticalMinimum`
+at its post-Undo assertion. It was stopped (exit 75), not passed. No runner
+remains. Next: after the banner is gone, run only that exact selector and inspect
+its capture; do not rerun a broad gate before the concrete obstruction is fixed.
+Then close the accumulated checkpoint and continue phase two below.
+
+Preservation check: original Editorial still matches its saved checksum on
+2026-10-20. The temporary 69-file recovery baseline manifest is now unavailable;
+do not report a fresh recovery checksum pass. The 2026-10-18 exact comparison
+remains historical. This resume made no recovery writes. Installed app/provision
+still match each other, not yet the current test-source fingerprint.
+
+SF-LOCAL-BUILDER-001 remains IN PROGRESS, uncommitted. The owner authorizes
+verification followed by evidence-based workflow consolidation, not new unrelated
+features, GitHub, signing or publication. Original Aurora/recovery stay protected.
+The two exact structural selectors now pass 2/2 in
+`focused-20923f31-5b20-456e-9592-6237107acb48.xcresult` (34.303s and 262.069s).
+The prior `focused-aec94d75-3857-44ed-ba62-76a78fb53d69.xcresult` failed activation
+before feature assertions; its trailing zero-test suite is not a pass. The
+segmented-control check preserves strict bounds on concrete native buttons,
+not the outdented noninteractive AX wrapper. Ten captures were inspected;
+OS notification banners limit their full-window presentation evidence.
+Next: one accumulated full checkpoint; then the safe page-duplicate/navigation
+and contextual-edit follow-up in the queue, measured against actual old logs.
+No source/test edits while the collector is active. Refresh the regular app only
+after normal Saved/Quit and source/provision fingerprint validation.
+
+## Historical owner package — SF-LOCAL-BUILDER-001 — 2026-10-18
+
+Latest correction: the next integrated attempt passed all 675 model/integration
+checks, then exposed an obsolete dark-editor 300/340-point pane cap. The approved
+five-destination layout uses normal minima 324/356 and bounded maxima 360/420.
+The exact visual journey now asserts both bounds, remaining canvas width and
+no overflow. It and both measured-pane model tests pass 3/3 in
+`focused-994388ba-9214-4f86-bb87-f74f60f28987.xcresult`; all five original-resolution
+captures were reviewed. The red full attempt was stopped, not counted as passed.
+Final integrated verification remains required; no commit/push is authorized.
+
+Latest integration result: repository checks/build pass; first full attempt was
+interrupted after real failures. Six corrected historical-fixture/announcement
+checks now pass, grouped Settings passes 1/1, and strengthened historical chrome
+rejection passes 1/1. After the owner reported no prompt visible, the exact
+appearance journey passed 1/1 (37.828s), bundle
+`focused-4de2a0c3-86e7-45cb-a6de-acd755018b88.xcresult`. OD-023 is resolved
+without changing permissions. The accumulated final gate is now required.
+Do not claim verification or completion yet. The following focused/native
+delivery record remains valid; preserve all original Aurora/recovery bytes.
+
+Latest authority: normal unlock restored native execution. Sample, explicit
+legacy-history and isolated clean/crash journeys each pass 1/1. The regular app
+was safely updated after real Saved/Quit (fingerprint 0a76a510a64ab351504e740e23fda56b2eb218ad1bdf6660cc0370a4b160c24c);
+installed sample/original-reopen and installed responsive/Safari/export journeys
+each pass 1/1. Seven native delivery/recovery captures plus installed captures
+were reviewed; see the latest Aurora evidence for exact bundles/failures/limits.
+All 69 genuine recovery hashes match. Aurora Editorial is preserved; a separate
+Aurora Workflow Study was created through native Save As (1/1), original hash
+unchanged. No authoring replay, commit, push or extra named app copy.
+
+The owner-authorized workflow follow-up now has focused Fill/Hug and shared
+text-metric proof (four model/native-render tests plus one native journey),
+measured five-tab rows/Inspector stability, and neutral no-change Site Settings
+Apply. Design Essentials label/size/destination, invalid draft/Escape and
+Undo/Redo pass a new native journey. Aurora conversion/preset now passes, as do
+installed Study conversion/padding and normal save/reopen. Eight Safari widths
+were inspected after fixing flex-basis cascade and intrinsic grid-track sizing.
+The regular installed app now contains these workflow edits (fingerprint
+2d25a03f100d1cab8b57b46b7c16b18cc1c59a956c5665b1f47d31e472ea9f12).
+All 84 Study nodes/base frames remain exact; only two intentional content edits
+exist. The original and original recovery hashes remain unchanged. See workflow
+evidence and ADR-0025 for schema 19, precedence, opt-in conversion and remaining
+native/browser/integrated acceptance. Reserve the accumulated final gate for
+the ready state. The checkpoint trail below is historical; do not replay
+authoring or treat its former locked/pending-install state as current.
+
+Owner-selected direction: a dark translation of original render 01, preserving
+its slim navigator, dominant framed canvas, clean sections and compact toolbar.
+Aurora website content stays pale. Preserve fixed render-12 Settings geometry.
+No new commit, push, GitHub operation, publication, distribution signing or app
+duplication is authorized. Baseline ab18c66 remains accepted; this package is
+IN PROGRESS and must remain uncommitted. Preserve genuine owner data.
+
+## Historical implementation trail — superseded by the active record above
+
+Past pending-install, locked-console and unfinished-native-check statements
+below describe their original checkpoints, not current instructions or blockers.
+
+Historical source checkpoints:
+- Crash qualification source is now implemented (ADR-0024): new recovery-only
+  receipts bind session/project/document/revision; private held locks identify
+  live sessions; actual normal termination marks clean; automatic Welcome
+  discovery excludes clean/live/legacy snapshots. Explicit Recovery History
+  retains manual access. Durable saves strip evidence. Latest focused recovery,
+  autosave and ownership checks pass 7/7, bundle
+  `focused-8cebb442-2596-4507-89f1-d560022915b7.xcresult`; all 69 originals hash
+  identically. No native interaction was retried while locked. Native crash/clean
+  exit acceptance and integrated verification remain pending. Additional
+  `testInitialRecoveryOffersAbandonedSessionButKeepsCleanExitManual` passes 1/1
+  in `focused-eb3ae24b-9dc8-4159-99ba-8711d9192584.xcresult` (eight distinct
+  checks total). Native source builds for testing without launching. No runner
+  remains. After normal unlock, run only the exact packaged-sample selector and
+  `SiteForgeLaunchTests/testProductionRecoveryDiscoverySupportsKeyboardRestoreAndDiscard`
+  first; inspect captures before safe normal Saved/Quit/install. Preserve the
+  ordinary Aurora original and do not replay authoring.
+- Packaged Aurora Welcome source is implemented, not yet installed/visually
+  accepted. The loader uses the exact UI-authored package and verified resources
+  with fresh project/document identity and no source history. Five focused
+  template/resource/lifecycle checks pass; two corrected historical resource
+  fixture checks pass. ADR-0023 records the read-only bundled-resource policy.
+  The new exact UI selector is
+  `SiteForgeLaunchTests/testAuroraPackagedSampleCreatesEditableFourPageWebsiteJourney`.
+  Its first attempt compiled but was interrupted during launch after macOS
+  reported a locked console; it is not a passing or product-failing result.
+  No runner remains. Recheck unlock before the next attempt. The final source
+  assertion uses the genuine Section Height field, not an invented width ID.
+  Do not duplicate the delivered Aurora or replay authoring scripts.
+- Aurora was authored through the installed app and saved as an ordinary
+  `Aurora — Editorial.siteforge`, with real Home/Journal/About/Contact pages,
+  independent image/overlay/text/actions and responsive Layout edits. Native
+  export exists; shared compiler fixes for linked Buttons, authored borders,
+  preserved line breaks and plain-Text vertical placement pass 3/3 focused.
+  Continue from this saved package, not a new prototype. Exact authoring
+  checkpoint evidence and rejected loading-only Safari capture are recorded in
+  the Aurora evidence. Real Safari navigation and mobile menu were exercised;
+  latest delivery captures supersede earlier output experiments. Installed
+  startup-sample acceptance, native crash-qualified recovery and integrated final
+  verification remain unfinished.
+- Canonical Site Settings/page metadata is now implemented (schema 18/history
+  3), including native File-menu sheet, local drafts, exact inverse, escaped
+  compiler output and favicon asset safety. Latest focused checks: 22/22
+  model/history, 2/2 additional adversarial/dependency, 5/5 existing output;
+  actual Apply/Cancel/Undo/Redo 1/1 (49.593s). Both final screenshots inspected;
+  search preview is pinned outside the scrollable fields. Full package pending.
+- Primary Preview builds the existing static artifact and opens actual Safari
+  on bounded loopback. Canvas Device Preview remains separate (Command-Option-P).
+- Native raster retains/reprojects compatible world layout during zoom; role
+  names no longer enter authored pixels. Existing focused geometry checks pass.
+- Dark sRGB semantic palette/default is shared with Settings; explicit saved
+  appearance choices still win. Website ink/paper remain independent.
+- Canvas-priority layout yields render-01-like slim panes. Native pull-down tab
+  overflow now has visible template icons, truthful values and real AX focus;
+  every destination remains available. Forward/reverse traversal passes.
+- Accessibility, Image Fill and Fill Layers share section styling; Reset is a
+  genuine content button, not a flattened GroupBox heading. Reusable-style
+  creation is no longer clipped. Inspector navigation alignment shares the
+  native/output resolver rather than displaying a false Start default.
+- Existing test tab actions now use the shipping adaptive menu helper; no
+  feature/history/persistence assertion was removed.
+
+Latest focused evidence: appearance/palette 10/10; tab identity/traversal model
+checks 2/2; native overflow/default-reset checks 2/2; real dark-section and fill-
+layer journeys 2/2; complete native forward/reverse keyboard journey 1/1; latest
+paper-ink/material checks 3/3 plus Accessibility and Safari journeys 2/2. These
+are overlapping focused checkpoints, not a summed full-suite result. Exact
+bundles/selectors and reviewed captures are in the Aurora evidence document.
+OD-022 is resolved after normal owner unlock/Xcode restart. No test runner is
+active at this handoff. New focused logs contain no publish-during-update or
+invalid-view-geometry diagnostic; Apple service/QoS diagnostics remain observable.
+
+The regular installed app was safely updated after normal Saved/Quit and now
+contains the shared output/Direction corrections, but not the new packaged
+sample. The ordinary delivered project is Aurora Editorial; the earlier Aurora
+Authoring Attempt remains preserved. Both and all genuine recovery must stay
+untouched. Browser/photo authoring used real UI, not JSON or model shortcuts.
+Samples/Aurora contains the generated photograph/provenance and exact packaged
+copy of the UI-authored website.
+
+Next bounded work in this same package:
+1. Check repository hygiene/traceability and retain the current focused evidence.
+2. Validate crash-qualified recovery and explicit legacy history in the native
+   app after normal unlock. Source and 7/7 focused checks exist; do not classify
+   every old snapshot as a crash or touch genuine owner snapshots for testing.
+3. Integrate the focused Site Settings checkpoint into final Aurora/Safari
+   acceptance; retain explicit broader SEO exclusions in ADR-0022.
+4. Finish Aurora through production authoring tools: independent overlay,
+   typography/text/actions, destination pages and real Safari mobile navigation.
+   Fix observed native long-title/output font/link differences through shared
+   resolution, not sample-specific branches or hand HTML.
+5. Review installed blank/Aurora/Inspector, Settings and actual Safari captures;
+   safely refresh only the regular owner app, preserving documents/recovery.
+6. Run one integrated unattended final gate only when the full package is ready.
+No integrated acceptance or completion is claimed by the current focused passes.
+
+## Residual follow-up — 2026-10-16
+
+Accepted baseline `ab18c66` remains unchanged (755/755). All 47 QoS stacks
+inspected: 37 AppKit Services-menu AX inspection and 10 native text-checking,
+both through `_getDataDetectorsScanner`; no SiteForge blocking frame found.
+See `evidence/SF-PRODUCT-UI-010-RESIDUAL-QOS.md` for paths, limits and other
+retained Apple diagnostics. No production/test changes, tests, reinstall,
+commit or push for this follow-up. Documentation-only edits await owner review;
+no owner action is required. Do not reopen accepted repairs based on count alone.
+
 ## Final authoritative checkpoint — 2026-10-15
 
 SF-PRODUCT-UI-010 bounded correction is accepted: final `./sf verify` exit 0,
@@ -35,7 +814,7 @@ OD-021 is resolved. Next: authoritative final `./sf verify`, factual final
 reconciliation and one authorized local commit only. No push. Earlier blocker
 and pending language below is historical, not the current execution state.
 
-## Current blocker and next action — 2026-10-15
+## Historical blocker and next action — 2026-10-15
 
 SF-PRODUCT-UI-010 remains IN PROGRESS. No commit or push. Latest full attempt
 completed 636 model tests and 93 UI passes, with four UI assertion failures and
@@ -105,7 +884,7 @@ inspected at original resolution; all 69 recovery hashes still match. No runner
 remains active. Run the final `./sf verify`, review and create ONE authorized local commit.
 No push, GitHub change, publication or distribution signing. Counter stays 2/10.
 
-## Current owner correction and LOCAL COMMIT authorization — 2026-10-15
+## Historical owner correction and LOCAL COMMIT authorization — 2026-10-15
 
 SF-PRODUCT-UI-010 is IN PROGRESS and supersedes older no-commit directions.
 Preserve the accumulated tree. The owner authorizes a local commit only after
@@ -226,7 +1005,7 @@ safe regular-app update and smoke, source/report fingerprint agreement, full
 diff review and local commit. Preserve genuine owner recovery. Counter stays
 2/10. No new feature milestone.
 
-## Current delivery evidence — do not restart or discard the tree
+## Historical delivery evidence — do not restart or discard the tree
 
 Regular app owner-local provisioning, both real Testing buttons, cancellation,
 native Settings close/reopen and report actions passed installed-window checks.
@@ -252,7 +1031,7 @@ the harness refuses stale fingerprints. No commits/pushes/GitHub/publication.
 Counter remains 2/10. All older no-install/experimental directions below are
 historical; the top current owner-local direction is authoritative.
 
-## Current owner-local delivery correction — IN PROGRESS
+## Historical owner-local delivery correction — IN PROGRESS
 
 Owner supersedes separate experimental copies: deliver the regular SiteForge app
 with an installation-provisioned Advanced > Testing harness. No source-folder
@@ -272,7 +1051,7 @@ Local ad-hoc owner packaging/install is authorized. Counter remains 2/10.
 Focused acceptance is running; no completed delivery or full gate is claimed.
 Earlier experimental/owner-away instructions below are historical and superseded.
 
-## Active owner-return visual acceptance — counter remains 2/10
+## Historical owner-return visual acceptance — counter remains 2/10
 
 01/05/12 selected references replace 04. Source shared matte/flat-editor/card-
 Settings treatment and proportional split allocation are integrated; loading's
@@ -288,7 +1067,7 @@ No full suite/verify, commits/pushes/GitHub/manual signing/install/release.
 Current authorization allows necessary local builds/launch and focused UI tests;
 the owner-away execution prohibition below is historical, not current.
 
-## Current handoff — cohesive local-builder cycle Prompt 2/10
+## Historical handoff — cohesive local-builder cycle Prompt 2/10
 
 124 source implements native Inspector section search/navigation/pins and strict
 typed geometry-value copy/paste through the existing registry, including mixed/
@@ -307,7 +1086,7 @@ or documentation into extra development prompts. Phase one has provisionally
 5–8 remaining packages; phase two defers CMS/services/collaboration/plugins/
 remote/publishing. ROADMAP retains requirements and OD-018/019/update boundaries.
 
-## Current owner-away source cycle — Prompt 1/10
+## Historical owner-away source cycle — Prompt 1/10
 
 SF-AUTHORING-123 source implements derived component-property discovery,
 provenance filtering and keyboard reveal against the existing Inspector scroll
@@ -795,7 +1574,7 @@ repair failures with exact failed selectors/new regressions only, reconcile
 docs with actual results, review diff, then make one local commit and push
 origin/main if green. No PR, release, signing, notarization, or settings change.
 
-## Current source-only half-batch (2026-09-30)
+## Historical source-only half-batch (2026-09-30)
 
 SF-PRODUCT-UI-005 and SF-AUTHORING-075–078 were implemented in that historical
 dirty tree. The current normative gradient AppIcon source supersedes v1 at
@@ -841,7 +1620,7 @@ The corrected journey requires a real native-scroll reveal, a hittable button,
 and an actual hittable draft field. It passed focused 1/1 locally. Push this
 single-selector correction and wait for a genuinely green hosted gate.
 
-## Current ten-slice local checkpoint (2026-09-30)
+## Historical ten-slice local checkpoint (2026-09-30)
 
 SF-AUTHORING-065–074 deliver application Settings reset plus native Pages,
 Layers, Elements, and Quick Open search under bounded `SF-0205-002/003/004/006/008`
@@ -863,7 +1642,7 @@ next action is the hosted correction described above; do not start a new
 feature before its hosted result is known. No publication or release work is
 authorized.
 
-## Current Layers search checkpoint
+## Historical Layers search checkpoint
 
 SF-AUTHORING-067 filters only the current Layers navigator targets by name
 under bounded `SF-0205-002/003/004/006/008` and existing `SF-0402-002/006`.
@@ -874,7 +1653,7 @@ original-resolution states were reviewed; see
 `docs/evidence/SF-AUTHORING-067-LAYERS-SEARCH.md`. Preserve the preceding
 owner-review tree. The later batch verification result is recorded above.
 
-## Current Pages search checkpoint
+## Historical Pages search checkpoint
 
 SF-AUTHORING-066 adds a scene-local native Pages search by page name or route
 under bounded `SF-0205-002/003/004/006/008`. Return opens the first result;
@@ -885,7 +1664,7 @@ window states were reviewed. See `docs/evidence/SF-AUTHORING-066-PAGES-SEARCH.md
 The later batch verification result is recorded above; no module-complete
 claim is made.
 
-## Current application preference-group checkpoint
+## Historical application preference-group checkpoint
 
 SF-AUTHORING-065 adds an explicit native Settings Reset tab for the existing
 application-only Appearance and new-workspace Grid records (`SF-0206-002/003/004/006/008`
@@ -901,7 +1680,7 @@ No new full gate, commit, push, or hosted result is claimed. Project-owned
 Settings still require a concrete spec-backed preference choice; none was
 invented in this application-only slice.
 
-## Current focused Canvas Settings checkpoint
+## Historical focused Canvas Settings checkpoint
 
 SF-AUTHORING-064 adds a strictly decoded application-only default for Grid in
 new workspaces under bounded `SF-0206-002/003/004/006/008` and `SF-0407-006`.
@@ -937,7 +1716,7 @@ post-repair `./sf verify` passed 486 unit/integration and 70 UI tests on
 2026-09-29. The owner requested the verified tree remain uncommitted for review;
 do not push or publish. Normative modules remain Partial unless fully proven.
 
-## Current asset-organization work
+## Historical asset-organization work
 
 SF-AUTHORING-063 extends the existing ImageAsset and Assets pane with optional
 schema-eleven project-local folder/tags/favorite metadata. Reuse
@@ -960,7 +1739,7 @@ resolution artboard evidence reviewed. See
 gate passed; retain the recovery evidence and leave this tree uncommitted for
 owner review.
 
-## Current component-visibility work
+## Historical component-visibility work
 
 SF-AUTHORING-062 adds strict `component.exposedVisibility.v1.*` definition-child
 metadata and `component.instance.v1.visibility.*` instance overrides. Reuse
@@ -973,7 +1752,7 @@ See `docs/evidence/SF-AUTHORING-062-COMPONENT-VISIBILITY.md` for focused results
 That prior prompt-ten checkpoint has since passed its local full gate; the
 current bounded post-checkpoint slice is SF-AUTHORING-064 above.
 
-## Current image-fill work
+## Historical image-fill work
 
 SF-AUTHORING-061 adds one optional local AssetID image fill for Frame/Section
 under `style.fill.image.v1.*`, reusing the existing resource store, typed
@@ -1030,7 +1809,7 @@ focused model/migration/static/UI selectors and limitations are recorded in
 `docs/evidence/SF-AUTHORING-057-LOCAL-COLOR-TOKENS.md`. Do not claim full
 SF-0509 theme/mode, alias, broad scale, or release acceptance from this slice.
 
-## Current native outer-shadow checkpoint
+## Historical native outer-shadow checkpoint
 
 SF-AUTHORING-056 keeps outer-shadow geometry/color in the established typed
 `style.box.v1` model and adds `shadow.enabled` only for Frame/Section. Omitted
@@ -1039,7 +1818,7 @@ without rendering it. The identity-gated registry is the only write path, and
 native canvas, Local Preview, and typed static CSS all consume the same
 resolution. Do not introduce a separate shadow model or raw CSS pathway.
 
-## Current native box-style checkpoint
+## Historical native box-style checkpoint
 
 SF-AUTHORING-055 extends the existing `style.box.v1` model only for Frame and
 Section with uniform content padding and explicit content clipping. The central
@@ -1073,7 +1852,7 @@ The first three passed 3/3 on 2026-09-27. The UI selector was attempted once
 but XCTest timed out while enabling automation before the body ran; rerun it
 only after the macOS automation service is healthy.
 
-## Current static authored-box checkpoint
+## Historical static authored-box checkpoint
 
 SF-AUTHORING-053 adds only the fixed `box-sizing: border-box` declaration to
 valid typed static geometry. This retains canonical width/height as the outer
@@ -1084,7 +1863,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CanvasRendererTests.testStaticLayoutOutputUsesStableRoundingAndExplicitVisibilityOverrides`.
 
-## Current static plan-integrity checkpoint
+## Historical static plan-integrity checkpoint
 
 SF-AUTHORING-052 adds a deterministic SHA-256 digest to each immutable static
 plan. Its input is a path-sorted, length-delimited in-memory file list, so no
@@ -1095,7 +1874,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CommandKernelTests.testFormFieldsPreserveAtomicHistoryAndRemapSelectOptionsOnPageDuplicate`.
 
-## Current static semantic-outline checkpoint
+## Historical static semantic-outline checkpoint
 
 SF-AUTHORING-051 adds parent NodeID provenance to immutable static tree nodes
 and emits a validated `semantic-outline.txt` plan artifact. It has no effect
@@ -1107,7 +1886,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CommandKernelTests.testMultiPageStaticBuildPlanUsesAuthoredSemanticElementResolution`.
 
-## Current static semantic-resolution checkpoint
+## Historical static semantic-resolution checkpoint
 
 SF-AUTHORING-050 makes `CanonicalSemanticElement.resolved(for:)` the shared
 typed semantic boundary for Inspector and immutable static output. It accepts
@@ -1118,7 +1897,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CommandKernelTests.testMultiPageStaticBuildPlanUsesAuthoredSemanticElementResolution`.
 
-## Current static asset-manifest checkpoint
+## Historical static asset-manifest checkpoint
 
 SF-AUTHORING-049 adds a deterministic `assets.manifest.txt` planning artifact
 only when an Image has a verified content-addressed reference. It exposes only
@@ -1131,7 +1910,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`.
 
-## Current static-image responsive-layout checkpoint
+## Historical static-image responsive-layout checkpoint
 
 SF-AUTHORING-048 carries only validated `ImageAsset` dimensions into
 `InternalStaticImage` and emits them as integer HTML sizing hints. The actual
@@ -1143,7 +1922,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`.
 
-## Current static-image presentation checkpoint
+## Historical static-image presentation checkpoint
 
 SF-AUTHORING-047 adds `StaticImageStyleOutputEmitter`. It maps only the typed
 canonical Fit/Fill/Stretch enum and bounded focal point to a fixed
@@ -1156,7 +1935,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`.
 
-## Current static-image reference checkpoint
+## Historical static-image reference checkpoint
 
 SF-AUTHORING-046 carries canonical Image metadata into the static tree through
 `InternalStaticImage`. `MultiPageStaticBuildPlanner` accepts only existing
@@ -1170,7 +1949,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CommandKernelTests.testMultiPageStaticBuildPlanIncludesVerifiedResponsiveImageReference`.
 
-## Current static-typography checkpoint
+## Historical static-typography checkpoint
 
 SF-AUTHORING-045 makes canonical plain Text content visible in the immutable
 static tree and escapes it only at the Safe HTML boundary. Its stylesheet
@@ -1184,7 +1963,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CanvasRendererTests.testStaticTypographyOutputEscapesTextAndUsesAllowlistedCanonicalValues`.
 
-## Current static-layout plan checkpoint
+## Historical static-layout plan checkpoint
 
 SF-AUTHORING-044 makes the SF-AUTHORING-043 typed layout projection available
 to `MultiPageStaticBuildPlanner` as a deterministic in-memory `styles.css`
@@ -1196,7 +1975,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CommandKernelTests.testMultiPageStaticBuildPlanIncludesTypedLayoutStylesheet`.
 
-## Current static-layout checkpoint
+## Historical static-layout checkpoint
 
 SF-AUTHORING-043 adds `StaticLayoutOutputEmitter`, an immutable projection of
 typed canonical base geometry, explicit Tablet/Mobile overrides, and
@@ -1211,7 +1990,7 @@ No local test execution was performed under the owner-directed pause. The
 next allowed focused selector is
 `CanvasRendererTests.testStaticLayoutOutputUsesStableRoundingAndExplicitVisibilityOverrides`.
 
-## Current static-navigation checkpoint
+## Historical static-navigation checkpoint
 
 SF-AUTHORING-042 adds `StaticNavigationEmitter`, an immutable static-output
 projection from the canonical navigator order. It includes only Home and
@@ -1226,7 +2005,7 @@ assuming a site-root router.
 No tests were run under the owner-directed pause. The next allowed focused
 selector is `CanvasRendererTests.testStaticNavigationProjectionPreservesPageOrderAndAccessibleCurrentState`.
 
-## Current static-control checkpoint
+## Historical static-control checkpoint
 
 SF-AUTHORING-041 adds immutable static-tree projection for existing canonical
 Button and Link controls. `InternalDocumentRenderTreeCompiler` is the sole
@@ -1243,7 +2022,7 @@ owner-directed test pause. The focused compiler regression
 now covers escaped external/section routes, stable anchors, missing targets,
 and inert button output; it must be run before any runtime or export work.
 
-## Current checkpoint
+## Historical checkpoint
 
 SF-AUTHORING-038 adds fixed-breakpoint static CSS emission for canonical
 geometry and visibility overrides. SF-AUTHORING-037 Local form-validation and
@@ -1263,7 +2042,7 @@ identity-gated canonical edit boundary; focused foundation plus current-slice
 coverage is green (9/9). Actual-app UI evidence and all visitor/runtime
 submission behavior remain deferred.
 
-## Current Form boundary
+## Historical Form boundary
 
 - Form field metadata is valid only on Text nodes owned by a Form node.
 - Static output permits only escaped text/email/textarea/checkbox/select and

@@ -391,17 +391,23 @@ struct CanvasRenderSceneSnapshot: Codable, Equatable, Sendable {
     let identity: CanvasRenderRequestIdentity
     let surfaceID: CanvasRenderSurfaceID
     let objects: [CanvasRenderObject]
+    /// Appearance of the structural page surface, not a selectable object.
+    /// Its bounds are derived from the same immutable artboard snapshot.
+    let pageBackground: CanvasRenderObject?
+    var paintObjects: [CanvasRenderObject] { pageBackground.map { [$0] + objects } ?? objects }
 
     init(
         schemaVersion: Int = currentSchemaVersion,
         identity: CanvasRenderRequestIdentity,
         surfaceID: CanvasRenderSurfaceID,
-        objects: [CanvasRenderObject]
+        objects: [CanvasRenderObject],
+        pageBackground: CanvasRenderObject? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.identity = identity
         self.surfaceID = surfaceID
         self.objects = objects
+        self.pageBackground = pageBackground
     }
 }
 
@@ -436,6 +442,7 @@ struct CanvasPreviewSceneSnapshot: Equatable, Sendable {
     let revision: UInt64
     let objects: [CanvasRenderObject]
     let deterministicDigest: String
+    var pageBackground: CanvasRenderObject? = nil
 }
 
 struct LocalPreviewPageSnapshot: Equatable, Sendable, Identifiable {
@@ -445,6 +452,7 @@ struct LocalPreviewPageSnapshot: Equatable, Sendable, Identifiable {
     let role: PageRole
     let viewportBounds: WorldRect
     let objects: [CanvasRenderObject]
+    var pageBackground: CanvasRenderObject? = nil
 }
 
 /// An immutable, document-revision-owned Preview bundle. Navigation mutates
@@ -553,7 +561,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
 }
 
 /// Immutable, render-only control projection. It contains only a validated
-/// static route; buttons intentionally have no browser runtime behavior.
+/// static route; untargeted buttons have no browser runtime behavior.
 struct InternalStaticNavigation: Equatable, Sendable {
     struct Link: Equatable, Sendable { let id: NodeID; let label: String; let href: String?; var isCurrentPage = false; var opensNewContext = false }
     let links: [Link]
@@ -660,7 +668,7 @@ enum InternalDocumentRenderTreeCompiler {
     ) throws -> InternalRenderTreeSnapshot {
         guard Set(page.nodes.map(\.id)).count == page.nodes.count else { throw SafeHTMLEmissionError.invalidIdentity }
         let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
-        let connected = page.nodes.contains { CanonicalPageFlow.role($0) != nil }
+        let connected = page.usesConnectedOutput
         let navigationSurfaces = Set(page.nodes.compactMap { owner -> NodeID? in
             guard [.header, .footer].contains(CanonicalPageFlow.role(owner)) else { return nil }
             return CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner) ?? owner.id
@@ -700,7 +708,7 @@ enum InternalDocumentRenderTreeCompiler {
                 fillLayers: staticFillLayers(for: node, colorTokens: colorTokens),
                 opacity: staticOpacity(for: node),
                 boxStyle: staticBoxStyle(for: node, colorTokens: colorTokens),
-                sizingConstraints: [.frame, .image].contains(node.kind)
+                sizingConstraints: CanonicalSizingConstraints.supportedKinds.contains(node.kind)
                     ? CanonicalSizingConstraints.resolved(for: node) : nil,
                 positioning: CanonicalPositioning.resolve(node),
                 resolvedAppearance: baseAppearance,
@@ -775,7 +783,7 @@ enum InternalDocumentRenderTreeCompiler {
     }
 
     private static func staticOpacity(for node: DocumentNode) -> Double? {
-        guard [.frame, .section].contains(node.kind),
+        guard DesignBoxStyleCommandRegistry.applicableKinds.contains(node.kind),
               let value = node.insertionNumberProperty("style.opacity"),
               value.isFinite, (0...1).contains(value) else { return nil }
         return value
@@ -783,7 +791,7 @@ enum InternalDocumentRenderTreeCompiler {
 
     private static func staticBoxStyle(for node: DocumentNode,
                                        colorTokens: [LocalColorToken]) -> CanonicalBoxStyle? {
-        guard [.frame, .section].contains(node.kind),
+        guard DesignBoxStyleCommandRegistry.applicableKinds.contains(node.kind),
               DesignBoxStyleCommandRegistry.hasWellFormedContentBoxProperties(node) else { return nil }
         return LocalColorTokenResolver.resolvedBoxStyle(for: node, tokens: colorTokens)
     }
@@ -818,9 +826,10 @@ enum InternalDocumentRenderTreeCompiler {
             }
             href = route + "#" + anchorID(for: nodeID)
         }
-        let isLink = node.kind == .link
-        // Static Button authoring has no scripted action or submission path in
-        // this bounded slice, so it remains visible but deliberately inert.
+        // A typed navigation destination is a native anchor even when its
+        // authored appearance is Button. Untargeted actions remain inert;
+        // this does not introduce scripting or form submission behavior.
+        let isLink = node.kind == .link || target != .none
         return .init(
             label: node.controlLabel,
             href: isLink ? href : nil,
@@ -925,14 +934,47 @@ enum StaticTypographyOutputEmitter {
             "letter-spacing: \(number(style.tracking))px;",
             "line-height: \(number(style.lineHeight))px;",
             "text-align: \(alignment(style.alignment));",
+            "white-space: pre-wrap;",
         ]
         if style.family == CanonicalTypography.defaultFamily {
             declarations.insert("font-family: system-ui;", at: 0)
+        } else {
+            // Font intent remains text, never CSS syntax or a remote font URL.
+            // The same installed family is available to AppKit and Safari;
+            // unavailable names fall back to the shared system-family policy.
+            let family = style.family.unicodeScalars.map { scalar -> String in
+                if CharacterSet.alphanumerics.contains(scalar) || scalar == " " || scalar == "-" {
+                    return String(scalar)
+                }
+                return "\\" + String(scalar.value, radix: 16) + " "
+            }.joined()
+            declarations.insert("font-family: \"\(family)\", system-ui;", at: 0)
         }
         if let color = node.textForeground {
             declarations.append("color: rgba(\(number(color.red * 255)), \(number(color.green * 255)), \(number(color.blue * 255)), \(number(color.alpha)));")
         }
-        return "\(CanonicalCSSRule.selector(for: node.id)) { \(declarations.joined(separator: " ")) }"
+        let selector = CanonicalCSSRule.selector(for: node.id)
+        // Managed navigation renders inline/menu copies with stable link
+        // identity, not the ordinary node attribute (which would also apply
+        // absolute authored geometry). Both copies still own this typography.
+        let typographySelector = node.navigationOwnerID == nil ? selector
+            : "\(selector), [data-siteforge-nav-link=\"\(node.id)\"]"
+        let typography = "\(typographySelector) { \(declarations.joined(separator: " ")) }"
+        if node.control == nil {
+            guard node.textContent != nil, node.formField == nil else { return typography }
+            // CanvasTextLayout centers the whole line-fragment block in its
+            // authored frame. Preserve that contract without moving canonical
+            // geometry; Form controls keep their own label/input layout.
+            return typography + "\n\(selector)[data-siteforge-node] { display:flex;flex-direction:column;justify-content:center;overflow:hidden; }"
+        }
+        let horizontal = switch style.alignment {
+        case .leading: "flex-start"
+        case .center: "center"
+        case .trailing: "flex-end"
+        }
+        // Native control bezels/underlines are not authored appearance. Keep
+        // their reset separate from typography so fluid font rules still win.
+        return typography + "\n\(selector):is(a,button) { display:flex;align-items:center;justify-content:\(horizontal);border:0;text-decoration:none; }"
     }
 
     private static func weight(_ value: CanonicalFontWeight) -> Int {
@@ -1265,8 +1307,9 @@ enum LocalStaticBuildWriteError: Error, Equatable, Sendable {
 
 enum LocalStaticBuildWriter {
     static func write(_ plan: LocalStaticBuildPlan, to destination: URL, expectedRevision: UInt64,
-                      replacingExisting: Bool = false, cancelled: Bool = false) throws {
-        guard !cancelled else { throw LocalStaticBuildWriteError.cancelled }
+                      replacingExisting: Bool = false, cancelled: Bool = false,
+                      cancellation: CooperativeCancellationCheckpoint = .init()) throws {
+        guard !cancelled, !Task.isCancelled else { throw LocalStaticBuildWriteError.cancelled }
         guard plan.revision == expectedRevision else { throw LocalStaticBuildWriteError.stale }
         let target = destination.standardizedFileURL
         guard target.path != "/", !target.path.isEmpty,
@@ -1278,24 +1321,31 @@ enum LocalStaticBuildWriter {
         let parent = target.deletingLastPathComponent()
         let stage = parent.appendingPathComponent(".siteforge-build-\(UUID().uuidString)", isDirectory: true)
         do {
+            try cancellation.check()
             try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
             for file in plan.files {
+                try cancellation.check()
                 let output = try safeOutputURL(path: file.path, root: stage)
                 try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try file.contents.data(using: .utf8)!.write(to: output, options: .atomic)
             }
             for file in plan.binaryFiles {
-                guard !cancelled else { throw LocalStaticBuildWriteError.cancelled }
+                try cancellation.check()
                 let output = try safeOutputURL(path: file.path, root: stage)
                 try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try file.contents.write(to: output, options: .atomic)
             }
+            // Cancellation must still be observed after staging every byte,
+            // before promoting/replacing the user-selected destination.
+            try cancellation.check()
             if exists {
                 _ = try FileManager.default.replaceItemAt(target, withItemAt: stage,
                     backupItemName: nil, options: [])
             } else {
                 try FileManager.default.moveItem(at: stage, to: target)
             }
+        } catch is CancellationError {
+            try? FileManager.default.removeItem(at: stage); throw LocalStaticBuildWriteError.cancelled
         } catch let error as LocalStaticBuildWriteError {
             try? FileManager.default.removeItem(at: stage); throw error
         } catch let error as CocoaError where error.code == .fileWriteNoPermission {
@@ -1315,9 +1365,14 @@ enum LocalStaticBuildWriter {
         guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
             throw LocalStaticBuildWriteError.unsafeDestination
         }
-        let output = components.reduce(root) { $0.appendingPathComponent(String($1), isDirectory: false) }
+        // Normalize the existing stage once, before appending absent children.
+        // macOS may normalize an existing /private/var root to /var while an
+        // absent child retains /private/var; comparing those aliases rejects
+        // safe output. Both sides must start from the same normalized root.
+        let normalizedRoot = root.standardizedFileURL
+        let output = components.reduce(normalizedRoot) { $0.appendingPathComponent(String($1), isDirectory: false) }
             .standardizedFileURL
-        guard output.path.hasPrefix(root.standardizedFileURL.path + "/") else {
+        guard output.path.hasPrefix(normalizedRoot.path + "/") else {
             throw LocalStaticBuildWriteError.unsafeDestination
         }
         return output
@@ -1377,19 +1432,30 @@ enum MultiPageStaticBuildPlanner {
             staticNodes += tree.nodes
             staticTrees.append(tree)
             let body = try SafeHTMLEmitter.emit(tree)
-            let hasFlow = page.nodes.contains { CanonicalPageFlow.role($0) != nil }
+            let hasFlow = page.usesConnectedOutput
             let hasMenu = tree.nodes.contains { $0.navigation?.hamburgerEnabled == true }
             needsNavigationScript = needsNavigationScript || hasMenu
             let prefix = String(repeating: "../", count: max(0, output.split(separator: "/").count - 1))
             let stylesheetLink = hasFlow ? "<link rel=\"stylesheet\" href=\"\(prefix)styles.css\">" : ""
             let script = hasMenu ? "<script src=\"\(prefix)siteforge-navigation.js\" defer></script>" : ""
+            let metadata = WebsiteMetadataResolver.resolve(page: page, document: document)
+            guard let metadataHead = StaticSEOEmitter.head(.init(siteName: metadata.siteName,
+                title: metadata.title, description: metadata.description, language: "en",
+                index: metadata.allowsIndexing, follow: true), route: page.route.rawValue) else {
+                throw MultiPageStaticBuildError.invalidDocument
+            }
+            let favicon = metadata.faviconAssetID.flatMap { imageOutputPaths[$0] }.map {
+                "<link rel=\"icon\" href=\"\(prefix)\($0)\">"
+            } ?? ""
+            let head = "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\(metadataHead)\(favicon)\(stylesheetLink)</head>"
             let markup: String
             if hasFlow {
                 // Authored navigation replaces the generated route list; that
                 // historical list must not shift the connected page origin.
-                markup = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\(stylesheetLink)</head><body class=\"sf-connected-body\" tabindex=\"-1\"><div class=\"sf-connected-page sf-page-\(page.id)\">\(body)</div>\(script)</body></html>"
+                markup = "<!doctype html><html lang=\"en\">\(head)<body class=\"sf-connected-body\" tabindex=\"-1\"><div class=\"sf-connected-page sf-page-\(page.id)\">\(body)</div>\(script)</body></html>"
             } else {
-                markup = [navigation, body, script].filter { !$0.isEmpty }.joined(separator: "\n")
+                let contents = [navigation, body, script].filter { !$0.isEmpty }.joined(separator: "\n")
+                markup = "<!doctype html><html lang=\"en\">\(head)<body>\(contents)</body></html>"
             }
             files.append(.init(path: output, contents: markup))
         }
@@ -1412,7 +1478,7 @@ enum MultiPageStaticBuildPlanner {
         // Fluid typography deliberately follows fixed typography. Geometry
         // and spacing fluid rules live inside layout output before explicit
         // breakpoint rules so authored breakpoint literals retain precedence.
-        let stylesheet = [layout.css, typography, fluidTypography, images, fills, boxStyles, sizing, advancedStyles, ConnectedPageOutput.css(pages: pages)]
+        let stylesheet = [layout.css, typography, fluidTypography, images, fills, boxStyles, sizing, advancedStyles, ConnectedPageOutput.css(pages: pages, colorTokens: document.colorTokens)]
             .filter { !$0.isEmpty }.joined(separator: "\n")
         if !stylesheet.isEmpty {
             guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
@@ -1590,7 +1656,7 @@ enum StaticSEOEmitter {
         guard !metadata.siteName.isEmpty, !metadata.title.isEmpty, route.first == "/", !route.contains("?") && !route.contains("#") else { return nil }
         func escape(_ value: String) -> String { value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;").replacingOccurrences(of: "<", with: "&lt;") }
         let description = metadata.description.map { "<meta name=\"description\" content=\"\(escape($0))\">" } ?? ""
-        return "<meta charset=\"utf-8\"><html lang=\"\(escape(metadata.language))\"><title>\(escape(metadata.title))</title>\(description)<meta name=\"robots\" content=\"\(metadata.index ? "index" : "noindex"), \(metadata.follow ? "follow" : "nofollow")\"><link rel=\"canonical\" href=\"\(route)\">"
+        return "<meta charset=\"utf-8\"><title>\(escape(metadata.title))</title>\(description)<meta name=\"robots\" content=\"\(metadata.index ? "index" : "noindex"), \(metadata.follow ? "follow" : "nofollow")\"><link rel=\"canonical\" href=\"\(escape(route))\">"
     }
 }
 
@@ -1700,6 +1766,25 @@ struct StaticBuildCompilation: Equatable, Sendable {
 /// caller-owned resource bytes and returns an immutable plan or typed findings.
 /// It never reads paths, writes output, mutates the project, or publishes.
 enum StaticBuildCompiler {
+    /// Safari and local export resolve the same immutable package input on
+    /// their workers. Never assemble/hash resource bytes in a SwiftUI event.
+    static func compile(document: CanonicalDocument, profileSelection: LocalBuildProfileSelection,
+                        package: ProjectPackage) -> StaticBuildCompilation {
+        do {
+            let input = try ProjectImageResourceSnapshot(document: document, package: package)
+            return compile(document: document, profileSelection: profileSelection,
+                resourceDescriptors: input.descriptors, resourceData: input.data, cancelled: Task.isCancelled)
+        } catch is CancellationError {
+            return compile(document: document, profileSelection: profileSelection,
+                resourceDescriptors: [:], resourceData: [:], cancelled: true)
+        } catch {
+            return .init(documentID: document.id, revision: document.revision, profile: profileSelection.profile,
+                plan: nil, report: nil, findings: [.init(severity: .error, code: "resource-snapshot-invalid",
+                    requirementID: "SF-1206-004", explanation: "The resource snapshot is unavailable or belongs to another project.",
+                    repair: "Refresh from the current project. Locate or replace missing resources before exporting.")])
+        }
+    }
+
     static func compile(
         document: CanonicalDocument,
         profileSelection: LocalBuildProfileSelection,
@@ -1764,10 +1849,16 @@ enum StaticBuildCompiler {
             CanonicalImageStyle.resolve(node)?.assetID ?? CanonicalImageFill.resolve(node)?.assetID
         }
         let referencedAssets = document.imageAssets.filter { asset in
-            nodes.contains { referencedAssetID($0) == asset.id }
+            nodes.contains { referencedAssetID($0) == asset.id } || document.websiteMetadata?.faviconAssetID == asset.id
         }.sorted { $0.id.description < $1.id.description }
         var entries: [StaticAssetExportEntry] = []
         var binaries: [LocalStaticBuildPlan.BinaryFile] = []
+        if let favicon = document.websiteMetadata?.faviconAssetID,
+           !document.imageAssets.contains(where: { $0.id == favicon }) {
+            findings.append(.init(severity: .error, code: "favicon-missing",
+                requirementID: "SF-1207-004", explanation: "The website favicon is unavailable.",
+                repair: "Choose a replacement image or remove the favicon in Site Settings."))
+        }
         for asset in referencedAssets {
             let affected = nodes.first { referencedAssetID($0) == asset.id }?.id
             guard let descriptor = resourceDescriptors[asset.resourceID],
@@ -1910,7 +2001,7 @@ enum SafeHTMLEmitter {
                       !href.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw SafeHTMLEmissionError.invalidControl }
                 return "<a class=\"sf-node-\(id) sf-nav-link-\(id)\" data-siteforge-nav-link=\"\(id)\" href=\"\(escape(href))\"\(link.isCurrentPage ? " aria-current=\"page\"" : "")\(link.opensNewContext ? " target=\"_blank\" rel=\"noopener noreferrer\"" : "") title=\"\(label)\">\(label)</a>"
             }
-            return "<a class=\"sf-node-\(id) sf-nav-link-\(id)\" role=\"link\" aria-disabled=\"true\" tabindex=\"0\" title=\"Missing original page\">\(label)</a>"
+            return "<a class=\"sf-node-\(id) sf-nav-link-\(id)\" data-siteforge-nav-link=\"\(id)\" role=\"link\" aria-disabled=\"true\" tabindex=\"0\" title=\"Missing original page\">\(label)</a>"
         }.joined()
         let name = role == .footer ? "Footer navigation" : "Header navigation"
         let inline = "<nav aria-label=\"\(name)\" class=\"sf-nav-inline\(navigation.hamburgerEnabled ? " sf-nav-responsive" : "")\">\(links)</nav>"
@@ -2116,6 +2207,8 @@ struct CanvasRenderPlan: Equatable, Sendable {
     /// adopting the plan; that would separate painted bounds from overlays.
     let viewport: CanvasViewportState
     let authoredObjects: [CanvasRenderObject]
+    let pageBackground: CanvasRenderObject?
+    var paintObjects: [CanvasRenderObject] { pageBackground.map { [$0] + authoredObjects } ?? authoredObjects }
     let tiles: [CanvasRenderTile]
     let accessibilityElements: [CanvasAccessibilityElementSnapshot]
     let dirtyWorldRegions: [WorldRect]
@@ -2187,7 +2280,8 @@ struct CanvasRendererCore: Sendable {
         }
         let invalidation = invalidation(previous: previous, next: scene)
         let dirty = dirtyRegions(previous: previous, next: scene, invalidation: invalidation)
-        let tiles = try buildTiles(objects: painted, viewport: viewport, cancellation: cancellation)
+        let tiles = try buildTiles(objects: scene.pageBackground.map { [$0] + painted } ?? painted,
+                                  viewport: viewport, cancellation: cancellation)
         var accessibility: [CanvasAccessibilityElementSnapshot] = []
         accessibility.reserveCapacity(min(CanvasRendererPolicy.maximumAccessibilityElements, painted.count))
         for object in painted where accessibility.count < CanvasRendererPolicy.maximumAccessibilityElements {
@@ -2217,11 +2311,12 @@ struct CanvasRendererCore: Sendable {
             surfaceID: scene.surfaceID,
             viewport: viewport,
             authoredObjects: painted,
+            pageBackground: scene.pageBackground,
             tiles: tiles,
             accessibilityElements: accessibility,
             dirtyWorldRegions: dirty,
             invalidation: invalidation,
-            deterministicDigest: digest(scene.objects)
+            deterministicDigest: digest(scene.paintObjects)
         )
     }
 
@@ -2243,7 +2338,8 @@ struct CanvasRendererCore: Sendable {
             documentID: scene.identity.documentID,
             revision: scene.identity.revision,
             objects: scene.objects,
-            deterministicDigest: digest(scene.objects)
+            deterministicDigest: digest(scene.paintObjects),
+            pageBackground: scene.pageBackground
         )
     }
 
@@ -2258,13 +2354,13 @@ struct CanvasRendererCore: Sendable {
         // An empty scene is a valid, explicit blank-project state. Keeping it
         // renderable means the canvas can adopt a real empty plan rather than
         // retaining a stale scene or fabricating a root-node rectangle.
-        guard scene.objects.count <= CanvasRendererPolicy.maximumObjects else {
-            throw CanvasRendererError.objectLimitExceeded(scene.objects.count)
+        guard scene.paintObjects.count <= CanvasRendererPolicy.maximumObjects else {
+            throw CanvasRendererError.objectLimitExceeded(scene.paintObjects.count)
         }
         guard overlays.identity == scene.identity else { throw CanvasRendererError.staleResult }
         var ids = Set<NodeID>()
         var orders = Set<Int>()
-        for (index, object) in scene.objects.enumerated() {
+        for (index, object) in scene.paintObjects.enumerated() {
             if index.isMultiple(of: CanvasRendererPolicy.cancellationStride), cancellation.isCancelled(index) {
                 throw CanvasRendererError.cancelled
             }
@@ -2283,7 +2379,7 @@ struct CanvasRendererCore: Sendable {
                 throw CanvasRendererError.invalidObject(object.id)
             }
         }
-        guard !cancellation.isCancelled(scene.objects.count) else { throw CanvasRendererError.cancelled }
+        guard !cancellation.isCancelled(scene.paintObjects.count) else { throw CanvasRendererError.cancelled }
     }
 
     private func buildTiles(
@@ -2358,7 +2454,7 @@ struct CanvasRendererCore: Sendable {
         guard previous.identity.documentID == next.identity.documentID,
               previous.identity.sceneID == next.identity.sceneID,
               previous.identity.scale == next.identity.scale else { return .fullRaster }
-        return previous.objects == next.objects ? .compositorOnly : .dirtyRegions
+        return previous.paintObjects == next.paintObjects ? .compositorOnly : .dirtyRegions
     }
 
     private func dirtyRegions(
@@ -2367,10 +2463,10 @@ struct CanvasRendererCore: Sendable {
         invalidation: CanvasInvalidationKind
     ) -> [WorldRect] {
         guard invalidation == .dirtyRegions, let previous else {
-            return invalidation == .compositorOnly ? [] : next.objects.map { rasterBounds(for: $0) }
+            return invalidation == .compositorOnly ? [] : next.paintObjects.map { rasterBounds(for: $0) }
         }
-        let old = Dictionary(uniqueKeysWithValues: previous.objects.map { ($0.id, $0) })
-        let new = Dictionary(uniqueKeysWithValues: next.objects.map { ($0.id, $0) })
+        let old = Dictionary(uniqueKeysWithValues: previous.paintObjects.map { ($0.id, $0) })
+        let new = Dictionary(uniqueKeysWithValues: next.paintObjects.map { ($0.id, $0) })
         return Set(old.keys).union(new.keys).sorted { $0.description < $1.description }.flatMap { id -> [WorldRect] in
             guard old[id] != new[id] else { return [] }
             return [old[id], new[id]].compactMap { $0 }.map { rasterBounds(for: $0) }

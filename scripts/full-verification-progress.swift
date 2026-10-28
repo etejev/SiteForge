@@ -107,8 +107,13 @@ final class ProgressApp: NSObject, NSApplicationDelegate {
 }
 
 guard CommandLine.arguments.count == 2 else { exit(2) }
-let app = NSApplication.shared
-let delegate = ProgressApp(run: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
+// Swift's script entry is the native main thread but is not implicitly actor
+// isolated under every supported toolchain. Keep the entire AppKit lifecycle
+// in one explicit main-actor scope; the delegate lives until app.run returns.
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = ProgressApp(run: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+    withExtendedLifetime(delegate) { app.run() }
+}

@@ -1,8 +1,435 @@
+import Combine
 import XCTest
 @testable import SiteForge
 
 @MainActor
 final class CommandKernelTests: XCTestCase {
+    // SF-0902-003/005, SF-0905-003/004: a shared default draft is not
+    // discarded by renderer adoption, nor retargeted to a replacement binding.
+    func testComponentDefinitionTextDraftRetainsPairedEditsAndDetectsBindingReplacement() {
+        let document = DocumentID(), page = PageID(), scene = CanvasViewportSceneID(), node = NodeID()
+        let binding = ComponentTextPropertyID()
+        func identity(_ revision: UInt64) -> DesignInspectorOperationIdentity {
+            .init(documentID: document, pageID: page, revision: revision, sceneID: scene, rendererGeneration: revision)
+        }
+        var draft = ComponentDefinitionTextDraft(label: "Title", content: "Original", bindingID: binding,
+            identity: identity(1), selectionIDs: [node])
+        draft.label.value = "Heading"; draft.content.value = "Unfinished default"
+        draft.adopt(label: "Title", content: "Original", bindingID: binding, identity: nil, selectionIDs: [node])
+        XCTAssertTrue(draft.isDirty); XCTAssertNil(draft.identity); XCTAssertFalse(draft.hasConflict)
+        draft.adopt(label: "Title", content: "Original", bindingID: binding, identity: identity(2), selectionIDs: [node])
+        XCTAssertEqual(draft.label.value, "Heading"); XCTAssertEqual(draft.content.value, "Unfinished default")
+        XCTAssertEqual(draft.identity, identity(2))
+        draft.adopt(label: "Title", content: "Original", bindingID: ComponentTextPropertyID(), identity: identity(3), selectionIDs: [node])
+        XCTAssertTrue(draft.bindingConflict); XCTAssertNil(draft.identity)
+        XCTAssertEqual(draft.bindingID, binding, "Retain the original draft binding, never retarget by label")
+        draft = .init(label: "Title", content: "Current", bindingID: binding, identity: identity(4), selectionIDs: [node])
+        XCTAssertFalse(draft.isDirty); XCTAssertFalse(draft.hasConflict)
+        draft.content.value = "Local"
+        draft.adopt(label: "Title", content: "External", bindingID: binding, identity: identity(5), selectionIDs: [node])
+        XCTAssertTrue(draft.hasConflict); XCTAssertEqual(draft.content.value, "Local")
+    }
+
+    // SF-0901-003/006, SF-0902-003/006: source navigation uses typed stable
+    // property identity across all six existing types, not names/virtual IDs.
+    func testComponentPropertySourceDestinationsCoverExistingTypesAndRejectMissingDefinitions() throws {
+        let document = try organizedComponentFixture(), definition = document.componentDefinitions[0]
+        let page = document.websitePages[0]
+        let instance = try XCTUnwrap(page.nodes.first { $0.kind == .component })
+        let entries = CanonicalComponentOrganization.entries(in: definition)
+        XCTAssertEqual(Set(entries.map { $0.id.organizationKind }), Set(CanonicalComponentOrganization.kinds))
+        for entry in entries {
+            let destination = try XCTUnwrap(ComponentPropertySourceDestination(document: document, pageID: page.id,
+                instanceID: instance.id, property: entry.id))
+            XCTAssertEqual(destination.definitionID, definition.id); XCTAssertEqual(destination.sourceNodeID, entry.sourceNodeID)
+        }
+        let property = try XCTUnwrap(entries.first?.id)
+        XCTAssertNil(ComponentPropertySourceDestination(document: document, pageID: definition.id, instanceID: instance.id, property: property))
+        XCTAssertNil(ComponentPropertySourceDestination(document: document, pageID: page.id, instanceID: NodeID(), property: property))
+        XCTAssertNil(ComponentPropertySourceDestination(document: document, pageID: page.id, instanceID: instance.id,
+            property: .text(ComponentTextPropertyID())))
+        var missing = document; missing.pages.removeAll { $0.id == definition.id }
+        XCTAssertNil(ComponentPropertySourceDestination(document: missing, pageID: page.id, instanceID: instance.id, property: property))
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(document)), document)
+    }
+
+    private func awaitComponentSelection(_ state: WorkspaceShellState, page: PageID, ids: [NodeID]) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while state.effectiveSelectedPageID != page || state.selectionState.orderedIDs != ids
+            || state.componentTextDraftIdentity == nil
+            || state.canvasRenderPlan?.identity.viewportGeneration != state.viewportState.generation {
+            guard ContinuousClock.now < deadline else { throw CocoaError(.coderReadCorrupt) }
+            await Task.yield()
+        }
+    }
+
+    // SF-0901-002/003/005/006, SF-0905-003/004/006: one edit boundary per
+    // transition, exact return, rejected navigation and pinned Rename.
+    func testComponentPropertySourceTransitionReturnsExactInstanceAndGuardsRenameContext() async throws {
+        let session = try exposedTextSession(), document = session.document
+        let definition = document.componentDefinitions[0], text = definition.nodes[1], page = document.websitePages[0]
+        let binding = try XCTUnwrap(CanonicalComponentText.property(on: text))
+        let instance = try XCTUnwrap(page.nodes.first { $0.kind == .component })
+        let fixture = try ApplicationOwnedTestFixture.create("component-source-navigation")
+        defer { try? fixture.cleanup() }
+        let state = WorkspaceShellState(documentSession: session, lifecycle: .init(session: session,
+            recoveryDirectory: fixture.url.appendingPathComponent("recovery"), autosaveDebouncer: ManualLifecycleAutosaveDebouncer()))
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while state.componentTextDraftIdentity == nil {
+            guard ContinuousClock.now < deadline else { throw CocoaError(.coderReadCorrupt) }; await Task.yield()
+        }
+        state.selectLayer(instance.id)
+        try await awaitComponentSelection(state, page: page.id, ids: [instance.id])
+        let origin = state.selectionState, history = session.historySnapshot().undoEntries.count
+        var boundaries = 0, reject = false
+        let subscription = state.editCommitRequests.sink { request in boundaries += 1; if reject { request.reject() } }
+        defer { subscription.cancel() }
+        let sourceContext = state.responsiveInspectorEditContext
+        XCTAssertTrue(state.revealComponentPropertySource(instanceID: instance.id, property: .text(binding.id), expectedContext: sourceContext))
+        XCTAssertEqual(boundaries, 1)
+        try await awaitComponentSelection(state, page: definition.id, ids: [text.id])
+        XCTAssertEqual(state.componentReturnActionTitle, "Return to Instance")
+        XCTAssertEqual(state.inspectorTab, .content)
+        state.exitComponentDefinition()
+        XCTAssertEqual(boundaries, 2)
+        try await awaitComponentSelection(state, page: page.id, ids: [instance.id])
+        XCTAssertEqual(state.selectionState.orderedIDs, origin.orderedIDs)
+        XCTAssertEqual(state.selectionState.primaryID, origin.primaryID)
+        XCTAssertEqual(session.document, document); XCTAssertEqual(session.historySnapshot().undoEntries.count, history)
+        reject = true
+        XCTAssertFalse(state.revealComponentPropertySource(instanceID: instance.id, property: .text(binding.id), expectedContext: state.responsiveInspectorEditContext))
+        state.revealComponentRecoverySource(instanceID: instance.id, property: .text(binding.id), identity: try XCTUnwrap(state.componentTextDraftIdentity))
+        XCTAssertNil(state.editingComponentID); XCTAssertEqual(state.selectionState.orderedIDs, [instance.id])
+        reject = false
+        let renameContext = state.responsiveInspectorEditContext
+        try session.execute(.renamePage(.init(pageID: page.id, name: "Unrelated website rename")))
+        try await awaitComponentSelection(state, page: page.id, ids: [instance.id])
+        let before = session.document
+        XCTAssertFalse(state.renameComponent(definition.id, to: "Stale rename", expectedContext: renameContext))
+        XCTAssertEqual(session.document, before)
+        XCTAssertTrue(state.renameComponent(definition.id, to: "Renamed component", expectedContext: state.responsiveInspectorEditContext))
+        XCTAssertEqual(session.document.componentDefinitions[0].id, definition.id)
+        XCTAssertEqual(CanonicalComponentReference.definitionID(for: try XCTUnwrap(session.document.websitePages[0].nodes.first { $0.id == instance.id })), definition.id)
+        try session.undo(); XCTAssertEqual(session.document.pages, before.pages)
+    }
+
+    // SF-0901-005, SF-0902-003/005, SF-0905-003/005: repeated definition
+    // edits preserve overrides, existing appearance states and immutable output.
+    // This is not variant-axis support (SF-0904 remains deferred).
+    func testComponentSourceDefaultEditsKeepOverridesAppearanceStatesAndCompilerParity() async throws {
+        let session = try exposedTextSession(), definition = session.document.componentDefinitions[0]
+        let text = definition.nodes[1], binding = try XCTUnwrap(CanonicalComponentText.property(on: text))
+        let page = session.document.websitePages[0]
+        let instances = page.nodes.filter { $0.kind == .component }
+        XCTAssertEqual(instances.count, 2)
+        let first = instances[0].id, second = instances[1].id
+        try session.execute(textCommand(.setTextOverride(instanceID: first, propertyID: binding.id, value: "Independent"),
+            document: session.document, pageID: page.id, selected: first).command)
+        let root = definition.rootNodeIDs[0], scene = CanvasViewportSceneID()
+        let color = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#224466FF"))
+        let stateEdit = AdvancedStyleCommand(identity: .init(documentID: session.document.id, pageID: definition.id,
+            revision: session.document.revision, sceneID: scene, rendererGeneration: session.document.revision),
+            orderedNodeIDs: [root], edit: .setState(state: .hover, id: UUID(), fill: color, opacity: 0.6),
+            provenance: .keyboard, cancelled: false)
+        let prepared = try AdvancedStyleCommandRegistry().prepare(stateEdit, in: session.document,
+            context: .init(activePageID: definition.id, currentSceneID: scene, rendererGeneration: session.document.revision,
+                selectedNodeIDs: [root], availableNodeIDs: [root], isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        try session.execute(prepared.documentCommand)
+        let before = session.document
+        let previous = try await LocalPreviewRuntimeCompiler().compile(document: before, imageResourceData: [:], pixelRatio: .init(2))
+        try session.execute(textCommand(.exposeText(nodeID: text.id, label: "Heading", defaultValue: "Shared first edit"),
+            document: session.document, pageID: definition.id, selected: text.id).command)
+        try session.execute(textCommand(.exposeText(nodeID: text.id, label: "Heading", defaultValue: "Shared second edit"),
+            document: session.document, pageID: definition.id, selected: text.id).command)
+        let committed = session.document
+        let source = try XCTUnwrap(committed.componentDefinitions[0].nodes.first { $0.id == text.id })
+        XCTAssertEqual(CanonicalComponentText.property(on: source)?.id, binding.id)
+        XCTAssertEqual(source.insertionProperty(CanonicalComponentText.namespace + "id")?.id,
+            text.insertionProperty(CanonicalComponentText.namespace + "id")?.id)
+        XCTAssertEqual(committed.websitePages, before.websitePages)
+        XCTAssertEqual(CanonicalComponentText.overrides(on: committed.websitePages[0].nodes.first { $0.id == first }!)[binding.id], "Independent")
+        let rootAfter = try XCTUnwrap(committed.componentDefinitions[0].nodes.first { $0.id == root })
+        let appearance = try CanonicalResolvedAppearance.resolve(node: rootAfter,
+            index: CanonicalReusableStyleIndex(document: committed), state: .hover)
+        XCTAssertEqual(appearance.fill, color); XCTAssertEqual(appearance.opacity, 0.6)
+        func virtual(_ instance: NodeID) -> NodeID {
+            NodeID(DocumentPage.deterministicUUID(namespace: instance.rawValue, label: "component-child:" + text.id.description))
+        }
+        let current = try await LocalPreviewRuntimeCompiler().compile(document: committed, imageResourceData: [:], pixelRatio: .init(2))
+        XCTAssertEqual(current.pages.first { $0.id == page.id }?.objects.first { $0.id == virtual(first) }?.plainText, "Independent")
+        XCTAssertEqual(current.pages.first { $0.id == page.id }?.objects.first { $0.id == virtual(second) }?.plainText, "Shared second edit")
+        XCTAssertEqual(previous.pages.first { $0.id == page.id }?.objects.first { $0.id == virtual(second) }?.plainText, "Original")
+        let output = try MultiPageStaticBuildPlanner.plan(document: committed)
+        XCTAssertTrue(output.files.contains { $0.contents.contains("Independent") })
+        XCTAssertTrue(output.files.contains { $0.contents.contains("Shared second edit") })
+        XCTAssertTrue(output.files.contains { $0.contents.contains(":hover") })
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(committed)), committed)
+        try session.undo(); try session.undo(); XCTAssertEqual(session.document.pages, before.pages)
+        try session.redo(); try session.redo(); XCTAssertEqual(session.document.pages, committed.pages)
+    }
+
+    func testComponentRetainedDraftRejectsReplacementSelectionAndRepeatedAdoptionIsNeutral() {
+        let document = DocumentID(), page = PageID(), scene = CanvasViewportSceneID(), first = NodeID(), other = NodeID()
+        func identity(_ revision: UInt64) -> DesignInspectorOperationIdentity {
+            .init(documentID: document, pageID: page, revision: revision, sceneID: scene, rendererGeneration: revision)
+        }
+        var draft = ComponentInstanceTextDraft(committed: "Inherited", identity: identity(1), selectionIDs: [first])
+        draft.value = "Unfinished"
+        for revision in UInt64(2)...4 { draft.adopt(committed: "Inherited", identity: identity(revision), selectionIDs: [first]) }
+        XCTAssertEqual(draft.value, "Unfinished"); XCTAssertNil(draft.conflict)
+        XCTAssertEqual(draft.identity, identity(4))
+        draft.adopt(committed: "Inherited", identity: identity(5), selectionIDs: [other])
+        XCTAssertEqual(draft.conflict, .contextChanged); XCTAssertNil(draft.identity)
+        XCTAssertEqual(draft.value, "Unfinished")
+        draft.cancel(committed: "Inherited", identity: identity(5), selectionIDs: [other])
+        XCTAssertFalse(draft.isDirty); XCTAssertNil(draft.conflict)
+        draft.adopt(committed: "New clean selection", identity: identity(6), selectionIDs: [first])
+        XCTAssertNil(draft.conflict, "An untouched field must not block the new selection")
+        XCTAssertEqual(draft.value, "New clean selection")
+    }
+    func testSelectedMediaAssetUseAndGlobalReferenceInventoryPreserveScope() throws {
+        let document = try componentImageChoiceFixture(), session = DocumentSession(document: document)
+        let definition = document.componentDefinitions[0], image = definition.nodes[1], oldAsset = document.imageAssets[0]
+        try session.execute(textCommand(.exposeMedia(nodeID: image.id, label: "Hero"), document: session.document,
+            pageID: definition.id, selected: image.id).command)
+        let binding = try XCTUnwrap(CanonicalComponentMedia.property(on: session.document.componentDefinitions[0].nodes[1]))
+        let page = session.document.websitePages[0], first = page.nodes[1].id, second = page.nodes[2].id
+        let ordinary = DocumentNode(kind: .image, name: "Ordinary", parent: .node(page.rootNodeIDs[0]), properties: image.properties.map {
+            .init(key: $0.key, value: $0.value, origin: $0.origin)
+        })
+        try session.execute(.insertNode(.init(pageID: page.id, node: ordinary, index: 2)))
+        let fill = DocumentNode(kind: .frame, name: "Fill", parent: .node(page.rootNodeIDs[0]), properties: [
+            .init(key: .init(rawValue: CanonicalImageFill.assetKey), value: .string(oldAsset.id.description))])
+        try session.execute(.insertNode(.init(pageID: page.id, node: fill, index: 3)))
+        try session.execute(.setWebsiteMetadata(.init(documentID: session.document.id, metadata: .init(faviconAssetID: oldAsset.id))))
+        try session.execute(textCommand(.setMediaOverride(instanceID: first, propertyID: binding.id, assetID: oldAsset.id),
+            document: session.document, pageID: page.id, selected: first).command)
+        let references = ImageAssetReference.references(to: oldAsset.id, in: session.document)
+        XCTAssertEqual(references.count, 5)
+        for kind in ImageAssetReference.Kind.allCases { XCTAssertEqual(references.filter { $0.kind == kind }.count, 1) }
+        let alternate = ImageAsset(resourceID: ResourceID(), displayName: "Alternate", originalFilename: "alternate.png", format: .png,
+            pixelWidth: 8, pixelHeight: 6, byteCount: 1, contentHash: String(repeating: "b", count: 64))
+        try session.execute(.insertImageAsset(.init(asset: alternate, index: 1)))
+        let scene = CanvasViewportSceneID(), before = session.document
+        let request = ImageAssetUseRequest(identity: .init(documentID: before.id, pageID: page.id, revision: before.revision,
+            sceneID: scene, rendererGeneration: before.revision, selectedNodeIDs: [first]), target: .componentMedia(instanceID: first, propertyID: binding.id))
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: scene, rendererGeneration: before.revision,
+            selectedNodeIDs: [first], availableNodeIDs: [first], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let command = try ImageInspectorCommandRegistry().prepareAssetUse(alternate.id, request: request, in: before, context: context)
+        try session.execute(command)
+        XCTAssertEqual(CanonicalComponentMedia.overrides(on: session.document.websitePages[0].nodes[1])[binding.id], alternate.id)
+        XCTAssertTrue(CanonicalComponentMedia.overrides(on: session.document.websitePages[0].nodes[2]).isEmpty)
+        XCTAssertEqual(session.document.websitePages[0].nodes[2].id, second)
+        XCTAssertEqual(session.document.componentDefinitions, before.componentDefinitions)
+        XCTAssertEqual(session.document.imageAssets, before.imageAssets)
+        XCTAssertEqual(ImageAssetReference.references(to: oldAsset.id, in: session.document).count, 4)
+        let local = session.document
+        var global = oldAsset; global.resourceID = ResourceID(); global.contentHash = String(repeating: "c", count: 64)
+        try session.execute(.updateImageAsset(.init(asset: global)))
+        XCTAssertEqual(session.document.pages, local.pages)
+        XCTAssertEqual(ImageAssetReference.references(to: oldAsset.id, in: session.document).count, 4)
+        try session.undo(); XCTAssertEqual(session.document.imageAssets, local.imageAssets)
+        try session.undo(); XCTAssertEqual(session.document.pages, before.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, local.pages)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    func testComponentNamedCreationIsAtomicAndPreservesSourceIdentity() throws {
+        var document = BlankProjectDefaults.document()
+        let parent = document.pages[0].rootNodeIDs[0]
+        let root = DocumentNode(kind: .frame, name: "Frame", parent: .node(parent), properties:
+            [("layout.x", 100.0), ("layout.y", 80.0), ("layout.width", 240.0), ("layout.height", 160.0)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            })
+        document.pages[0].nodes[0].childIDs = [root.id]
+        document.pages[0].nodes.append(root)
+        let session = DocumentSession(document: document), pageID = document.pages[0].id
+        for invalid in ["", "\n", String(repeating: "a", count: 257)] {
+            XCTAssertThrowsError(try textCommand(.createNamed(root.id, name: invalid), document: document,
+                pageID: pageID, selected: root.id))
+            XCTAssertEqual(session.document, document)
+        }
+        try session.execute(textCommand(.createNamed(root.id, name: "Editorial Card"), document: document,
+            pageID: pageID, selected: root.id).command)
+        let created = session.document
+        XCTAssertEqual(created.componentDefinitions.first?.name, "Editorial Card")
+        let instance = try XCTUnwrap(created.pages[0].nodes.first { $0.id == root.id })
+        XCTAssertEqual(instance.name, "Editorial Card")
+        XCTAssertEqual(instance.kind, .component)
+        XCTAssertEqual(instance.insertionGeometry, root.insertionGeometry)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(created)), created)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, document.pages)
+        try session.redo()
+        XCTAssertEqual(session.document.pages, created.pages)
+        XCTAssertThrowsError(try ComponentCommandRegistry.creationSourceIDs(instance.id,
+            page: created.pages[0], document: created))
+    }
+
+    func testComponentNamedCreationCancelledStaleDuplicateAndUnsupportedAreNeutral() throws {
+        var document = BlankProjectDefaults.document()
+        let pageID = document.pages[0].id, parent = document.pages[0].rootNodeIDs[0]
+        let root = DocumentNode(kind: .frame, name: "Card", parent: .node(parent), properties:
+            [("layout.x", 10.0), ("layout.y", 20.0), ("layout.width", 240.0), ("layout.height", 160.0)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            })
+        document.pages[0].nodes[0].childIDs = [root.id]
+        document.pages[0].nodes.append(root)
+        let scene = CanvasViewportSceneID(), registry = ComponentCommandRegistry()
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: pageID,
+            revision: document.revision, sceneID: scene, rendererGeneration: document.revision)
+        let context = TransformValidationContext(activePageID: pageID, currentSceneID: scene,
+            rendererGeneration: document.revision, selectedNodeIDs: [root.id], availableNodeIDs: [root.id],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        XCTAssertThrowsError(try registry.prepare(.createNamed(root.id, name: "Card"), identity: identity,
+            in: document, context: context, cancelled: true))
+        let session = DocumentSession(document: document)
+        try session.execute(textCommand(.createNamed(root.id, name: "Card"), document: document,
+            pageID: pageID, selected: root.id).command)
+        let duplicate = DocumentNode(kind: .frame, name: "Other", parent: .node(parent), properties: root.properties.map {
+            NodeProperty(key: $0.key, value: $0.value, origin: $0.origin)
+        })
+        try session.execute(.insertNode(.init(pageID: pageID, node: duplicate, index: 1)))
+        let before = session.document
+        XCTAssertThrowsError(try textCommand(.createNamed(duplicate.id, name: "cArD"), document: before,
+            pageID: pageID, selected: duplicate.id))
+        XCTAssertThrowsError(try registry.prepare(.createNamed(root.id, name: "Stale"), identity: identity,
+            in: before, context: context))
+        XCTAssertEqual(session.document, before)
+        for kind in [NodeKind.text, .image, .button, .component] {
+            var unsupported = document
+            unsupported.pages[0].nodes[1].kind = kind
+            XCTAssertThrowsError(try ComponentCommandRegistry.creationSourceIDs(root.id,
+                page: unsupported.pages[0], document: unsupported))
+        }
+    }
+
+    func testComponentConnectedReusePropagationResetHistoryAndImmutableOutput() async throws {
+        let session = try exposedTextSession()
+        let definition = session.document.componentDefinitions[0], text = definition.nodes[1]
+        let binding = try XCTUnwrap(CanonicalComponentText.property(on: text))
+        try session.execute(textCommand(.exposeVisibility(nodeID: text.id, label: "Show title", defaultValue: true),
+            document: session.document, pageID: definition.id, selected: text.id).command)
+        let visibility = try XCTUnwrap(CanonicalComponentVisibility.property(on: session.document.componentDefinitions[0].nodes[1]))
+        let page = session.document.websitePages[0], first = page.nodes[1].id, second = page.nodes[2].id
+        func apply(_ edit: ComponentEdit, pageID: PageID, selected: NodeID) throws {
+            try session.execute(textCommand(edit, document: session.document, pageID: pageID, selected: selected).command)
+        }
+        try apply(.setTextOverride(instanceID: first, propertyID: binding.id, value: "Independent title"), pageID: page.id, selected: first)
+        try apply(.exposeText(nodeID: text.id, label: "Title", defaultValue: "Shared revised title"), pageID: definition.id, selected: text.id)
+        func virtual(_ instance: NodeID) -> NodeID {
+            NodeID(DocumentPage.deterministicUUID(namespace: instance.rawValue, label: "component-child:" + text.id.description))
+        }
+        let old = try await LocalPreviewRuntimeCompiler().compile(document: session.document, imageResourceData: [:], pixelRatio: .init(2))
+        XCTAssertEqual(old.pages.first { $0.id == page.id }?.objects.first { $0.id == virtual(first) }?.plainText, "Independent title")
+        XCTAssertEqual(old.pages.first { $0.id == page.id }?.objects.first { $0.id == virtual(second) }?.plainText, "Shared revised title")
+        let output = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        XCTAssertTrue(output.files.contains { $0.contents.contains("Independent title") })
+        XCTAssertTrue(output.files.contains { $0.contents.contains("Shared revised title") })
+        try apply(.setVisibilityOverride(instanceID: first, propertyID: visibility.id, value: false), pageID: page.id, selected: first)
+        let retained = session.document.pages
+        let hidden = try await LocalPreviewRuntimeCompiler().compile(document: session.document, imageResourceData: [:], pixelRatio: .init(1))
+        XCTAssertNil(hidden.pages.first { $0.id == page.id }?.objects.first { $0.id == virtual(first) })
+        try apply(.resetAllOverrides(first), pageID: page.id, selected: first)
+        XCTAssertTrue(CanonicalComponentText.overrides(on: session.document.pages[0].nodes[1]).isEmpty)
+        XCTAssertTrue(CanonicalComponentVisibility.overrides(on: session.document.pages[0].nodes[1]).isEmpty)
+        let reset = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, retained)
+        try session.redo(); XCTAssertEqual(session.document.pages, reset)
+        let current = try await LocalPreviewRuntimeCompiler().compile(document: session.document, imageResourceData: [:], pixelRatio: .init(2))
+        for id in [first, second] {
+            XCTAssertEqual(current.pages.first { $0.id == page.id }?.objects.first { $0.id == virtual(id) }?.plainText, "Shared revised title")
+        }
+        XCTAssertEqual(old.pages.first { $0.id == page.id }?.objects.first { $0.id == virtual(first) }?.plainText, "Independent title")
+        XCTAssertEqual(current.revision, session.document.revision)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    func testComponentDefinitionReturnContextRestoresOrderedSelectionAndRejectsReplacement() throws {
+        let document = try componentTextFixture(), page = document.pages[0]
+        let ids = [page.nodes[2].id, page.nodes[1].id]
+        var selection = SelectionState()
+        selection.setSelection(ids, primary: ids[0], anchor: ids[1], provenance: .layersNavigator)
+        let context = try XCTUnwrap(ComponentDefinitionReturnContext(document: document, pageID: page.id, selection: selection))
+        XCTAssertEqual(context.resolve(in: document)?.selection, selection)
+        XCTAssertEqual(context.resolve(in: document)?.selection?.orderedIDs, ids)
+        var changed = document
+        changed.pages[0].nodes.removeAll { $0.id == ids[0] }
+        XCTAssertEqual(context.resolve(in: changed)?.reason, .selectionUnavailable)
+        XCTAssertNil(context.resolve(in: changed)?.selection)
+        changed = document
+        changed.pages.removeAll { $0.id == page.id }
+        XCTAssertEqual(context.resolve(in: changed)?.reason, .pageUnavailable)
+        XCTAssertNil(context.resolve(in: changed)?.selection)
+        let replacement = BlankProjectDefaults.document()
+        XCTAssertNil(context.resolve(in: replacement))
+        var single = SelectionState()
+        single.setSelection([ids[0]], primary: ids[0], anchor: ids[0], provenance: .layersNavigator)
+        XCTAssertTrue(try XCTUnwrap(ComponentDefinitionReturnContext(document: document, pageID: page.id, selection: single)).returnsToInstance)
+    }
+
+    func testComponentDefinitionReturnContextDoesNotSelectRetargetedLockedOrHiddenInstances() throws {
+        let document = try componentTextFixture(), page = document.pages[0], node = page.nodes[1]
+        var selection = SelectionState()
+        selection.setSelection([node.id], primary: node.id, anchor: node.id, provenance: .pointer)
+        let context = try XCTUnwrap(ComponentDefinitionReturnContext(document: document, pageID: page.id, selection: selection))
+        for key in ["locked", "hidden"] {
+            var changed = document
+            changed.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: key), value: .boolean(true), origin: .authored))
+            XCTAssertEqual(context.resolve(in: changed)?.reason, .selectionUnavailable)
+            XCTAssertNil(context.resolve(in: changed)?.selection)
+        }
+        var changed = document
+        changed.pages[0].nodes[1].kind = .frame
+        XCTAssertEqual(context.resolve(in: changed)?.reason, .selectionUnavailable)
+        selection.setSelection([node.id], primary: node.id, anchor: node.id, provenance: .layersNavigator)
+        let layers = try XCTUnwrap(ComponentDefinitionReturnContext(document: document, pageID: page.id, selection: selection))
+        changed = document
+        changed.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: "hidden"), value: .boolean(true), origin: .authored))
+        XCTAssertEqual(layers.resolve(in: changed)?.selection, selection, "Layers inspection does not fabricate a canvas target")
+    }
+
+    func testComponentTextDraftAdoptionPreservesTypingAndRejectsConflictingContext() throws {
+        let document = try componentTextFixture(), page = document.pages[0], scene = CanvasViewportSceneID()
+        func identity(_ revision: UInt64, sceneID: CanvasViewportSceneID? = nil) -> DesignInspectorOperationIdentity {
+            .init(documentID: document.id, pageID: page.id, revision: revision,
+                sceneID: sceneID ?? scene, rendererGeneration: revision)
+        }
+        var draft = ComponentInstanceTextDraft(committed: "Original", identity: identity(1))
+        draft.value = "Typing"
+        draft.adopt(committed: "Original", identity: identity(2))
+        XCTAssertEqual(draft.value, "Typing")
+        XCTAssertEqual(draft.identity, identity(2))
+        draft.adopt(committed: "Typing", identity: nil)
+        XCTAssertFalse(draft.isDirty)
+        XCTAssertNil(draft.identity, "A successful event must not be repeated while renderer adoption is pending")
+        draft.adopt(committed: "Typing", identity: identity(3))
+        XCTAssertEqual(draft.identity, identity(3))
+        XCTAssertNil(draft.conflict)
+        draft.value = "Local"
+        draft.adopt(committed: "Remote", identity: identity(4))
+        XCTAssertEqual(draft.value, "Local")
+        XCTAssertEqual(draft.conflict, .valueChanged)
+        XCTAssertNil(draft.identity)
+        draft.cancel(committed: "Remote", identity: identity(4))
+        XCTAssertEqual(draft.value, "Remote")
+        XCTAssertFalse(draft.isDirty)
+        draft.value = "Do not send to another scene"
+        draft.adopt(committed: "Elsewhere", identity: identity(5, sceneID: CanvasViewportSceneID()))
+        XCTAssertEqual(draft.conflict, .contextChanged)
+        XCTAssertNil(draft.identity)
+        XCTAssertEqual(draft.value, "Do not send to another scene")
+    }
+
+    func testContextualColorTargetUsesWholeSelectionWithoutPrimaryBorrowing() {
+        XCTAssertEqual(LocalColorTarget.initialInspectorTarget(for: []), .fill)
+        XCTAssertEqual(LocalColorTarget.initialInspectorTarget(for: [.text]), .textForeground)
+        XCTAssertEqual(LocalColorTarget.initialInspectorTarget(for: [.text, .text]), .textForeground)
+        XCTAssertEqual(LocalColorTarget.initialInspectorTarget(for: [.text, .frame]), .fill)
+        XCTAssertEqual(LocalColorTarget.initialInspectorTarget(for: [.frame, .text]), .fill)
+        XCTAssertEqual(LocalColorTarget.initialInspectorTarget(for: [.button]), .fill)
+    }
     private func componentTextFixture() throws -> CanonicalDocument {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "schema-v7-linked-text-document", withExtension: "json", subdirectory: "Legacy"))
         return try DocumentSerializer.decode(Data(contentsOf: url))
@@ -542,9 +969,12 @@ final class CommandKernelTests: XCTestCase {
         try session.undo(); XCTAssertEqual(session.document.pages, organizedPages)
         let legacy = try componentTextFixture()
         XCTAssertTrue(CanonicalComponentOrganization.entries(in: legacy.componentDefinitions[0]).isEmpty)
-        let previousSchema = String(decoding: try DocumentSerializer.encode(document), as: UTF8.self)
-            .replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":14")
-        XCTAssertEqual(try DocumentSerializer.decode(Data(previousSchema.utf8)), document)
+        var previousSchema = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(document)) as? [String: Any])
+        previousSchema["schemaVersion"] = 14
+        var previousDocument = try XCTUnwrap(previousSchema["document"] as? [String: Any])
+        previousDocument.removeValue(forKey: "websiteMetadata") // Not part of schema 14.
+        previousSchema["document"] = previousDocument
+        XCTAssertEqual(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: previousSchema)), document)
     }
 
     func testComponentPropertyOrganizationRenameRemovalConflictAndDetachPreserveIntent() throws {

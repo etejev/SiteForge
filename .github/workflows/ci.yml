@@ -33,6 +33,7 @@ jobs:
         env:
           SITEFORGE_DERIVED_DATA: ${{ runner.temp }}/SiteForge/DerivedData
         run: |
+          /bin/zsh scripts/setup-verification-runtime.sh
           mkdir -p "$RUNNER_TEMP/siteforge-ci"
           set -o pipefail
           ./sf verify 2>&1 | tee "$RUNNER_TEMP/siteforge-ci/verify.log"

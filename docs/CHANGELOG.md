@@ -1,5 +1,610 @@
 # SiteForge Development Changelog
 
+## 2026-10-28 — Verified local authoring/preview checkpoint
+
+- Final ./sf verify passed:785 unit/integration +151 UI =936 passes,0 failures,
+  three intentional owner-session skips. The three repaired journeys also pass
+  focused3/3; their nine original screenshots were visually inspected.
+- Completed the bounded ten-workflow batch and separate Page Background paint
+  prerequisite. Native scrolling/focus, structural Root semantics, page paint
+  and sRGB conversion are proven without weakening canonical/history assertions.
+- Security, traceability440, architecture, build and diff checks passed. No
+  publish-during-update or invalid-view-geometry messages were found in this run
+  log.72 runtime QoS warnings remain recorded, not claimed fixed.
+- Local checkpoint only; no push, installation, release or owner project edits.
+  Earlier pending/failure/authentication notes below are retained history.
+
+## 2026-10-28 — Final batch acceptance interaction corrections
+
+- Owner completed native authentication; the corrected Fluid, Site Settings and
+  blank-canvas/material journeys pass3/3 (07cad6e0). All nine original screenshots
+  were inspected; canonical values, visible native controls, artboard/grid and
+  real selection/render alignment agree. Final coherent full gate remains pending.
+
+- The three corrected journey sources compile. Their focused run6c4a1ac5 hit a
+  fresh macOS Enable UI Automation authentication timeout before any UI method.
+  No runner remains; owner presence is needed for one isolated retry. No tests
+  are claimed passing from this initialization failure, and no commit was made.
+
+- Completed full acceptance:785 non-UI passes; UI148 passes,3 failures and3
+  intentional owner-session skips. The failed gate is retained, not called green.
+- Older fluid and Site Settings journeys now reveal native controls within their
+  actual scroll view before strict pointer/focus checks, reusing the shipping
+  workflow. No production geometry or command bypass is introduced.
+- Blank Layers coverage now permits the canonical structural Root with explicit
+  Page structure status, while requiring zero canvas objects/selection ghosts;
+  real insertion must create exactly one matching selected layer/render identity.
+- Targeted checks and final full verification remain pending. No push/install.
+
+## 2026-10-27 — Preview/export integration, source batch 10 (acceptance pending)
+
+- Current full acceptance exposed manual Recovery History using a non-cancellable
+  launch status. Its read-only review now offers real Cancel and retains recovery
+  bytes; the affected regression passes. Typography parity/recovery tests now use
+  the shipping text-storage initializer and exact validated replacement identity.
+- Five output integration methods and three corrected methods pass focused
+  coverage. Owner authentication retry succeeded; all twelve changed/prerequisite
+  UI methods now pass affected acceptance. Final full gate remains pending.
+- Visual review caught missing page paint despite correct Inspector state.
+  Structural Page Background now uses the shared immutable paint/tile/Preview
+  path without creating a canvas object or ghost. Normalized native fill and
+  gradient channels use explicit sRGB. Exact 1x/2x pixels and actual-app page
+  pixels pass; Transparent/None restores the unpainted editor page surface.
+- Native Settings scrolling/draft notices, Image field insets, font-search focus,
+  live browser status and native document Undo ownership were corrected without
+  weakening assertions. Nothing is committed, pushed or installed yet.
+
+- Preview/Refresh completes one draft boundary; native Preview Refresh and
+  static export reject invalid drafts without changing committed content.
+- Export pins the selected immutable snapshot before the destination panel.
+  Stop/replacement cancels owned pending writes, with cooperative staged cleanup.
+- Shared worker resource resolution validates package/document ownership and
+  original bytes; stale build/profile completions cannot replace newer feedback.
+- Owner approved current-source full local acceptance and a reviewed local
+  commit. Nothing is pushed or installed; normative modules remain Partial.
+
+## 2026-10-27 — Global Settings and lifecycle clarity, source batch 09 (unverified)
+
+- Settings retains one global destination model and shows unsaved Appearance/
+  Canvas drafts across its existing pages, with Review and Cancel Drafts actions.
+  Fixed geometry/cards remain unchanged; there is no project/workspace scope or
+  release-channel selector. Advanced testing remains manually triggered.
+- Cancel reloads the latest saved preference, not an outdated cache. Restore
+  Previous cannot replay history over an external preference or discard a draft.
+  Unknown records stay untouched, and default-reset wording now names Dark.
+- Recent-project operations are ordered within the launch controller; failed
+  refresh retains the last valid list. Expired Open/New/cancel completions cannot
+  overwrite newer presentation. Failed Open preserves Return to Current Project
+  for a real untitled workspace, including across retries.
+- Cancelled recovery-history review returns from loading. Restore/discard is
+  single-flight and identity-guarded; errors retain the recovery surface with
+  specific feedback instead of pretending success. Crash qualification, owned
+  recovery deletion and original-byte/security boundaries are unchanged.
+- Seven new methods remain UNRUN. IMPLEMENTED IN SOURCE — NOT BUILT/TESTED;
+  OWNER TEST APPROVAL REQUIRED. No testing, build, visual/runtime review,
+  installation, signing, cleanup, commit or GitHub action occurred.
+
+## 2026-10-27 — Coherent component source editing, source batch 08 (unverified)
+
+- Each organized exposed property offers Edit Property Source, selecting its
+  real definition layer. Return to Instance retains the original canonical
+  selection and overrides; missing bindings are never guessed or retargeted.
+- Definition text/default editors retain drafts across renderer adoption instead
+  of rebuilding on every revision. Paired edits commit once through the existing
+  registry; invalid, conflicting or cancelled work stays noncanonical. New
+  properties still require explicit Expose; clean instance text omits redundant
+  Apply/Cancel while keeping explicit Reset.
+- Definition entry/return now prepares editing once, before changing graphs.
+  Rejected entry cannot queue a stale source selection. Rename validates its
+  opening context rather than targeting a replacement scene.
+- Five new methods are UNRUN. IMPLEMENTED IN SOURCE — NOT BUILT/TESTED;
+  OWNER TEST APPROVAL REQUIRED. No testing, builds, runtime/visual acceptance,
+  installation, signing, commits or GitHub mutation. Component variants remain
+  deferred; existing appearance states and typed choice properties are retained.
+
+## 2026-10-27 — Practical local-image Inspector, source batch 07 (unverified)
+
+- Mixed Images retain fit, focal and alt/decorative controls with per-property
+  Mixed state. Applicable-subset edits do not borrow a primary asset's values.
+- Image drafts retain their opening context, report invalid/stale input and
+  commit through the existing registry on Return, valid blur or Apply. Escape/
+  Cancel preserves committed content; repeated authored values add no history.
+  Untouched focal coordinates retain exact precision, not rounded UI percentages.
+- Missing-resource status describes selected-use versus confirmed shared repair;
+  missing asset definitions do not offer a dead global-replacement action.
+  Existing metadata, geometry, Header/Footer visibility and favicon references
+  are retained. Fit/Fill/Stretch remain non-destructive.
+- Reuse search now finds all matching project images regardless of navigator
+  filters. Filtered-empty Assets offers Clear Search and Filters without changing
+  the document or import architecture.
+- Five new methods are UNRUN. IMPLEMENTED IN SOURCE — NOT BUILT/TESTED;
+  OWNER TEST APPROVAL REQUIRED. No execution, visual acceptance, installation,
+  signing, commits or external changes.
+
+## 2026-10-27 — Reusable style links, source batch 06 (unverified)
+
+- Link appends without replacing other reusable styles; Unlink removes one;
+  Earlier/Later changes precedence. Mixed-link selection can explicitly detach.
+- Shared Update previews solid RGBA8/opacity and authored usage scope, requires
+  confirmation and rejects stale context. Complex/mixed captures are explained,
+  not silently flattened or omitted. Tokens remain definitions/bindings, not
+  converted into hidden aliases.
+- Confirmed Use Linked Fill/Opacity removes only the corresponding local
+  override. Explicit None, fill-token bindings and image fills are protected.
+  Inspector values/provenance reflect linked appearance; opacity drafts are
+  context-owned and unchanged focus loss does not author a local literal.
+- Five new acceptance methods remain UNRUN. IMPLEMENTED IN SOURCE — NOT
+  BUILT/TESTED; OWNER TEST APPROVAL REQUIRED. No execution, screenshots,
+  installation, signing, commits or GitHub mutation.
+
+## 2026-10-27 — Practical installed typography, source batch 05 (unverified)
+
+- Installed-font chooser offers native upright weight choices per family. A
+  choice applies both properties in one undoable edit instead of temporarily
+  retaining an unavailable old weight. Family-only choice remains explicit.
+- Chooser captures context/revision, honors the existing edit/IME boundary,
+  preserves failed drafts, and shows validation inside the popover. Cancel and
+  repeated unchanged choices do not issue a font mutation.
+- Typography shows Heading/Paragraph semantic guidance without deriving heading
+  level from font size or rewriting text/geometry. Existing metrics/fluid controls
+  and shared renderer/editor/compiler are preserved.
+- Five new tests and one expanded package/recovery test remain UNRUN.
+  IMPLEMENTED IN SOURCE — NOT BUILT/TESTED; OWNER TEST APPROVAL REQUIRED.
+  No execution, visual acceptance, install, signing, commit or GitHub mutation.
+
+## 2026-10-27 — Responsive visibility/fluid workflow, source batch 04 (unverified)
+
+- Fluid drafts and visibility controls retain their opening context; stale
+  selection/page/document/device/revision work cannot silently target live data.
+- Fluid Value retains the chosen property after a commit, labels its base scope
+  and shows the current winning value/source. Removal preserves device overrides
+  and no longer unconditionally implies that a fixed fallback wins.
+- Mixed fixed values can open blank fields for one explicit range. Equal ranges
+  display as common without merging separate objects' FluidValueIDs/history.
+- Typography distinguishes fixed fallback controls from current rendered metrics
+  and offers native navigation to the existing Layout fluid editor.
+- Six acceptance methods added, none run. IMPLEMENTED IN SOURCE — NOT BUILT/
+  TESTED; OWNER TEST APPROVAL REQUIRED. No execution, installation, commit, push,
+  scheduled follow-up or external mutation.
+
+## 2026-10-27 — Connected container spacing, source batch 03 (unverified)
+
+- Container Layout shows fluid gap/padding at the current viewport width and
+  reports the winning fluid/device source rather than the inactive fixed value.
+- Desktop fixed spacing/reset cannot silently change an ignored fallback while
+  fluid spacing is active. Device overrides remain explicit and independently
+  resettable; removing fluid intent stays a separate undoable command.
+- Edit Fluid Values reaches the existing native editor. Connected containers
+  expose supported padding/gap there without exposing flow-owned dimensions.
+- Seven new acceptance methods added, all UNRUN. IMPLEMENTED IN SOURCE — NOT
+  BUILT/TESTED; OWNER TEST APPROVAL REQUIRED. No testing/builds/check scripts,
+  automation, acceptance launches, installation, commit or GitHub mutation.
+
+## 2026-10-27 — Header/Footer navigation, source batch 02 (unverified)
+
+- Dedicated settings expose inline link gap, current breakpoint provenance,
+  Apply/Cancel and Reset Override using the existing Navigation Stack properties.
+- Structural frames and shared connected CSS use that same bounded gap instead
+  of hard-coded spacing; native mobile-menu interaction remains unchanged.
+- Actual Contents Images have explicit base visibility controls and an existing
+  Contents-selection path for logo customization; no extra logo model or asset.
+- Six unrun acceptance methods added. IMPLEMENTED IN SOURCE — NOT BUILT/TESTED;
+  OWNER TEST APPROVAL REQUIRED. No builds/tests/launches/install/commit/push.
+
+## 2026-10-27 — Site and page setup, source batch 01 (unverified)
+
+- Pages exposes Site & Page Settings and current-page metadata directly.
+- Per-page indexing can inherit, allow or discourage; Reset Page Overrides
+  restores inheritance without changing other pages or site defaults.
+- Local snippet preview and favicon choices retain the opening snapshot, with
+  provenance, route/navigation-name guidance and missing-favicon repair text.
+- Existing canonical metadata, original image resources, page/link identities
+  and shared head emission are reused. No social-image model or live SEO service.
+- Five test methods added, none run. IMPLEMENTED IN SOURCE — NOT BUILT/TESTED;
+  OWNER TEST APPROVAL REQUIRED. No build, launch, install, commit or push.
+
+## 2026-10-27 — Page Background discoverability (source only, unverified)
+
+- Pages and empty Design expose Page Background through the existing Root fill/
+  gradient/token editor, with a concise effective value and Transparent / None.
+- None uses one undoable fill-layer transaction, including fill-token unbinding;
+  shared tokens, other styles and canonical geometry remain unchanged.
+- Shared appearance resolution treats an explicit empty fill stack as None,
+  preventing a reusable solid from unexpectedly reappearing behind it.
+- Layers distinguish Page structure from genuinely hidden content; structural
+  Roots stay noninteractive on the canvas. Draft guards include page/document.
+- Six acceptance methods added but not run. IMPLEMENTED IN SOURCE — NOT BUILT/
+  TESTED; owner approval required. No app install, commit or push.
+
+## 2026-10-27 — Post-cleanup delivery verification boundary
+
+- Owner hold stopped the exact authoritative run safely: 733 non-UI and100 UI
+  passes retained, three declared skips, one cancelled case and38 UI not reached.
+  No full-pass claim or installed refresh. Further testing requires approval.
+
+- Owner-assisted native authentication restored demonstrated UI readiness: the
+  exact shell method passes1/1. No speculative source/configuration patch; final
+  full verification and green-gated local refresh still required.
+
+- Preserved the completed gate: 733 non-UI passes; XCTest automation-mode
+  initialization failed before UI execution. No product assertion failure or
+  successful full verification is claimed. Installed app remains unchanged;
+  approved local refresh awaits a green gate. Owner data/evidence preserved.
+
+## 2026-10-26 — Focused verification boundary corrections in progress
+
+- Owner-authorized cleanup removed about 1.7 GiB of regenerable compiled caches,
+  preserving all project/recovery/visual/test evidence. One post-cleanup gate and
+  green-gated local-only app refresh are authorized; no completion claim yet.
+- The externally interrupted asset journey passes one isolated rerun (99.566s)
+  on unchanged source. This does not retroactively green the failed full gate.
+  No runner remains; installed delivery waits for OD-026/027 and a green gate.
+- Reconciled final verification passed 733 non-UI and 138 UI tests, but macOS's
+  cache-deletion service killed the runner during one asset-test launch. Gate
+  remains failed (871 passed, 1 external kill, 3 owner-session skips); no completion
+  or installed-delivery claim. Exact targeted system evidence is retained.
+- Layers native context-menu hosting now observes current selection/lifecycle
+  state while reusing central drag/drop validation (focused nesting/history 1/1).
+- Component Rename ends native focus before dismissing the sheet, so its closed
+  editor cannot capture main-window document Undo (focused exact history 1/1).
+- All nine previously failing UI methods now pass focused runs; final full gate
+  remains pending. Original-resolution rename/nesting captures were reviewed.
+- Privacy coverage compares diagnostic records for different authored fluid values
+  rather than rejecting incidental digits in sanitized identifiers (focused 1/1).
+- Document-history UI checks explicitly move focus from the native draft editor
+  to the real breakpoint control before invoking native menu/keyboard Undo.
+  Nested-layout history passes 1/1; native text Undo behavior is unchanged.
+- Exact clear-selection/sibling-insertion/nesting model regression passes 1/1.
+  Remaining UI repairs and final full verification are not yet complete.
+
+## 2026-10-25 — Dark Flow output viewport acceptance
+
+- Responsive-conversion UI coverage now reveals and re-queries the real computed
+  geometry readout after breakpoint Inspector rebuilds. Native conversion passes
+  1/1 (97.941s); native related-page Save/Preview/export/reopen passes 1/1
+  (235.493s). No canonical sizing, timeout or persistence behavior was weakened.
+- Connected output uses a viewport-based minimum on the real flow root and outer
+  wrapper instead of an arbitrary 900px wrapper minimum (focused 1/1).
+- Native Design authoring added editable Dark Surface root-token bindings to the
+  two short owner pages. Revision 245 Preview/export is visually reviewed at
+  1440/390; no white lower strip, content/geometry changes or hardcoded theme.
+- Direct supported native controls completed the pending boundary without another
+  XCTest initialization retry. Full verification/installed delivery remain pending.
+
+## 2026-10-24 — Dark Flow native-authoring continuation
+
+- Shared website output keeps collapsed navigation's full Menu affordance on
+  one line and aligned to the authored Mobile navigation edge, rather than
+  wrapping inside an undersized remaining title row. Two focused code methods
+  and a real native export Cancel/retry pass; corrected browser acceptance is
+  still pending physical unlock (SF-0806-003/006, SF-1203-003).
+- Generated navigation links now receive their own authored typography/color
+  through their stable link identity, without acquiring absolute node geometry.
+  Three focused output methods pass; actual desktop loopback preview confirms
+  white readable links on the dark Header.
+- Layers accessibility values now name the actual parent, so flat visual rows
+  do not force assistive users to guess hierarchy (SF-0408-003/006). The native
+  authoring helper no longer requests a redundant move after inserting a child
+  directly into its intended Stack. The native nesting/parent/history regression
+  passes 1/1 (40.016s), preserving selection and exact Undo/Redo.
+- Unchanged valid sizing drafts now finish without a false red failure or a
+  history/revision change. The central registry still rejects invalid/stale
+  input; the focused scene/history regression passes 1/1 (SF-0505-002/004/005).
+- Persisted-history load no longer validates each inverse/forward twice before
+  applying it. The central apply still validates fully; strict history identity,
+  exact inverse round trips, corruption isolation and cancellation remain intact.
+  Four focused history tests pass; real owner-package reopen is being rechecked.
+
+- Owner-ready retry succeeded. Saved Home now uses the exact native three-stop
+  gradient, authored text colors and responsive CTA/padding edits through controls.
+- Removed implicit Text placeholder surface/stroke from authored raster content;
+  production text pixels remain visible without pale boxes (focused 3/3).
+- Collapsed navigation shares authored common foreground and opaque owner
+  contrast with compiled website output; mixed links do not borrow a primary
+  color (focused 2/2). Token-row center clicks select the actual editor (UI 1/1).
+- Website content/browser acceptance and final verification remain unfinished;
+  earlier authentication-failure entries below are historical, not current.
+- A real long inline article entry exposed repeated full-document Geometry
+  Inspector availability validation during draft redraws. Availability now reuses
+  only an identical revision/selection/viewport/renderer/lifecycle context; actual
+  commands still validate fully. Invalidation and nested text-adoption regressions
+  pass 2/2. The affected native authoring retry is in progress, not yet accepted.
+- Extended that bounded reuse to Insert/Transform and Layers context-action
+  availability after actual main-thread samples; execution validation remains
+  unchanged. Focused identity/lock/history/hierarchy checks pass.
+- Native editing commands now recognize the active window-owned inline session
+  before deferred AppKit focus arrives. Real Select All exact replacement,
+  Escape and Undo/Redo pass a fresh-process regression (1/1).
+- Original-resolution review showed Text's unavailable numeric Bounds were
+  incorrectly targeted by the authoring driver. The website now continues with
+  supported Stack reading-column sizing, not a weakened Text eligibility rule.
+
+- Recorded owner refinement to one editable three-stop native gradient, not
+  generated wallpaper; independent Aurora Dark Flow was saved via native Save As.
+- Added an explicitly opted-in existing-owner-session UI audit, with no launch,
+  termination or direct model/package writes. Build succeeds; fresh UI execution
+  stopped at automation-mode authentication before the method. No website
+  completion or full verification claim. Xcode setup itself is now ready.
+
+## 2026-10-24 — Observed Xcode-readiness handoff
+
+- Native inspection confirms Xcode's Install Required dialog for system-wide
+  components. Left open for owner installation/authentication; no setup action,
+  test rerun, product change or completion claim. OD-025/evidence now name the
+  exact owner action instead of inferring an outstanding step from exit 69.
+
+## 2026-10-23 — Accumulated native acceptance repairs (in progress)
+
+- Repository/security/traceability/architecture/evidence checks passed. The ONE
+  accumulated full collector stopped before tests at Xcode setup readiness;
+  OD-025 records the owner boundary. No full-pass or installed-update claim.
+
+- Safari mobile navigation no longer dismisses its target during transient
+  document-body accessibility focus. Actual exported menu-to-Journal activation,
+  Back/reload/Escape and native Export Cancel/retry/reopen were exercised.
+- Connected image/typography now passes through Save, separate native/document
+  Undo, reopen and committed preview. All 13 focused UI workflows have passing
+  serial results; full integrated verification remains separate.
+- Eight browser widths reviewed. Fixed template clipping at 320/1024 remains
+  explicitly documented; no automatic conversion or universal parity claim.
+
+- Native viewport focus changes now publish after AppKit's responder transition,
+  guarded by window/request/actual responder. Rejected choices report the retained
+  preset. Three focus-policy tests and responsive sizing UI pass; Tablet/reopen
+  captures reviewed. Earlier cancellation experiments were disproven and removed.
+
+- Bounds uses the existing contained native Inspector disclosure style.
+- Geometry, sizing and typography accessibility announce unfinished drafts
+  instead of presenting a committed value as the field's current input.
+- The installed-font chooser has a truthful accessible popover group; pointer
+  checks no longer scroll the Inspector behind it.
+- Corrected native/document Undo focus and scoped ambiguous menu navigation in
+  affected tests, preserving identity, history and containment assertions.
+- Escape/refocus tests now assert actual keyboard focus and full committed-value
+  restoration, rather than inferring cancellation from a prior announcement.
+- Eleven distinct native workflows have passing focused results. Reviewed
+  Settings/compact/component/image/native page captures remain bounded evidence,
+  not universal browser parity or a refreshed installed-build claim.
+
+## 2026-10-23 — Component native acceptance continuation
+
+- Corrected public-control test navigation: select Design before querying its
+  component provenance, including after definition return; production tab
+  behavior is unchanged. Existing identity/cancel/persistence assertions remain.
+- Component workflow passes 1/1 with three visually reviewed captures showing
+  creation, committed/cancelled drafts and reopened state. Remaining accumulated
+  acceptance continues; no full, browser or installed-build completion claim.
+- Native initialization now succeeds. No authentication prompt was confirmed
+  visible and no privacy/service change or owner authentication is required.
+
+## 2026-10-23 — Fresh accumulated acceptance reassessment
+
+- No new feature code. Current isolated app/provision rebuilt and validated;
+  complete code target passes 717/717, zero failures/skips.
+- One pending native selector reached a runner-initialization automation timeout
+  before any method. Native/visual/Safari/full acceptance is not claimed.
+- Read-only session/system-log diagnosis locates the wait at macOS device-owner
+  authentication for “Enable UI Automation,” not a failed product assertion.
+  Simulator warning causality is unproven; no update, permission reset or source
+  workaround is prescribed. Owner authentication is required before one retry.
+- Protected project/resource hashes match 4/4. Installed build 26.10.21 remains
+  unchanged; OD-025 and delivery stay pending. No commit or external operation.
+
+## 2026-10-22 — Connected local-builder integration, source checkpoint
+
+- Save, Preview, Close and context actions ask existing retained editors to
+  commit first; invalid/conflicting input pauses with a retry/cancel notice.
+  Equivalent numeric input and repeated blur remain neutral.
+- Native text Undo/Redo stays separate from document history. Inline text is
+  committed or retained for composition, not cancelled by Preview.
+- Open/Save As panels are bound to their origin. Build, browser-open and export
+  feedback rejects late completion; export exposes sanitized useful failure states.
+- Shared static output handles macOS temporary-directory aliases correctly
+  without weakening containment/traversal validation.
+- Existing native journeys are extended, not duplicated. Native/visual/Safari
+  and accumulated full acceptance remain pending. Exact results/inventory: 005 evidence.
+- Reviewed focused source group passes 24/24 (ten new); app/UI targets compile.
+
+## 2026-10-21 — Practical image reuse and typography, source checkpoint
+
+- Image, fill and organized component-media controls share scoped choosing/import
+  and search. Global replacement names its reference scope and requires explicit
+  confirmation; canonical references and usage reveal share one derived inventory.
+- Selected-use import is one atomic asset/reference edit with existing resource
+  deduplication. Other uses, organization, image settings and layout remain intact.
+  Thumbnails refresh by document/resource identity through replacement/Undo/Redo.
+- Installed-family search and discovered weights reuse local CoreText metadata.
+  Missing intent, mixed state and base/fluid scope are explicit; unfinished
+  typography drafts survive unrelated adoption and reject changed context.
+- 22/22 affected code tests pass (seven new); app/UI targets compile. Native,
+  original-resolution visual/Safari, installed and final full acceptance remain
+  pending. No completed-milestone, installation or release claim.
+
+## 2026-10-21 — Practical responsive sizing, source-focused checkpoint
+
+- Layout places sizing modes, numeric geometry and container controls together,
+  with bounds/aspect in a native disclosure. Effective numeric winners and base
+  automatic intent are distinguished; exact dimension reset restores inheritance.
+- Responsive conversion discloses scope, explicit dimension removal and skips.
+  Matching numeric drafts retain incomplete text across unrelated adoption,
+  reject context changes and use existing Return/blur/Escape transactions.
+- Shared Grid layout/output preserves numeric breakpoint/fluid dimensions;
+  connected CSS retains continuous fluid values instead of sampled presets.
+- 23 unique affected code tests pass (11 new), plus 2/2 strengthened reruns.
+  App/UI targets compile. Native/visual/Safari and final full gate are pending;
+  component reuse and Settings acceptance remain open. Nothing installed or pushed.
+
+## 2026-10-21 — Practical component reuse, source-focused checkpoint
+
+- Named component creation and useful empty-state insertion reuse one central
+  preflight/transaction path. Original instance identity and geometry are retained.
+- Definition editing returns to the original page/ordered instance selection when
+  still valid, with explicit missing-selection/page fallback rather than guesses.
+- Organized instance controls are available in Design as well as Content. Text
+  drafts survive renderer adoption, support Return/blur/Escape, and retain conflicts;
+  Reset All with retained conflicts requires confirmation.
+- Final focused code group passes 17/17; seven new regressions cover creation,
+  return, drafts, two-instance output and real package/recovery history. UI journey
+  compiles but is not run. Native/visual/Safari and final full gate remain pending;
+  this is not completed installed acceptance or a release.
+
+## 2026-10-21 — Installed visual handoff clarified (documentation only)
+
+- Reuse the green 815-test gate and installed Aurora review; do not rerun them
+  for screenshots. One fresh native binding still fails, so no Settings destination
+  is newly accepted and no product patch or installation was made.
+- Reconcile the queue checklist and supersede historical CURRENT/NEXT records.
+  Preserve unknown current user work. OD-025 requests one normal owner reopen/
+  Settings handoff; the following package is existing Practical component reuse,
+  not reimplementation of already-shipped controls or blocked slot architecture.
+
+## 2026-10-21 — Verified local workflow checkpoint
+
+- Final accumulated gate passed all repository/build checks and 815 tests
+  (682 code, 133 UI), zero failures/skips. New copy/inclusion/contextual-edit,
+  Safari/reopen and repaired recovery/token paths pass in the full target.
+- Regular installed Aurora/Study-copy/Safari/reopen passes separately; seven
+  captures inspected and original package/resource hashes preserved. Source,
+  installed app and bundled testing provision agree. Changes remain uncommitted.
+- One extra installed Settings visual capture is still pending OD-025 after a
+  zero-test automation-mode timeout and native inspection transport failure;
+  the completed gate is not rerun or mislabeled, and no permissions were changed.
+
+## 2026-10-21 — Independent page reuse and contextual editing (focused checkpoint)
+
+- The refreshed regular installed app passes the same independent Study-copy,
+  Safari and native reopen journey (158.722s). Seven installed captures reviewed;
+  protected source package/resource hashes remain unchanged. Final gate pending.
+
+- New Page can explicitly copy current content and page metadata with the chosen
+  name/route in one undoable transaction. Default remains a blank independent page;
+  cancellation does not retain the copy choice. Header/Footer are not live-linked.
+- Include All Pages updates only the current Header/Footer, preserving existing
+  labels/order/identities and rejecting capacity/locked/stale work atomically.
+- Plain-Text selection starts Color Tokens at Text Foreground beside Typography;
+  mixed selection never borrows its primary object's target. Title provenance
+  reflects the actual authored/site/Home/stored-default resolution.
+- Focused model and native controls/Aurora/Safari/reopen checks pass; 16 retained
+  captures inspected. Actual matched pointer tasks improve from 10 to 6 (page)
+  and 2 to 1 (navigation). Installed review and changed-tree full gate pending.
+
+## 2026-10-21 — Reproducible verification and focused harness repairs
+
+- Fix the native testing-progress helper's main-actor entry and type-check it
+  before a collector takes ownership. Affected tooling regressions pass 21/21;
+  cancelled preparation remains recorded, not treated as a completed gate.
+
+- Declare a private pinned Pillow runtime for icon verification with actionable
+  setup/preflight checks; preserve the approved artwork and global Python.
+- Bind crash-journey interruption to the actual isolated artifact/run/PID rather
+  than the ordinary application. Fully reveal token-name controls before native
+  pointer/keyboard editing. Preserve focus, recovery, history and rendering checks.
+- Repository checks and both exact failed UI journeys pass; seven captures
+  reviewed. Integrated acceptance remains pending; no completion/commit/push.
+
+## 2026-10-20 — Structural acceptance resumed
+
+- Both exact structural journeys pass after normal activation recovered.
+  The subsequent accumulated run is not green: a fresh system notification
+  obstructed native toolbar Undo in the compact Button/Link test (OD-024).
+  No product history assertion or system setting was changed to bypass it.
+
+- Concrete native direction targets retain strict screen bounds instead of
+  testing their outdented segmented AX wrapper. Minimum and complete structural
+  reflow/undo/reopen journeys pass 2/2. Prior activation failures remain recorded
+  as failures, not zero-test acceptance. Integrated verification remains pending.
+
+## 2026-10-18 — Aurora workflow focused checkpoint, integration pending
+
+- The dark-editor visual regression now enforces measured five-tab pane bounds,
+  direct destinations and canvas remainder instead of obsolete narrow-pane caps.
+  Two policy checks plus the native journey pass 3/3; five captures reviewed.
+
+- Integration caught stale historical fixture shapes and prior Settings-default/
+  Welcome-announcement expectations. Focused corrections pass; the remaining
+  appearance check subsequently passes 1/1 after the owner reported no prompt
+  visible (OD-023 resolved without permission changes). Final verification
+  is not claimed yet.
+
+- All five navigator/Inspector destinations fit normal-width native rows;
+  compact/large-text adaptation and canvas minimum remain intact.
+- Unchanged Site Settings Apply closes without history and reports a specific
+  no-change result. Native focused acceptance passes.
+- Explicit Fill/Hug modes preserve fixed intent. Separately confirmed content
+  conversion removes dimension overrides atomically with exact Undo. Wrapping
+  and parent heights share native font metrics; private system fonts are
+  bridged rather than reconstructed by unsupported names.
+- Design Essentials puts existing label/size and linked destination controls
+  beside typography/color. Native invalid draft, Escape and Undo/Redo checks
+  pass without additional Inspector-tab changes.
+- Shared browser output resets row/column flex bases and uses content-sized
+  overlay-grid rows, preserving fixed Button heights and wrapped-content height.
+- Original Aurora/recovery data remain untouched. Installed Study conversion,
+  save/reopen and eight-width browser review pass; accumulated final gate pending.
+  Earlier source-only entries below are historical, not current locks.
+
+## 2026-10-18 — packaged Aurora and crash-qualified recovery source
+
+- Welcome offers the actual UI-authored Aurora website as an independent,
+  editable resource-bearing sample with a clean history baseline. Five focused
+  sample/resource/persistence checks pass; installed visual acceptance is pending.
+- Automatic Welcome recovery now requires matching abandoned-session evidence;
+  live apps and normal clean quits do not qualify. Older snapshots remain
+  available through Review Recovery History, without automatic restoration or
+  deletion. Session evidence stays out of canonical content and durable saves.
+- Eight distinct focused recovery/ownership/autosave/retirement/launch checks pass. The original
+  69 recovery files remain byte-for-byte unchanged. Native clean-quit/crash and
+  sample acceptance plus the integrated final gate still require owner unlock.
+- Shared output preserves linked Button destinations/borders, text line breaks
+  and vertical placement; actual Safari delivery captures are retained. The
+  subsequent responsive/Inspector workflow redesign has not begun.
+
+## 2026-10-18 — project Site Settings focused checkpoint
+
+- File > Site Settings edits project site name, page-title pattern, default
+  description, favicon and indexing intent, with current-page title/description
+  overrides, native cancellation and a persistent draft search preview.
+- Changes use one identity-gated undoable transaction. Reset removes overrides;
+  historical documents migrate without inventing authored metadata. Focused
+  save/reopen/recovery/history checks pass.
+- The existing website compiler emits escaped resolved metadata and verified
+  favicon assets. Favicon uses participate in safe asset deletion. Default
+  Header/Footer titles inherit site name; authored titles remain untouched.
+- Focused UI and visual checks pass. Integrated Aurora delivery and its final
+  full gate remain pending; broader SEO/social/publication is not completed.
+
+## 2026-10-18 — dark editorial focused checkpoint
+
+- The canvas takes the main editor's available width; slim side panes retain
+  every destination through visible native overflow menus with real keyboard
+  focus and accessibility values. Existing feature assertions remain intact.
+- Accessibility, Image Fill and Fill Layers now share the native section style.
+  Long accessible-name and reusable-style controls remain readable.
+- Dark appearance/default/reset, website paper/ink separation, actual editing,
+  keyboard traversal and Safari have passing focused evidence. Five final theme
+  captures were reviewed. The integrated Aurora package is not complete or
+  installed; metadata/recovery/sample/browser work and the final gate remain.
+
+## 2026-10-17 — dark editorial editor work in progress
+
+- Owner-selected direction now explicitly translates render 01 into shared
+  charcoal/slate chrome while preserving authored pale website content.
+- Unset appearance defaults to Dark; saved Light/Follow macOS preferences remain
+  intact. Shared palette and Reset preview checks are being validated; installed
+  visual review and integrated acceptance remain pending.
+
+## 2026-10-16 — local-builder work in progress
+
+- Added a secondary native Safari website-preview command backed by the static
+  compiler/export plan and a bounded loopback-only server. Focused HTTP/lifecycle
+  checks pass; real browser acceptance and primary-toolbar replacement pending.
+- Structural editor names no longer enter authored tile pixels. Pan/zoom retain
+  compatible world-layout content until its new raster adopts, with explicit
+  top-left compositor anchors; focused native geometry checks pass.
+- Created and saved an ordinary editable Aurora starting project through the
+  installed app. The finished design and remaining owner corrections are not
+  yet accepted; no final verification or new commit is claimed.
+
 ## 2026-10-15 — accepted owner correction and local delivery
 
 - Final verification passes 636 model/integration and 119 native UI tests
@@ -1418,3 +2023,10 @@ This file records user-visible behavior during development. It is not a substitu
 - The canvas editing interface and Preview behavior remain bounded placeholders for later work items.
 - Local alpha packaging is unsigned and not notarized.
 - Final sandbox/distribution verification remains pending owner-approved publisher and trust configuration; the local Release candidate is deliberately unsigned.
+# 2026-10-20 focused pointer acceptance
+
+- After owner confirmation of a clear screen, the unchanged compact internal
+  Button/Link target-removal and toolbar Undo journey passes 1/1 (52.649s).
+  Both new retained captures were visually inspected. OD-024 resolved without
+  product/test changes, permission changes or weaker assertions; integrated
+  verification remains pending.

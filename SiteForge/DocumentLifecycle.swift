@@ -259,6 +259,7 @@ actor DocumentLifecycleBackend {
     private let historyStore: PersistedHistoryStore
     private let fileAccess: FileAccessService
     private let observer: (any LifecycleBackendObserving)?
+    private let recoverySession: RecoverySessionEvidence
     private var fault: LifecycleBackendFault = .none
     private var delayNanoseconds: UInt64 = 0
 
@@ -267,13 +268,15 @@ actor DocumentLifecycleBackend {
         diagnostics: DocumentLifecycleDiagnostics = DocumentLifecycleDiagnostics(),
         historyStore: PersistedHistoryStore = PersistedHistoryStore(),
         fileAccess: FileAccessService = FileAccessService(),
-        observer: (any LifecycleBackendObserving)? = nil
+        observer: (any LifecycleBackendObserving)? = nil,
+        recoverySession: RecoverySessionEvidence = .shared
     ) {
         self.store = store
         self.diagnostics = diagnostics
         self.historyStore = historyStore
         self.fileAccess = fileAccess
         self.observer = observer
+        self.recoverySession = recoverySession
     }
 
     func configureForTesting(fault: LifecycleBackendFault = .none, delayNanoseconds: UInt64 = 0) {
@@ -281,7 +284,15 @@ actor DocumentLifecycleBackend {
         self.delayNanoseconds = delayNanoseconds
     }
 
+    func validateCreationResources(document: CanonicalDocument, members: [ProjectPackageMember]) throws {
+        try Task.checkCancellation()
+        try ProjectCreationResources.validate(document: document, members: members)
+    }
+
     func diagnosticRecords() async -> [LifecycleDiagnostic] { await diagnostics.records }
+    func qualifiesForAutomaticRecovery(_ package: ProjectPackage, in directory: URL) -> Bool {
+        recoverySession.qualifiesForAutomaticRecovery(package, in: directory)
+    }
     func historyDiagnosticRecords() async -> [HistoryDiagnosticRecord] { await historyStore.diagnosticRecords() }
     func fileAccessDiagnosticRecords() async -> [FileAccessDiagnostic] { await fileAccess.diagnosticRecords() }
 
@@ -429,7 +440,11 @@ actor DocumentLifecycleBackend {
                 historySnapshot = history
             }
             try Task.checkCancellation()
-            let packageWithHistory = try await historyStore.package(package, with: historySnapshot)
+            let historyPackage = try await historyStore.package(
+                RecoverySessionEvidence.removingEvidence(from: package), with: historySnapshot)
+            let packageWithHistory = identity.intent == .autosave
+                ? try recoverySession.tagging(historyPackage, in: url.deletingLastPathComponent())
+                : historyPackage
             try Task.checkCancellation()
             let policy: ProjectPackageArtifactPolicy = identity.intent == .autosave ? .recovery(package.projectID) : .durable
             // The controller captured this fingerprint from the exact validated
@@ -879,6 +894,7 @@ final class DocumentLifecycleController: ObservableObject {
     @Published private(set) var failure: DocumentLifecycleFailure?
     @Published private(set) var recoveryCandidate: RecoveryCandidate?
     @Published private(set) var historyNotice: String?
+    @Published private(set) var fileActionNotice: String?
     @Published private(set) var pendingUnsavedChangesPrompt: UnsavedChangesPrompt?
     @Published private(set) var transitionFailure: DocumentLifecycleFailure?
     @Published var isRecoveryDetailsPresented = false
@@ -1004,6 +1020,10 @@ final class DocumentLifecycleController: ObservableObject {
         return try project.resourceData(for: descriptor)
     }
 
+    /// Immutable package bytes may be validated and decoded by a build worker
+    /// without retaining the main-actor lifecycle or granting filesystem access.
+    func staticBuildResourceSnapshot() -> ProjectPackage { project }
+
     func projectResourceDescriptor(for resourceID: ResourceID) throws -> ProjectResourceDescriptor {
         guard let index = try ProjectResourceIndex.decode(from: project),
               let descriptor = index.resources.first(where: { $0.id == resourceID }) else {
@@ -1050,7 +1070,8 @@ final class DocumentLifecycleController: ObservableObject {
     }
 
     @discardableResult
-    func requestNewDocument(_ document: CanonicalDocument = ProjectCreation.blank()) async -> DocumentTransitionResult {
+    func requestNewDocument(_ document: CanonicalDocument = ProjectCreation.blank(),
+                            resourceMembers: [ProjectPackageMember] = []) async -> DocumentTransitionResult {
         // Validate the complete creation selection before authorization or a
         // document boundary. A malformed local template therefore cannot
         // disturb the current document, history, recovery ownership, or file
@@ -1062,6 +1083,12 @@ final class DocumentLifecycleController: ObservableObject {
         }
         let attempt = beginTransitionAttempt()
         defer { finishTransitionAttempt(attempt) }
+        if !resourceMembers.isEmpty {
+            do { try await backend.validateCreationResources(document: document, members: resourceMembers) }
+            catch is CancellationError { return .cancelled }
+            catch { return .failed(.malformedPackage) }
+            guard transitionStillMatches(attempt) else { return .cancelled }
+        }
         let previousProjectID = project.projectID
         switch await authorize(.newDocument) {
         case .cancelled:
@@ -1084,7 +1111,7 @@ final class DocumentLifecycleController: ObservableObject {
             let boundary = await beginDocumentBoundary()
             guard transitionStillMatches(attempt), lifecycleEpoch == boundary else { return .cancelled }
             do {
-                try establishNewDocument(document)
+                try establishNewDocument(document, resourceMembers: resourceMembers)
             } catch {
                 failure = .malformedPackage
                 phase = .failed
@@ -1096,7 +1123,7 @@ final class DocumentLifecycleController: ObservableObject {
         }
     }
 
-    private func establishNewDocument(_ document: CanonicalDocument) throws {
+    private func establishNewDocument(_ document: CanonicalDocument, resourceMembers: [ProjectPackageMember]) throws {
         stopPresentingDurableFile()
         observing = true
         do {
@@ -1107,7 +1134,7 @@ final class DocumentLifecycleController: ObservableObject {
         }
         observing = false
         let now = ProjectTimestamp(date: clock.now())
-        project = ProjectPackage(createdAt: now, document: document)
+        project = ProjectPackage(createdAt: now, document: document, optionalMembers: resourceMembers)
         currentRecoveryArtifact = nil
         candidateRecoveryArtifact = nil
         fileURL = nil; durableFingerprint = nil; displayName = "Untitled"
@@ -1266,6 +1293,7 @@ final class DocumentLifecycleController: ObservableObject {
     }
 
     @discardableResult func save(to destination: URL? = nil, userSelected: Bool = false) async -> Bool {
+        fileActionNotice = nil
         let invocationEpoch = lifecycleEpoch
         await cancelAndDrainAutosave()
         if let priorSave = activeSaveTask {
@@ -1908,7 +1936,7 @@ final class DocumentLifecycleController: ObservableObject {
         }
     }
 
-    func discoverUntitledRecoveryCandidate() async {
+    func discoverUntitledRecoveryCandidate(automaticCrashOnly: Bool = false) async {
         guard fileURL == nil, !isModified else { return }
         let identity = makeOperation(
             intent: .discoverRecovery,
@@ -1946,6 +1974,8 @@ final class DocumentLifecycleController: ObservableObject {
                         return
                     }
                     guard loaded.package.document.revision > 0 else { continue }
+                    if automaticCrashOnly,
+                       !(await backend.qualifiesForAutomaticRecovery(loaded.package, in: recoveryDirectory)) { continue }
                     candidates.append(RecoveryCandidate(
                         package: loaded.package,
                         url: url,
@@ -2379,9 +2409,32 @@ final class DocumentLifecycleController: ObservableObject {
         phase = error == .externalModification || error == .conflict ? .conflicted : .failed
     }
 
-    func presentSavePanel() {
-        guard let url = saveDestinationProvider(suggestedSaveFilename) else { noteCancellation(); return }
-        Task { _ = await save(to: url, userSelected: true) }
+    @discardableResult
+    func presentSavePanel() -> Task<Bool, Never>? {
+        let origin = (session.document.id, session.document.revision, lifecycleEpoch)
+        fileActionNotice = nil
+        let url = saveDestinationProvider(suggestedSaveFilename)
+        // A native modal panel runs a nested event loop. Its destination is
+        // consent for the originating document, not a replacement scene.
+        guard session.document.id == origin.0, session.document.revision == origin.1, lifecycleEpoch == origin.2 else {
+            noteNativePanelContextChanged(.saveAs, originatingDocumentID: origin.0)
+            return nil
+        }
+        guard let url else { noteCancellation(); return nil }
+        return Task { [weak self] in
+            guard let self else { return false }
+            guard session.document.id == origin.0, session.document.revision == origin.1, lifecycleEpoch == origin.2 else {
+                noteNativePanelContextChanged(.saveAs, originatingDocumentID: origin.0)
+                return false
+            }
+            return await save(to: url, userSelected: true)
+        }
+    }
+
+    func noteNativePanelContextChanged(_ intent: LifecycleOperationIntent, originatingDocumentID: DocumentID) {
+        guard session.document.id == originatingDocumentID, intent == .open || intent == .saveAs else { return }
+        let action = intent == .open ? "Open" : "Save As"
+        fileActionNotice = "\(action) paused because the document changed. Review the current edits and choose \(action) again."
     }
 
     private func startPresentingDurableFile(_ url: URL) {

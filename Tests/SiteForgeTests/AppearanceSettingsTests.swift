@@ -4,6 +4,31 @@ import XCTest
 
 @MainActor
 final class AppearanceSettingsTests: XCTestCase {
+    // SF-0206-003/005/006: Cancel follows the latest saved global value;
+    // an old restoration record cannot overwrite an external preference.
+    func testAppearanceCancelReloadsLatestSavedValueAndRejectsForeignRestore() throws {
+        try withStore { defaults, store in
+            store.begin(); store.preview(.light); XCTAssertTrue(store.apply())
+            let count = store.transactions.count
+            store.preview(.dark)
+            let external = try JSONEncoder().encode(ApplicationAppearanceRecord(.system))
+            defaults.set(external, forKey: AppearanceSettingsStore.storageKey)
+            XCTAssertFalse(store.apply())
+            store.cancel()
+            XCTAssertEqual(store.choice, .system); XCTAssertEqual(store.resolved, .system)
+            XCTAssertFalse(store.isDirty); XCTAssertFalse(store.canRestore)
+            store.restorePrevious()
+            XCTAssertEqual(defaults.data(forKey: AppearanceSettingsStore.storageKey), external)
+            XCTAssertEqual(store.transactions.count, count)
+            let unsupported = Data("{\"version\":99}".utf8)
+            defaults.set(unsupported, forKey: AppearanceSettingsStore.storageKey)
+            store.cancel()
+            XCTAssertEqual(store.resolved, .dark); XCTAssertTrue(store.canApply)
+            XCTAssertEqual(defaults.data(forKey: AppearanceSettingsStore.storageKey), unsupported,
+                "Cancel must not silently rewrite an unknown preference record")
+        }
+    }
+
     private func withStore(_ body: (UserDefaults, AppearanceSettingsStore) throws -> Void) rethrows {
         let name = "SiteForge.AppearanceSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
@@ -23,7 +48,7 @@ final class AppearanceSettingsTests: XCTestCase {
             withStore { defaults, _ in
                 defaults.set(data, forKey: AppearanceSettingsStore.storageKey)
                 let store = AppearanceSettingsStore(defaults: defaults, present: { _ in })
-                XCTAssertEqual(store.resolved, .system)
+                XCTAssertEqual(store.resolved, .dark)
                 XCTAssertTrue(store.status.contains("unavailable"))
                 store.begin(); store.preview(.light); store.cancel(); store.close()
                 XCTAssertEqual(defaults.data(forKey: AppearanceSettingsStore.storageKey), data)
@@ -38,18 +63,18 @@ final class AppearanceSettingsTests: XCTestCase {
     // SF-0206-002/003/004: preview never persists; Escape/close restore.
     func testAppearancePreviewCancelCloseAndNoOpAreNeutral() {
         withStore { defaults, store in
-            XCTAssertEqual(store.resolved, .system)
+            XCTAssertEqual(store.resolved, .dark)
             XCTAssertTrue(store.provenance.contains("Default"))
-            store.begin(); store.preview(.dark)
-            XCTAssertEqual(store.choice, .dark)
-            XCTAssertEqual(store.resolved, .system)
+            store.begin(); store.preview(.light)
+            XCTAssertEqual(store.choice, .light)
+            XCTAssertEqual(store.resolved, .dark)
             XCTAssertNil(defaults.object(forKey: AppearanceSettingsStore.storageKey))
             store.cancel()
-            XCTAssertEqual(store.choice, .system)
+            XCTAssertEqual(store.choice, .dark)
             XCTAssertTrue(store.apply())
             XCTAssertTrue(store.transactions.isEmpty)
             store.preview(.light); store.close()
-            XCTAssertEqual(store.choice, .system)
+            XCTAssertEqual(store.choice, .dark)
             XCTAssertFalse(store.apply())
             XCTAssertTrue(store.transactions.isEmpty)
         }
@@ -118,16 +143,51 @@ final class AppearanceSettingsTests: XCTestCase {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 400),
                                   styleMask: [.titled], backing: .buffered, defer: false)
             store.attach(to: window)
-            store.preview(.dark)
+            store.preview(.light)
             store.attach(to: window)
-            XCTAssertEqual(store.choice, .dark)
+            XCTAssertEqual(store.choice, .light)
             XCTAssertTrue(store.isDirty)
             NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: window)
-            XCTAssertEqual(store.choice, .system)
+            XCTAssertEqual(store.choice, .dark)
             XCTAssertFalse(store.isDirty)
             NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
             store.preview(.light)
             XCTAssertEqual(store.choice, .light)
+        }
+    }
+
+    // SF-0206-003: the owner-selected default does not replace explicit intent.
+    func testDarkEditorDefaultPreservesExplicitSystemAndLightWithoutWritingDefaults() throws {
+        try withStore { defaults, store in
+            XCTAssertEqual(store.resolved, .dark)
+            XCTAssertEqual(AppearanceSettingsStore.committedAppearance(defaults: defaults), .dark)
+            XCTAssertNil(defaults.object(forKey: AppearanceSettingsStore.storageKey))
+            for choice in [ApplicationAppearance.system, .light, .dark] {
+                let bytes = try JSONEncoder().encode(ApplicationAppearanceRecord(choice))
+                defaults.set(bytes, forKey: AppearanceSettingsStore.storageKey)
+                let reopened = AppearanceSettingsStore(defaults: defaults, present: { _ in })
+                XCTAssertEqual(reopened.resolved, choice)
+                XCTAssertEqual(defaults.data(forKey: AppearanceSettingsStore.storageKey), bytes)
+                XCTAssertTrue(reopened.transactions.isEmpty)
+            }
+        }
+    }
+
+    func testResetPreviewsDarkDefaultAndCancelRestoresExplicitAppearance() throws {
+        try withStore { defaults, _ in
+            let saved = try JSONEncoder().encode(ApplicationAppearanceRecord(.light))
+            defaults.set(saved, forKey: AppearanceSettingsStore.storageKey)
+            var presentations: [ApplicationAppearance] = []
+            let store = AppearanceSettingsStore(defaults: defaults, present: { presentations.append($0) })
+            store.begin()
+            store.reset()
+            XCTAssertEqual(presentations.last, .dark)
+            XCTAssertEqual(store.choice, .dark)
+            XCTAssertEqual(store.resolved, .light)
+            XCTAssertEqual(defaults.data(forKey: AppearanceSettingsStore.storageKey), saved)
+            store.cancel()
+            XCTAssertEqual(presentations.last, .light)
+            XCTAssertTrue(store.transactions.isEmpty)
         }
     }
 }

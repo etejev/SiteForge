@@ -3,6 +3,25 @@ import XCTest
 
 @MainActor
 final class CanvasSettingsTests: XCTestCase {
+    // SF-0206-003/005: saved new-workspace defaults, never project data.
+    func testCanvasCancelReloadsExternalDefaultWithoutReplayingOldHistory() throws {
+        try withStore { defaults, store in
+            let project = try DocumentSerializer.encode(ProjectCreation.blank())
+            store.begin(); store.choose(false); XCTAssertTrue(store.apply())
+            let count = store.transactions.count
+            store.choose(true)
+            let external = try JSONEncoder().encode(CanvasGridPreferenceRecord(visibleByDefault: true))
+            defaults.set(external, forKey: CanvasSettingsStore.storageKey)
+            XCTAssertFalse(store.apply()); store.cancel()
+            XCTAssertTrue(store.choice); XCTAssertFalse(store.isDirty); XCTAssertFalse(store.canRestore)
+            store.restorePrevious()
+            XCTAssertEqual(defaults.data(forKey: CanvasSettingsStore.storageKey), external)
+            XCTAssertEqual(store.transactions.count, count)
+            XCTAssertTrue(CanvasSettingsStore.committedGridVisibility(defaults: defaults))
+            XCTAssertEqual(try DocumentSerializer.decode(project).revision, 0)
+        }
+    }
+
     private func withStore(_ body: (UserDefaults, CanvasSettingsStore) throws -> Void) rethrows {
         let name = "SiteForge.CanvasSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
@@ -127,7 +146,7 @@ final class CanvasSettingsTests: XCTestCase {
         XCTAssertEqual(group.transactions.count, 1)
         XCTAssertEqual(group.transactions[0].before.appearance, previousAppearance)
         XCTAssertEqual(group.transactions[0].before.canvas, previousCanvas)
-        XCTAssertEqual(appearance.resolved, .system)
+        XCTAssertEqual(appearance.resolved, .dark)
         XCTAssertTrue(canvas.resolved)
         XCTAssertTrue(group.restorePrevious())
         XCTAssertEqual(defaults.data(forKey: AppearanceSettingsStore.storageKey), previousAppearance)

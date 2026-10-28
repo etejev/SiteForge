@@ -57,9 +57,8 @@ struct FillLayerListInspectorView: View {
     private var layers: [CanonicalFillLayer] { state.designInspectorFillLayers() }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Divider()
-            Text("Fill Layers").font(.headline)
+        GroupBox("Fill Layers") {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             if let reason = state.designInspectorLayerEditingReason {
                 Text(reason)
                     .font(.caption)
@@ -98,6 +97,7 @@ struct FillLayerListInspectorView: View {
                 }
                 .controlSize(.small)
             }
+        }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Fill layers")

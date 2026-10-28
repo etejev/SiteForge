@@ -19,6 +19,7 @@ struct AnySiteForgeCodingKey: CodingKey, Hashable {
 
 enum SiteForgeDecodingPolicy {
     static let strictCurrentSchema = CodingUserInfoKey(rawValue: "app.siteforge.strict-current-schema")!
+    static let sourceDocumentSchema = CodingUserInfoKey(rawValue: "app.siteforge.source-document-schema")!
 
     static func requiresExactKeys(_ decoder: Decoder) -> Bool {
         decoder.userInfo[strictCurrentSchema] as? Bool == true

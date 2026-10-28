@@ -506,6 +506,15 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertEqual(overlay.overlays.map(\.objectID), [authoredID])
     }
 
+    func testStructuralRootPresentationDoesNotConflateOwnershipWithHiddenState() throws {
+        let fixture = try makeFixture(count: 1)
+        let target = fixture.targets[0].copy(participatesInCanvasTraversal: false, isStructuralRoot: true)
+        XCTAssertEqual(target.layerVisibilityDescription, "Page structure")
+        XCTAssertFalse(target.participatesInCanvasTraversal)
+        XCTAssertEqual(target.copy(isVisible: false).layerVisibilityDescription, "Hidden at current breakpoint")
+        XCTAssertEqual(target.id, target.copy(isVisible: false).id)
+    }
+
     func testTraversal() throws {
         var fixture = try makeFixture(count: 3)
         fixture.targets[0] = fixture.targets[0].copy(participatesInCanvasTraversal: false)
@@ -1112,12 +1121,14 @@ private extension SelectionTargetSnapshot {
         clipRect: WorldRect? = nil,
         isVisible: Bool? = nil,
         isAvailable: Bool? = nil,
-        participatesInCanvasTraversal: Bool? = nil
+        participatesInCanvasTraversal: Bool? = nil,
+        isStructuralRoot: Bool? = nil
     ) -> Self {
         .init(id: id, pageID: pageID ?? self.pageID, parentID: parentID, name: name, frame: frame,
             clipRect: clipRect ?? self.clipRect, paintOrder: paintOrder, isVisible: isVisible ?? self.isVisible,
             isLocked: isLocked, isAvailable: isAvailable ?? self.isAvailable,
-            participatesInCanvasTraversal: participatesInCanvasTraversal ?? self.participatesInCanvasTraversal)
+            participatesInCanvasTraversal: participatesInCanvasTraversal ?? self.participatesInCanvasTraversal,
+            isStructuralRoot: isStructuralRoot ?? self.isStructuralRoot)
     }
 }
 

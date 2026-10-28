@@ -182,6 +182,10 @@ class Collector:
     def preflight(self):
         problems = [f"missing-tool:{name}" for name in ("xcodebuild", "xcrun", "caffeinate", "swift", "git")
                     if not shutil.which(name)]
+        runtime = subprocess.run(["/bin/zsh", str(self.root / "scripts/verification-python.sh"), "--check"],
+                                 capture_output=True, text=True)
+        if runtime.returncode:
+            problems.append("verification-image-runtime-missing: run /bin/zsh scripts/setup-verification-runtime.sh")
         if not (self.root / "SiteForge.xcodeproj").is_dir() or not (self.root / "sf").is_file():
             problems.append("invalid-workspace")
         if not os.access(self.root, os.R_OK | os.W_OK | os.X_OK): problems.append("workspace-permission-denied")
@@ -363,6 +367,12 @@ def main():
             try:
                 if json.loads(lock.read_text())["run"] == str(args.collect): lock.unlink()
             except (OSError, ValueError, KeyError): pass
+    progress = args.progress or root / "scripts" / "full-verification-progress.swift"
+    if progress.suffix == ".swift":
+        checked = subprocess.run(["xcrun", "swiftc", "-typecheck", str(progress)], capture_output=True, text=True)
+        if checked.returncode:
+            print("Testing progress helper does not compile; no collector launched.\n" + checked.stderr, file=sys.stderr)
+            return 2
     try: descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         print(f"A run already owns {lock}. Inspect its report; do not launch a duplicate.", file=sys.stderr)
@@ -377,7 +387,6 @@ def main():
             command.extend(["--expected-source-fingerprint", args.expected_source_fingerprint])
         child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     with os.fdopen(descriptor, "w") as file: json.dump({"run": str(run), "pid": child.pid}, file)
-    progress = args.progress or root / "scripts" / "full-verification-progress.swift"
     with (run / "progress.log").open("w") as log:
         command = [str(progress), str(run)] if progress.suffix != ".swift" else ["xcrun", "swift", str(progress), str(run)]
         viewer = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)

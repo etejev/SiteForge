@@ -85,32 +85,32 @@ enum SiteForgeVisualSystem {
     static let compactControlHeight: CGFloat = 28
     static let tabStripHeight: CGFloat = 32
     static let sidePaneIdealWidth: CGFloat = 288
-    static let navigatorIdealWidth: CGFloat = 256
-    static let inspectorIdealWidth: CGFloat = 400
+    static let navigatorIdealWidth: CGFloat = 344
+    static let inspectorIdealWidth: CGFloat = 384
     static let settingsSidebarRowHeight: CGFloat = 44
     static let settingsIdealWidth: CGFloat = 970
     static let settingsIdealHeight: CGFloat = 740
     static let launchSurfaceNSColor = NSColor(name: "SiteForgeApprovedLaunchSurface") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedRed: 0.105, green: 0.12, blue: 0.16, alpha: 1)
+            ? NSColor(srgbRed: 0.11, green: 0.125, blue: 0.15, alpha: 1)
             : NSColor(calibratedRed: 0.91, green: 0.93, blue: 0.97, alpha: 1)
     }
 
     static let chromeSurfaceNSColor = NSColor(name: "SiteForgeChromeSurface") { appearance in
         let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         return dark
-            ? NSColor(calibratedRed: 0.105, green: 0.12, blue: 0.13, alpha: 1)
+            ? NSColor(srgbRed: 0.11, green: 0.125, blue: 0.15, alpha: 1)
             : NSColor(calibratedWhite: 0.965, alpha: 1)
     }
     static let elevatedSurfaceNSColor = NSColor(name: "SiteForgeElevatedSurface") { appearance in
         let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         return dark
-            ? NSColor(calibratedRed: 0.135, green: 0.15, blue: 0.165, alpha: 1)
+            ? NSColor(srgbRed: 0.15, green: 0.167, blue: 0.195, alpha: 1)
             : NSColor(calibratedWhite: 0.995, alpha: 1)
     }
     static let chromeSelectionNSColor = NSColor(name: "SiteForgeChromeSelection") { appearance in
         let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return dark ? NSColor.controlAccentColor.withAlphaComponent(0.78)
+        return dark ? NSColor.controlAccentColor.withAlphaComponent(0.20)
             : NSColor.controlAccentColor.withAlphaComponent(0.10)
     }
 
@@ -125,9 +125,9 @@ enum SiteForgeVisualSystem {
         let increased = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         if dark {
             return NSColor(
-                calibratedRed: increased ? 0.25 : 0.34,
-                green: increased ? 0.26 : 0.35,
-                blue: increased ? 0.27 : 0.36,
+                srgbRed: increased ? 0.18 : 0.205,
+                green: increased ? 0.195 : 0.225,
+                blue: increased ? 0.22 : 0.255,
                 alpha: 1
             )
         }

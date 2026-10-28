@@ -1,5 +1,11 @@
 # SiteForge Test Levels
 
+Before first verification, run `/bin/zsh scripts/setup-verification-runtime.sh`.
+The declared Pillow version lives in ignored `.build/verification-python`, not
+global Python. Both repository checking and unattended preflight validate this
+isolated runtime and print that setup command if missing or outdated. The owner
+app packager checks the same prerequisite before preparing its testing provision.
+
 SiteForge provides four local feedback levels. They change only which XCTest
 cases `./sf test` selects; they never weaken the authoritative verification
 gate.

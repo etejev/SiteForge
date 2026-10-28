@@ -652,9 +652,34 @@ enum SettingsDestination: String, CaseIterable, Identifiable, Sendable {
 }
 
 @MainActor
-final class SettingsNavigationModel {
-    var selection: SettingsDestination = .appearance
-    func show(_ destination: SettingsDestination) { selection = destination }
+final class SettingsNavigationModel: ObservableObject {
+    @Published private(set) var selection: SettingsDestination = .appearance
+    private var requestID = UUID()
+    func show(_ destination: SettingsDestination) {
+        requestID = UUID()
+        if selection != destination { selection = destination }
+    }
+    func selectFromNativeList(_ destination: SettingsDestination) {
+        let id = UUID(); requestID = id
+        // List writes selection during native/SwiftUI reconciliation. Publish
+        // once at the next event turn; a newer row or explicit Review wins.
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, requestID == id else { return }
+            show(destination)
+        }
+    }
+}
+
+struct SettingsDraftNotice: Equatable, Sendable {
+    let destinations: [SettingsDestination]
+    init(appearanceDirty: Bool, canvasDirty: Bool) {
+        destinations = (appearanceDirty ? [.appearance] : []) + (canvasDirty ? [.canvas] : [])
+    }
+    var message: String {
+        guard !destinations.isEmpty else { return "No unsaved application preferences." }
+        return "Unsaved \(destinations.map(\.title).joined(separator: " and ")) changes. Review and Apply to keep them, or cancel drafts. Project files are unchanged."
+    }
 }
 
 struct SettingsWindowGeometry: Equatable {
@@ -738,19 +763,19 @@ private struct FixedSettingsWindowHost: NSViewRepresentable {
 }
 
 struct SiteForgeSettingsRootView: View {
-    let navigation: SettingsNavigationModel
+    @ObservedObject var navigation: SettingsNavigationModel
     @ObservedObject var appearance: AppearanceSettingsStore
     @ObservedObject var canvas: CanvasSettingsStore
     @ObservedObject var defaults: ApplicationSettingsGroupStore
     @ObservedObject var updates: UpdateSettingsStore
     @ObservedObject var support: SupportSettingsStore
-    @State private var selection: SettingsDestination
     @StateObject private var testing = ExperimentalTestingStore()
     @State private var geometry = SettingsWindowGeometry.resolve(visibleFrame: NSScreen.main?.visibleFrame ?? .zero) ?? .preferred
 
     private var destinations: [SettingsDestination] {
         return SettingsDestination.allCases
     }
+    private var selection: SettingsDestination { navigation.selection }
 
     init(
         navigation: SettingsNavigationModel,
@@ -766,12 +791,11 @@ struct SiteForgeSettingsRootView: View {
         self.defaults = defaults
         self.updates = updates
         self.support = support
-        _selection = State(initialValue: navigation.selection)
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            List(destinations, selection: $selection) { destination in
+            List(destinations, selection: Binding(get: { navigation.selection }, set: { navigation.selectFromNativeList($0) })) { destination in
                 Label(destination.title, systemImage: destination.symbol)
                     .font(.body)
                     .padding(.vertical, SiteForgeVisualSystem.compactSpacing)
@@ -807,8 +831,10 @@ struct SiteForgeSettingsRootView: View {
                 .accessibilityIdentifier("settings.form")
                 .frame(maxWidth: .infinity, alignment: .top)
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) { pendingDraftNotice }
             .background(SiteForgeVisualSystem.elevatedSurface)
             .groupBoxStyle(SiteForgeSettingsGroupStyle())
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("settings.content")
         }
         .frame(width: geometry.contentSize.width, height: geometry.contentSize.height)
@@ -819,8 +845,51 @@ struct SiteForgeSettingsRootView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.root")
         .onAppear {
-            if !destinations.contains(selection) { selection = .defaults }
+            if !destinations.contains(selection) { navigation.show(.defaults) }
         }
+    }
+
+    @ViewBuilder private var pendingDraftNotice: some View {
+        let notice = SettingsDraftNotice(appearanceDirty: appearance.isDirty, canvasDirty: canvas.isDirty)
+        if !notice.destinations.isEmpty {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                Divider()
+                Text(notice.message).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityValue(notice.message).accessibilityIdentifier("settings.drafts.status")
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        draftReviewActions(notice)
+                        Spacer()
+                        cancelDraftsAction
+                    }
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                        draftReviewActions(notice)
+                        cancelDraftsAction
+                    }
+                }.controlSize(.small)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Unsaved application preferences")
+            .accessibilityIdentifier("settings.drafts")
+            .padding(SiteForgeVisualSystem.settingsFormPadding)
+            .frame(width: geometry.formWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .background(.bar)
+        }
+    }
+
+    @ViewBuilder private func draftReviewActions(_ notice: SettingsDraftNotice) -> some View {
+        ForEach(notice.destinations) { destination in
+            Button("Review \(destination.title)") { navigation.show(destination) }
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityIdentifier("settings.drafts.review." + destination.rawValue)
+        }
+    }
+    private var cancelDraftsAction: some View {
+        Button("Cancel Drafts") { appearance.cancel(); canvas.cancel() }
+            .fixedSize(horizontal: true, vertical: false)
+            .help("Reload the latest saved application preferences without changing project files.")
+            .accessibilityIdentifier("settings.drafts.cancel")
     }
 }
 

@@ -4,6 +4,74 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+/// Immutable adapter over the existing package resource index, not another
+/// store. Call on a worker: resourceData validates original bytes/hashes.
+/// The package may contain an older saved revision, but never a foreign
+/// document's resources. Missing individual blobs remain explicit absences.
+struct ProjectImageResourceSnapshot: Sendable {
+    let descriptors: [ResourceID: ProjectResourceDescriptor]
+    let data: [ResourceID: Data]
+    let images: [AssetID: Data]
+
+    init(document: CanonicalDocument, package: ProjectPackage) throws {
+        try Task.checkCancellation()
+        guard document.id == package.document.id else { throw ProjectResourceError.corruptIndex }
+        let index = try ProjectResourceIndex.decode(from: package)
+        let referenced = Set(document.imageAssets.map(\.resourceID))
+        var descriptors: [ResourceID: ProjectResourceDescriptor] = [:], data: [ResourceID: Data] = [:]
+        for descriptor in index?.resources ?? [] where referenced.contains(descriptor.id) {
+            try Task.checkCancellation()
+            descriptors[descriptor.id] = descriptor
+            data[descriptor.id] = try? package.resourceData(for: descriptor)
+        }
+        var images: [AssetID: Data] = [:]
+        for asset in document.imageAssets {
+            try Task.checkCancellation()
+            guard let descriptor = descriptors[asset.resourceID], descriptor.sha256 == asset.contentHash,
+                  descriptor.byteCount == asset.byteCount, let bytes = data[asset.resourceID] else { continue }
+            images[asset.id] = bytes
+        }
+        self.descriptors = descriptors; self.data = data; self.images = images
+    }
+}
+
+/// Derived reference inventory shared by Assets, replacement disclosure and
+/// Reveal Usage. It is not serialized and does not own resource lifetime.
+struct ImageAssetReference: Equatable, Sendable {
+    enum Kind: String, CaseIterable, Sendable {
+        case image = "Images", fill = "Image fills", definition = "Component defaults"
+        case mediaOverride = "Component overrides", favicon = "Website favicon"
+    }
+    let kind: Kind
+    let pageID: PageID?
+    let nodeID: NodeID?
+    static func references(to assetID: AssetID, in document: CanonicalDocument) -> [Self] {
+        let raw = assetID.description
+        var result: [Self] = []
+        for page in document.pages {
+            for node in page.canonicalDepthFirstNodes() {
+                if node.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == raw {
+                    result.append(.init(kind: page.role == .componentDefinition ? .definition : .image, pageID: page.id, nodeID: node.id))
+                }
+                if node.insertionStringProperty(CanonicalImageFill.assetKey) == raw {
+                    result.append(.init(kind: .fill, pageID: page.id, nodeID: node.id))
+                }
+                for property in node.properties where CanonicalComponentMedia.overrideID(property.key.rawValue) != nil && property.value == .string(raw) {
+                    result.append(.init(kind: .mediaOverride, pageID: page.id, nodeID: node.id))
+                }
+            }
+        }
+        if document.websiteMetadata?.faviconAssetID == assetID { result.append(.init(kind: .favicon, pageID: nil, nodeID: nil)) }
+        return result
+    }
+    static func summary(_ references: [Self]) -> String {
+        Kind.allCases.compactMap { kind -> String? in
+            let count = references.filter { $0.kind == kind }.count
+            return count == 0 ? nil : "\(kind.rawValue): \(count)"
+        }.joined(separator: " · ")
+    }
+}
+
 enum ImageImportError: Error, Equatable, LocalizedError, Sendable {
     case cancelled, permissionDenied, unsupported, corrupt, tooLarge, invalidDimensions, ioFailure
     var errorDescription: String? {
@@ -340,6 +408,8 @@ actor ProjectResourceStore {
     let root: URL
     private let cancellation: CooperativeCancellationCheckpoint
     private let ioObserver: ProjectResourceIOObserver
+    private let bundledResourceRoot: URL?
+    private let isBundledReadOnly: Bool
 
     init(
         root: URL,
@@ -349,6 +419,19 @@ actor ProjectResourceStore {
         self.root = root
         self.cancellation = cancellation
         self.ioObserver = ioObserver
+        bundledResourceRoot = nil
+        isBundledReadOnly = false
+    }
+
+    /// Bundled examples are public readable assets, not a writable private
+    /// store. Descriptor binding/hash checks remain shared; this mode cannot
+    /// create a directory, add a blob, or read outside its supplied bundle.
+    init(bundledRoot root: URL, bundle: Bundle) {
+        self.root = root
+        cancellation = CooperativeCancellationCheckpoint()
+        ioObserver = ProjectResourceIOObserver()
+        bundledResourceRoot = bundle.resourceURL?.resolvingSymlinksInPath()
+        isBundledReadOnly = true
     }
 
     static func sidecarURL(for packageURL: URL) -> URL {
@@ -361,6 +444,7 @@ actor ProjectResourceStore {
         mediaType: String,
         data: Data
     ) throws -> ProjectResourceDescriptor {
+        guard !isBundledReadOnly else { throw ProjectResourceError.unsafeStore }
         let digest = Self.digest(data)
         let descriptor = ProjectResourceDescriptor(
             id: id,
@@ -460,14 +544,20 @@ actor ProjectResourceStore {
     }
 
     private func openStore() throws -> Int32 {
+        if isBundledReadOnly {
+            guard let bundledResourceRoot,
+                  root.resolvingSymlinksInPath().path.hasPrefix(bundledResourceRoot.path + "/") else {
+                throw ProjectResourceError.unsafeStore
+            }
+        }
         var info = stat()
         if lstat(root.path, &info) == 0 {
             guard (info.st_mode & S_IFMT) == S_IFDIR,
-                  info.st_uid == geteuid(),
-                  (info.st_mode & 0o077) == 0 else {
+                  safeResourcePermissions(info) else {
                 throw ProjectResourceError.unsafeStore
             }
         } else {
+            guard !isBundledReadOnly else { throw ProjectResourceError.missingBlob }
             guard errno == ENOENT else { throw ProjectResourceError.ioFailure }
             do {
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -480,14 +570,20 @@ actor ProjectResourceStore {
         guard descriptor >= 0 else { throw ProjectResourceError.unsafeStore }
         guard Darwin.fstat(descriptor, &info) == 0,
               (info.st_mode & S_IFMT) == S_IFDIR,
-              info.st_uid == geteuid(),
-              (info.st_mode & 0o077) == 0,
+              safeResourcePermissions(info),
               try !Self.hasExtendedACL(descriptor) else {
             Darwin.close(descriptor)
             throw ProjectResourceError.unsafeStore
         }
         ioObserver.didReach(.storeDescriptorBound)
         return descriptor
+    }
+
+    private func safeResourcePermissions(_ info: stat, blob: Bool = false) -> Bool {
+        if isBundledReadOnly {
+            return (info.st_uid == geteuid() || info.st_uid == 0) && (info.st_mode & 0o022) == 0
+        }
+        return info.st_uid == (blob ? getuid() : geteuid()) && (info.st_mode & 0o077) == 0
     }
 
     private func blobName(for digest: String) -> String {
@@ -532,9 +628,8 @@ actor ProjectResourceStore {
         var info = stat()
         guard fstat(descriptor, &info) == 0,
               (info.st_mode & S_IFMT) == S_IFREG,
-              info.st_uid == getuid(),
+              safeResourcePermissions(info, blob: true),
               info.st_nlink == 1,
-              (info.st_mode & 0o077) == 0,
               info.st_size == resource.byteCount,
               info.st_size <= ProjectResourceIndex.maximumResourceBytes,
               try !Self.hasExtendedACL(descriptor) else {

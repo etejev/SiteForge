@@ -12,6 +12,7 @@ MODEL_FOUNDATION = [
     "SiteForge/StrictDecoding.swift",
     "SiteForge/DiagnosticSupport.swift",
     "SiteForge/DocumentModel.swift",
+    "SiteForge/ResponsiveTextMetrics.swift",
 ]
 # Canonical authored state now resolves responsive geometry, fills, reusable
 # appearance, and isolation through headless types implemented in the authoring

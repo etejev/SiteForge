@@ -112,6 +112,12 @@ final class AppMetadataTests: XCTestCase {
     }
 
     // SF-0201-006, SF-0303-006, SF-1505-006
+    func testOverflowTabsHaveDistinctNativeFocusIdentities() {
+        XCTAssertEqual(ShellFocus.navigatorOverflow.diagnosticIdentifier, "navigator.tab.overflow")
+        XCTAssertEqual(ShellFocus.inspectorOverflow.diagnosticIdentifier, "inspector.tab.overflow")
+        XCTAssertNotEqual(ShellFocus.navigatorOverflow, ShellFocus.inspectorOverflow)
+    }
+
     func testShellFocusTraversalIsCompleteBidirectionalAndSceneLocal() {
         let first = PageID(UUID(uuidString: "30000000-0000-0000-0000-000000000001")!)
         let second = PageID(UUID(uuidString: "30000000-0000-0000-0000-000000000002")!)

@@ -1,8 +1,247 @@
 # SiteForge Project Status
 
-Last updated: 2026-10-15.
+## Current verified local checkpoint — 2026-10-28
 
-Final authority: SF-PRODUCT-UI-010 DONE for its bounded owner correction.
+Final ./sf verify passes:939 total,936 passed,0 failed,3 intentional owner-session
+skips (785 non-UI/151 UI passes). Focused corrections3/3 and original-resolution
+visual review passed. Security, traceability440, architecture and build are green.
+The bounded source batch01–10 is complete; modules and broader owner-installed
+delivery remain Partial. One reviewed LOCAL checkpoint commit is authorized,
+not push/install/new feature. Earlier pending and authentication receipts below
+are historical. Preserve owner resources, recovery, revision245 and gradient.
+
+LATEST: three remaining corrected UI journeys pass3/3 after owner authentication;
+nine retained originals inspected. The coherent final local gate remains pending.
+Old authentication handoff below is resolved. No commit/push/install yet.
+
+Current handoff: three UI corrections compile, but focused6c4a1ac5 could not
+initialize UI automation: fresh native authentication request, zero UI methods.
+Await owner presence for one isolated native-authentication retry. No active
+runner, unchanged retry, local commit, push or installation.
+
+2026-10-28 latest completed acceptance:939 total,933 passed/3 failed/3
+intentional owner-session skips; all785 non-UI passed, UI148/3/3. Three bounded
+UI interaction corrections are under affected verification, followed by a final
+full local gate and reviewed local commit only if green. Old pending/hold
+paragraphs below are historical. No push, installation or new feature.
+
+Current policy (2026-10-27): owner explicitly approved full local testing,
+corrections and a reviewed local commit for the preserved source batch. Finish
+Preview/export integration and verify the changed snapshot; earlier holds and
+pass counts below are historical. Current build/test/visual acceptance is pending.
+See evidence/SF-SOURCE-BATCH-20261027-10-INTEGRATION.md for the ten-item inventory.
+No push, installation, publication, schedule or next feature is authorized.
+
+Current-source full attempt finished exit65: checks/build green, non-UI781/784
+passed; the three failed methods are corrected and pass focused3/3. New output
+integration passes focused5/5. That attempt's UI0 initialization failure was
+resolved by the owner authentication retry. All twelve changed/prerequisite UI
+methods now pass targeted acceptance. Visual inspection caught and corrected
+missing Root page paint and calibrated-RGB conversion; four exact renderer
+checks plus Page Background UI pass5/5. Final full gate pending; no installed
+update/local commit or completed-gate claim. Historical hold notes below do not
+describe the current approval or evidence.
+
+Source-only development continued under the testing hold: Page Background is
+directly discoverable through existing Pages/Design controls and the structural
+Root is distinguished from hidden content. IMPLEMENTED IN SOURCE — NOT BUILT/
+TESTED; six unrun methods, no app launch/install or completion claim. See006
+Page Background evidence. Previous partial passes do not cover these new edits.
+
+OWNER HOLD ALL TESTING. Verification stopped safely on request; no runner remains.
+Retained833 passes (733 non-UI/100 UI), three skips, one cancellation,38 UI not run.
+No green full gate or installed delivery claim. No testing/automation/install
+until explicit approval; existing source/projects/recovery/evidence preserved.
+
+Current readiness: native exact shell test passes1/1 after owner authentication;
+actual app executed. Freeze one final full gate before safe approved local install.
+Earlier startup boundary paragraphs are historical, not current blockers.
+
+Latest native readiness comparison finished with the same pre-method automation
+timeout as CLI. Zero UI methods ran; no runner/current authorization dialog
+remains. Readiness and full delivery are not complete; owner-present completion
+of native authentication is needed before another coordinated focused attempt.
+
+2026-10-27 current: authorized post-cleanup gate finished, not green. All 733
+non-UI tests passed; UI runner failed automation initialization before any UI
+method. No runner remains, no duplicate broad retry or installed update. Owner
+cleanup/signature decisions are resolved. Earlier pending notes are historical.
+
+Owner continuation: OD-026/027 resolved for build-cache-only cleanup and existing
+local ad-hoc signature after green. About 1.7 GiB regenerable caches removed;
+source/projects/recovery/evidence/backups unchanged. One post-cleanup full gate is
+next; no installed update, service/privacy change, commit or push yet.
+
+Current handoff: interrupted asset test passes isolated 1/1 (99.566s), same frozen
+source; no app/test/build process remains. Full gate retains its external SIGKILL
+failure (871 passed/1 failed/3 skipped), not completion. Await OD-026/027 before
+broad retry/install; all work stays uncommitted, no cache/system/signing changes.
+
+Latest: completed final gate is externally interrupted, NOT green. 733 non-UI and
+138 UI pass; one runner killed by macOS cache_delete at initial app readiness;
+three owner-session skips. Exit65, no product assertion failure. Exact OS request
+retained in 006 evidence. One isolated asset retry is active; no broad retry or
+installed refresh. OD-026/027 await signature/storage clarification; no deletion,
+system change, commit or push. Earlier successful focused results remain valid.
+
+Latest focused repair: 9/9 formerly failing UI methods and 2/2 affected model
+methods pass across bounded runs. Live native menu observation and rename focus
+teardown are implemented; captures reviewed. One reconciled final full gate is
+next. Installed app unchanged; local signature clarification pending, no signing,
+commit or push. Earlier failed/running totals below are historical.
+
+2026-10-26 current: full gate completed without cancellation but failed, 861 passed,
+10 failed, 3 owner-session skips. Focused correction is underway, not a completion
+claim. Content-independent privacy and exact nesting model checks pass 2/2; nested
+layout document-menu history passes 1/1 after real nonediting-control focus.
+Eight remaining affected UI methods run together. Installed app unchanged;
+no commit, push or owner-project mutation. Earlier totals below are historical.
+
+Newest: exact native Xcode comparison passes reuse and corrected responsive
+conversion, 2/2 across individual runs. Test fix reveals the real computed field
+after Inspector rebuild; canonical geometry/selection unchanged. Fresh frozen
+full verification is next, with ordinary app identity matching native evidence.
+Installed app unchanged. Earlier failed gate/cancellation is not a completion claim.
+
+Newest outcome: full gate is NOT green. Repository/build and 732/732 non-UI pass;
+UI produced six passes, two failures and one cancellation. Diagnostic pair 0/2
+fails at changing AX discovery boundaries despite a healthy native control tree.
+OD-025 records the Xcode-normal handoff. No runner/installed update/commit/push.
+Revision-245 visual evidence below remains valid, not a full verification pass.
+
+Current 2026-10-25, SF-LOCAL-BUILDER-006: direct native Open/Preview/Export works.
+Revision 245 contains real editable dark root fills on Contact/Not Found; reviewed
+1440/390 output now covers the viewport without white bands and scrolls naturally.
+The project is Saved and the isolated app normally quit. Twenty-six affected code
+methods pass across focused runs; the final frozen full gate and installed update
+remain pending. No commit/push. Earlier lock/setup/authentication checkpoints below
+are historical and must not be mistaken for a current completed gate.
+
+Last updated: 2026-10-25. The following entries are historical checkpoints.
+
+Current boundary: the refreshed native export journey passes 1/1 (71.683s) plus
+two affected navigation code methods. Direct Safari review found a 320-wide Menu
+wrap; the shared intrinsic/alignment correction still needs visual confirmation.
+The Mac locked again during this review. Physical unlock is needed, not Xcode
+setup or automation authentication. All five pages remain saved, originals and
+resources match the consistent raw-file baseline, no test remains active, and
+changes remain uncommitted. Full verification/installed delivery are pending.
+
+Latest 006 continuation: owner-ready authentication succeeded. The independent
+Dark Flow Home gradient, authored foreground tokens and Mobile flow are saved;
+native Home continuation passes 1/1 (549.781s). Focused text-paint and dark menu
+contrast regressions pass. Remaining website pages, browser/output/reopen review
+and the frozen final gate are pending. All following setup/authentication blocker
+paragraphs are historical; no current owner action is requested. No installed
+refresh, full pass, commit or GitHub action has occurred.
+
+Journal's responsive-flow continuation passes 1/1 (105.475s), About editorial
+content 1/1 (451.458s), Contact/Not Found together 1/1 (1176.261s), with
+original-resolution page captures reviewed. Native Layers nesting/history passes
+1/1 (40.016s); unchanged sizing neutrality passes 1/1. Setup/authentication are
+resolved. Home expansion passes 1/1 (549.457s), with reviewed native captures.
+Twenty-four distinct affected code methods pass. Final review completed native
+history/reopen/gradient, Safari preview and export, then failed Safari input while
+native inventory explicitly reported the Mac locked (exit 65, 265.132s).
+Owner unlock, browser width review and the frozen final gate remain pending.
+No test process remains from that run. See 006 evidence.
+
+Historical observed owner action: Xcode was showing **Install Required** for system-wide
+components. Choose Install in Xcode and complete its subsequent setup personally.
+Dialog is left open; no install or test/collector retry was performed. OD-025
+and 005 evidence contain the exact observation/screenshot. All prior acceptance
+totals and fixed-template limitations remain unchanged; work stays uncommitted.
+
+Final collector is BLOCKED at Xcode setup readiness (exit 69), before all test
+stages. Independent repository checks passed. Owner action is recorded in OD-025;
+no full acceptance or installed update is claimed. No runner remains active.
+
+Current focused acceptance: 13 distinct native workflows and nine affected code
+methods have passing results across serial runs. Original-resolution native,
+Settings, compact and eight-width Safari captures were inspected. Real mobile
+navigation, export Cancel/retry, Save/reopen and normal isolated-app Quit work.
+Fixed template geometry still clips at 320/1024; it was not silently converted.
+No accumulated full pass or installed refresh is claimed. All work is uncommitted;
+ordinary owner work remains untouched. Current details: 005 integration evidence.
+
+Earlier: 12 distinct focused UI methods have passing results, including responsive
+sizing after the native viewport focus correction (1 UI + 3 code regressions).
+The initial cancellation hypothesis was disproven: X never regained focus. Those
+experimental changes and temporary traces are removed. The final connected image/
+typography method is running; browser/full/installed acceptance stays pending.
+
+Earlier: eleven distinct focused native workflows had passing results. Two
+connected methods are still being repaired and rerun, not waived. Production
+corrections cover contained Bounds disclosure geometry, truthful draft
+accessibility, font-popover semantics and the Escape cancellation event boundary.
+All seven Settings destinations and practical compact captures were inspected;
+independent eight-width Safari review, accumulated full gate and safe installed
+delivery remain pending. No current owner authentication action is needed.
+
+Earlier acceptance continuation: the corrected component workflow passes 1/1,
+zero failures/skips (232.398 seconds), with named creation, Return/focus-loss/
+Escape and real save/reopen checked. Three original-resolution captures were
+inspected: readable Design controls, upright text, aligned selected bounds,
+preserved instance value and Saved state. Isolated provision fingerprint
+`eab81b81…` includes only test-navigation changes beyond the production source
+covered by the earlier 717-code pass. The focused acceptance group is active;
+no integrated/full/browser/installed acceptance is claimed. Computer-use inventory
+works again. No owner authentication action is currently required.
+
+Historical pre-retry authority: isolated build/provision (`f601b53b…`) and
+complete code target pass 717/717, zero failures/skips. The ONE pending native
+selector failed runner initialization (automation timeout), executing no method.
+Computer-use tooling is separately unavailable. Native/visual/Safari/full and
+installed delivery remain pending OD-025, not product-complete. Fresh protected
+hashes match 4/4; regular app remains older build 26.10.21. Exact current report
+and inventory: `evidence/SF-LOCAL-BUILDER-005-INTEGRATION.md`. No active owned run,
+commit, GitHub action or new feature. Read-only diagnostics now locate the blocker
+at incomplete device-owner authentication for “Enable UI Automation,” after
+test-daemon authorization succeeds. Owner authentication is the next prerequisite;
+SiteForge reopening is not a demonstrated fix. Normal saved/quit proof remains
+separate and necessary only before a later installed update. No new tests ran.
+
+Current authority: SF-LOCAL-BUILDER-005 connected integration is IN PROGRESS.
+Retained edits, native text Undo, panel/preview/export ownership and shared output
+path aliasing are corrected at their existing boundaries. Exact focused evidence
+and ONE pending acceptance inventory: `evidence/SF-LOCAL-BUILDER-005-INTEGRATION.md`.
+Native/visual/Safari/Settings, safe installed refresh and accumulated full
+verification remain pending OD-025. No commit/GitHub or original Aurora/recovery
+operation. Return to acceptance, not unrelated features. Focused totals overlap.
+Reviewed focused results: 24/24 code tests pass (ten new); app/UI targets compile.
+
+Prior source package: SF-LOCAL-BUILDER-004 images/typography is IN PROGRESS.
+Scoped use import, explicit global replacement/references, current thumbnails and
+installed-font controls with safe drafts pass 22/22 affected code tests (seven
+new). App/UI targets compile; no new native/visual acceptance. Evidence and one
+pending inventory: `evidence/SF-LOCAL-BUILDER-004-ASSETS-TYPOGRAPHY.md`.
+002/003 and Settings remain pending; historical 815 is not this changed-tree gate.
+No installed refresh, commit, GitHub or privacy change.
+
+Prior source package: SF-LOCAL-BUILDER-003 responsive sizing is IN PROGRESS.
+Effective sizing/reset, compact adjacent controls, safe numeric drafts and shared
+Grid/fluid output corrections pass 23 unique code tests (11 new), with 2/2
+strengthened reruns. Native journey compiles but is not executed. Component
+reuse, Settings, native/visual/Safari and final changed-tree gate remain pending.
+No installation, original/recovery change, commit or GitHub operation. Evidence:
+`evidence/SF-LOCAL-BUILDER-003-RESPONSIVE-SIZING.md`.
+
+Prior source package: SF-LOCAL-BUILDER-002 Practical component reuse is IN PROGRESS.
+Named creation, exact scene-local definition return, shared organized Design/
+Content controls and stable text drafts are implemented. Final focused group
+passes 17/17 code tests; UI target compiles, new native journey is not executed.
+Repository/security/architecture checks and traceability (425 records) pass.
+Native/visual/Safari review and final changed-tree full gate remain pending
+OD-025. The regular installed app is unchanged, current owner work is unknown,
+and original Aurora/recovery remain protected. No commit or GitHub action.
+See `evidence/SF-LOCAL-BUILDER-002-COMPONENT-REUSE.md`.
+
+Historical baseline: the prior source fingerprint passed 682 code +133 UI =815
+tests, with installed Aurora/Safari/reopen evidence. It does not verify the new
+component edits. All older authority/in-progress/next-action statements below
+are historical; they do not authorize a commit, refresh or recovery action now.
+
+Historical authority: SF-PRODUCT-UI-010 DONE for its bounded owner correction.
 Final verification passes 636 model/integration +119 UI =755 tests, no failures
 or skips, repository checks green. Installed owner build is refreshed and
 fourteen final focused captures reviewed; original recovery remains unchanged.

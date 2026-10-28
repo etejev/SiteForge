@@ -705,12 +705,42 @@ final class ProjectPackageTests: XCTestCase {
         try await store.prepareRecoveryDirectory(recoveryDirectory)
         let recoveryURL = DocumentLifecycleBackend.recoveryURL(for: baseline.projectID, in: recoveryDirectory)
         try await store.write(reopened, to: recoveryURL, policy: .recovery(baseline.projectID))
-        let recovered = try await store.readOwnedRecoverySnapshot(
+        let recoveredSnapshot = try await store.readOwnedRecoverySnapshot(
             from: recoveryURL,
             expectedProjectID: baseline.projectID
-        ).package
+        )
+        let recovered = recoveredSnapshot.package
         let recoveredNode = try XCTUnwrap(recovered.document.pages[0].nodes.first(where: { $0.id == nodeID }))
         XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: recoveredNode), expected)
+
+        // SF-0507-005: the paired chooser uses the same package/recovery
+        // format, retaining existing property identity rather than a font store.
+        let beforePair = session.document.pages
+        let pairedEdit = try registry.prepare(command(.fontFace(family: "System", weight: .bold)),
+            in: session.document, context: context)
+        try session.execute(pairedEdit.documentCommand)
+        let pairedNode = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == nodeID })
+        XCTAssertEqual(pairedNode.insertionProperty(CanonicalTypography.namespace + "family")?.id,
+            reopenedNode.insertionProperty(CanonicalTypography.namespace + "family")?.id)
+        let pairedPackage = ProjectPackage(projectID: baseline.projectID, createdAt: baseline.createdAt,
+            modifiedAt: baseline.modifiedAt, document: session.document,
+            optionalMembers: baseline.optionalMembers, compatibility: baseline.compatibility)
+        let pairedEncoded = try await store.encode(pairedPackage)
+        let pairedReopened = try await store.decode(pairedEncoded)
+        XCTAssertEqual(pairedReopened.document, session.document)
+        let pairedResaved = try await store.encode(pairedReopened)
+        XCTAssertEqual(pairedResaved, pairedEncoded)
+        try await store.write(pairedReopened, to: recoveryURL, expected: recoveredSnapshot.file.fingerprint,
+                              policy: .recovery(baseline.projectID))
+        let pairedRecovery = try await store.readOwnedRecoverySnapshot(from: recoveryURL, expectedProjectID: baseline.projectID).package
+        XCTAssertEqual(pairedRecovery.document, session.document)
+        let style = try XCTUnwrap(TypographyCommandRegistry.resolvedTypography(for: pairedNode))
+        XCTAssertEqual(style.family, "System"); XCTAssertEqual(style.weight, .bold)
+        XCTAssertEqual(style.size, expected.size); XCTAssertEqual(style.lineHeight, expected.lineHeight)
+        XCTAssertEqual(style.tracking, expected.tracking); XCTAssertEqual(style.alignment, expected.alignment)
+        let afterPair = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, beforePair)
+        try session.redo(); XCTAssertEqual(session.document.pages, afterPair)
     }
 
     @MainActor

@@ -381,7 +381,11 @@ final class FileAccessBoundaryTests: XCTestCase {
         XCTAssertEqual(entitlements["com.apple.security.app-sandbox"] as? Bool, true)
         XCTAssertEqual(entitlements["com.apple.security.files.user-selected.read-write"] as? Bool, true)
         XCTAssertEqual(entitlements["com.apple.security.files.bookmarks.app-scope"] as? Bool, true)
-        XCTAssertEqual(entitlements.count, 3)
+        // SF-1201: Safari preview accepts connections only on 127.0.0.1.
+        // There is deliberately no outbound network-client entitlement.
+        XCTAssertEqual(entitlements["com.apple.security.network.server"] as? Bool, true)
+        XCTAssertNil(entitlements["com.apple.security.network.client"])
+        XCTAssertEqual(entitlements.count, 4)
 
         let info = try XCTUnwrap(Bundle.main.infoDictionary)
         let exported = try XCTUnwrap(info["UTExportedTypeDeclarations"] as? [[String: Any]])

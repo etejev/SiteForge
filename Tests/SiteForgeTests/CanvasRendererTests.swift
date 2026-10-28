@@ -2,6 +2,242 @@ import XCTest
 @testable import SiteForge
 
 final class CanvasRendererTests: XCTestCase {
+    // SF-1203-004/1211-004: cancellation before promotion preserves an
+    // existing destination byte-for-byte and removes only our private stage.
+    func testStaticWriterLiveCancellationBeforePromotionPreservesExistingOutput() async throws {
+        let fixture = try ApplicationOwnedTestFixture.create("export-cancellation")
+        defer { try? fixture.cleanup() }
+        let destination = fixture.url.appendingPathComponent("website")
+        let old = LocalStaticBuildPlan(revision: 1, files: [.init(path: "index.html", contents: "old")])
+        try LocalStaticBuildWriter.write(old, to: destination, expectedRevision: 1)
+        let next = LocalStaticBuildPlan(revision: 2, files: [.init(path: "index.html", contents: "new")])
+        let barrier = DeterministicCancellationBarrier(blockAt: 3)
+        let task = Task.detached {
+            try LocalStaticBuildWriter.write(next, to: destination, expectedRevision: 2, replacingExisting: true,
+                cancellation: .init(barrier.check))
+        }
+        await barrier.waitUntilBlocked()
+        task.cancel(); barrier.release()
+        do { try await task.value; XCTFail("Cancelled staging must not promote") }
+        catch { XCTAssertEqual(error as? LocalStaticBuildWriteError, .cancelled) }
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("index.html"), encoding: .utf8), "old")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.url.path), ["website"])
+    }
+
+    @MainActor func testBrowserExportPanelIntentCannotRetargetReplacementBuild() async throws {
+        let fixture = try ApplicationOwnedTestFixture.create("export-intent")
+        defer { try? fixture.cleanup() }
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let controller = BrowserPreviewController { _ in .opened }
+        defer { controller.stop() }
+        await controller.build(document: session.document, pageID: session.document.pages[0].id,
+            package: .init(document: session.document), isCurrent: { _, _ in true }).value
+        let captured = try XCTUnwrap(controller.makeExportRequest())
+        try session.execute(.renamePage(.init(pageID: session.document.pages[0].id, name: "Changed")))
+        await controller.build(document: session.document, pageID: session.document.pages[0].id,
+            package: .init(document: session.document), isCurrent: { _, _ in true }).value
+        let staleDestination = fixture.url.appendingPathComponent("stale")
+        XCTAssertNil(controller.export(to: staleDestination, request: captured))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleDestination.path))
+        let current = try XCTUnwrap(controller.makeExportRequest())
+        let destination = fixture.url.appendingPathComponent("current")
+        let write = try XCTUnwrap(controller.export(to: destination, request: current))
+        await write.value
+        XCTAssertNil(controller.exportFailure, controller.status)
+        for file in current.plan.files {
+            XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent(file.path)), Data(file.contents.utf8))
+        }
+        XCTAssertEqual(current.plan.revision, session.document.revision)
+    }
+
+    func testPackageBackedCompilerRejectsForeignSnapshotWithoutLeakingContent() {
+        let document = ProjectCreation.blank(), foreign = ProjectCreation.blank()
+        let result = StaticBuildCompiler.compile(document: document,
+            profileSelection: .init(profile: .development), package: .init(document: foreign))
+        XCTAssertFalse(result.canWrite); XCTAssertNil(result.plan)
+        XCTAssertEqual(result.findings.map(\.code), ["resource-snapshot-invalid"])
+        XCTAssertFalse(result.redactedSummary.contains(foreign.id.description))
+        XCTAssertFalse(result.redactedSummary.contains(document.id.description))
+    }
+    @MainActor func testBrowserPreviewPendingIdentityCancelsReplacementAndRevisionWithoutOpeningBrowser() async throws {
+        let document = ProjectCreation.blank()
+        var opened = 0
+        let controller = BrowserPreviewController { _ in opened += 1; return .opened }
+        let first = controller.build(document: document, pageID: document.pages[0].id,
+            package: .init(document: document), isCurrent: { _, _ in true })
+        controller.noteRevision(documentID: DocumentID(), revision: 0)
+        XCTAssertFalse(controller.isBuilding)
+        await first.value
+        XCTAssertNil(controller.plan); XCTAssertNil(controller.url); XCTAssertEqual(opened, 0)
+        XCTAssertEqual(controller.status, "Website preview stopped.")
+        let second = controller.build(document: document, pageID: document.pages[0].id,
+            package: .init(document: document), isCurrent: { _, _ in true })
+        controller.noteRevision(documentID: document.id, revision: document.revision + 1)
+        XCTAssertFalse(controller.isBuilding)
+        await second.value
+        XCTAssertEqual(opened, 0); XCTAssertNil(controller.plan)
+        XCTAssertTrue(controller.status.contains("Refresh"))
+        let third = controller.build(document: document, pageID: document.pages[0].id,
+            package: .init(document: document), isCurrent: { _, _ in false })
+        await third.value
+        XCTAssertFalse(controller.isBuilding); XCTAssertNil(controller.plan)
+        XCTAssertEqual(opened, 0)
+        controller.stop()
+    }
+
+    @MainActor func testBrowserPreviewExportUsesExactSnapshotAndSupersededCompletionKeepsStoppedStatus() async throws {
+        let fixture = try ApplicationOwnedTestFixture.create("preview-boundary")
+        defer { try? fixture.cleanup() }
+        let document = ProjectCreation.blank()
+        let controller = BrowserPreviewController { _ in .opened }
+        let build = controller.build(document: document, pageID: document.pages[0].id,
+            package: .init(document: document), isCurrent: { _, _ in true })
+        await build.value
+        let plan = try XCTUnwrap(controller.plan)
+        let destination = fixture.url.appendingPathComponent("website")
+        let export = try XCTUnwrap(controller.export(to: destination))
+        await export.value
+        XCTAssertFalse(controller.isExporting)
+        XCTAssertNil(controller.exportFailure, controller.status)
+        for file in plan.files {
+            XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent(file.path)), Data(file.contents.utf8))
+        }
+        XCTAssertTrue(controller.status.contains("Exported"))
+        let second = fixture.url.appendingPathComponent("second-website")
+        let cancelled = try XCTUnwrap(controller.export(to: second))
+        controller.stop()
+        await cancelled.value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
+        XCTAssertEqual(controller.status, "Website preview stopped.")
+        XCTAssertFalse(controller.isExporting)
+        let unsafe = LocalStaticBuildPlan(revision: plan.revision, files: [.init(path: "../escape.html", contents: "not allowed")])
+        XCTAssertThrowsError(try LocalStaticBuildWriter.write(unsafe, to: fixture.url.appendingPathComponent("unsafe"), expectedRevision: plan.revision)) {
+            XCTAssertEqual($0 as? LocalStaticBuildWriteError, .unsafeDestination)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.url.appendingPathComponent("escape.html").path))
+    }
+
+    @MainActor func testBrowserPreviewLateOpenCompletionCannotReplaceStoppedFeedback() async throws {
+        let document = ProjectCreation.blank()
+        var continuation: CheckedContinuation<BrowserPreviewController.BrowserOpenResult, Never>?
+        let completed = expectation(description: "Native browser-open adapter returned")
+        let controller = BrowserPreviewController { _ in
+            let result = await withCheckedContinuation { continuation = $0 }
+            completed.fulfill()
+            return result
+        }
+        let build = controller.build(document: document, pageID: document.pages[0].id,
+            package: .init(document: document), isCurrent: { _, _ in true })
+        await build.value
+        let deadline = ContinuousClock.now + .seconds(3)
+        while continuation == nil, ContinuousClock.now < deadline { await Task.yield() }
+        let pending = try XCTUnwrap(continuation)
+        controller.stop(); pending.resume(returning: .failed)
+        await fulfillment(of: [completed], timeout: 3)
+        XCTAssertEqual(controller.status, "Website preview stopped.")
+        XCTAssertNil(controller.url); XCTAssertNil(controller.plan)
+    }
+    // SF-1201-003/004, SF-1206-003/004: serve the immutable export artifact,
+    // never client-supplied filesystem paths or a DNS-rebound Host.
+    func testBrowserPreviewHTTPRoutesExactExportBytesAndHead() throws {
+        let image = Data([0, 1, 254, 255])
+        let plan = LocalStaticBuildPlan(revision: 9, files: [
+            .init(path: "index.html", contents: "<h1>Home</h1>"),
+            .init(path: "contact.html", contents: "Contact"),
+            .init(path: "404.html", contents: "Missing")
+        ], binaryFiles: [.init(path: "assets/photo.png", contents: image)])
+        let content = try WebsitePreviewHTTPContent(plan: plan)
+        func request(_ path: String, method: String = "GET") -> WebsitePreviewHTTPContent.Response {
+            content.response(to: Data("\(method) \(path) HTTP/1.1\r\nHost: 127.0.0.1:4321\r\n\r\n".utf8), port: 4321)
+        }
+        XCTAssertEqual(request("/").body, Data(plan.files[0].contents.utf8))
+        XCTAssertEqual(request("/contact?query=hello").body, Data("Contact".utf8))
+        XCTAssertEqual(request("/assets/photo.png").body, image)
+        XCTAssertEqual(request("/assets/photo.png").type, "image/png")
+        XCTAssertEqual(request("/missing").status, 404)
+        XCTAssertEqual(request("/missing").body, Data("Missing".utf8))
+        let head = request("/", method: "HEAD")
+        XCTAssertTrue(head.headOnly)
+        XCTAssertTrue(String(decoding: head.bytes, as: UTF8.self).hasSuffix("\r\n\r\n"))
+        XCTAssertTrue(String(decoding: head.bytes, as: UTF8.self).contains("Content-Length: \(head.body.count)"))
+        XCTAssertEqual(plan.revision, 9)
+    }
+
+    func testBrowserPreviewHTTPRejectsTraversalRebindingAndInvalidArtifacts() throws {
+        let content = try WebsitePreviewHTTPContent(plan: .init(revision: 1, files: [.init(path: "index.html", contents: "safe")]))
+        for path in ["/../private", "/%2e%2e/private", "/%252e%252e/private", "/a\\b", "/%00", "//external.test/", "http://external.test/"] {
+            let response = content.response(to: Data("GET \(path) HTTP/1.1\r\nHost: 127.0.0.1:4321\r\n\r\n".utf8), port: 4321)
+            XCTAssertEqual(response.status, 400, path)
+        }
+        for host in ["external.test:4321", "127.0.0.1:4322", "127.0.0.1:4321\r\nHost: localhost:4321"] {
+            XCTAssertEqual(content.response(to: Data("GET / HTTP/1.1\r\nHost: \(host)\r\n\r\n".utf8), port: 4321).status, 400)
+        }
+        XCTAssertEqual(content.response(to: Data(repeating: 65, count: 16_385), port: 4321).status, 431)
+        XCTAssertEqual(content.response(to: Data("POST / HTTP/1.1\r\nHost: localhost:4321\r\n\r\n".utf8), port: 4321).status, 405)
+        for files: [LocalStaticBuildPlan.File] in [[], [.init(path: "../index.html", contents: "bad")], [.init(path: "index.html", contents: "a"), .init(path: "index.html", contents: "b")]] {
+            XCTAssertThrowsError(try WebsitePreviewHTTPContent(plan: .init(revision: 1, files: files)))
+        }
+    }
+
+    func testBrowserPreviewLoopbackServesImmutablePlanAndStops() async throws {
+        let server = LoopbackWebsiteServer()
+        let plan = LocalStaticBuildPlan(revision: 4, files: [.init(path: "index.html", contents: "<p>Exact authored output</p>")])
+        let url = try await server.start(plan: plan)
+        XCTAssertEqual(url.host, "127.0.0.1")
+        XCTAssertNotNil(url.port)
+        let session = URLSession(configuration: .ephemeral)
+        do {
+            let (bytes, response) = try await session.data(from: url)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual(bytes, Data(plan.files[0].contents.utf8))
+            await server.stop()
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 2
+            do {
+                _ = try await session.data(for: request)
+                XCTFail("Stopped preview must not keep serving")
+            } catch { /* Connection refusal is the expected teardown boundary. */ }
+        } catch {
+            await server.stop()
+            session.invalidateAndCancel()
+            throw error
+        }
+        session.invalidateAndCancel()
+    }
+
+    func testBrowserPreviewStoppedServerCannotRestart() async throws {
+        let server = LoopbackWebsiteServer()
+        await server.stop()
+        do {
+            _ = try await server.start(plan: .init(revision: 1, files: [.init(path: "index.html", contents: "safe")]))
+            XCTFail("A retired scene server cannot restart")
+        } catch { XCTAssertEqual(error as? WebsitePreviewError, .cancelled) }
+    }
+
+    func testBrowserPreviewWorkerWritesSameCompilerArtifactInsidePrivateOwnership() async throws {
+        let document = ProjectCreation.blank()
+        let worker = BrowserWebsiteBuilder()
+        let (compilation, root) = try await worker.prepare(document: document, package: ProjectPackage(document: document))
+        let owned = try XCTUnwrap(root)
+        do {
+            let permissions = try FileManager.default.attributesOfItem(atPath: owned.path)[.posixPermissions] as? NSNumber
+            XCTAssertEqual(permissions?.intValue, 0o700)
+            let plan = try XCTUnwrap(compilation.plan)
+            XCTAssertEqual(plan.revision, document.revision)
+            let http = try WebsitePreviewHTTPContent(plan: plan)
+            for file in plan.files {
+                let written = try Data(contentsOf: owned.appendingPathComponent("website").appendingPathComponent(file.path))
+                XCTAssertEqual(written, Data(file.contents.utf8))
+                XCTAssertEqual(http.files[file.path], written)
+            }
+            await worker.removeOwnedOutput(owned)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: owned.path))
+        } catch {
+            await worker.removeOwnedOutput(owned)
+            throw error
+        }
+    }
+
     // SF-0202-003, SF-0303-003, SF-1102-003 — static navigation retains
     // canonical order, omits non-public roles, and reports the current page.
     func testStaticNavigationProjectionPreservesPageOrderAndAccessibleCurrentState() {
@@ -92,6 +328,37 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(output.contains("<label for=\"sf-field-"))
         XCTAssertTrue(output.contains("name=\"email\" type=\"email\" required"))
         XCTAssertTrue(output.contains("maxlength=\"128\""))
+    }
+
+    // SF-0506-003/005, SF-1203-003/004: typed navigation is shared by
+    // styled Buttons and Links; no unconfigured action is made executable.
+    func testTargetedButtonOutputRetainsSafeNavigationAndAuthoredBorder() throws {
+        let pageID = PageID(), targetID = PageID(), id = NodeID(), missingID = NodeID()
+        let prefix = DesignBoxStyleCommandRegistry.namespace
+        var button = DocumentNode(id: id, kind: .button, name: "Read journal", parent: .page(pageID),
+            properties: typedControlProperties(.page(targetID), label: "Read & explore", context: .new))
+        button.properties += [
+            .init(key: .init(rawValue: prefix + "border.width"), value: .number(1), origin: .authored),
+            .init(key: .init(rawValue: prefix + "border.style"), value: .string("solid"), origin: .authored),
+            .init(key: .init(rawValue: prefix + "border.color.red"), value: .number(0.4), origin: .authored),
+            .init(key: .init(rawValue: prefix + "border.color.green"), value: .number(0.2), origin: .authored),
+            .init(key: .init(rawValue: prefix + "border.color.blue"), value: .number(0.8), origin: .authored),
+            .init(key: .init(rawValue: prefix + "border.color.alpha"), value: .number(1), origin: .authored),
+        ]
+        let missing = DocumentNode(id: missingID, kind: .button, name: "Missing", parent: .page(pageID),
+            properties: typedControlProperties(.page(PageID()), label: "Missing"))
+        let page = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+            rootNodeIDs: [id, missingID], nodes: [button, missing])
+        let tree = try InternalDocumentRenderTreeCompiler.compile(page: page, documentID: DocumentID(), revision: 1,
+            staticRoutes: [pageID: "index.html", targetID: "journal.html"])
+        let html = try SafeHTMLEmitter.emit(tree)
+        XCTAssertTrue(html.contains("href=\"journal.html\" target=\"_blank\" rel=\"noopener noreferrer\">Read &amp; explore</a>"))
+        XCTAssertTrue(html.contains("role=\"link\" aria-disabled=\"true\">Missing</a>"))
+        XCTAssertEqual(tree.nodes.first(where: { $0.id == id })?.boxStyle?.border?.width, 1)
+        XCTAssertTrue(StaticBoxStyleOutputEmitter.emit(nodes: tree.nodes).contains("rgba(102.0, 51.0, 204.0, 1.0)"))
+        let css = StaticTypographyOutputEmitter.emit(nodes: tree.nodes)
+        XCTAssertTrue(css.contains(":is(a,button) { display:flex;align-items:center;"))
+        XCTAssertFalse(html.contains("onclick=") || html.contains("<script"))
     }
 
     func testSafeHTMLEmitterSafelyEmitsCheckboxSelectAndUnconfiguredSubmit() throws {
@@ -197,6 +464,22 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(css.contains("font-weight: 700;"))
         XCTAssertTrue(css.contains("font-size: 18.5px;"))
         XCTAssertTrue(css.contains("text-align: center;"))
+        XCTAssertTrue(css.contains("white-space: pre-wrap;"))
+        XCTAssertTrue(css.contains("[data-siteforge-node] { display:flex;flex-direction:column;justify-content:center;overflow:hidden; }"))
+        var authored = node
+        authored.properties[1].value = .string("Georgia")
+        authored.properties[1].origin = .authored
+        let serifPage = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+            rootNodeIDs: [nodeID], nodes: [authored])
+        let serif = try InternalDocumentRenderTreeCompiler.compile(page: serifPage, documentID: DocumentID(), revision: 2)
+        XCTAssertTrue(StaticTypographyOutputEmitter.emit(nodes: serif.nodes).contains("font-family: \"Georgia\", system-ui;"))
+        authored.properties[1].value = .string("A\";color:red;/*")
+        let hostilePage = DocumentPage(id: pageID, name: "Home", route: .init(rawValue: "/"), role: .home,
+            rootNodeIDs: [nodeID], nodes: [authored])
+        let literal = try InternalDocumentRenderTreeCompiler.compile(page: hostilePage, documentID: DocumentID(), revision: 3)
+        let escaped = StaticTypographyOutputEmitter.emit(nodes: literal.nodes)
+        XCTAssertTrue(escaped.contains("\\22 "))
+        XCTAssertFalse(escaped.contains(";color:red;"))
     }
 
     // SF-AUTHORING-098, SF-1203-003/004 — canonical accessibility metadata

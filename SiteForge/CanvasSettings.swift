@@ -80,7 +80,11 @@ final class CanvasSettingsStore: NSObject, ObservableObject {
     var choice: Bool { draft?.visibleByDefault ?? true }
     var isDirty: Bool { draft != CanvasGridPreferenceRecord.decode(committedData) }
     var canApply: Bool { isDirty || (committedData != nil && CanvasGridPreferenceRecord.decode(committedData) == nil) }
-    var canRestore: Bool { !transactions.isEmpty }
+    var canRestore: Bool {
+        editing && !isDirty && transactions.last?.after == committedData
+            && !transactions.isEmpty && defaults.data(forKey: Self.storageKey) == committedData
+            && !defaults.objectIsForced(forKey: Self.storageKey)
+    }
     var provenance: String {
         if isDirty { return "Draft — Apply to use this default for new workspaces." }
         return draft == nil ? "Default — Grid shown in new workspaces." : "Authored — this Mac only."
@@ -167,7 +171,7 @@ final class CanvasSettingsStore: NSObject, ObservableObject {
     }
 
     func restorePrevious() {
-        guard editing, let previous = transactions.last, revision < UInt64.max,
+        guard canRestore, let previous = transactions.last, revision < UInt64.max,
               !defaults.objectIsForced(forKey: Self.storageKey),
               defaults.data(forKey: Self.storageKey) == committedData else {
             status = "SF-0206-004: canvas default cannot be restored. Cancel and reopen Settings."
@@ -179,9 +183,16 @@ final class CanvasSettingsStore: NSObject, ObservableObject {
     }
 
     func cancel() {
+        let stored = defaults.data(forKey: Self.storageKey)
+        if stored != committedData {
+            committedData = stored
+            if revision < UInt64.max { revision += 1 }
+        }
         draft = CanvasGridPreferenceRecord.decode(committedData)
         draftRevision = revision
-        status = "Canvas default draft cancelled. Saved preference retained."
+        status = committedData != nil && draft == nil
+            ? "Canvas draft cancelled. Stored default is unavailable; new workspaces show Grid. Apply or Reset explicitly to replace it."
+            : "Canvas default draft cancelled. Latest saved preference retained."
         lastDiagnostic = CanvasSettingsDiagnostic(operation: "cancel", failureCategory: "none")
     }
 
@@ -334,7 +345,7 @@ final class ApplicationSettingsGroupStore: ObservableObject {
         }
         guard current != Snapshot(appearance: nil, canvas: nil) else {
             failureCategory = "none"
-            status = "Application defaults already follow macOS and show Grid in new workspaces."
+            status = "Application defaults already use the Dark editor and show Grid in new workspaces."
             return
         }
         pendingBefore = current
@@ -365,7 +376,7 @@ final class ApplicationSettingsGroupStore: ObservableObject {
         isPending = false
         failureCategory = "none"
         synchronizeTabs()
-        status = "Application defaults reset. Appearance follows macOS; new workspaces show Grid. Projects are unchanged."
+        status = "Application defaults reset. Dark editor; new workspaces show Grid. Projects are unchanged."
         return true
     }
 

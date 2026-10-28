@@ -5,6 +5,10 @@ import SwiftUI
 enum ApplicationAppearance: String, Codable, CaseIterable {
     case system, light, dark
 
+    // Owner-selected render-01 editor direction. Explicit saved preferences
+    // still win; this default never writes a preference or project property.
+    static let editorDefault: ApplicationAppearance = .dark
+
     var title: String {
         switch self {
         case .system: "Follow macOS"
@@ -85,7 +89,7 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
         draft = ApplicationAppearanceRecord.decode(committedData)
         super.init()
         status = committedData != nil && draft == nil
-            ? "Stored appearance is unavailable. Following macOS; Apply or Reset to replace it."
+            ? "Stored appearance is unavailable. Using Dark; Apply or Reset to replace it."
             : "Application appearance loaded. Projects are unchanged."
         if committedData != nil && draft == nil {
             lastDiagnostic = AppearanceSettingsDiagnostic(operation: "load", failureCategory: "unsupported-record", durationSeconds: 0)
@@ -112,17 +116,21 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
         if !editing { begin() }
     }
 
-    var resolved: ApplicationAppearance { ApplicationAppearanceRecord.decode(committedData)?.appearance ?? .system }
+    var resolved: ApplicationAppearance { ApplicationAppearanceRecord.decode(committedData)?.appearance ?? .editorDefault }
     static func committedAppearance(defaults: UserDefaults = .standard) -> ApplicationAppearance {
-        ApplicationAppearanceRecord.decode(defaults.data(forKey: storageKey))?.appearance ?? .system
+        ApplicationAppearanceRecord.decode(defaults.data(forKey: storageKey))?.appearance ?? .editorDefault
     }
-    var choice: ApplicationAppearance { draft?.appearance ?? .system }
+    var choice: ApplicationAppearance { draft?.appearance ?? .editorDefault }
     var isDirty: Bool { draft != ApplicationAppearanceRecord.decode(committedData) }
     var canApply: Bool { isDirty || (committedData != nil && ApplicationAppearanceRecord.decode(committedData) == nil) }
-    var canRestore: Bool { !transactions.isEmpty }
+    var canRestore: Bool {
+        editing && !isDirty && transactions.last?.after == committedData
+            && !transactions.isEmpty && defaults.data(forKey: Self.storageKey) == committedData
+            && !defaults.objectIsForced(forKey: Self.storageKey)
+    }
     var provenance: String {
         if isDirty { return "Preview — not saved. Apply to keep this appearance." }
-        return draft == nil ? "Default — follows macOS." : "Authored — this Mac only."
+        return draft == nil ? "Default — Dark editor." : "Authored — this Mac only."
     }
 
     func begin() {
@@ -146,7 +154,7 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
     func reset() {
         guard editing else { return }
         draft = nil
-        present(.system)
+        present(.editorDefault)
         status = "Reset preview. Apply removes the application override."
     }
 
@@ -198,7 +206,7 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
     }
 
     func restorePrevious() {
-        guard editing, let previous = transactions.last, revision < UInt64.max,
+        guard canRestore, let previous = transactions.last, revision < UInt64.max,
               !defaults.objectIsForced(forKey: Self.storageKey),
               defaults.data(forKey: Self.storageKey) == committedData else {
             status = "SF-0206-004: appearance cannot be restored. Cancel and reopen Settings."
@@ -210,10 +218,19 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
     }
 
     func cancel() {
+        // Another Settings owner/managed preference may have saved while the
+        // preview was open. Cancel must reveal that value, never replay cache.
+        let stored = defaults.data(forKey: Self.storageKey)
+        if stored != committedData {
+            committedData = stored
+            if revision < UInt64.max { revision += 1 }
+        }
         draft = ApplicationAppearanceRecord.decode(committedData)
         draftRevision = revision
         present(resolved)
-        status = "Preview cancelled. Saved appearance restored."
+        status = committedData != nil && draft == nil
+            ? "Preview cancelled. Stored appearance is unavailable; Dark is shown. Apply or Reset explicitly to replace it."
+            : "Preview cancelled. Latest saved appearance restored."
         lastDiagnostic = AppearanceSettingsDiagnostic(operation: "cancel", failureCategory: "none", durationSeconds: 0)
     }
 
@@ -249,7 +266,7 @@ struct AppearanceSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
-                Button("Reset to macOS") { store.reset() }
+                Button("Reset to Default") { store.reset() }
                     .accessibilityValue(store.draft == nil ? "Already default" : "Reset available")
                     .accessibilityIdentifier("settings.appearance.reset")
                 Button("Restore Previous") { store.restorePrevious() }

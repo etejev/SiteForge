@@ -21,6 +21,13 @@ still records 47 internal QoS warnings, not diagnosed as fixed by this slice.
 No normative module, broad output parity or release gate is declared complete.
 The chronology below preserves failed attempts; pending wording is historical.
 
+2026-10-16 residual follow-up: all 47 warning stacks are classified in
+[Residual QoS evidence](SF-PRODUCT-UI-010-RESIDUAL-QOS.md): 37 AppKit native
+Services-menu accessibility inspections, 10 native text-checking operations,
+both waiting on Apple's Data Detectors scanner. No demonstrated SiteForge-owned
+blocking path; no source/app change or test rerun. Additional retained Apple
+service/AX diagnostics are documented there, not silently counted as absent.
+
 ## Contract and reviewed evidence
 
 Bounded SF-0201-003/006/008, SF-0203-002/006/008, SF-0301-004/006,

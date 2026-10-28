@@ -27,6 +27,108 @@ final class DocumentLifecycleTests: XCTestCase {
         XCTAssertEqual(DocumentLifecycleController.requirementIDs, expectedRequirementIDs)
     }
 
+    // SF-0306-003/004/005: normal exits and live sibling processes are not crashes.
+    func testRecoverySessionEvidenceSeparatesLiveCrashCleanAndLegacyWithoutChangingContent() async throws {
+        let directory = fixture("session-evidence", isDirectory: true)
+        try await ProjectPackageStore().prepareRecoveryDirectory(directory)
+        let source = ProjectPackage(document: ProjectCreation.blank())
+        var running: RecoverySessionEvidence? = RecoverySessionEvidence()
+        let tagged = try XCTUnwrap(running).tagging(source, in: directory)
+        let reader = RecoverySessionEvidence()
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(source, in: directory))
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(tagged, in: directory), "A live window/process owns this work")
+        XCTAssertEqual(tagged.document, source.document)
+        XCTAssertEqual(tagged.projectID, source.projectID)
+        XCTAssertEqual(RecoverySessionEvidence.removingEvidence(from: tagged), source)
+        running = nil // OS releases the process lock; no clean-exit marker was written.
+        XCTAssertTrue(reader.qualifiesForAutomaticRecovery(tagged, in: directory))
+        let foreign = ProjectPackage(document: tagged.document, optionalMembers: tagged.optionalMembers)
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(foreign, in: directory), "Copied evidence cannot qualify a different project")
+        var clean: RecoverySessionEvidence? = RecoverySessionEvidence()
+        let cleanPackage = try XCTUnwrap(clean).tagging(source, in: directory)
+        clean?.markCleanShutdown()
+        clean = nil
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(cleanPackage, in: directory))
+        XCTAssertTrue(reader.qualifiesForAutomaticRecovery(tagged, in: directory), "Another session's clean exit cannot consume a crashed session")
+        let unrelated = fixture("other-session", isDirectory: true)
+        try await ProjectPackageStore().prepareRecoveryDirectory(unrelated)
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(tagged, in: unrelated))
+    }
+
+    func testRecoverySessionEvidenceRejectsUnsafeMalformedAndMissingMarkers() async throws {
+        let directory = fixture("unsafe-session", isDirectory: true)
+        try await ProjectPackageStore().prepareRecoveryDirectory(directory)
+        let source = ProjectPackage(document: ProjectCreation.blank())
+        var writer: RecoverySessionEvidence? = RecoverySessionEvidence()
+        let tagged = try XCTUnwrap(writer).tagging(source, in: directory)
+        writer = nil
+        let reader = RecoverySessionEvidence()
+        let marker = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: directory,
+            includingPropertiesForKeys: nil).first { $0.lastPathComponent.hasPrefix(".session-") })
+        let original = try Data(contentsOf: marker)
+        XCTAssertTrue(reader.qualifiesForAutomaticRecovery(tagged, in: directory))
+        try Data("not a session".utf8).write(to: marker)
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(tagged, in: directory))
+        try original.write(to: marker)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: marker.path)
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(tagged, in: directory))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+        let hardlink = directory.appendingPathComponent("marker-hardlink")
+        try FileManager.default.linkItem(at: marker, to: hardlink)
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(tagged, in: directory))
+        try FileManager.default.removeItem(at: hardlink)
+        let moved = directory.appendingPathComponent("retained-marker")
+        try FileManager.default.moveItem(at: marker, to: moved)
+        try FileManager.default.createSymbolicLink(at: marker, withDestinationURL: moved)
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(tagged, in: directory))
+        try FileManager.default.removeItem(at: marker)
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(tagged, in: directory))
+        let malformed = ProjectPackage(document: source.document, optionalMembers: [
+            .init(path: RecoverySessionEvidence.memberPath, data: Data("SFR1:../../outside".utf8)),
+        ])
+        XCTAssertFalse(reader.qualifiesForAutomaticRecovery(malformed, in: directory))
+    }
+
+    func testCrashQualifiedDiscoveryPreservesLegacyAndDurableSaveExcludesSessionEvidence() async throws {
+        let directory = fixture("qualified-discovery", isDirectory: true)
+        let store = ProjectPackageStore()
+        try await store.prepareRecoveryDirectory(directory)
+        let session = DocumentSession()
+        try session.execute(.insertPage(.init(page: DocumentPage(name: "Crash work"), index: 2)))
+        let source = ProjectPackage(document: session.document)
+        var writer: RecoverySessionEvidence? = RecoverySessionEvidence()
+        let tagged = try XCTUnwrap(writer).tagging(source, in: directory)
+        let url = DocumentLifecycleBackend.recoveryURL(for: tagged.projectID, in: directory)
+        try await store.write(tagged, to: url, policy: .recovery(tagged.projectID))
+        let bytes = try Data(contentsOf: url)
+        let reader = makeController(recoveryDirectory: directory)
+        await reader.discoverUntitledRecoveryCandidate(automaticCrashOnly: true)
+        XCTAssertNil(reader.recoveryCandidate)
+        writer = nil
+        await reader.discoverUntitledRecoveryCandidate(automaticCrashOnly: true)
+        XCTAssertEqual(reader.recoveryCandidate?.package.projectID, source.projectID)
+        XCTAssertEqual(try Data(contentsOf: url), bytes, "Discovery is read-only")
+        let restored = await reader.requestRestoreRecovery()
+        XCTAssertEqual(restored, .completed)
+        let destination = fixture("Crash-restored.siteforge")
+        let saved = await reader.save(to: destination)
+        XCTAssertTrue(saved)
+        let reopened = try await store.read(from: destination)
+        XCTAssertEqual(reopened.document, session.document)
+        XCTAssertFalse(reopened.optionalMembers.contains { $0.path == RecoverySessionEvidence.memberPath })
+
+        let legacy = ProjectPackage(document: session.document)
+        let legacyURL = DocumentLifecycleBackend.recoveryURL(for: legacy.projectID, in: directory)
+        try await store.write(legacy, to: legacyURL, policy: .recovery(legacy.projectID))
+        let legacyBytes = try Data(contentsOf: legacyURL)
+        let manual = makeController(recoveryDirectory: directory)
+        await manual.discoverUntitledRecoveryCandidate(automaticCrashOnly: true)
+        XCTAssertNil(manual.recoveryCandidate)
+        await manual.discoverUntitledRecoveryCandidate()
+        XCTAssertEqual(manual.recoveryCandidate?.package.projectID, legacy.projectID)
+        XCTAssertEqual(try Data(contentsOf: legacyURL), legacyBytes)
+    }
+
     func testSaveOpenAndSaveAsValidateBeforeReplacingState() async throws {
         let first = fixture("Lifecycle.siteforge")
         let second = fixture("Copy.siteforge")

@@ -56,7 +56,8 @@ if ! scripts/check-architecture-boundaries.py; then
   failed=1
 fi
 
-if ! python3 scripts/check-app-icon.py; then
+if ! /bin/zsh scripts/test-verification-runtime.sh \
+  || ! /bin/zsh scripts/verification-python.sh scripts/check-app-icon.py; then
   failed=1
 fi
 
@@ -106,6 +107,7 @@ entitlement_value() {
 }
 
 if [[ "$(entitlement_value com.apple.security.app-sandbox)" != true ]] ||
+   [[ "$(entitlement_value com.apple.security.network.server)" != true ]] ||
    [[ "$(entitlement_value com.apple.security.files.user-selected.read-write)" != true ]] ||
    [[ "$(entitlement_value com.apple.security.files.bookmarks.app-scope)" != true ]]; then
   print -u2 "The Release-candidate sandbox entitlement policy is incomplete."

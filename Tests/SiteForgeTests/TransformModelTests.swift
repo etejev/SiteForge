@@ -1,9 +1,715 @@
 import Darwin
+import Combine
 import XCTest
 @testable import SiteForge
 
 @MainActor
 final class TransformModelTests: XCTestCase {
+    // SF-0508-002/003, SF-0701-003 — selection routing must not guess a Root.
+    func testPageBackgroundPolicyRequiresSingleStructuralWebsiteRoot() throws {
+        var document = ProjectCreation.blank()
+        var page = try XCTUnwrap(document.pages.first)
+        let root = try XCTUnwrap(PageBackgroundPolicy.root(in: page))
+        XCTAssertNil(root.insertionGeometry)
+        XCTAssertNil(PageBackgroundPolicy.unavailableReason(in: page))
+        let before = document
+        XCTAssertNil(PageBackgroundPolicy.root(in: nil))
+        page.rootNodeIDs.append(NodeID())
+        XCTAssertNil(PageBackgroundPolicy.root(in: page), "Multiple roots must not pick an arbitrary background owner")
+        page = before.pages[0]
+        for (key, value) in [("layout.x", 0.0), ("layout.y", 0.0), ("layout.width", 100.0), ("layout.height", 100.0)] {
+            page.nodes[0].properties.append(.init(key: .init(rawValue: key), value: .number(value)))
+        }
+        XCTAssertNil(PageBackgroundPolicy.root(in: page), "An authored geometric Frame is not silently promoted to page background ownership")
+        page = before.pages[0]
+        page.nodes[0].properties.append(.init(key: .init(rawValue: "hidden"), value: .boolean(true)))
+        XCTAssertNotNil(PageBackgroundPolicy.unavailableReason(in: page))
+        XCTAssertEqual(PageBackgroundPolicy.root(in: page)?.id, root.id, "Hidden intent is retained, not replaced")
+        document = before
+        XCTAssertEqual(document, before, "Discoverability is a read-only projection")
+    }
+
+    // SF-0508-002/005 — None clears gradient/solid/token state in one existing
+    // property transaction; exact inverse restores IDs, origins and bindings.
+    func testPageBackgroundTransparentNonePreservesTokenHistoryAndPersistence() throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let rootID = document.pages[0].rootNodeIDs[0]
+        let color = CanonicalSolidColor(red: 0.2, green: 0.1, blue: 0.4, alpha: 1)
+        let token = LocalColorToken(name: "Page Ink", color: color)
+        document.colorTokens = [token]
+        let layer = CanonicalFillLayer.solid(color: color)
+        document.pages[0].nodes[0].properties += CanonicalFillLayerCodec.propertyValues(for: [layer]).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value, origin: .authored)
+        }
+        document.pages[0].nodes[0].properties.append(.init(
+            key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)),
+            value: .string(token.id.description), origin: .authored))
+        let original = document.pages[0].nodes[0]
+        let scene = CanvasViewportSceneID()
+        func context(_ value: CanonicalDocument) -> TransformValidationContext {
+            .init(activePageID: pageID, currentSceneID: scene, rendererGeneration: value.revision,
+                  selectedNodeIDs: [rootID], availableNodeIDs: [rootID],
+                  isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        }
+        func request(_ value: CanonicalDocument, cancelled: Bool = false) -> DesignFillLayerCommand {
+            .init(identity: .init(documentID: value.id, pageID: pageID, revision: value.revision,
+                                 sceneID: scene, rendererGeneration: value.revision),
+                  orderedNodeIDs: [rootID], edit: .clearAll, provenance: .keyboard, cancelled: cancelled)
+        }
+        let registry = DesignInspectorCommandRegistry()
+        let prepared = try registry.prepare(request(document), in: document, context: context(document))
+        let session = DocumentSession(document: document)
+        _ = try session.execute(prepared.documentCommand)
+        let cleared = session.document.pages[0].nodes[0]
+        XCTAssertEqual(cleared.id, original.id)
+        XCTAssertEqual(CanonicalFillLayerCodec.layers(for: cleared), [])
+        XCTAssertNil(LocalColorTokenBinding.id(for: cleared))
+        XCTAssertEqual(session.document.colorTokens, [token], "None unbinds; it does not delete the shared token")
+        XCTAssertNil(cleared.insertionGeometry)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        XCTAssertThrowsError(try registry.prepare(request(session.document), in: session.document, context: context(session.document))) {
+            XCTAssertEqual($0 as? DesignInspectorError, .noChanges)
+        }
+        try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes[0], original)
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes[0], cleared)
+        let beforeRejected = session.document
+        XCTAssertThrowsError(try registry.prepare(request(beforeRejected, cancelled: true), in: beforeRejected, context: context(beforeRejected)))
+        XCTAssertThrowsError(try registry.prepare(request(document), in: beforeRejected, context: context(beforeRejected)))
+        var changedPage = context(beforeRejected)
+        changedPage = .init(activePageID: PageID(), currentSceneID: scene, rendererGeneration: beforeRejected.revision,
+                            selectedNodeIDs: [rootID], availableNodeIDs: [rootID], isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        XCTAssertThrowsError(try registry.prepare(request(beforeRejected), in: beforeRejected, context: changedPage))
+        let changedSelection = TransformValidationContext(activePageID: pageID, currentSceneID: scene,
+            rendererGeneration: beforeRejected.revision, selectedNodeIDs: [], availableNodeIDs: [rootID],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        XCTAssertThrowsError(try registry.prepare(request(beforeRejected), in: beforeRejected, context: changedSelection))
+        let changedScene = TransformValidationContext(activePageID: pageID, currentSceneID: CanvasViewportSceneID(),
+            rendererGeneration: beforeRejected.revision, selectedNodeIDs: [rootID], availableNodeIDs: [rootID],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        XCTAssertThrowsError(try registry.prepare(request(beforeRejected), in: beforeRejected, context: changedScene))
+        XCTAssertEqual(session.document, beforeRejected)
+        var omitted = document
+        omitted.pages[0].nodes[0].properties.removeAll()
+        XCTAssertThrowsError(try registry.prepare(request(omitted), in: omitted, context: context(omitted))) {
+            XCTAssertEqual($0 as? DesignInspectorError, .noChanges)
+        }
+        let styleID = ReusableStyleID()
+        let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(styleID.description)."
+        omitted.pages[0].nodes[0].properties = [
+            .init(key: .init(rawValue: prefix + "name"), value: .string("Page Style")),
+            .init(key: .init(rawValue: prefix + "fill"), value: .string(color.hexadecimalRGBA)),
+            .init(key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(styleID.description))
+        ]
+        let inherited = omitted.pages[0].nodes[0]
+        let styledSession = DocumentSession(document: omitted)
+        let none = try registry.prepare(request(omitted), in: omitted, context: context(omitted))
+        try styledSession.execute(none.documentCommand)
+        let styledRoot = styledSession.document.pages[0].nodes[0]
+        XCTAssertEqual(CanonicalReusableStyleIndex.appliedIDs(styledRoot), [styleID])
+        XCTAssertNil(try CanonicalResolvedAppearance.resolve(node: styledRoot,
+            index: CanonicalReusableStyleIndex(document: styledSession.document)).fill)
+        try styledSession.undo()
+        XCTAssertEqual(styledSession.document.pages[0].nodes[0], inherited)
+    }
+
+    // SF-0508-003/005 — renderer/output inputs remain immutable canonical data.
+    func testPageBackgroundGradientProjectsThroughSharedCompilerWithoutMutation() throws {
+        var document = ProjectCreation.blank()
+        let rootID = document.pages[0].rootNodeIDs[0]
+        let layers = [CanonicalFillLayer.linearGradient(angleDegrees: 45, stops: [
+            .init(id: GradientStopID(), position: 0, color: .init(red: 0.1, green: 0.2, blue: 0.3, alpha: 1)),
+            .init(id: GradientStopID(), position: 1, color: .init(red: 0.8, green: 0.4, blue: 0.2, alpha: 1))
+        ])]
+        document.pages[0].nodes[0].properties += CanonicalFillLayerCodec.propertyValues(for: layers).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value, origin: .authored)
+        }
+        let before = document
+        let snapshot = try InternalDocumentRenderTreeCompiler.compile(page: document.pages[0], documentID: document.id, revision: document.revision)
+        XCTAssertEqual(try XCTUnwrap(snapshot.nodes.first { $0.id == rootID }).fillLayers, layers)
+        document.pages[0].nodes[0].properties.removeAll()
+        XCTAssertEqual(try XCTUnwrap(snapshot.nodes.first { $0.id == rootID }).fillLayers, layers, "Adopted output cannot mix a later draft")
+        XCTAssertEqual(PageBackgroundPolicy.root(in: before.pages[0])?.id, rootID)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(before)), before)
+    }
+
+    func testPageBackgroundEntrySelectsStructuralRootWithoutCanvasGhostOrMutation() async throws {
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while state.canvasRenderPlan == nil || state.layerTargets.isEmpty {
+            if ContinuousClock.now >= deadline { XCTFail("Initial scene was not adopted"); return }
+            await Task.yield()
+        }
+        let before = session.document
+        let pageID = before.pages[0].id
+        let rootID = before.pages[0].rootNodeIDs[0]
+        state.revealPageBackground(pageID: pageID)
+        XCTAssertEqual(state.selectionState.orderedIDs, [rootID])
+        XCTAssertTrue(state.isInspectingPageBackground)
+        XCTAssertTrue(state.canEditDesignSolidFill, "An omitted Root fill remains editable without creating a default")
+        XCTAssertEqual(state.inspectorTab, .design)
+        let root = try XCTUnwrap(state.layerTargets.first { $0.id == rootID })
+        XCTAssertTrue(root.isVisible)
+        XCTAssertTrue(root.isStructuralRoot)
+        XCTAssertFalse(root.participatesInCanvasTraversal)
+        XCTAssertEqual(root.layerVisibilityDescription, "Page structure")
+        state.revealPageBackground(pageID: PageID())
+        XCTAssertEqual(state.selectionState.orderedIDs, [rootID], "An obsolete page action must not retarget")
+        XCTAssertEqual(session.document, before)
+        XCTAssertTrue(session.historySnapshot().undoEntries.isEmpty)
+    }
+
+    func testDuplicateInlineDraftNotificationsDoNotRepublishOrMutateCanonicalState() async throws {
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        enum AdoptionFailure: Error { case timeout }
+        func settle() async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while state.canvasRenderPlan?.identity.revision != session.document.revision
+                    || state.selectionState.sceneIdentity?.revision != session.document.revision {
+                guard ContinuousClock.now < deadline else { throw AdoptionFailure.timeout }
+                await Task.yield()
+            }
+        }
+        try await settle(); state.performDefaultInsertion(.text, provenance: .menu); try await settle()
+        XCTAssertTrue(state.beginTextEditing(nodeID: try XCTUnwrap(state.selectionState.primaryID), provenance: .menu))
+        let before = session.document, history = session.historySnapshot()
+        let initial = try XCTUnwrap(state.textEditingSession.draft)
+        var publications = 0
+        let subscription = state.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+        for _ in 0..<100 {
+            state.updateTextEditingDraft(text: initial.text, selection: initial.selection, markedRange: initial.markedRange)
+        }
+        XCTAssertEqual(publications, 0)
+        let text = "An actual draft", range = TextEditRange(location: 15, length: 0)
+        state.updateTextEditingDraft(text: text, selection: range, markedRange: nil)
+        XCTAssertGreaterThan(publications, 0, "Changed native input still publishes immediately")
+        publications = 0
+        state.updateTextEditingDraft(text: text, selection: range, markedRange: nil)
+        XCTAssertEqual(publications, 0)
+        state.updateTextEditingDraft(text: text, selection: .init(location: 0, length: 2), markedRange: .init(location: 0, length: 2))
+        XCTAssertGreaterThan(publications, 0, "Selection and IME composition remain distinct draft changes")
+        XCTAssertEqual(state.textEditingSession.draft?.markedRange, .init(location: 0, length: 2))
+        XCTAssertEqual(session.document, before); XCTAssertEqual(session.historySnapshot(), history)
+    }
+
+    func testWorkspaceAvailabilityMemoKeepsOperationsDistinctAndStorageBounded() {
+        var cache = WorkspaceAvailabilityCache<Int, Int, Int>(), evaluations = 0
+        func prepare(_ value: Int) -> Int { evaluations += 1; return value }
+        XCTAssertEqual(cache.resolve(1, key: 0) { prepare(10) }, 10)
+        XCTAssertEqual(cache.resolve(2, key: 0) { prepare(20) }, 20)
+        for _ in 0..<1000 {
+            XCTAssertEqual(cache.resolve(1, key: 0) { prepare(-1) }, 10)
+            XCTAssertEqual(cache.resolve(2, key: 0) { prepare(-1) }, 20)
+        }
+        XCTAssertEqual(evaluations, 2)
+        for operation in 3...40 { _ = cache.resolve(operation, key: 0) { prepare(operation) } }
+        let beforeEviction = evaluations
+        XCTAssertEqual(cache.resolve(1, key: 0) { prepare(11) }, 11)
+        XCTAssertEqual(evaluations, beforeEviction + 1, "Arbitrary transform deltas cannot grow a permanent cache")
+        XCTAssertEqual(cache.resolve(1, key: 1) { prepare(12) }, 12)
+        XCTAssertEqual(evaluations, beforeEviction + 2, "Any context change requires fresh central validation")
+        var rows = WorkspaceAvailabilityCache<Int, Int, Int>(capacity: 256)
+        var rowPreparations = 0
+        for _ in 0..<3 {
+            for action in 0..<200 {
+                XCTAssertEqual(rows.resolve(action, key: 1) { rowPreparations += 1; return action }, action)
+            }
+        }
+        XCTAssertEqual(rowPreparations, 200, "Visible Layers context actions must not evict each other every redraw")
+    }
+
+    func testLayersMoveAvailabilityInvalidatesAfterLockAndUndo() async throws {
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        enum AdoptionFailure: Error { case timeout }
+        func settle() async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while state.canvasRenderPlan?.identity.revision != session.document.revision
+                    || state.selectionState.sceneIdentity?.revision != session.document.revision {
+                guard ContinuousClock.now < deadline else { throw AdoptionFailure.timeout }
+                await Task.yield()
+            }
+        }
+        try await settle()
+        let rootID = try XCTUnwrap(session.document.pages[0].rootNodeIDs.first)
+        state.performDefaultInsertion(.frame, provenance: .menu); try await settle()
+        let sourceID = try XCTUnwrap(state.selectionState.primaryID)
+        state.selectLayer(rootID); state.performDefaultInsertion(.frame, provenance: .menu); try await settle()
+        state.selectLayer(sourceID)
+        let destination = DragDestination.container(rootID, index: 2)
+        for _ in 0..<100 { XCTAssertTrue(state.dragDropAvailability(sourceID: sourceID, destination: destination).isEnabled) }
+        try session.execute(.setProperty(.init(pageID: session.document.pages[0].id, nodeID: sourceID,
+            property: .init(key: .init(rawValue: "locked"), value: .boolean(true)))))
+        try await settle(); state.selectLayer(sourceID)
+        XCTAssertFalse(state.dragDropAvailability(sourceID: sourceID, destination: destination).isEnabled)
+        state.undo(); try await settle(); state.selectLayer(sourceID)
+        XCTAssertTrue(state.dragDropAvailability(sourceID: sourceID, destination: destination).isEnabled)
+    }
+
+    func testWorkspaceInsertionAndTransformAvailabilityInvalidateAfterLockAndUndo() async throws {
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        enum AdoptionFailure: Error { case timeout }
+        func settle() async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while state.canvasRenderPlan?.identity.revision != session.document.revision
+                    || state.selectionState.sceneIdentity?.revision != session.document.revision {
+                guard ContinuousClock.now < deadline else { throw AdoptionFailure.timeout }
+                await Task.yield()
+            }
+        }
+        try await settle()
+        state.performDefaultInsertion(.frame, provenance: .menu)
+        try await settle()
+        let frameID = try XCTUnwrap(state.selectionState.primaryID)
+        let pageID = try XCTUnwrap(state.effectiveSelectedPageID)
+        let operation = TransformOperation.move(delta: .init(dx: 1, dy: 0), constraint: .none)
+        let unchanged = session.document
+        for _ in 0..<100 {
+            XCTAssertTrue(state.insertionAvailability(.text).isEnabled)
+            XCTAssertTrue(state.transformAvailability(operation).isEnabled)
+        }
+        XCTAssertEqual(session.document, unchanged)
+        try session.execute(.setProperty(.init(pageID: pageID, nodeID: frameID,
+            property: .init(key: .init(rawValue: "locked"), value: .boolean(true)))))
+        try await settle()
+        state.selectLayer(frameID)
+        XCTAssertFalse(state.insertionAvailability(.text).isEnabled)
+        XCTAssertFalse(state.transformAvailability(operation).isEnabled)
+        state.undo(); try await settle(); state.selectLayer(frameID)
+        XCTAssertTrue(state.insertionAvailability(.text).isEnabled)
+        XCTAssertTrue(state.transformAvailability(operation).isEnabled)
+        state.selectLayer(try XCTUnwrap(session.document.pages[0].rootNodeIDs.first))
+        XCTAssertTrue(state.insertionAvailability(.text).isEnabled)
+        XCTAssertFalse(state.transformAvailability(operation).isEnabled, "A prior frame cannot remain the menu target")
+        XCTAssertEqual(session.document.pages, unchanged.pages)
+    }
+
+    // SF-0507-002/003, SF-0403-003: typing a scene-local draft must not
+    // revalidate the entire canonical document for each Inspector field render.
+    func testGeometryAvailabilityReusesOnlyIdenticalCommandContext() throws {
+        let fixture = makeFixture()
+        let scope = LayoutInspectorDraftScope(documentID: fixture.document.id, pageID: fixture.pageID,
+            sceneID: fixture.sceneID, orderedNodeIDs: [fixture.nodeID], breakpoint: .desktop, viewportWidth: 1440)
+        let renderer = CanvasRenderRequestIdentity(documentID: fixture.document.id, revision: fixture.document.revision,
+            sceneID: fixture.sceneID, sceneGeneration: fixture.rendererGeneration,
+            viewportGeneration: 0, scale: try .init(1))
+        func key(_ newScope: LayoutInspectorDraftScope? = nil, revision: UInt64? = nil,
+                 renderer newRenderer: CanvasRenderRequestIdentity? = nil,
+                 context: TransformValidationContext? = nil) -> GeometryInspectorAvailabilityCache.Key {
+            .init(scope: newScope ?? scope, revision: revision ?? fixture.document.revision,
+                renderer: newRenderer ?? renderer, context: context ?? fixture.context)
+        }
+        var cache = GeometryInspectorAvailabilityCache(), evaluations = 0
+        let before = fixture.document
+        for _ in 0..<1000 {
+            XCTAssertEqual(cache.resolve(.width, key: key()) { evaluations += 1; return .enabled }, .enabled)
+        }
+        XCTAssertEqual(evaluations, 1)
+        XCTAssertEqual(cache.resolve(.height, key: key()) { evaluations += 1; return .disabled("Computed by Hug") }, .disabled("Computed by Hug"))
+        XCTAssertEqual(evaluations, 2, "Fields have independent availability")
+        let variants: [GeometryInspectorAvailabilityCache.Key] = [
+            key(revision: fixture.document.revision + 1),
+            key(.init(documentID: DocumentID(), pageID: scope.pageID, sceneID: scope.sceneID,
+                orderedNodeIDs: scope.orderedNodeIDs, breakpoint: scope.breakpoint, viewportWidth: scope.viewportWidth)),
+            key(.init(documentID: scope.documentID, pageID: PageID(), sceneID: scope.sceneID,
+                orderedNodeIDs: scope.orderedNodeIDs, breakpoint: scope.breakpoint, viewportWidth: scope.viewportWidth)),
+            key(.init(documentID: scope.documentID, pageID: scope.pageID, sceneID: CanvasViewportSceneID(),
+                orderedNodeIDs: scope.orderedNodeIDs, breakpoint: scope.breakpoint, viewportWidth: scope.viewportWidth)),
+            key(.init(documentID: scope.documentID, pageID: scope.pageID, sceneID: scope.sceneID,
+                orderedNodeIDs: [NodeID()], breakpoint: scope.breakpoint, viewportWidth: scope.viewportWidth)),
+            key(.init(documentID: scope.documentID, pageID: scope.pageID, sceneID: scope.sceneID,
+                orderedNodeIDs: scope.orderedNodeIDs, breakpoint: .mobile, viewportWidth: 390)),
+            key(renderer: .init(documentID: renderer.documentID, revision: renderer.revision, sceneID: renderer.sceneID,
+                sceneGeneration: renderer.sceneGeneration + 1, viewportGeneration: 1, scale: try .init(2))),
+            key(context: .init(activePageID: fixture.pageID, currentSceneID: fixture.sceneID,
+                rendererGeneration: fixture.rendererGeneration, selectedNodeIDs: [fixture.nodeID], availableNodeIDs: [],
+                isLifecycleAvailable: true, lifecycleDisabledReason: nil)),
+            key(context: .init(activePageID: fixture.pageID, currentSceneID: fixture.sceneID,
+                rendererGeneration: fixture.rendererGeneration, selectedNodeIDs: [fixture.nodeID], availableNodeIDs: [fixture.nodeID],
+                isLifecycleAvailable: false, lifecycleDisabledReason: "Resolve conflict")),
+        ]
+        for variant in variants {
+            let previous = evaluations
+            XCTAssertEqual(cache.resolve(.width, key: variant) { evaluations += 1; return .disabled("Changed context") }, .disabled("Changed context"))
+            XCTAssertEqual(evaluations, previous + 1, "No stale enabled result may survive a context change")
+        }
+        XCTAssertEqual(fixture.document, before, "Availability is never an authored mutation")
+    }
+
+    func testInspectorAccessibilityAnnouncesRetainedDraftInsteadOfCommittedValue() {
+        let committed = "75; Computed by responsive layout"
+        XCTAssertEqual(InspectorDraftAccessibility.value(draft: nil, committed: committed), committed)
+        for draft in ["-", "1e", "nan", "22", "Missing Family"] {
+            XCTAssertEqual(InspectorDraftAccessibility.value(draft: draft, committed: committed), "\(draft); uncommitted draft")
+            XCTAssertFalse(InspectorDraftAccessibility.value(draft: draft, committed: committed).contains("75"))
+        }
+        XCTAssertEqual(InspectorDraftAccessibility.value(draft: "", committed: committed), "Empty; uncommitted draft")
+        XCTAssertEqual(InspectorDraftAccessibility.value(draft: nil, committed: "Mixed values"), "Mixed values")
+    }
+
+    func testRetainedNumericNoOpRecognizesEquivalentInputWithoutDiscardingConflict() {
+        let scope = LayoutInspectorDraftScope(documentID: DocumentID(), pageID: PageID(), sceneID: CanvasViewportSceneID(),
+            orderedNodeIDs: [NodeID()], breakpoint: .desktop, viewportWidth: 1440)
+        for text in ["160", "160.0", " 160 "] {
+            let draft = LayoutInspectorNumericDraft(text: text, committed: "160", scope: scope)
+            XCTAssertTrue(draft.hasUnchangedNumericValue)
+        }
+        for text in ["-", "nan", "infinity", "161"] {
+            XCTAssertFalse(LayoutInspectorNumericDraft(text: text, committed: "160", scope: scope).hasUnchangedNumericValue)
+        }
+        var stale = LayoutInspectorNumericDraft(text: "160", committed: "160", scope: scope)
+        stale.adopt(committed: "160", scope: .init(documentID: scope.documentID, pageID: scope.pageID,
+            sceneID: scope.sceneID, orderedNodeIDs: [NodeID()], breakpoint: .desktop, viewportWidth: 1440))
+        XCTAssertFalse(stale.hasUnchangedNumericValue)
+        XCTAssertEqual(stale.conflict, .contextChanged)
+        XCTAssertEqual(stale.text, "160")
+    }
+    func testSizingDimensionWinnerAndExactResetPreserveOtherOverridesAndHistory() throws {
+        var fixture = makeFixture()
+        let widthKey = ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)
+        let heightKey = ResponsiveGeometryResolver.key(.height, breakpoint: .mobile)
+        let fluid = CanonicalFluidValue(minimum: 180, preferred: 280, maximum: 480)
+        fixture.document.pages[0].nodes[1].properties += [
+            .init(key: .init(rawValue: CanonicalSizingConstraints.prefix + "widthMode"), value: .string("fill")),
+            .init(key: .init(rawValue: widthKey), value: .number(240)),
+            .init(key: .init(rawValue: heightKey), value: .number(160)),
+            .init(key: .init(rawValue: CanonicalFluidValueCodec.key(.width)), value: .string(try CanonicalFluidValueCodec.encode(fluid, target: .width)))
+        ]
+        let session = DocumentSession(document: fixture.document), registry = SizingConstraintCommandRegistry()
+        func resolution() -> SizingDimensionResolution {
+            CanonicalSizingConstraints.dimensionResolution(.width, node: session.document.pages[0].nodes[1], breakpoint: .mobile, width: 390)
+        }
+        func reset(_ source: ResponsiveGeometrySource) throws -> DocumentCommand {
+            try registry.prepareDimensionReset(.width, source: source,
+                identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id, pageID: fixture.pageID,
+                    revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: [fixture.nodeID], breakpoint: .mobile, in: session.document, context: fixture.context)
+        }
+        XCTAssertEqual(resolution().declaredMode, .fill)
+        XCTAssertEqual(resolution().effectiveMode, .fixed)
+        XCTAssertEqual(resolution().numericSource, .override(.mobile))
+        XCTAssertThrowsError(try reset(.fluid), "Do not remove a concealed lower-priority source")
+        try session.execute(reset(.override(.mobile)))
+        XCTAssertNil(session.document.pages[0].nodes[1].insertionProperty(widthKey))
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionProperty(heightKey), fixture.document.pages[0].nodes[1].insertionProperty(heightKey))
+        XCTAssertEqual(resolution().numericSource, .fluid)
+        let inheritedFluid = session.document.pages
+        try session.execute(reset(.fluid))
+        XCTAssertEqual(resolution().effectiveMode, .fill)
+        XCTAssertNil(resolution().numericSource)
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionGeometry, fixture.document.pages[0].nodes[1].insertionGeometry)
+        try session.undo(); XCTAssertEqual(session.document.pages, inheritedFluid)
+        try session.undo(); XCTAssertEqual(session.document.pages, fixture.document.pages)
+        try session.redo(); try session.redo()
+        let beforeHeightReset = session.document.pages
+        try session.execute(registry.prepareDimensionReset(.height, source: .override(.mobile),
+            identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id, pageID: fixture.pageID,
+                revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], breakpoint: .mobile, in: session.document, context: fixture.context))
+        XCTAssertNil(session.document.pages[0].nodes[1].insertionProperty(heightKey))
+        XCTAssertEqual(CanonicalSizingConstraints.resolved(for: session.document.pages[0].nodes[1]).widthMode, .fill)
+        try session.undo(); XCTAssertEqual(session.document.pages, beforeHeightReset)
+        try session.redo()
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    func testSizingExactDimensionResetRejectsStaleLockedMixedAndCancelledWithoutMutation() throws {
+        var fixture = makeFixture()
+        let key = ResponsiveGeometryResolver.key(.width, breakpoint: .tablet)
+        fixture.document.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: key), value: .number(360)))
+        let registry = SizingConstraintCommandRegistry(), document = fixture.document
+        func prepare(_ candidate: CanonicalDocument, selected: [NodeID], revision: UInt64? = nil, cancelled: Bool = false) throws {
+            _ = try registry.prepareDimensionReset(.width, source: .override(.tablet),
+                identity: .init(editID: GeometryInspectorEditID(), documentID: document.id, pageID: fixture.pageID,
+                    revision: revision ?? document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: selected, breakpoint: .tablet, in: candidate,
+                context: fixture.context(selectedIDs: selected), cancelled: cancelled)
+        }
+        XCTAssertThrowsError(try prepare(document, selected: [fixture.nodeID], cancelled: true))
+        XCTAssertThrowsError(try prepare(document, selected: [fixture.nodeID], revision: document.revision + 1))
+        XCTAssertThrowsError(try prepare(document, selected: [fixture.nodeID, fixture.secondNodeID]))
+        var locked = document
+        locked.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: "locked"), value: .boolean(true)))
+        XCTAssertThrowsError(try prepare(locked, selected: [fixture.nodeID]))
+        XCTAssertEqual(fixture.document, document)
+    }
+
+    func testSizingModeEligibilityAndConversionScopeUseTheSameSupportedSubset() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[1].kind = .stack
+        fixture.document.pages[0].nodes[1].childIDs = [fixture.secondNodeID]
+        fixture.document.pages[0].nodes[0].childIDs = [fixture.nodeID]
+        applyStructuralDefaults(for: .stack, to: &fixture.document.pages[0].nodes[1])
+        fixture.document.pages[0].nodes[2].parent = .node(fixture.nodeID)
+        let page = fixture.document.pages[0]
+        var image = page.nodes[2]; image.kind = .image
+        XCTAssertFalse(SizingConstraintCommandRegistry.supportsMode(.height, .hug, node: image, page: page))
+        XCTAssertFalse(SizingConstraintCommandRegistry.supportsMode(.width, .hug, node: page.nodes[1], page: page))
+        XCTAssertTrue(SizingConstraintCommandRegistry.supportsMode(.width, .fill, node: page.nodes[1], page: page))
+        let context = fixture.context
+        let scope = SizingConstraintCommandRegistry.conversionScope(page: page, context: context)
+        XCTAssertEqual(scope.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(scope.skippedNodeIDs, [fixture.secondNodeID])
+        let prepared = try SizingConstraintCommandRegistry().prepare(.init(identity:
+            .init(editID: GeometryInspectorEditID(), documentID: fixture.document.id, pageID: fixture.pageID,
+                revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .convertContent, cancelled: false), in: fixture.document, context: context)
+        XCTAssertEqual(prepared.applicableNodeIDs, scope.applicableNodeIDs)
+        XCTAssertEqual(prepared.skippedNodeIDs, scope.skippedNodeIDs)
+        let cancelled = SizingConstraintCommand(identity: .init(editID: GeometryInspectorEditID(), documentID: fixture.document.id,
+            pageID: fixture.pageID, revision: fixture.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .convertContent, cancelled: true)
+        XCTAssertThrowsError(try SizingConstraintCommandRegistry().prepare(cancelled, in: fixture.document, context: context))
+        var locked = fixture.document
+        locked.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: "locked"), value: .boolean(true)))
+        XCTAssertTrue(SizingConstraintCommandRegistry.conversionScope(page: locked.pages[0], context: context).applicableNodeIDs.isEmpty)
+    }
+
+    func testLayoutNumericDraftRetainsInvalidInputAndRejectsContextChanges() {
+        let fixture = makeFixture()
+        let scope = LayoutInspectorDraftScope(documentID: fixture.document.id, pageID: fixture.pageID,
+            sceneID: fixture.sceneID, orderedNodeIDs: [fixture.nodeID], breakpoint: .desktop, viewportWidth: 1440)
+        for text in ["320", "-", "1e", ""] {
+            var draft = LayoutInspectorNumericDraft(text: text, committed: "120", scope: scope)
+            draft.adopt(committed: "120", scope: scope)
+            draft.adopt(committed: nil, scope: scope)
+            XCTAssertEqual(draft.text, text)
+            XCTAssertTrue(draft.canCommit(in: scope), "Parsing remains the existing registry/locale parser's responsibility")
+            let other = LayoutInspectorDraftScope(documentID: fixture.document.id, pageID: fixture.pageID,
+                sceneID: fixture.sceneID, orderedNodeIDs: [fixture.nodeID], breakpoint: .mobile, viewportWidth: 390)
+            draft.adopt(committed: "120", scope: other)
+            XCTAssertEqual(draft.conflict, .contextChanged)
+            XCTAssertEqual(draft.text, text)
+            XCTAssertFalse(draft.canCommit(in: other))
+            XCTAssertFalse(draft.canCommit(in: scope), "Switching back cannot silently rearm a conflicted edit")
+        }
+        var changed = LayoutInspectorNumericDraft(text: "320", committed: "120", scope: scope)
+        changed.adopt(committed: "240", scope: scope)
+        XCTAssertEqual(changed.conflict, .valueChanged)
+        XCTAssertFalse(changed.canCommit(in: scope))
+        for (selected, width) in [([fixture.secondNodeID], 1440.0), ([fixture.nodeID], 1200.0)] {
+            let other = LayoutInspectorDraftScope(documentID: fixture.document.id, pageID: fixture.pageID,
+                sceneID: fixture.sceneID, orderedNodeIDs: selected, breakpoint: .desktop, viewportWidth: width)
+            var retained = LayoutInspectorNumericDraft(text: "1e", committed: "120", scope: scope)
+            retained.adopt(committed: nil, scope: other)
+            XCTAssertEqual(retained.conflict, .contextChanged)
+            XCTAssertEqual(retained.text, "1e")
+            XCTAssertFalse(retained.canCommit(in: other))
+        }
+    }
+
+    func testSizingDiagnosticsRemainBoundedAndExcludeRawObjectIdentity() {
+        let fixture = makeFixture(), diagnostics = CommandDiagnostics(capacity: 2)
+        for succeeded in [false, true, false] {
+            diagnostics.recordSizingOperation(pageID: fixture.pageID, nodeIDs: [fixture.nodeID], succeeded: succeeded, durationMilliseconds: 1)
+        }
+        XCTAssertEqual(diagnostics.records.count, 2)
+        XCTAssertEqual(diagnostics.droppedRecordCount, 1)
+        for record in diagnostics.records {
+            XCTAssertTrue(record.requirementIDs.contains("SF-0505-003"))
+            XCTAssertTrue(record.requirementIDs.contains("SF-0604-005"))
+            XCTAssertFalse(record.sanitizedIdentifiers.joined().contains(fixture.nodeID.description))
+            XCTAssertFalse(record.sanitizedIdentifiers.joined().contains(fixture.pageID.description))
+        }
+    }
+
+    func testHugFlowContainerRejectsFillHeightCycleWithoutChangingCanonicalIntent() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[0].childIDs = [fixture.nodeID]
+        fixture.document.pages[0].nodes[1].kind = .stack
+        fixture.document.pages[0].nodes[1].childIDs = [fixture.secondNodeID]
+        applyStructuralDefaults(for: .stack, to: &fixture.document.pages[0].nodes[1])
+        fixture.document.pages[0].nodes[2].parent = .node(fixture.nodeID)
+        fixture.document.pages[0].nodes[2].properties.append(.init(key: .init(rawValue: CanonicalSizingConstraints.prefix + "heightMode"), value: .string("fill")))
+        try fixture.document.validate()
+        let before = fixture.document
+        let command = SizingConstraintCommand(identity: .init(editID: GeometryInspectorEditID(), documentID: before.id,
+            pageID: fixture.pageID, revision: before.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .setMode(.height, .hug), cancelled: false)
+        XCTAssertThrowsError(try SizingConstraintCommandRegistry().prepare(command, in: before, context: fixture.context)) {
+            XCTAssertTrue($0.localizedDescription.contains("hug a fill-height child"))
+        }
+        XCTAssertEqual(fixture.document, before)
+    }
+
+    // SF-0508-002/005: native Return of an unchanged angle clears its draft
+    // without inventing history or displaying an error; invalid input remains rejected.
+    func testWorkspaceFillLayerUnchangedAngleIsSuccessfulAndHistoryNeutral() async throws {
+        let state = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank()))
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        enum AdoptionFailure: Error { case timeout }
+        func settle() async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while state.canvasRenderPlan?.identity.revision != state.documentSession.document.revision
+                    || state.selectionState.sceneIdentity?.revision != state.documentSession.document.revision {
+                guard ContinuousClock.now < deadline else { throw AdoptionFailure.timeout }
+                await Task.yield()
+            }
+        }
+        try await settle()
+        state.performDefaultInsertion(.frame, provenance: .menu)
+        try await settle()
+        let id = FillLayerID()
+        XCTAssertTrue(state.commitDesignFillLayer(.addLinearGradient(id: id, angleDegrees: 45, stops: [
+            .init(id: GradientStopID(), position: 0, color: .legacySurface),
+            .init(id: GradientStopID(), position: 1, color: .init(red: 0.4, green: 0.2, blue: 0.8, alpha: 1)),
+        ]), operation: "add gradient"))
+        try await settle()
+        let before = state.documentSession.document
+        let history = state.documentSession.historySnapshot()
+        XCTAssertTrue(state.commitDesignFillLayer(.setGradientAngle(id, 45), operation: "angle", provenance: .keyboard))
+        XCTAssertNil(state.designInspectorFailure)
+        XCTAssertEqual(state.lastDesignInspectorAnnouncement, "Design appearance is unchanged.")
+        XCTAssertEqual(state.documentSession.document, before)
+        XCTAssertEqual(state.documentSession.historySnapshot(), history)
+        XCTAssertFalse(state.commitDesignFillLayer(.setGradientAngle(id, .nan), operation: "angle", provenance: .keyboard))
+        XCTAssertNotNil(state.designInspectorFailure)
+        XCTAssertEqual(state.documentSession.document, before)
+        XCTAssertEqual(state.documentSession.historySnapshot(), history)
+    }
+
+    // SF-0505-002/004/005: unchanged valid drafts finish without a false error
+    // or history entry; invalid and stale attempts remain rejected.
+    func testWorkspaceSizingUnchangedDraftIsSuccessfulAndHistoryNeutral() async throws {
+        let state = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank()))
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        enum AdoptionFailure: Error { case timeout }
+        func settle() async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while state.canvasRenderPlan?.identity.revision != state.documentSession.document.revision
+                    || state.selectionState.sceneIdentity?.revision != state.documentSession.document.revision {
+                guard ContinuousClock.now < deadline else { throw AdoptionFailure.timeout }
+                await Task.yield()
+            }
+        }
+        try await settle()
+        state.performDefaultInsertion(.frame, provenance: .menu)
+        try await settle()
+        XCTAssertTrue(state.commitSizingConstraint(.set(.minWidth, 80)))
+        try await settle()
+        let before = state.documentSession.document
+        let history = state.documentSession.historySnapshot()
+        let selection = state.selectionState.orderedIDs
+        XCTAssertTrue(state.commitSizingConstraint(.set(.minWidth, 80)))
+        XCTAssertEqual(state.lastSizingConstraintAnnouncement, "Sizing is unchanged.")
+        XCTAssertEqual(state.documentSession.document, before)
+        XCTAssertEqual(state.documentSession.historySnapshot(), history)
+        XCTAssertEqual(state.selectionState.orderedIDs, selection)
+        XCTAssertFalse(state.commitSizingConstraint(.set(.minWidth, -.infinity)))
+        XCTAssertFalse(state.commitSizingConstraint(.set(.minWidth, 80), expectedContext: "stale"))
+        XCTAssertEqual(state.documentSession.document, before)
+        XCTAssertEqual(state.documentSession.historySnapshot(), history)
+    }
+
+    // SF-SOURCE-BATCH-20261027-01: new source only, not executed.
+    func testSiteSetupOpeningPageIdentityCannotCommitAfterPageSwitch() async throws {
+        let session = DocumentSession()
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while state.websiteSettingsIdentity == nil {
+            if ContinuousClock.now >= deadline { XCTFail("Opening scene did not become available"); return }
+            await Task.yield()
+        }
+        let opening = try XCTUnwrap(state.websiteSettingsIdentity)
+        let destination = try XCTUnwrap(session.document.websitePages.first { $0.id != opening.pageID })
+        state.presentWebsiteSettings()
+        state.selectPage(destination.id)
+        let nextDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while state.websiteSettingsIdentity?.pageID != destination.id {
+            if ContinuousClock.now >= nextDeadline { XCTFail("Destination scene did not adopt"); return }
+            await Task.yield()
+        }
+        let before = session.document, history = session.historySnapshot()
+        XCTAssertFalse(state.commitWebsiteSettings(.init(siteName: "Stale draft", pages: [
+            .init(pageID: opening.pageID, title: "Old page title", allowsIndexing: false)
+        ]), identity: opening))
+        XCTAssertEqual(session.document, before)
+        XCTAssertEqual(session.historySnapshot(), history)
+        XCTAssertEqual(state.effectiveSelectedPageID, destination.id)
+    }
+
+    func testWebsiteSettingsNoChangeIsNeutralAndStillRejectsStaleIdentity() async throws {
+        var document = ProjectCreation.blank()
+        document.websiteMetadata = .init(siteName: "Aurora")
+        let session = DocumentSession(document: document)
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        enum AdoptionFailure: Error { case timeout }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while state.websiteSettingsIdentity == nil {
+            guard ContinuousClock.now < deadline else { throw AdoptionFailure.timeout }
+            await Task.yield()
+        }
+        let identity = try XCTUnwrap(state.websiteSettingsIdentity)
+        let before = session.document
+        XCTAssertTrue(state.commitWebsiteSettings(before.websiteMetadata, identity: identity))
+        XCTAssertEqual(state.websiteSettingsStatus, "Site Settings are unchanged.")
+        XCTAssertEqual(session.document, before)
+        XCTAssertFalse(session.canUndo)
+        XCTAssertFalse(state.lifecycle.isModified)
+        let stale = DesignInspectorOperationIdentity(documentID: identity.documentID,
+            pageID: identity.pageID, revision: identity.revision + 1,
+            sceneID: identity.sceneID, rendererGeneration: identity.rendererGeneration)
+        XCTAssertFalse(state.commitWebsiteSettings(before.websiteMetadata, identity: stale))
+        XCTAssertEqual(session.document, before)
+        XCTAssertFalse(session.canUndo)
+    }
+    // SF-0402-003/005, SF-0403-003, SF-0701-003: ordinary edits must not
+    // mistake a Layers-selected nested parent for an isolation transition.
+    func testNestedLayersSelectionSurvivesTextGeometryAndRendererAdoptionWithoutIsolation() async throws {
+        let state = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank()))
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        enum AdoptionFailure: Error { case timeout }
+        func settle() async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while state.canvasRenderPlan?.identity.revision != state.documentSession.document.revision
+                    || state.selectionState.sceneIdentity?.revision != state.documentSession.document.revision {
+                guard ContinuousClock.now < deadline else { throw AdoptionFailure.timeout }
+                await Task.yield()
+            }
+        }
+        try await settle()
+        state.performDefaultInsertion(.section, provenance: .menu)
+        try await settle()
+        let section = try XCTUnwrap(state.selectionState.primaryID)
+        state.selectLayer(section)
+        state.performDefaultInsertion(.text, provenance: .menu)
+        try await settle()
+        let text = try XCTUnwrap(state.selectionState.primaryID)
+        state.selectLayer(text)
+        XCTAssertEqual(state.selectionState.activeContainerID, section)
+        XCTAssertNil(state.isolationRootID)
+        XCTAssertTrue(state.beginTextEditing(nodeID: text, provenance: .menu))
+        state.updateTextEditingDraft(text: "The Journal", selection: .init(location: 11, length: 0), markedRange: nil)
+        state.commitTextEditing()
+        XCTAssertEqual(state.selectionState.primaryID, text)
+        try await settle()
+        XCTAssertEqual(state.selectionState.activeContainerID, section)
+        XCTAssertEqual(state.selectionState.primaryID, text)
+        XCTAssertTrue(state.commitGeometryInspectorValue(600, field: .width, provenance: .keyboard))
+        XCTAssertEqual(state.selectionState.primaryID, text)
+        try await settle()
+        XCTAssertEqual(state.selectionState.primaryID, text)
+        XCTAssertEqual(state.selectionState.activeContainerID, section)
+        state.undo(); try await settle()
+        XCTAssertEqual(state.selectionState.primaryID, text)
+        state.redo(); try await settle()
+        XCTAssertEqual(state.selectionState.primaryID, text)
+        XCTAssertNil(state.isolationRootID)
+    }
+
     func testFrameSectionImageFillIsAtomicScopedAndMissingSafe() throws {
         var fixture = makeFixture(selectedIDs: [NodeID]())
         fixture.document.pages[0].nodes[2].kind = .section
@@ -237,7 +943,9 @@ final class TransformModelTests: XCTestCase {
         let propertyIndex = try XCTUnwrap(properties.firstIndex { ($0["key"] as? String) == LocalColorTokenBinding.key(for: .fill) })
         properties[propertyIndex]["key"] = LocalColorTokenBinding.legacyKey
         nodes[nodeIndex]["properties"] = properties
-        pages[0]["nodes"] = nodes; body["pages"] = pages; envelope["document"] = body
+        pages[0]["nodes"] = nodes; body["pages"] = pages
+        body.removeValue(forKey: "websiteMetadata") // Historical schema 9 has no metadata field.
+        envelope["document"] = body
         XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: envelope)))
         envelope["schemaVersion"] = 9
         let migrated = try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: envelope))
@@ -324,6 +1032,84 @@ final class TransformModelTests: XCTestCase {
         expectInvalid([property("minWidth", .number(100)), property("minWidth", .number(100))],
             expected: .duplicatePropertyKey)
         expectInvalid([property("minWidth", .number(10))], kind: .text)
+    }
+
+    func testResponsiveContentConversionIsExplicitAtomicAndRestoresOverridesAndIDs() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[0].childIDs = [fixture.nodeID]
+        fixture.document.pages[0].nodes[1].kind = .stack
+        fixture.document.pages[0].nodes[1].childIDs = [fixture.secondNodeID]
+        applyStructuralDefaults(for: .stack, to: &fixture.document.pages[0].nodes[1])
+        fixture.document.pages[0].nodes[2].kind = .text
+        fixture.document.pages[0].nodes[2].parent = .node(fixture.nodeID)
+        let override = NodeProperty(key: .init(rawValue: ResponsiveGeometryResolver.key(.height, breakpoint: .mobile)),
+            value: .number(280), origin: .authored)
+        fixture.document.pages[0].nodes[2].properties.append(override)
+        try fixture.document.validate()
+        let session = DocumentSession(document: fixture.document)
+        let selected = [fixture.nodeID, fixture.secondNodeID]
+        let context = fixture.context(selectedIDs: selected)
+        let command = SizingConstraintCommand(identity: .init(editID: GeometryInspectorEditID(),
+            documentID: session.document.id, pageID: fixture.pageID, revision: session.document.revision,
+            sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: selected, edit: .convertContent, cancelled: false)
+        let prepared = try SizingConstraintCommandRegistry().prepare(command, in: session.document, context: context)
+        XCTAssertEqual(prepared.applicableNodeIDs, selected, "An ancestor and child selection converts each node exactly once")
+        try session.execute(prepared.documentCommand)
+        let committed = session.document
+        for node in committed.pages[0].nodes.dropFirst() {
+            let sizing = CanonicalSizingConstraints.resolved(for: node)
+            XCTAssertEqual(sizing.widthMode, .fill)
+            XCTAssertEqual(sizing.heightMode, .hug)
+            XCTAssertNil(node.insertionProperty(override.key.rawValue))
+        }
+        XCTAssertEqual(committed.pages[0].nodes.map(\.id), fixture.document.pages[0].nodes.map(\.id))
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(committed)), committed)
+        XCTAssertThrowsError(try SizingConstraintCommandRegistry().prepare(command, in: committed, context: context))
+        try session.undo()
+        XCTAssertEqual(session.document.pages, fixture.document.pages)
+        XCTAssertEqual(session.document.pages[0].nodes[2].insertionProperty(override.key.rawValue), override)
+        try session.redo()
+        XCTAssertEqual(session.document.pages, committed.pages)
+    }
+
+    func testSizingModesCommitSeparatelyPreserveFallbackAndExactInverse() throws {
+        let fixture = makeFixture()
+        let session = DocumentSession(document: fixture.document)
+        let context = fixture.context(selectedIDs: [fixture.nodeID])
+        let original = session.document.pages
+        func prepared(_ edit: SizingConstraintEdit, cancelled: Bool = false, revision: UInt64? = nil) throws -> SizingConstraintCommandRegistry.Prepared {
+            try SizingConstraintCommandRegistry().prepare(.init(identity: .init(editID: GeometryInspectorEditID(),
+                documentID: session.document.id, pageID: fixture.pageID,
+                revision: revision ?? session.document.revision, sceneID: fixture.sceneID,
+                rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: [fixture.nodeID],
+                edit: edit, cancelled: cancelled), in: session.document, context: context)
+        }
+        try session.execute(prepared(.setMode(.width, .fill)).documentCommand)
+        let widthState = session.document.pages
+        let widthID = try XCTUnwrap(widthState[0].nodes[1].insertionProperty(CanonicalSizingConstraints.prefix + "widthMode")?.id)
+        try session.execute(prepared(.setMode(.height, .hug)).documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionGeometry, original[0].nodes[1].insertionGeometry)
+        XCTAssertEqual(session.document.pages[0].nodes[1].id, fixture.nodeID)
+        XCTAssertEqual(CanonicalSizingConstraints.resolved(for: session.document.pages[0].nodes[1]).heightMode, .hug)
+        let committed = session.document
+        XCTAssertThrowsError(try prepared(.setMode(.width, .hug)))
+        XCTAssertThrowsError(try prepared(.setMode(.height, .fixed), cancelled: true))
+        XCTAssertThrowsError(try prepared(.reset, revision: 0))
+        XCTAssertEqual(session.document, committed)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(committed)), committed)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, widthState)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, original)
+        try session.redo()
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionProperty(CanonicalSizingConstraints.prefix + "widthMode")?.id, widthID)
+        try session.redo()
+        XCTAssertEqual(session.document.pages, committed.pages)
+        try session.execute(prepared(.reset).documentCommand)
+        XCTAssertEqual(session.document.pages, original)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, committed.pages)
     }
 
     func testSizingConstraintsSetClampAspectResetAndExactHistory() throws {
@@ -472,6 +1258,7 @@ final class TransformModelTests: XCTestCase {
         var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         var document = try XCTUnwrap(envelope["document"] as? [String: Any])
         document.removeValue(forKey: "colorTokens")
+        document.removeValue(forKey: "websiteMetadata")
         envelope["schemaVersion"] = 8
         envelope["document"] = document
         let historical = try JSONSerialization.data(withJSONObject: envelope)
@@ -2115,6 +2902,103 @@ final class TransformModelTests: XCTestCase {
         )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
     }
 
+    // SF-0507-002/003/005: installed family+weight is one authored
+    // choice, preserving semantics, per-node metrics, fluid intent and exact IDs.
+    func testFontFamilyWeightChoiceIsAtomicForMixedTextAndPreservesExactHistory() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[1].kind = .text
+        fixture.document.pages[0].nodes[2].kind = .button
+        let family = NodeProperty(key: .init(rawValue: CanonicalTypography.namespace + "family"),
+            value: .string("Missing prior family"), origin: .defaulted)
+        let weight = NodeProperty(key: .init(rawValue: CanonicalTypography.namespace + "weight"),
+            value: .string("bold"), origin: .defaulted)
+        let fluid = NodeProperty(key: .init(rawValue: CanonicalFluidValueCodec.key(.fontSize)),
+            value: .string(try CanonicalFluidValueCodec.encode(.init(minimum: 10, preferred: 14, maximum: 18), target: .fontSize)))
+        fixture.document.pages[0].nodes[1].properties += [family, weight, fluid,
+            .init(key: .init(rawValue: CanonicalSemanticElement.key), value: .string("h2")),
+            .init(key: .init(rawValue: "content.text"), value: .string("Heading\nSecond line"))]
+        fixture.selectedIDs = [fixture.nodeID, fixture.secondNodeID, fixture.rootID]
+        let session = DocumentSession(document: fixture.document), registry = TypographyCommandRegistry()
+        func request(_ choice: CanonicalFontWeight) -> TypographyCommand {
+            .init(identity: .init(documentID: session.document.id, pageID: fixture.pageID,
+                revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: fixture.selectedIDs, edit: .fontFace(family: "System", weight: choice), provenance: .picker, cancelled: false)
+        }
+        let original = session.document.pages
+        let edit = try registry.prepare(request(.medium), in: session.document, context: fixture.context)
+        XCTAssertEqual(edit.applicableNodeIDs, [fixture.nodeID, fixture.secondNodeID])
+        XCTAssertEqual(edit.skippedNodeIDs, [fixture.rootID])
+        try session.execute(edit.documentCommand)
+        let authored = session.document.pages
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        for node in authored[0].nodes[1...2] {
+            let style = try XCTUnwrap(TypographyCommandRegistry.resolvedTypography(for: node))
+            XCTAssertEqual(style.family, "System"); XCTAssertEqual(style.weight, .medium)
+            XCTAssertEqual(style.size, 14); XCTAssertEqual(style.lineHeight, 17); XCTAssertEqual(style.tracking, 0)
+        }
+        XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: authored[0].nodes[1])?.alignment, .leading)
+        XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: authored[0].nodes[2])?.alignment, .center)
+        XCTAssertEqual(authored[0].nodes[1].insertionProperty(family.key.rawValue)?.id, family.id)
+        XCTAssertEqual(authored[0].nodes[1].insertionProperty(weight.key.rawValue)?.id, weight.id)
+        XCTAssertEqual(authored[0].nodes[1].insertionProperty(family.key.rawValue)?.origin, .authored)
+        XCTAssertEqual(authored[0].nodes[1].insertionProperty(fluid.key.rawValue), fluid)
+        XCTAssertEqual(authored[0].nodes[1].insertionStringProperty(CanonicalSemanticElement.key), "h2")
+        XCTAssertEqual(authored[0].nodes.map(\.id), original[0].nodes.map(\.id))
+        XCTAssertEqual(authored[0].nodes[1].insertionGeometry, original[0].nodes[1].insertionGeometry)
+        XCTAssertEqual(authored[0].nodes[0], original[0].nodes[0])
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        XCTAssertThrowsError(try registry.prepare(request(.medium), in: session.document,
+            context: fixture.with(document: session.document).context)) { XCTAssertEqual($0 as? TypographyCommandError, .noChanges) }
+        try session.undo(); XCTAssertEqual(session.document.pages, original)
+        try session.redo(); XCTAssertEqual(session.document.pages, authored)
+        try session.undo()
+        try session.execute(try registry.prepare(request(.bold), in: session.document,
+            context: fixture.with(document: session.document).context).documentCommand)
+        XCTAssertTrue(session.historySnapshot().redoEntries.isEmpty)
+    }
+
+    // SF-0507-004/005: syntax/stale/cancel/unavailable failures never
+    // leave a new family with the previous weight or mutate a partial subset.
+    func testFontFamilyWeightChoiceRejectsInvalidStaleCancelledAndUnavailableTargets() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[1].kind = .text
+        let registry = TypographyCommandRegistry(), before = fixture.document
+        func request(_ family: String = "System", cancelled: Bool = false,
+                     revision: UInt64? = nil, ids: [NodeID]? = nil) -> TypographyCommand {
+            .init(identity: .init(documentID: before.id, pageID: fixture.pageID,
+                revision: revision ?? before.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: ids ?? fixture.selectedIDs, edit: .fontFace(family: family, weight: .semibold),
+                provenance: .keyboard, cancelled: cancelled)
+        }
+        for invalid in ["", " System", "System ", "Bad\nFamily", String(repeating: "x", count: 129)] {
+            XCTAssertThrowsError(try registry.prepare(request(invalid), in: before, context: fixture.context)) {
+                XCTAssertEqual($0 as? TypographyCommandError, .invalidValue)
+            }
+        }
+        XCTAssertThrowsError(try registry.prepare(request(cancelled: true), in: before, context: fixture.context)) {
+            XCTAssertEqual($0 as? TypographyCommandError, .cancelled)
+        }
+        XCTAssertThrowsError(try registry.prepare(request(revision: before.revision + 1), in: before, context: fixture.context)) {
+            XCTAssertEqual($0 as? TypographyCommandError, .stale)
+        }
+        XCTAssertThrowsError(try registry.prepare(request(ids: [fixture.secondNodeID]), in: before, context: fixture.context)) {
+            XCTAssertEqual($0 as? TypographyCommandError, .stale)
+        }
+        XCTAssertThrowsError(try registry.prepare(request(), in: before,
+            context: fixture.context(selectedIDs: fixture.selectedIDs, availableIDs: [])))
+        for key in ["locked", "hidden"] {
+            var blocked = fixture
+            blocked.document.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: key), value: .boolean(true)))
+            XCTAssertThrowsError(try registry.prepare(request(), in: blocked.document, context: blocked.context))
+        }
+        let unsupported = fixture.context(selectedIDs: [fixture.secondNodeID])
+        XCTAssertThrowsError(try registry.prepare(request(ids: [fixture.secondNodeID]), in: before, context: unsupported)) {
+            XCTAssertEqual($0 as? TypographyCommandError, .noApplicableTargets)
+        }
+        XCTAssertNil(CanonicalFontWeight(rawValue: "unlisted-weight"))
+        XCTAssertEqual(fixture.document, before)
+    }
+
     func testTypographyRegistryValidatesMixesResetsPersistsAndUndoRedo() throws {
         var fixture = makeFixture(selectedIDs: [NodeID]())
         fixture.document.pages[0].nodes[1].kind = .text
@@ -2311,6 +3195,184 @@ final class TransformModelTests: XCTestCase {
             context: fixture.context(selectedIDs: [fixture.nodeID]))) {
             XCTAssertEqual($0 as? AccessibilityMetadataCommandError, .cancelled)
         }
+    }
+
+    // SF-0502-003/006, SF-0503-003/006: inspection uses the same
+    // viewport-dependent winner as layout, including partially applicable sets.
+    func testContainerFluidSpacingInspectionUsesViewportAndReportsMixedValues() throws {
+        var fixture = makeFixture()
+        for (index, kind) in [(1, NodeKind.stack), (2, NodeKind.grid)] {
+            fixture.document.pages[0].nodes[index].kind = kind
+            applyStructuralDefaults(for: kind, to: &fixture.document.pages[0].nodes[index])
+            let fluid = CanonicalFluidValue(minimum: 8, preferred: 16, maximum: 32)
+            fixture.document.pages[0].nodes[index].properties.append(.init(
+                key: .init(rawValue: CanonicalFluidValueCodec.key(.gap)),
+                value: .string(try CanonicalFluidValueCodec.encode(fluid, target: .gap)), origin: .authored))
+        }
+        fixture.selectedIDs = [fixture.nodeID, fixture.secondNodeID, fixture.rootID]
+        let before = fixture.document
+        let registry = ContainerLayoutCommandRegistry()
+        for width in [320.0, 390, 574, 768, 1024, 1440] {
+            let breakpoint = ResponsiveBreakpoint.resolving(width: width)
+            let fluid = try XCTUnwrap(CanonicalFluidValueCodec.value(for: .gap, node: fixture.document.pages[0].nodes[1]))
+            let expected = try XCTUnwrap(fluid.0.resolved(viewportWidth: width))
+            XCTAssertEqual(registry.value(for: .gap, in: fixture.document, context: fixture.context,
+                breakpoint: breakpoint, viewportWidth: width),
+                .single(.number(expected), .authored, applicableCount: 2, skippedCount: 1))
+            for node in fixture.document.pages[0].nodes[1...2] {
+                let resolved = try XCTUnwrap(ResponsiveContainerLayoutResolver.value(
+                    for: .gap, node: node, breakpoint: breakpoint, viewportWidth: width))
+                XCTAssertEqual(resolved.0, .number(expected))
+                XCTAssertEqual(resolved.2, .fluid)
+            }
+        }
+        XCTAssertEqual(fixture.document, before, "Inspection must not write sampled fluid values")
+        fixture.document.pages[0].nodes[2].properties.removeAll { $0.key.rawValue == CanonicalFluidValueCodec.key(.gap) }
+        XCTAssertEqual(registry.value(for: .gap, in: fixture.document, context: fixture.context,
+            breakpoint: .desktop, viewportWidth: 1440), .mixed(applicableCount: 2, skippedCount: 1))
+        let key = ResponsiveContainerLayoutResolver.key(.gap, breakpoint: .tablet)
+        for index in 1...2 {
+            fixture.document.pages[0].nodes[index].properties.append(.init(
+                key: .init(rawValue: key), value: .number(4), origin: .authored))
+        }
+        XCTAssertEqual(registry.value(for: .gap, in: fixture.document, context: fixture.context,
+            breakpoint: .tablet, viewportWidth: 768),
+            .single(.number(4), .authored, applicableCount: 2, skippedCount: 1))
+        XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .gap,
+            node: fixture.document.pages[0].nodes[1], breakpoint: .tablet, viewportWidth: 768)?.2, .override(.tablet))
+    }
+
+    // SF-0502-003/005, SF-0503-003/005: fixed fallback edits cannot
+    // silently replace fluid intent. Override/remove/fixed are separate history.
+    func testContainerFluidSpacingCommandsPreserveOverridesAndExactHistory() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[1].kind = .stack
+        applyStructuralDefaults(for: .stack, to: &fixture.document.pages[0].nodes[1])
+        let fluid = CanonicalFluidValue(minimum: 8, preferred: 16, maximum: 32)
+        let fluidProperty = NodeProperty(key: .init(rawValue: CanonicalFluidValueCodec.key(.gap)),
+            value: .string(try CanonicalFluidValueCodec.encode(fluid, target: .gap)), origin: .authored)
+        fixture.document.pages[0].nodes[1].properties.append(fluidProperty)
+        fixture.selectedIDs = [fixture.nodeID, fixture.secondNodeID]
+        let session = DocumentSession(document: fixture.document), registry = ContainerLayoutCommandRegistry()
+        func command(_ value: ContainerLayoutValue?, breakpoint: ResponsiveBreakpoint = .desktop,
+                     reset: Bool = false, cancelled: Bool = false,
+                     revision: UInt64? = nil) -> ContainerLayoutCommand {
+            .init(identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id, pageID: fixture.pageID,
+                revision: revision ?? session.document.revision, sceneID: fixture.sceneID,
+                rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: fixture.selectedIDs,
+                field: .gap, value: value, provenance: .keyboard, cancelled: cancelled,
+                breakpoint: breakpoint, removesOverride: reset)
+        }
+        func prepare(_ value: ContainerLayoutCommand) throws -> PreparedContainerLayoutEdit {
+            try registry.prepare(value, in: session.document, context: fixture.with(document: session.document).context)
+        }
+        let ignoredEdits: [ContainerLayoutValue?] = [.number(7), nil]
+        for value in ignoredEdits {
+            XCTAssertThrowsError(try prepare(command(value))) {
+                XCTAssertEqual($0 as? ContainerLayoutError, .fluidValueWins)
+            }
+        }
+        XCTAssertTrue(session.historySnapshot().undoEntries.isEmpty)
+        XCTAssertThrowsError(try prepare(command(.number(7), cancelled: true))) {
+            XCTAssertEqual($0 as? ContainerLayoutError, .cancelled)
+        }
+        XCTAssertThrowsError(try prepare(command(.number(.nan)))) {
+            XCTAssertEqual($0 as? ContainerLayoutError, .invalidValue)
+        }
+        let oldRevision = session.document.revision
+        let original = session.document.pages[0].nodes
+        let edit = try prepare(command(.number(6), breakpoint: .tablet))
+        XCTAssertEqual(edit.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(edit.skippedNodeIDs, [fixture.secondNodeID])
+        try session.execute(edit.documentCommand)
+        let authored = session.document.pages[0].nodes
+        XCTAssertEqual(authored[1].insertionProperty(fluidProperty.key.rawValue), fluidProperty)
+        XCTAssertEqual(authored[1].insertionNumberProperty("layout.gap"), 24)
+        XCTAssertEqual(registry.value(for: .gap, in: session.document,
+            context: fixture.with(document: session.document).context, breakpoint: .tablet, viewportWidth: 768),
+            .single(.number(6), .authored, applicableCount: 1, skippedCount: 1))
+        XCTAssertThrowsError(try prepare(command(.number(5), breakpoint: .tablet, revision: oldRevision))) {
+            XCTAssertEqual($0 as? ContainerLayoutError, .staleRevision)
+        }
+        try session.undo(); XCTAssertEqual(session.document.pages[0].nodes, original)
+        try session.redo(); XCTAssertEqual(session.document.pages[0].nodes, authored)
+        try session.execute(try prepare(command(nil, breakpoint: .tablet, reset: true)).documentCommand)
+        XCTAssertEqual(registry.value(for: .gap, in: session.document,
+            context: fixture.with(document: session.document).context, breakpoint: .tablet, viewportWidth: 768),
+            .single(.number(16), .authored, applicableCount: 1, skippedCount: 1))
+        let identity = GeometryInspectorOperationIdentity(editID: GeometryInspectorEditID(), documentID: session.document.id, pageID: fixture.pageID,
+            revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration)
+        let remove = try FluidValueCommandRegistry().prepare(.init(identity: identity,
+            orderedNodeIDs: fixture.selectedIDs, target: .gap, value: nil, provenance: .keyboard, cancelled: false),
+            in: session.document, context: fixture.with(document: session.document).context)
+        try session.execute(remove.documentCommand)
+        try session.execute(try prepare(command(.number(7))).documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionNumberProperty("layout.gap"), 7)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.undo(); try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionProperty(fluidProperty.key.rawValue), fluidProperty)
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionNumberProperty("layout.gap"), 24)
+    }
+
+    // SF-0502-005, SF-0503-005: one fluid member rejects an ignored
+    // multi-edit atomically, without leaking authored text into diagnostics.
+    func testContainerFluidSpacingMixedRejectionIsAtomicAndRedacted() throws {
+        var fixture = makeFixture()
+        for (index, kind) in [(1, NodeKind.stack), (2, NodeKind.grid)] {
+            fixture.document.pages[0].nodes[index].kind = kind
+            applyStructuralDefaults(for: kind, to: &fixture.document.pages[0].nodes[index])
+        }
+        fixture.document.pages[0].nodes[2].properties.append(.init(
+            key: .init(rawValue: CanonicalFluidValueCodec.key(.padding)),
+            value: .string(try CanonicalFluidValueCodec.encode(.init(minimum: 4, preferred: 8, maximum: 16), target: .padding))))
+        fixture.selectedIDs = [fixture.nodeID, fixture.secondNodeID]
+        let before = fixture.document
+        let command = ContainerLayoutCommand(identity: .init(editID: GeometryInspectorEditID(), documentID: before.id, pageID: fixture.pageID,
+            revision: before.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: fixture.selectedIDs, field: .padding, value: .number(12), provenance: .keyboard, cancelled: false)
+        XCTAssertThrowsError(try ContainerLayoutCommandRegistry().prepare(command, in: before, context: fixture.context)) {
+            XCTAssertEqual($0 as? ContainerLayoutError, .fluidValueWins)
+        }
+        XCTAssertEqual(fixture.document, before)
+        let record = ContainerLayoutDiagnosticFactory.make(command: command, durationMilliseconds: 0,
+            resultRevision: nil, result: .failure, failure: .fluidValueWins)
+        XCTAssertEqual(record.failureCategory, "fluid-value-wins")
+        XCTAssertFalse(record.sanitizedIdentifiers.joined().contains(fixture.nodeID.description))
+        XCTAssertTrue(ContainerLayoutError.fluidValueWins.localizedDescription.contains("Fluid Value"))
+    }
+
+    // SF-0501-003, SF-0505-003/005: empty Hug containers use fluid
+    // padding and explicit bounds, not a placeholder child or rewritten height.
+    func testEmptyFluidContainersResolveHugWithinBoundsWithoutRewritingFallbacks() throws {
+        var fixture = makeFixture()
+        let padding = CanonicalFluidValue(minimum: 0, preferred: 8, maximum: 16)
+        for (index, kind) in [(1, NodeKind.stack), (2, NodeKind.grid)] {
+            fixture.document.pages[0].nodes[index].kind = kind
+            applyStructuralDefaults(for: kind, to: &fixture.document.pages[0].nodes[index])
+            let record = CanonicalFluidValue(minimum: padding.minimum, preferred: padding.preferred, maximum: padding.maximum)
+            fixture.document.pages[0].nodes[index].properties += [
+                .init(key: .init(rawValue: CanonicalFluidValueCodec.key(.padding)),
+                    value: .string(try CanonicalFluidValueCodec.encode(record, target: .padding))),
+                .init(key: .init(rawValue: CanonicalSizingConstraints.prefix + "heightMode"), value: .string("hug")),
+                .init(key: .init(rawValue: CanonicalSizingConstraints.prefix + "minHeight"), value: .number(12)),
+                .init(key: .init(rawValue: CanonicalSizingConstraints.prefix + "maxHeight"), value: .number(24))
+            ]
+        }
+        try fixture.document.validate()
+        let before = fixture.document
+        for width in [320.0, 390, 574, 768, 1024, 1440] {
+            let frames = before.pages[0].resolvedStructuralGeometry(breakpoint: .resolving(width: width), viewportWidth: width)
+            let expected = max(12, min(24, 2 * (try XCTUnwrap(padding.resolved(viewportWidth: width)))))
+            for node in before.pages[0].nodes[1...2] {
+                XCTAssertTrue(node.childIDs.isEmpty)
+                let frame = try XCTUnwrap(frames[node.id])
+                XCTAssertEqual(frame.size.height, expected, accuracy: 0.001)
+                XCTAssertTrue(frame.size.width.isFinite)
+                XCTAssertGreaterThan(frame.size.width, 0)
+            }
+        }
+        XCTAssertEqual(fixture.document, before)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(before)), before)
     }
 
     // SF-0502-001...006 / SF-0503-001...006 / SF-0506-001...006
@@ -3068,6 +4130,122 @@ final class TransformModelTests: XCTestCase {
     // SF-AUTHORING-102, SF-0604-001/003/004/005/008 — the closed v1 payload
     // round-trips stable identity and resolves one monotonic value at the
     // product reference widths; malformed and inverted payloads are rejected.
+    // SF-0602-003, SF-0604-003: inspection and rendering resolve the
+    // same continuous range; a device literal is never mistaken for fluid.
+    func testEffectiveFluidTypographyAndGeometryResolveAtBreakpointBoundaries() throws {
+        var fixture = makeFixture()
+        let fontSize = CanonicalFluidValue(minimum: 12, preferred: 16, maximum: 20)
+        let lineHeight = CanonicalFluidValue(minimum: 18, preferred: 24, maximum: 30)
+        let widthRange = CanonicalFluidValue(minimum: 100, preferred: 150, maximum: 200)
+        for index in 1...2 {
+            fixture.document.pages[0].nodes[index].kind = .text
+            for (target, value) in [(FluidValueTarget.fontSize, fontSize), (.lineHeight, lineHeight), (.width, widthRange)] {
+                let record = CanonicalFluidValue(minimum: value.minimum, preferred: value.preferred, maximum: value.maximum)
+                fixture.document.pages[0].nodes[index].properties.append(.init(
+                    key: .init(rawValue: CanonicalFluidValueCodec.key(target)),
+                    value: .string(try CanonicalFluidValueCodec.encode(record, target: target)), origin: .authored))
+            }
+        }
+        fixture.document.pages[0].nodes[1].properties.append(.init(
+            key: .init(rawValue: ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)),
+            value: .number(180), origin: .authored))
+        fixture.selectedIDs = [fixture.nodeID, fixture.secondNodeID]
+        try fixture.document.validate()
+        let before = fixture.document
+        let nodes = Array(before.pages[0].nodes[1...2])
+        let ranges = try nodes.map { try XCTUnwrap(CanonicalFluidValueCodec.value(for: .fontSize, node: $0)?.0) }
+        XCTAssertNotEqual(ranges[0].id, ranges[1].id)
+        XCTAssertEqual(FluidValueCommandRegistry().value(for: .fontSize, in: before, context: fixture.context),
+            .single(ranges[0], .authored, applicableCount: 2, skippedCount: 0),
+            "Separate stable identities do not make identical authored ranges Mixed")
+        for width in [320.0, 390, 599, 600, 767, 768, 1023, 1024, 1440] {
+            let breakpoint = ResponsiveBreakpoint.resolving(width: width)
+            let size = try XCTUnwrap(fontSize.resolved(viewportWidth: width))
+            let height = try XCTUnwrap(lineHeight.resolved(viewportWidth: width))
+            let typography = try XCTUnwrap(TypographyCommandRegistry.resolvedTypography(for: nodes[0], viewportWidth: width))
+            XCTAssertEqual(typography.size, size, accuracy: 0.0001)
+            XCTAssertEqual(typography.lineHeight, height, accuracy: 0.0001)
+            XCTAssertEqual(TypographyCommandRegistry.selectionValue(nodes: nodes, viewportWidth: width), .single(typography, .authored))
+            let resolved = try XCTUnwrap(FluidValueCommandRegistry.effectiveValue(for: .fontSize,
+                node: nodes[0], breakpoint: breakpoint, viewportWidth: width))
+            XCTAssertEqual(resolved.0, size, accuracy: 0.0001)
+            XCTAssertEqual(resolved.1, .fluid)
+            let geometry = try XCTUnwrap(FluidValueCommandRegistry.effectiveValue(for: .width,
+                node: nodes[0], breakpoint: breakpoint, viewportWidth: width))
+            XCTAssertEqual(geometry.0, breakpoint == .mobile ? 180 : try XCTUnwrap(widthRange.resolved(viewportWidth: width)), accuracy: 0.0001)
+            XCTAssertEqual(geometry.1, breakpoint == .mobile ? .override(.mobile) : .fluid)
+        }
+        for width in [Double.nan, .infinity, 0, -1] {
+            XCTAssertNil(FluidValueCommandRegistry.effectiveValue(for: .fontSize,
+                node: nodes[0], breakpoint: .desktop, viewportWidth: width))
+        }
+        XCTAssertNil(FluidValueCommandRegistry.effectiveValue(for: .gap, node: nodes[0], breakpoint: .desktop, viewportWidth: 1440))
+        XCTAssertEqual(TypographyCommandRegistry.selectionValue(nodes: nodes), .single(.defaultValue, .defaulted),
+            "Fixed fallback inspection stays separate from effective fluid typography")
+        var mixed = fixture
+        let propertyIndex = try XCTUnwrap(mixed.document.pages[0].nodes[2].properties.firstIndex {
+            $0.key.rawValue == CanonicalFluidValueCodec.key(.fontSize)
+        })
+        mixed.document.pages[0].nodes[2].properties[propertyIndex].value = .string(try CanonicalFluidValueCodec.encode(
+            .init(id: ranges[1].id, minimum: 13, preferred: 17, maximum: 21), target: .fontSize))
+        XCTAssertEqual(FluidValueCommandRegistry().value(for: .fontSize, in: mixed.document, context: mixed.context),
+            .mixed(applicableCount: 2, skippedCount: 0))
+        XCTAssertEqual(TypographyCommandRegistry.selectionValue(nodes: mixed.document.pages[0].nodes, viewportWidth: 390),
+            .mixed(applicableCount: 2, skippedCount: 1))
+        let session = DocumentSession(document: before)
+        let unified = FluidValueCommand(identity: .init(editID: GeometryInspectorEditID(), documentID: before.id,
+            pageID: fixture.pageID, revision: before.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: fixture.selectedIDs, target: .fontSize,
+            value: .init(minimum: 13, preferred: 17, maximum: 21), provenance: .keyboard, cancelled: false)
+        try session.execute(try FluidValueCommandRegistry().prepare(unified, in: before, context: fixture.context).documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[1...2].compactMap {
+            CanonicalFluidValueCodec.value(for: .fontSize, node: $0)?.0.id
+        }, ranges.map(\.id))
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        let committed = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, before.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, committed)
+        XCTAssertEqual(fixture.document, before)
+    }
+
+    // SF-0604-002/005: invalid/cancel/stale ranges cannot replace
+    // authored IDs, device overrides, fallback typography or exact inverses.
+    func testFluidTypographyInvalidStaleAndCancelledRangesPreserveCanonicalIntent() throws {
+        var fixture = makeFixture()
+        fixture.document.pages[0].nodes[1].kind = .text
+        fixture.document.pages[0].nodes[1].properties.append(.init(
+            key: .init(rawValue: ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)), value: .number(180)))
+        let session = DocumentSession(document: fixture.document), registry = FluidValueCommandRegistry()
+        func request(_ value: CanonicalFluidValue?, cancelled: Bool = false, revision: UInt64? = nil) -> FluidValueCommand {
+            .init(identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id,
+                pageID: fixture.pageID, revision: revision ?? session.document.revision,
+                sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: [fixture.nodeID], target: .fontSize, value: value, provenance: .keyboard, cancelled: cancelled)
+        }
+        func prepare(_ value: FluidValueCommand) throws -> PreparedFluidValueEdit {
+            try registry.prepare(value, in: session.document, context: fixture.with(document: session.document).context)
+        }
+        let before = session.document.pages
+        for invalid in [CanonicalFluidValue(minimum: 20, preferred: 10, maximum: 30),
+                        .init(minimum: .nan, preferred: 10, maximum: 20),
+                        .init(minimum: 10, preferred: 20, maximum: .infinity),
+                        .init(minimum: 0, preferred: 12, maximum: 20)] {
+            XCTAssertThrowsError(try prepare(request(invalid))) { XCTAssertEqual($0 as? FluidValueCommandError, .invalidValue) }
+        }
+        XCTAssertThrowsError(try prepare(request(.init(minimum: 10, preferred: 14, maximum: 18), cancelled: true))) {
+            XCTAssertEqual($0 as? FluidValueCommandError, .cancelled)
+        }
+        let oldRevision = session.document.revision
+        try session.execute(try prepare(request(.init(minimum: 10, preferred: 14, maximum: 18))).documentCommand)
+        let authored = session.document.pages
+        XCTAssertThrowsError(try prepare(request(nil, revision: oldRevision))) { XCTAssertEqual($0 as? FluidValueCommandError, .stale) }
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionNumberProperty(ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)), 180)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, authored)
+    }
+
     func testFluidValueCodecResolutionValidationAndRoundTrip() throws {
         let value = CanonicalFluidValue(minimum: 24, preferred: 36, maximum: 60)
         let encoded = try CanonicalFluidValueCodec.encode(value, target: .padding)
@@ -3132,8 +4310,13 @@ final class TransformModelTests: XCTestCase {
             result: .success, failure: nil)
         XCTAssertEqual(diagnostic.requirementIDs, FluidValueCommandRegistry.requirementIDs.sorted())
         XCTAssertFalse(String(describing: diagnostic).contains(frameID.description))
-        XCTAssertFalse(String(describing: diagnostic).contains("180"),
-                       "Fluid content values must not enter support diagnostics.")
+        // Sanitized identity hashes can coincidentally contain a decimal value.
+        // Prove content independence instead of inspecting arbitrary hash digits.
+        let differentContentDiagnostic = FluidValueDiagnosticFactory.make(
+            command: command(.init(minimum: 120, preferred: 300, maximum: 480)),
+            durationMilliseconds: 1, resultRevision: 1, result: .success, failure: nil)
+        XCTAssertEqual(diagnostic, differentContentDiagnostic,
+                       "Authored fluid values must not affect support diagnostics.")
         let cancelled = FluidValueCommand(identity: command(fluid).identity, orderedNodeIDs: selected,
             target: .width, value: fluid, provenance: .keyboard, cancelled: true)
         XCTAssertThrowsError(try registry.prepare(cancelled, in: document, context: context(document))) {
@@ -3212,6 +4395,276 @@ final class TransformModelTests: XCTestCase {
 
     // SF-0504/SF-0510/SF-0511 — positioning, reusable appearance, and the
     // bounded state vocabulary share one identity-gated transactional path.
+    private func preparedReusableEdit(_ edit: AdvancedStyleEdit, session: DocumentSession,
+                                     fixture: TransformFixture, ids: [NodeID]? = nil,
+                                     cancelled: Bool = false) throws -> PreparedDesignInspectorEdit {
+        let current = fixture.with(document: session.document), selected = ids ?? [fixture.nodeID]
+        return try AdvancedStyleCommandRegistry().prepare(.init(identity: .init(documentID: session.document.id,
+            pageID: fixture.pageID, revision: session.document.revision, sceneID: fixture.sceneID,
+            rendererGeneration: fixture.rendererGeneration), orderedNodeIDs: selected, edit: edit,
+            provenance: .keyboard, cancelled: cancelled), in: session.document,
+            context: current.context(selectedIDs: selected))
+    }
+
+    // SF-0510-002/003/005: link/reorder/unlink preserve other links
+    // independently on mixed selections, with one exact reversible transaction.
+    func testReusableStyleLinksPreserveMixedOrderingAndExactHistory() throws {
+        var fixture = makeFixture()
+        let text = DocumentNode(kind: .text, name: "Caption", parent: .node(fixture.rootID), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(0)), .init(key: .init(rawValue: "layout.y"), value: .number(0)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(120)), .init(key: .init(rawValue: "layout.height"), value: .number(24))])
+        fixture.document.pages[0].nodes[0].childIDs.append(text.id); fixture.document.pages[0].nodes.append(text)
+        let session = DocumentSession(document: fixture.document), a = ReusableStyleID(), b = ReusableStyleID()
+        let red = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF0000FF"))
+        let blue = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#0000FFFF"))
+        for (id, name, color) in [(a, "First", red), (b, "Second", blue)] {
+            try session.execute(try preparedReusableEdit(.createReusableStyle(id: id, name: name, fill: color, opacity: nil),
+                session: session, fixture: fixture).documentCommand)
+        }
+        try session.execute(try preparedReusableEdit(.linkReusableStyle(a), session: session, fixture: fixture).documentCommand)
+        try session.execute(try preparedReusableEdit(.linkReusableStyle(b), session: session, fixture: fixture,
+            ids: [fixture.secondNodeID]).documentCommand)
+        let before = session.document.pages
+        let propertyID = try XCTUnwrap(before[0].nodes[1].insertionProperty(CanonicalReusableStyleIndex.appliedKey)?.id)
+        let ids = [fixture.nodeID, fixture.secondNodeID, text.id]
+        let edit = try preparedReusableEdit(.linkReusableStyle(b), session: session, fixture: fixture, ids: ids)
+        XCTAssertEqual(edit.skippedNodeIDs, [text.id])
+        try session.execute(edit.documentCommand)
+        XCTAssertEqual(CanonicalReusableStyleIndex.appliedIDs(session.document.pages[0].nodes[1]), [a, b])
+        XCTAssertEqual(CanonicalReusableStyleIndex.appliedIDs(session.document.pages[0].nodes[2]), [b])
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionProperty(CanonicalReusableStyleIndex.appliedKey)?.id, propertyID)
+        let linked = session.document.pages
+        XCTAssertThrowsError(try preparedReusableEdit(.linkReusableStyle(b), session: session, fixture: fixture, ids: ids)) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .noChanges)
+        }
+        try session.execute(try preparedReusableEdit(.moveReusableStyle(b, offset: -1), session: session, fixture: fixture, ids: ids).documentCommand)
+        let reordered = session.document.pages
+        XCTAssertEqual(CanonicalReusableStyleIndex.appliedIDs(reordered[0].nodes[1]), [b, a])
+        XCTAssertEqual(CanonicalReusableStyleIndex.appliedIDs(reordered[0].nodes[2]), [b])
+        let index = try CanonicalReusableStyleIndex(document: session.document)
+        XCTAssertEqual(try CanonicalResolvedAppearance.resolve(node: reordered[0].nodes[1], index: index).fill, red)
+        XCTAssertEqual(try CanonicalResolvedAppearance.resolve(node: reordered[0].nodes[2], index: index).fill, blue)
+        try session.undo(); XCTAssertEqual(session.document.pages, linked)
+        try session.redo(); XCTAssertEqual(session.document.pages, reordered)
+        try session.execute(try preparedReusableEdit(.unlinkReusableStyle(b), session: session, fixture: fixture, ids: ids).documentCommand)
+        XCTAssertEqual(CanonicalReusableStyleIndex.appliedIDs(session.document.pages[0].nodes[1]), [a])
+        XCTAssertNil(session.document.pages[0].nodes[2].insertionProperty(CanonicalReusableStyleIndex.appliedKey))
+        try session.undo(); XCTAssertEqual(session.document.pages, reordered)
+        try session.undo(); try session.undo(); XCTAssertEqual(session.document.pages, before)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        XCTAssertThrowsError(try preparedReusableEdit(.moveReusableStyle(a, offset: 99), session: session, fixture: fixture))
+        XCTAssertThrowsError(try preparedReusableEdit(.linkReusableStyle(ReusableStyleID()), session: session, fixture: fixture))
+        XCTAssertThrowsError(try preparedReusableEdit(.linkReusableStyle(b), session: session, fixture: fixture, cancelled: true)) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .cancelled)
+        }
+        func diagnostic(_ styleID: ReusableStyleID) -> AdvancedStyleDiagnosticRecord {
+            let command = AdvancedStyleCommand(identity: .init(documentID: session.document.id, pageID: fixture.pageID,
+                revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: ids, edit: .linkReusableStyle(styleID), provenance: .keyboard, cancelled: false)
+            return AdvancedStyleDiagnosticFactory.make(command: command, resultRevision: nil, result: .stale, failure: .stale)
+        }
+        XCTAssertEqual(diagnostic(a), diagnostic(b), "Style values/names/targets must not enter diagnostic payloads")
+        XCTAssertEqual(diagnostic(a).operationType, "reusable.link")
+    }
+
+    // SF-0508-003/005, SF-0509-003/005, SF-0510-003/005: reset is
+    // explicit inheritance, not None, token detach, or a baked equivalent fill.
+    func testReusableResetProtectsNoneAndTokensAndRestoresGradientIdentities() throws {
+        var fixture = makeFixture()
+        let red = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF0000FF"))
+        let blue = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#0000FFFF"))
+        let token = LocalColorToken(name: "Retained", color: blue)
+        fixture.document.colorTokens = [token]
+        let gradient = CanonicalFillLayer.linearGradient(angleDegrees: 45, stops: [
+            .init(id: GradientStopID(), position: 0, color: red), .init(id: GradientStopID(), position: 1, color: blue)])
+        let layers = [gradient, CanonicalFillLayer.solid(color: blue)]
+        for (key, value) in CanonicalFillLayerCodec.propertyValues(for: layers).sorted(by: { $0.key < $1.key }) {
+            fixture.document.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: key), value: value))
+        }
+        let opacity = NodeProperty(key: .init(rawValue: "style.opacity"), value: .number(0.9))
+        fixture.document.pages[0].nodes[1].properties.append(opacity)
+        fixture.document.pages[0].nodes[2].properties.append(.init(key: .init(rawValue: CanonicalFillLayerCodec.orderKey), value: .string("")))
+        let session = DocumentSession(document: fixture.document), styleID = ReusableStyleID()
+        try session.execute(try preparedReusableEdit(.createReusableStyle(id: styleID, name: "Linked", fill: red, opacity: 0.4),
+            session: session, fixture: fixture).documentCommand)
+        try session.execute(try preparedReusableEdit(.linkReusableStyle(styleID), session: session, fixture: fixture,
+            ids: [fixture.nodeID, fixture.secondNodeID]).documentCommand)
+        let original = session.document
+        XCTAssertThrowsError(try preparedReusableEdit(.useLinkedAppearance(.fill), session: session, fixture: fixture,
+            ids: [fixture.nodeID, fixture.secondNodeID]))
+        XCTAssertEqual(session.document, original, "A protected None member rejects the entire reset, not just the later object")
+        try session.execute(try preparedReusableEdit(.useLinkedAppearance(.fill), session: session, fixture: fixture).documentCommand)
+        XCTAssertNil(CanonicalFillLayerCodec.layers(for: session.document.pages[0].nodes[1]))
+        XCTAssertEqual(session.document.pages[0].nodes[1].insertionProperty("style.opacity"), opacity)
+        XCTAssertEqual(try CanonicalResolvedAppearance.resolve(node: session.document.pages[0].nodes[1],
+            index: CanonicalReusableStyleIndex(document: session.document)).fill, red)
+        let resetFill = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, original.pages)
+        XCTAssertEqual(CanonicalFillLayerCodec.layers(for: session.document.pages[0].nodes[1]), layers)
+        try session.redo(); XCTAssertEqual(session.document.pages, resetFill)
+        try session.execute(try preparedReusableEdit(.useLinkedAppearance(.opacity), session: session, fixture: fixture).documentCommand)
+        XCTAssertNil(session.document.pages[0].nodes[1].insertionProperty("style.opacity"))
+        let current = session.document
+        XCTAssertEqual(DesignInspectorCommandRegistry.opacityValue(nodes: [current.pages[0].nodes[1]],
+            reusableStyles: try CanonicalReusableStyleIndex(document: current)), .single(0.4, .authored))
+        let unchangedOpacity = DesignInspectorCommand(identity: .init(documentID: current.id, pageID: fixture.pageID,
+            revision: current.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .opacity(0.4), provenance: .keyboard, cancelled: false)
+        XCTAssertThrowsError(try DesignInspectorCommandRegistry().prepare(unchangedOpacity, in: current,
+            context: fixture.with(document: current).context)) { XCTAssertEqual($0 as? DesignInspectorError, .noChanges) }
+        try session.undo(); XCTAssertEqual(session.document.pages[0].nodes[1].insertionProperty("style.opacity"), opacity)
+        XCTAssertThrowsError(try preparedReusableEdit(.useLinkedAppearance(.fill), session: session, fixture: fixture,
+            ids: [fixture.secondNodeID]))
+        try session.execute(try preparedReusableEdit(.updateReusableStyle(id: styleID, name: "Linked", fill: blue, opacity: 0.6),
+            session: session, fixture: fixture).documentCommand)
+        let index = try CanonicalReusableStyleIndex(document: session.document)
+        XCTAssertNil(try CanonicalResolvedAppearance.resolve(node: session.document.pages[0].nodes[2], index: index).fill)
+        XCTAssertEqual(CanonicalFillLayerCodec.layers(for: session.document.pages[0].nodes[2]), [])
+        XCTAssertEqual(session.document.colorTokens, [token])
+        var bound = original
+        bound.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)),
+            value: .string(token.id.description)))
+        try bound.validate()
+        let boundSession = DocumentSession(document: bound)
+        XCTAssertThrowsError(try preparedReusableEdit(.useLinkedAppearance(.fill), session: boundSession, fixture: fixture))
+        XCTAssertEqual(boundSession.document, bound)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    // SF-0510-002/003, SF-0509-003: snapshots are explicit solid/opacity
+    // values, never accidental gradient flattening or source-token detachment.
+    func testReusableCaptureRejectsMixedComplexAndNoneWithoutDetachingTokens() throws {
+        var fixture = makeFixture()
+        let red = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#CC2233FF"))
+        let token = LocalColorToken(name: "Source", color: red)
+        fixture.document.colorTokens = [token]
+        for index in 1...2 {
+            for (key, value) in CanonicalFillLayerCodec.propertyValues(for: [.solid(color: red)]).sorted(by: { $0.key < $1.key }) {
+                fixture.document.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: key), value: value))
+            }
+            fixture.document.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: "style.opacity"), value: .number(0.5)))
+        }
+        fixture.document.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)),
+            value: .string(token.id.description)))
+        try fixture.document.validate()
+        let before = fixture.document
+        let capture = try AdvancedStyleCommandRegistry.captureSelection(Array(before.pages[0].nodes[1...2]), in: before)
+        XCTAssertEqual(capture.fill, red); XCTAssertEqual(capture.opacity, 0.5); XCTAssertEqual(capture.boundFillCount, 1)
+        var mixed = before
+        let opacityIndex = try XCTUnwrap(mixed.pages[0].nodes[2].properties.firstIndex { $0.key.rawValue == "style.opacity" })
+        mixed.pages[0].nodes[2].properties[opacityIndex].value = .number(0.6)
+        XCTAssertThrowsError(try AdvancedStyleCommandRegistry.captureSelection(Array(mixed.pages[0].nodes[1...2]), in: mixed))
+        for layers in [[CanonicalFillLayer](), [.linearGradient(angleDegrees: 45, stops: [
+            .init(id: GradientStopID(), position: 0, color: red), .init(id: GradientStopID(), position: 1, color: red)])]] {
+            var unsupported = before
+            unsupported.pages[0].nodes[1].properties.removeAll {
+                $0.key.rawValue.hasPrefix("style.fill.layers.v1.") || $0.key.rawValue == LocalColorTokenBinding.key(for: .fill)
+            }
+            unsupported.pages[0].nodes[1].properties += CanonicalFillLayerCodec.propertyValues(for: layers).map {
+                .init(key: .init(rawValue: $0.key), value: $0.value)
+            }
+            XCTAssertThrowsError(try AdvancedStyleCommandRegistry.captureSelection([unsupported.pages[0].nodes[1]], in: unsupported))
+        }
+        XCTAssertEqual(fixture.document, before)
+    }
+
+    // SF-0510-003/005/006, SF-0508-003, SF-0509-003: immutable native
+    // adoption, effective Inspector and compiler agree without recoloring None
+    // or breaking a different page's/token-bound local override.
+    func testReusableLinksAdoptSharedAppearanceWithoutRevivingNoneOrTokenOverrides() async throws {
+        var fixture = makeFixture()
+        let red = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF0000FF"))
+        let blue = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#0000FFFF"))
+        let orange = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF8800FF"))
+        let green = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#00FF00FF"))
+        let token = LocalColorToken(name: "Local green", color: green)
+        fixture.document.colorTokens = [token]
+        fixture.document.pages[0].nodes[2].properties.append(.init(key: .init(rawValue: CanonicalFillLayerCodec.orderKey), value: .string("")))
+        func frame(parent: NodeID, name: String) -> DocumentNode {
+            .init(kind: .frame, name: name, parent: .node(parent), properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(400)), .init(key: .init(rawValue: "layout.y"), value: .number(40)),
+                .init(key: .init(rawValue: "layout.width"), value: .number(120)), .init(key: .init(rawValue: "layout.height"), value: .number(80))])
+        }
+        var tokenNode = frame(parent: fixture.rootID, name: "Token local")
+        tokenNode.properties += CanonicalFillLayerCodec.propertyValues(for: [.solid(color: blue)]).map {
+            .init(key: .init(rawValue: $0.key), value: $0.value)
+        }
+        tokenNode.properties.append(.init(key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)), value: .string(token.id.description)))
+        fixture.document.pages[0].nodes[0].childIDs.append(tokenNode.id); fixture.document.pages[0].nodes.append(tokenNode)
+        let setup = DocumentSession(document: fixture.document), a = ReusableStyleID(), b = ReusableStyleID()
+        for (id, name, color, opacity) in [(a, "First", red, 0.4), (b, "Second", blue, 0.7)] {
+            try setup.execute(try preparedReusableEdit(.createReusableStyle(id: id, name: name, fill: color, opacity: opacity),
+                session: setup, fixture: fixture).documentCommand)
+        }
+        try setup.execute(try preparedReusableEdit(.applyReusableStyles([a, b]), session: setup, fixture: fixture).documentCommand)
+        try setup.execute(try preparedReusableEdit(.linkReusableStyle(a), session: setup, fixture: fixture,
+            ids: [fixture.secondNodeID, tokenNode.id]).documentCommand)
+        var document = setup.document, peerPage = DocumentPage(name: "Peer style page")
+        var peer = frame(parent: peerPage.rootNodeIDs[0], name: "Peer linked")
+        peer.properties.append(.init(key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(a.description)))
+        peerPage.nodes[0].childIDs.append(peer.id); peerPage.nodes.append(peer); document.pages.append(peerPage)
+        try document.validate()
+        let session = DocumentSession(document: document)
+        let state = WorkspaceShellState(documentSession: session)
+        let live = state.documentSession
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        func adopt() async {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while (state.canvasRenderPlan?.identity.revision != live.document.revision
+                || state.canvasRenderPlan?.identity.viewportGeneration != state.viewportState.generation), ContinuousClock.now < deadline { await Task.yield() }
+            XCTAssertEqual(state.canvasRenderPlan?.identity.revision, live.document.revision)
+        }
+        await adopt(); state.selectLayer(fixture.nodeID)
+        XCTAssertEqual(state.designInspectorFillValue(), .single(blue, .authored))
+        XCTAssertEqual(state.designInspectorOpacityValue(), .single(0.7, .authored))
+        let initialObject = try XCTUnwrap(state.canvasRenderPlan?.authoredObjects.first { $0.id == fixture.nodeID })
+        let opening = state.responsiveInspectorEditContext
+        XCTAssertEqual(state.reusableStyleUsage[a]?.objects, 4)
+        XCTAssertEqual(state.reusableStyleUsage[a]?.pages, 2)
+        XCTAssertTrue(state.commitAdvancedStyle(.updateReusableStyle(id: a, name: "First", fill: orange, opacity: 0.6),
+            operation: "confirmed shared update", expectedContext: opening))
+        await adopt()
+        XCTAssertEqual(state.designInspectorFillValue(), .single(blue, .authored), "Later linked values still win")
+        let none = try XCTUnwrap(state.canvasRenderPlan?.authoredObjects.first { $0.id == fixture.secondNodeID })
+        XCTAssertEqual(none.fillRGBA, [0, 0, 0, 0])
+        let bound = try XCTUnwrap(state.canvasRenderPlan?.authoredObjects.first { $0.id == tokenNode.id })
+        XCTAssertEqual(bound.fillLayers.first?.rgba, [green.red, green.green, green.blue, green.alpha])
+        XCTAssertEqual(live.document.colorTokens, document.colorTokens)
+        XCTAssertEqual(live.document.pages[0].nodes.first { $0.id == tokenNode.id }?.properties,
+            document.pages[0].nodes.first { $0.id == tokenNode.id }?.properties)
+        let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0), viewportSize: .init(width: 1000, height: 800),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1440, height: 900)), pixelRatio: .init(2))
+        let peerScene = try await WorkspaceScenePreparationWorker().prepare(.init(document: live.document, activePageID: peerPage.id,
+            activeContainerID: nil, viewport: viewport, surfaceID: CanvasRenderSurfaceID(), breakpoint: .desktop, viewportWidth: 1440))
+        XCTAssertEqual(peerScene.renderScene.objects.first { $0.id == peer.id }?.fillRGBA, [orange.red, orange.green, orange.blue, orange.alpha])
+        XCTAssertEqual(peerScene.renderScene.objects.first { $0.id == peer.id }?.opacity, 0.6)
+        XCTAssertTrue(state.commitAdvancedStyle(.moveReusableStyle(b, offset: -1), operation: "earlier link",
+            expectedContext: state.responsiveInspectorEditContext))
+        await adopt()
+        XCTAssertEqual(state.designInspectorFillValue(), .single(orange, .authored))
+        XCTAssertEqual(state.designInspectorOpacityValue(), .single(0.6, .authored))
+        XCTAssertTrue(state.reusableAppearanceSource(.opacity).contains("First"))
+        let count = live.historySnapshot().undoEntries.count
+        XCTAssertTrue(state.commitDesignOpacity(percent: 60, provenance: .focusLoss))
+        XCTAssertNil(live.document.pages[0].nodes[1].insertionProperty("style.opacity"))
+        XCTAssertEqual(live.historySnapshot().undoEntries.count, count)
+        let current = live.document
+        XCTAssertFalse(state.commitDesignOpacity(percent: 70, provenance: .focusLoss, expectedContext: opening),
+            "A queued field from the prior shared-style revision must not create a local opacity override")
+        XCTAssertEqual(live.document, current)
+        XCTAssertEqual(live.historySnapshot().undoEntries.count, count)
+        XCTAssertFalse(state.commitAdvancedStyle(.unlinkReusableStyle(a), operation: "stale dialog", expectedContext: opening))
+        XCTAssertEqual(live.document, current)
+        XCTAssertEqual(initialObject.fillRGBA, [blue.red, blue.green, blue.blue, blue.alpha], "Earlier immutable snapshots do not mix with current style order")
+        let plan = try MultiPageStaticBuildPlanner.plan(document: current)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        let selectedRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: fixture.nodeID) + " {") }.joined()
+        XCTAssertTrue(selectedRules.contains("background-color: rgba(255.0, 136.0, 0.0, 1.0)"))
+        let noneRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: fixture.secondNodeID) + " {") }.joined()
+        XCTAssertFalse(noneRules.contains("background-color: rgba("))
+        XCTAssertEqual(try MultiPageStaticBuildPlanner.plan(document: DocumentSerializer.decode(DocumentSerializer.encode(current))).files, plan.files)
+    }
+
     func testAdvancedStyleRegistryHistoryPersistenceAndSafeStaticProjection() throws {
         let fixture = makeFixture()
         let session = DocumentSession(document: fixture.document)

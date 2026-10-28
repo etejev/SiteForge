@@ -4,6 +4,164 @@ import QuartzCore
 import UniformTypeIdentifiers
 import ImageIO
 
+/// Project content, deliberately separate from application appearance settings.
+/// The opening identity remains fixed for the entire draft; a changed document
+/// is rejected by the registry instead of silently rebasing an old form.
+private struct WebsiteSettingsView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let identity: DesignInspectorOperationIdentity
+    @State private var openingDocument: CanonicalDocument
+    private var initial: WebsiteMetadata? { openingDocument.websiteMetadata }
+    private var pageName: String {
+        openingDocument.pages.first { $0.id == identity.pageID }?.name ?? "Page"
+    }
+    @State private var siteName: String
+    @State private var titlePattern: String
+    @State private var description: String
+    @State private var pageTitle: String
+    @State private var pageDescription: String
+    @State private var favicon: AssetID?
+    @State private var indexing: Bool
+    @State private var pageIndexing: Bool?
+
+    init(state: WorkspaceShellState, identity: DesignInspectorOperationIdentity) {
+        self.state = state; self.identity = identity
+        let document = state.documentSession.document
+        _openingDocument = State(initialValue: document)
+        let initial = document.websiteMetadata
+        let override = initial?.pages.first { $0.pageID == identity.pageID }
+        _siteName = State(initialValue: initial?.siteName ?? "")
+        _titlePattern = State(initialValue: initial?.titlePattern ?? "")
+        _description = State(initialValue: initial?.defaultDescription ?? "")
+        _pageTitle = State(initialValue: override?.title ?? "")
+        _pageDescription = State(initialValue: override?.description ?? "")
+        _favicon = State(initialValue: initial?.faviconAssetID)
+        _indexing = State(initialValue: initial?.allowsIndexing ?? true)
+        _pageIndexing = State(initialValue: override?.allowsIndexing)
+    }
+
+    private func optional(_ text: String) -> String? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
+        return value.isEmpty ? nil : value
+    }
+    private var draft: WebsiteMetadata {
+        let page = PageWebsiteMetadata(pageID: identity.pageID, title: optional(pageTitle),
+            description: optional(pageDescription),
+            allowsIndexing: pageIndexing)
+        return WebsiteMetadata(siteName: optional(siteName), titlePattern: optional(titlePattern),
+            defaultDescription: optional(description), faviconAssetID: favicon,
+            allowsIndexing: indexing == (initial?.allowsIndexing ?? true) ? initial?.allowsIndexing : indexing,
+            pages: initial?.pages ?? []).replacingPageOverride(page)
+    }
+    private var preview: ResolvedWebsiteMetadata? {
+        // Preview the opening document + this local draft. A page/document
+        // change cannot silently retarget the snippet or bypass Apply's guard.
+        var document = openingDocument
+        document.websiteMetadata = draft
+        return document.pages.first { $0.id == identity.pageID }.map {
+            WebsiteMetadataResolver.resolve(page: $0, document: document)
+        }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Site Settings").font(.title2.bold())
+            Form {
+                    Section("Website") {
+                        TextField("Site Name", text: $siteName)
+                            .accessibilityIdentifier("siteSettings.siteName")
+                        TextField("Browser title pattern", text: $titlePattern, prompt: Text("{page}"))
+                            .accessibilityIdentifier("siteSettings.titlePattern")
+                        Text("Use {page} and {site}, for example {page} | {site}. Blank uses the page name.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        TextField("Default Description", text: $description, axis: .vertical)
+                            .lineLimit(2...4).accessibilityIdentifier("siteSettings.description")
+                        Picker("Favicon", selection: $favicon) {
+                            Text("None").tag(AssetID?.none)
+                            ForEach(openingDocument.imageAssets) { asset in
+                                Text(asset.displayName).tag(Optional(asset.id))
+                            }
+                            if let favicon, !openingDocument.imageAssets.contains(where: { $0.id == favicon }) {
+                                Text("Missing image — choose a replacement").tag(Optional(favicon))
+                            }
+                        }.accessibilityIdentifier("siteSettings.favicon")
+                        if let favicon, !openingDocument.imageAssets.contains(where: { $0.id == favicon }) {
+                            Text("The favicon reference is retained. Choose an imported image or None to repair it; original files are not modified.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("siteSettings.faviconMissing")
+                        } else {
+                            Text("Uses an image from Assets. Import there first; the original bytes remain in the project resources.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Toggle("Allow search indexing", isOn: $indexing)
+                            .accessibilityIdentifier("siteSettings.indexing")
+                        Text("A local robots preference, not a guarantee that a search service will index or remove a page.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Section("Current page: \(pageName)") {
+                        if let page = openingDocument.pages.first(where: { $0.id == identity.pageID }) {
+                            LabeledContent("Route", value: page.route.rawValue)
+                                .accessibilityIdentifier("siteSettings.pageRoute")
+                            Text("The page name supplies its default navigation label. Rename Page and Edit Route are in Page Actions; authored link labels remain independent.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        TextField("Page Title", text: $pageTitle, prompt: Text("Inherited"))
+                            .accessibilityIdentifier("siteSettings.pageTitle")
+                        TextField("Page Description", text: $pageDescription, axis: .vertical)
+                            .lineLimit(2...4).accessibilityIdentifier("siteSettings.pageDescription")
+                        Picker("Page indexing", selection: $pageIndexing) {
+                            Text("Inherit website preference").tag(Bool?.none)
+                            Text("Allow indexing").tag(Optional(true))
+                            Text("Discourage indexing").tag(Optional(false))
+                        }.accessibilityIdentifier("siteSettings.pageIndexing")
+                        Text("Blank title and description inherit website defaults. Page overrides affect this page only.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Reset Page Overrides") { pageTitle = ""; pageDescription = ""; pageIndexing = nil }
+                            .accessibilityIdentifier("siteSettings.pageReset")
+                    }
+            }.formStyle(.grouped)
+            .accessibilityLabel("Website and current page settings")
+            .accessibilityIdentifier("siteSettings.form")
+            GroupBox("Local Snippet Preview") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(preview?.title ?? pageName).font(.headline).lineLimit(2)
+                        .accessibilityIdentifier("siteSettings.previewTitle")
+                    Text(preview?.description ?? "No description").foregroundStyle(.secondary).lineLimit(2)
+                        .accessibilityIdentifier("siteSettings.previewDescription")
+                    Text("Title: \(preview?.titleSource.rawValue ?? "omitted") · Description: \(preview?.descriptionSource.rawValue ?? "omitted")")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("siteSettings.previewSources")
+                    Text("Draft preview only. Browser/social services choose their own presentation; no account or live indexing check is connected.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+            }
+            if !state.websiteSettingsStatus.isEmpty {
+                Text(state.websiteSettingsStatus).font(.callout)
+                    .accessibilityIdentifier("siteSettings.status")
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { state.isWebsiteSettingsPresented = false }.keyboardShortcut(.cancelAction)
+                Button("Apply") {
+                    if state.commitWebsiteSettings(draft.isEmpty ? nil : draft, identity: identity) {
+                        state.isWebsiteSettingsPresented = false
+                    }
+                }.keyboardShortcut(.defaultAction).accessibilityIdentifier("siteSettings.apply")
+            }
+        }.padding(24).frame(width: 580, height: 640)
+    }
+}
+
+private struct WorkspaceKeyboardFocusVisibilityKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+private extension EnvironmentValues {
+    var workspaceKeyboardFocusVisible: Bool {
+        get { self[WorkspaceKeyboardFocusVisibilityKey.self] }
+        set { self[WorkspaceKeyboardFocusVisibilityKey.self] = newValue }
+    }
+}
+
 struct WorkspaceShellView: View {
     @ObservedObject var state: WorkspaceShellState
     @FocusState private var focusedControl: ShellFocus?
@@ -19,7 +177,7 @@ struct WorkspaceShellView: View {
                 if !state.isFocusModeEnabled {
                     NavigatorView(state: state, focus: $focusedControl)
                         .frame(
-                            minWidth: WorkspaceMetrics.navigatorWidth.lowerBound,
+                            minWidth: WorkspaceMetrics.navigatorMinimumWidth(for: geometry.size.width),
                             idealWidth: min(SiteForgeVisualSystem.navigatorIdealWidth, WorkspaceMetrics.navigatorMaximumWidth(for: geometry.size.width)),
                             maxWidth: WorkspaceMetrics.navigatorMaximumWidth(for: geometry.size.width)
                         )
@@ -27,11 +185,12 @@ struct WorkspaceShellView: View {
 
                 CanvasPlaceholderView(state: state, focus: $focusedControl, tabRouter: tabRouter)
                     .frame(minWidth: WorkspaceMetrics.minimumCanvasWidth, maxWidth: .infinity)
+                    .layoutPriority(1)
 
                 if !state.isFocusModeEnabled {
                     InspectorView(state: state, focus: $focusedControl)
                         .frame(
-                            minWidth: WorkspaceMetrics.inspectorWidth.lowerBound,
+                            minWidth: WorkspaceMetrics.inspectorMinimumWidth(for: geometry.size.width),
                             idealWidth: min(SiteForgeVisualSystem.inspectorIdealWidth, WorkspaceMetrics.inspectorMaximumWidth(for: geometry.size.width)),
                             maxWidth: WorkspaceMetrics.inspectorMaximumWidth(for: geometry.size.width)
                         )
@@ -71,8 +230,23 @@ struct WorkspaceShellView: View {
             }
         }
         .modifier(WorkspaceDocumentTitle(lifecycle: state.lifecycle))
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !state.workspaceActionStatus.isEmpty {
+                Text(state.workspaceActionStatus).font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(SiteForgeVisualSystem.controlInset)
+                    .accessibilityIdentifier("workspace.editBoundary.status")
+            }
+        }
+        .environment(\.workspaceKeyboardFocusVisible, tabRouter.keyboardFocusIsVisible)
         .sheet(item: $state.pageEditorRequest) { request in
             PageEditorSheet(state: state, request: request)
+        }
+        .sheet(isPresented: $state.isWebsiteSettingsPresented) {
+            if let identity = state.websiteSettingsDraftIdentity {
+                WebsiteSettingsView(state: state, identity: identity)
+            }
         }
         .sheet(isPresented: $state.isQuickOpenPresented, onDismiss: state.completeQuickOpenDismissal) {
             QuickOpenSheet(state: state)
@@ -92,6 +266,13 @@ struct WorkspaceShellView: View {
             state.cancelStaticBuild(silent: true)
         }) {
             StaticBuildDiagnosticsView(state: state)
+        }
+        .sheet(isPresented: $state.isBrowserPreviewPresented, onDismiss: {
+            DispatchQueue.main.async { focusedControl = .navigatorPages }
+        }) {
+            BrowserPreviewPanel(controller: state.browserPreview,
+                                refresh: state.refreshBrowserPreview,
+                                dismiss: { state.isBrowserPreviewPresented = false })
         }
         .sheet(isPresented: $state.isClipboardComponentPreflightPresented, onDismiss: {
             state.cancelCrossProjectComponentPaste()
@@ -188,6 +369,7 @@ private struct WindowCloseGuard: NSViewRepresentable {
             if controller.consumeCloseAuthorization() {
                 return priorDelegate?.windowShouldClose?(sender) ?? true
             }
+            guard state.prepareForWorkspaceAction(.close) else { return false }
             state.cancelDragDrop()
             if state.textEditingSession.isActive {
                 state.commitTextEditing()
@@ -215,6 +397,8 @@ private struct WorkspaceDocumentTitle: ViewModifier {
 
 private struct WorkspaceToolbar: ToolbarContent {
     @ObservedObject var state: WorkspaceShellState
+    @FocusedValue(\.siteforgeNativeTextEditor) private var nativeTextEditor
+    private var textEditorIsActive: Bool { nativeTextEditor == true || NSApp.keyWindow?.firstResponder is NSTextView }
 
     var body: some ToolbarContent {
         if state.isFocusModeEnabled {
@@ -273,31 +457,33 @@ private struct WorkspaceToolbar: ToolbarContent {
 
         ToolbarItemGroup(placement: .automatic) {
             Button("Undo", systemImage: "arrow.uturn.backward") {
-                state.undo()
+                if textEditorIsActive { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) }
+                else { state.undo() }
             }
-                .disabled(!state.canUndo)
-                .help(state.undoDisabledReason ?? "Undo the last document command")
+                .disabled(!textEditorIsActive && !state.canUndo)
+                .help(textEditorIsActive ? "Undo native text editing" : state.undoDisabledReason ?? "Undo the last document command")
                 .accessibilityIdentifier("toolbar.undo")
-                .accessibilityValue(state.nextUndoLabel ?? "Unavailable")
+                .accessibilityValue(textEditorIsActive ? "Text editing" : state.nextUndoLabel ?? "Unavailable")
                 .accessibilityHint(state.undoDisabledReason ?? "Undo the last committed document command")
 
             Button("Redo", systemImage: "arrow.uturn.forward") {
-                state.redo()
+                if textEditorIsActive { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }
+                else { state.redo() }
             }
-                .disabled(!state.canRedo)
-                .help(state.redoDisabledReason ?? "Redo the last undone document command")
+                .disabled(!textEditorIsActive && !state.canRedo)
+                .help(textEditorIsActive ? "Redo native text editing" : state.redoDisabledReason ?? "Redo the last undone document command")
                 .accessibilityIdentifier("toolbar.redo")
-                .accessibilityValue(state.nextRedoLabel ?? "Unavailable")
+                .accessibilityValue(textEditorIsActive ? "Text editing" : state.nextRedoLabel ?? "Unavailable")
                 .accessibilityHint(state.redoDisabledReason ?? "Redo the last undone document command")
         }
 
         ToolbarItem(placement: .primaryAction) {
             Button {
-                state.openPreview()
+                state.openBrowserPreview()
             } label: {
                 Label("Preview", systemImage: "play.fill")
             }
-            .help("Open a local snapshot preview")
+            .help("Build the website and open it locally in Safari")
             .accessibilityIdentifier("toolbar.preview")
         }
     }
@@ -312,6 +498,7 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     let focus: FocusState<ShellFocus?>.Binding
     let focusValue: (Tab) -> ShellFocus
     @ScaledMetric(relativeTo: .caption) private var labelSize: CGFloat = 12
+    @Environment(\.workspaceKeyboardFocusVisible) private var keyboardFocusVisible
 
     var body: some View {
         GeometryReader { geometry in
@@ -349,27 +536,19 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
     }
 
     private func overflowMenu(fullWidth: Bool) -> some View {
-        Menu {
-            ForEach(tabs) { tab in
-                Button {
-                    selection = tab
-                    focus.wrappedValue = focusValue(tab)
-                } label: {
-                    if selection == tab {
-                        Label(title(tab), systemImage: "checkmark")
-                    } else {
-                        Text(title(tab))
-                    }
-                }
-            }
-        } label: {
-            HStack {
-                if fullWidth { Text(title(selection)).font(.system(size: labelSize, weight: .semibold)).lineLimit(1) }
-                Image(systemName: "ellipsis.circle")
-            }.frame(maxWidth: .infinity, minHeight: 24)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        let overflowFocus: ShellFocus = identifierPrefix.hasPrefix("navigator") ? .navigatorOverflow : .inspectorOverflow
+        return NativeShellTabOverflow(
+            choices: tabs.map { ($0.rawValue, title($0)) }, selected: selection.rawValue,
+            selectedTitle: title(selection), fullWidth: fullWidth,
+            fontSize: labelSize,
+            identifier: identifierPrefix + ".overflow", keyboardFocusVisible: keyboardFocusVisible,
+            wantsFocus: focus.wrappedValue == overflowFocus,
+            onFocus: { focus.wrappedValue = overflowFocus },
+            onSelect: { rawValue in
+                guard let tab = tabs.first(where: { $0.rawValue == rawValue }) else { return }
+                selection = tab
+                focus.wrappedValue = focusValue(tab)
+            })
         .frame(height: 28)
         .contentShape(Rectangle())
         .layoutPriority(1)
@@ -402,10 +581,118 @@ private struct ShellTabBar<Tab: CaseIterable & Identifiable & RawRepresentable &
         .buttonStyle(.plain)
         .modifier(SiteForgeRowSurface(selected: selection == tab))
         .focusable()
+        // Keep native keyboard ownership; pointer selection uses only the
+        // selected segment surface, not a second persistent outer ring.
+        .focusEffectDisabled(!keyboardFocusVisible)
         .focused(focus, equals: focusValue(tab))
         .accessibilityIdentifier("\(identifierPrefix).\(tab.rawValue)")
         .accessibilityHint(accessibilityDescription(tab) ?? "")
         .accessibilityAddTraits(selection == tab ? .isSelected : [])
+    }
+}
+
+/// A real native pull-down menu keeps the overflow affordance in AppKit's key
+/// view loop and exposes a focused AX element, unlike SwiftUI's KeyViewProxy.
+private struct NativeShellTabOverflow: NSViewRepresentable {
+    let choices: [(String, String)]
+    let selected: String
+    let selectedTitle: String
+    let fullWidth: Bool
+    let fontSize: CGFloat
+    let identifier: String
+    let keyboardFocusVisible: Bool
+    let wantsFocus: Bool
+    let onFocus: () -> Void
+    let onSelect: (String) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> ShellTabOverflowPopUpButton {
+        let button = ShellTabOverflowPopUpButton(frame: .zero, pullsDown: true)
+        button.isBordered = false
+        button.controlSize = .small
+        button.setAccessibilityLabel("Show all tabs")
+        button.onFocus = { [weak coordinator = context.coordinator] in
+            guard let coordinator, !coordinator.adoptingFocus else { return }
+            coordinator.onFocus?()
+        }
+        return button
+    }
+
+    func updateNSView(_ button: ShellTabOverflowPopUpButton, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.onFocus = onFocus
+        coordinator.onSelect = onSelect
+        button.setAccessibilityIdentifier(identifier)
+        button.setAccessibilityValue(selectedTitle)
+        button.focusRingType = keyboardFocusVisible ? .default : .none
+        let signature = choices.map { $0.0 + ":" + $0.1 }.joined(separator: "|") + selected + String(fullWidth)
+        if coordinator.menuSignature != signature {
+            let menu = NSMenu(title: "Show all tabs")
+            menu.addItem(withTitle: fullWidth ? selectedTitle : "", action: nil, keyEquivalent: "")
+            for (value, title) in choices {
+                let item = NSMenuItem(title: title, action: #selector(Coordinator.choose(_:)), keyEquivalent: "")
+                item.target = coordinator
+                item.representedObject = value
+                item.state = value == selected ? .on : .off
+                menu.addItem(item)
+            }
+            button.menu = menu
+            coordinator.menuSignature = signature
+        }
+        button.updateDisplayedItem(title: selectedTitle, fullWidth: fullWidth, fontSize: fontSize)
+        button.setAccessibilityValue(selectedTitle)
+        (button.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
+        if wantsFocus, !coordinator.wasFocusRequested, let window = button.window, window.isKeyWindow {
+            coordinator.adoptingFocus = true
+            _ = window.makeFirstResponder(button)
+            coordinator.adoptingFocus = false
+        }
+        coordinator.wasFocusRequested = wantsFocus
+    }
+
+    static func dismantleNSView(_ view: ShellTabOverflowPopUpButton, coordinator: Coordinator) {
+        view.onFocus = nil
+        coordinator.onFocus = nil
+        coordinator.onSelect = nil
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        var menuSignature = ""
+        var adoptingFocus = false
+        var wasFocusRequested = false
+        var onFocus: (() -> Void)?
+        var onSelect: ((String) -> Void)?
+        @objc func choose(_ item: NSMenuItem) {
+            if let value = item.representedObject as? String { onSelect?(value) }
+        }
+    }
+}
+
+final class ShellTabOverflowPopUpButton: NSPopUpButton {
+    var onFocus: (() -> Void)?
+    func updateDisplayedItem(title: String, fullWidth: Bool, fontSize: CGFloat) {
+        // Pull-down buttons paint their first menu item, not NSButton.image.
+        // Setting only the latter leaves a real but completely invisible target.
+        guard let displayed = item(at: 0) else { return }
+        displayed.title = fullWidth ? title : ""
+        let icon = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
+        icon?.isTemplate = true
+        displayed.image = icon
+        imagePosition = fullWidth ? .imageTrailing : .imageOnly
+        font = .systemFont(ofSize: fontSize)
+        contentTintColor = .labelColor
+    }
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onFocus?() }
+        return accepted
+    }
+    override func mouseDown(with event: NSEvent) {
+        _ = window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
     }
 }
 
@@ -418,6 +705,16 @@ private struct NavigatorView: View {
             .disabled(!state.pageEditingIsAvailable).lineLimit(1)
             .accessibilityIdentifier("navigator.pages.new")
         if let page = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }) {
+            Button("Site & Page Settings…", systemImage: "globe") { state.presentWebsiteSettings() }
+                .disabled(state.websiteSettingsIdentity == nil).lineLimit(1)
+                .help("Edit website defaults, this page's browser title and description, and the favicon.")
+                .accessibilityIdentifier("navigator.pages.siteSettings")
+            Button("Page Background…", systemImage: "paintpalette") { state.revealPageBackground(pageID: page.id) }
+                .disabled(!state.pageEditingIsAvailable || state.pageBackgroundUnavailableReason != nil)
+                .lineLimit(1)
+                .help(state.pageBackgroundUnavailableReason ?? "Edit this page's solid, gradient or token background in Design.")
+                .accessibilityValue(state.pageBackgroundSummary)
+                .accessibilityIdentifier("navigator.pages.background")
             Menu("Page Actions") { PageActionButtons(state: state, page: page) }
                 .disabled(!state.pageEditingIsAvailable).lineLimit(1)
                 .accessibilityIdentifier("navigator.pages.actions")
@@ -860,6 +1157,10 @@ private struct PageStructureInspectorView: View {
     @State private var validation: String?
     private var role: PageFlowRole? { CanonicalPageFlow.role(node) }
     private var navigationRole: Bool { role == .header || role == .footer }
+    private var computedHeight: Double? {
+        if case .computed(let value, _) = state.geometryInspectorValue(for: .height) { return value }
+        return nil
+    }
     private var bodyPeers: [DocumentNode] {
         guard let page = state.pages.first(where: { $0.id == state.effectiveSelectedPageID }),
               case .node(let parentID) = node.parent, let parent = page.nodes.first(where: { $0.id == parentID }) else { return [] }
@@ -882,15 +1183,19 @@ private struct PageStructureInspectorView: View {
                     Text(state.resolvedSelectedGeometrySummary.map { "Resolved geometry: " + $0 }
                          ?? "No current resolved geometry is available.")
                         .font(.caption).fixedSize(horizontal: false, vertical: true)
-                        .help("Height is authored intent. Stack/Grid owners can fit the computed height without rewriting the saved value.")
+                        .help("Fixed height is authored intent. Fill/Hug height is computed without rewriting the saved fallback.")
                         .accessibilityIdentifier("inspector.flow.resolved")
                     LabeledContent("Height") {
-                    TextField("Height", text: $height).onSubmit { number(height, isPadding: false) }
+                    TextField("Height", text: Binding(get: {
+                        computedHeight.map { GeometryInspectorNumberParser.format($0) } ?? height
+                    }, set: { height = $0 })).onSubmit { number(height, isPadding: false) }
                         .focusedValue(\.siteforgeNativeTextEditor, true)
+                        .disabled(computedHeight != nil)
                         .accessibilityLabel("\(role?.rawValue.capitalized ?? "Section") height")
                         .accessibilityIdentifier("inspector.flow.height")
                     }
-                    Text(state.geometryInspectorResponsiveSource(for: .height) ?? "Desktop · authored/defaulted height")
+                    Text(computedHeight != nil ? "Computed sizing. Use Geometry below for an explicit breakpoint override, or choose Fixed sizing at Desktop."
+                         : state.geometryInspectorResponsiveSource(for: .height) ?? "Desktop · authored/defaulted height")
                         .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("inspector.flow.height.provenance")
                     LabeledContent("Padding") {
                     TextField("Content Padding", text: $padding).onSubmit { number(padding, isPadding: true) }
@@ -902,7 +1207,8 @@ private struct PageStructureInspectorView: View {
                         Text("Design padding overrides layout padding. Edit the existing Design control to change it.").font(.caption)
                     }
                     HStack {
-                        Button("Apply Height") { number(height, isPadding: false) }.accessibilityIdentifier("inspector.flow.height.apply")
+                        Button("Apply Height") { number(height, isPadding: false) }
+                            .disabled(computedHeight != nil).accessibilityIdentifier("inspector.flow.height.apply")
                         Button("Cancel", action: resetDrafts).accessibilityIdentifier("inspector.flow.cancel")
                     }
                     Button("Apply Padding") { number(padding, isPadding: true) }
@@ -926,7 +1232,8 @@ private struct PageStructureInspectorView: View {
                         Text("Desktop/Tablet show page links. Mobile uses a keyboard-accessible expandable menu when enabled and links exist. Test interaction in Preview.")
                             .font(.caption).fixedSize(horizontal: false, vertical: true)
                         Picker("Navigation Alignment", selection: Binding(get: {
-                            node.insertionStringProperty(CanonicalPageFlow.alignmentKey) ?? "start"
+                            state.pageStructureNavigation?.alignment
+                                ?? CanonicalPageChrome.navigationAlignment(surface: node, settings: node)
                         }, set: { value in if let alignment = ContainerLayoutAlignment(rawValue: value) { commit(.alignment(node.id, alignment)) } })) {
                             ForEach(ContainerLayoutAlignment.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0.rawValue) }
                         }.accessibilityIdentifier("inspector.navigation.alignment")
@@ -1001,12 +1308,22 @@ private struct PageChromeContentsControls: View {
     let commit: (PageStructureEdit) -> Void
     @State private var titleDraft = ""
     @State private var gapDraft = "24"
+    @State private var navigationGapDraft = "16"
+    @State private var navigationGapScope: ResponsiveBreakpoint = .desktop
     @State private var layoutValidation: String?
     @State private var customizationExpanded = false
     private var page: DocumentPage? { state.pages.first { $0.id == state.effectiveSelectedPageID } }
     private func referenced(_ key: String) -> DocumentNode? {
         guard let id = CanonicalPageChrome.reference(key, on: owner) else { return nil }
         return page?.nodes.first { $0.id == id }
+    }
+    private func contentImages(_ content: DocumentNode) -> [DocumentNode] {
+        guard let page else { return [] }
+        let children = Set(content.childIDs)
+        let nodes = Dictionary(uniqueKeysWithValues: page.nodes.lazy.filter {
+            $0.kind == .image && children.contains($0.id)
+        }.map { ($0.id, $0) })
+        return content.childIDs.compactMap { nodes[$0] }
     }
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
@@ -1022,9 +1339,68 @@ private struct PageChromeContentsControls: View {
                         .accessibilityIdentifier("inspector.navigation.title.apply")
                     Button("Cancel") { titleDraft = CanonicalPageChrome.titleText(title, in: state.documentSession.document) }
                 }
-                Text(title.insertionProperty("content.text")?.origin == .authored ? "Authored title" : "Defaulted from Home page")
+                Text(CanonicalPageChrome.resolvedTitle(title, in: state.documentSession.document).provenance)
                     .font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("inspector.navigation.title.provenance")
+                if let navigation = referenced(CanonicalPageChrome.navigationKey) {
+                    Divider()
+                    let breakpoint = state.viewportPreset.responsiveBreakpoint
+                    let resolved = ResponsiveContainerLayoutResolver.value(for: .gap, node: navigation,
+                        breakpoint: breakpoint, viewportWidth: state.viewportState.contentBounds.size.width)
+                    let fluidBase = breakpoint == .desktop && resolved?.2 == .fluid
+                    LabeledContent("Inline Link Gap") {
+                        TextField("Inline link gap", text: $navigationGapDraft)
+                            .focusedValue(\.siteforgeNativeTextEditor, true)
+                            .onSubmit { applyNavigationGap() }
+                            .onExitCommand { resetNavigationGapDraft(); layoutValidation = nil }
+                            .disabled(fluidBase)
+                            .accessibilityLabel("Navigation inline link gap")
+                            .accessibilityIdentifier("inspector.navigation.linkGap")
+                    }
+                    HStack {
+                        Button("Apply Gap", action: applyNavigationGap).disabled(fluidBase)
+                            .accessibilityIdentifier("inspector.navigation.linkGap.apply")
+                        Button("Cancel Gap") { resetNavigationGapDraft(); layoutValidation = nil }
+                            .accessibilityIdentifier("inspector.navigation.linkGap.cancel")
+                    }
+                    HStack {
+                        Button(breakpoint == .desktop ? "Reset Gap" : "Reset Override") {
+                            commit(.navigationGap(owner.id, nil, navigationGapScope))
+                        }.disabled(fluidBase)
+                            .accessibilityIdentifier("inspector.navigation.linkGap.reset")
+                    }
+                    Text(breakpoint == .desktop && resolved?.2 == .baseDesktop
+                         ? "Desktop · \(resolved?.1.rawValue ?? "defaulted") inline gap"
+                         : resolved?.2.label ?? "Default inline gap: 16 points")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("inspector.navigation.linkGap.provenance")
+                    if fluidBase {
+                        Text("Fluid gap is managed in Layout. Change that value there; explicit device overrides are retained.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("Inline links share this gap, bounded to the available width. The native mobile menu keeps its standard spacing.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                let images = contentImages(content)
+                if !images.isEmpty {
+                    Divider()
+                    Text("Images / Logos").font(.headline)
+                    ForEach(images) { image in
+                        Toggle("Show \(image.name)", isOn: Binding(get: { !image.selectionBooleanProperty("hidden") },
+                            set: { commit(.showContentImage(owner.id, image.id, $0)) }))
+                            .lineLimit(1).help(image.name)
+                            .disabled(image.selectionBooleanProperty("locked"))
+                            .accessibilityHint("Base visibility for this actual Contents image. Breakpoint visibility overrides are preserved.")
+                            .accessibilityIdentifier("inspector.navigation.image.visible." + image.id.description)
+                    }
+                    Text("Base image visibility; device overrides remain unchanged. Assets and alt text use the existing Image Inspector.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("To add a logo, select Contents and insert an Image using the existing Image tools.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Select Contents") { state.selectLayer(content.id) }
+                    .accessibilityIdentifier("inspector.navigation.selectContents")
                 DisclosureGroup("Customize Contents", isExpanded: $customizationExpanded) {
                     Picker("Direction", selection: Binding(get: { content.insertionStringProperty("layout.axis") ?? "horizontal" },
                         set: { value in if let axis = ContainerLayoutAxis(rawValue: value) { layout(content, axis: axis) } })) {
@@ -1044,13 +1420,17 @@ private struct PageChromeContentsControls: View {
                         .accessibilityIdentifier("inspector.navigation.content.reset")
                     Text(CanonicalPageChrome.isCustom(owner) ? "Custom content layout" : "Flexible navigation width · editable content layout")
                         .font(.caption).accessibilityIdentifier("inspector.navigation.content.provenance")
-                    if let layoutValidation {
-                        Text(layoutValidation).font(.caption).foregroundStyle(.red)
-                            .accessibilityIdentifier("inspector.navigation.content.validation")
-                    }
                 }.disclosureGroupStyle(SiteForgeInspectorDisclosureStyle(identifier: "inspector.navigation.customize"))
+                if let layoutValidation {
+                    Text(layoutValidation).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("inspector.navigation.content.validation")
+                }
                 if let page {
                     Text("Included Pages").font(.headline)
+                    Button("Include All Pages") { commit(.includeAllPages(owner.id)) }
+                        .help("Includes normal pages in this Header or Footer only. Existing labels and order are preserved. Undo reverses the whole change.")
+                        .accessibilityIdentifier("inspector.navigation.includeAll")
                     ForEach(state.pages.filter { $0.role != .notFound && $0.role != .componentDefinition }) { destination in
                         Toggle(destination.name, isOn: Binding(get: {
                             CanonicalPageChrome.links(owner: owner, page: page).contains {
@@ -1075,12 +1455,31 @@ private struct PageChromeContentsControls: View {
         }.onAppear(perform: resetDrafts)
             .onChange(of: owner) { _, _ in resetDrafts() }
             .onChange(of: state.componentTextInspectorKey) { _, _ in resetDrafts() }
+            .onChange(of: state.viewportPreset) { _, _ in resetDrafts() }
             .onExitCommand(perform: resetDrafts)
     }
     private func resetDrafts() {
         titleDraft = referenced(CanonicalPageChrome.titleKey).map { CanonicalPageChrome.titleText($0, in: state.documentSession.document) } ?? ""
         gapDraft = GeometryInspectorNumberParser.format(referenced(CanonicalPageChrome.contentKey)?.insertionNumberProperty("layout.gap") ?? 24)
+        resetNavigationGapDraft()
         layoutValidation = nil
+    }
+    private func resetNavigationGapDraft() {
+        navigationGapScope = state.viewportPreset.responsiveBreakpoint
+        if let navigation = referenced(CanonicalPageChrome.navigationKey) {
+            navigationGapDraft = GeometryInspectorNumberParser.format(CanonicalPageChrome.navigationGap(
+                surface: navigation, settings: owner, breakpoint: navigationGapScope,
+                width: state.viewportState.contentBounds.size.width))
+        }
+    }
+    private func applyNavigationGap() {
+        guard case .success(let value) = GeometryInspectorNumberParser.parse(navigationGapDraft),
+              (0...10_000).contains(value) else {
+            layoutValidation = "Enter a complete inline gap from 0 to 10,000 points. Committed navigation is unchanged."
+            return
+        }
+        layoutValidation = nil
+        commit(.navigationGap(owner.id, value, navigationGapScope))
     }
     private func layout(_ content: DocumentNode, axis: ContainerLayoutAxis? = nil, alignment: ContainerLayoutAlignment? = nil) {
         guard case .success(let gap) = GeometryInspectorNumberParser.parse(gapDraft), (0...10_000).contains(gap) else {
@@ -1216,6 +1615,7 @@ private struct OrganizedComponentInstanceInspectorView: View {
     @State private var query = ""
     @State private var conflictsOnly = false
     @State private var navigationProperty: ComponentOverridePropertyIdentity?
+    @State private var resetAllIdentity: DesignInspectorOperationIdentity?
     @FocusState private var focusedProperty: ComponentOverridePropertyIdentity?
     private var discovery: ComponentPropertyDiscovery.Result {
         ComponentPropertyDiscovery.project(state.componentOrganizationEntries, query: query,
@@ -1228,7 +1628,9 @@ private struct OrganizedComponentInstanceInspectorView: View {
         return result
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+        let sourceContext = state.responsiveInspectorEditContext
+        return VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+            if !state.componentOrganizationEntries.isEmpty {
             TextField("Search component properties", text: Binding(get: { query }, set: { query = String($0.prefix(256)) }))
                 .accessibilityLabel("Search component properties by name, type, group or provenance")
                 .accessibilityIdentifier("component.discovery.search")
@@ -1266,7 +1668,7 @@ private struct OrganizedComponentInstanceInspectorView: View {
                     VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
                         ForEach(discovery.entries.filter { $0.group == group }) { entry in
                             field(entry)
-                                .id(state.componentTextInspectorKey + ":" + entry.id.stableDescription)
+                                .id(fieldIdentity(entry))
                                 .disabled(!state.componentTextEditingAvailable)
                                 .id(entry.id).focusable().focused($focusedProperty, equals: entry.id)
                                 .accessibilityElement(children: .contain)
@@ -1276,6 +1678,15 @@ private struct OrganizedComponentInstanceInspectorView: View {
                                         reveal(discovery.neighbor(of: entry.id, offset: direction == .up ? -1 : 1), reader: reader)
                                     }
                                 }
+                            Button("Edit Property Source…") {
+                                _ = state.revealComponentPropertySource(instanceID: instance.id, property: entry.id,
+                                    expectedContext: sourceContext)
+                            }
+                            .controlSize(.small)
+                            .accessibilityLabel("Edit shared definition source for " + entry.label)
+                            .accessibilityHint("Selects the existing source layer. Definition changes affect inherited values; Return to Instance preserves this instance's overrides.")
+                            .accessibilityIdentifier("component.property.source." + entry.id.stableDescription)
+                            .disabled(state.componentTextDraftIdentity == nil)
                         }
                     }
                 } label: {
@@ -1284,26 +1695,55 @@ private struct OrganizedComponentInstanceInspectorView: View {
                     .accessibilityLabel(group ?? "Ungrouped Properties")
                     .accessibilityIdentifier("component.organization.instance.group." + (group.map { "named." + $0 } ?? "default"))
             }
+            }
             ComponentOverrideRecoveryView(state: state, instance: instance)
                 .id(state.componentTextInspectorKey)
                 .disabled(!state.componentTextEditingAvailable)
-            if groups.isEmpty { Text("No exposed properties. Edit the definition to expose a supported property.").font(.caption) }
-            Text("Reset All affects the entire instance, including filtered-out properties and retained conflicts; it is not limited to \(discovery.entries.count) matching rows. It reveals available definition defaults. Undo restores exact values.")
+            if state.componentOrganizationEntries.isEmpty {
+                Text("No exposed properties. Edit the definition to expose text, visibility, Image Fit, image or link controls.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("component.properties.empty")
+                if let id = CanonicalComponentReference.definitionID(for: instance),
+                   state.componentDefinitions.contains(where: { $0.id == id }) {
+                    Button("Expose Properties in Definition") { state.editComponentDefinition(id) }
+                        .accessibilityIdentifier("component.properties.expose")
+                }
+            }
+            Text("Reset All removes this instance's overrides, including filtered-out values. It inherits current definition defaults; Undo restores exact values.")
                 .font(.caption).fixedSize(horizontal: false, vertical: true)
             Button("Reset All Component Overrides") {
-                if let identity = state.componentTextDraftIdentity { state.commitComponentText(.resetAllOverrides(instance.id), identity: identity) }
+                if let identity = state.componentTextDraftIdentity {
+                    if state.componentOverrideConflicts.isEmpty {
+                        state.commitComponentText(.resetAllOverrides(instance.id), identity: identity)
+                    } else { resetAllIdentity = identity }
+                }
             }.disabled(!state.componentTextEditingAvailable || !instance.properties.contains { $0.key.rawValue.hasPrefix(CanonicalComponentReference.namespace) && $0.key.rawValue != CanonicalComponentReference.key })
                 .accessibilityIdentifier("component.text.resetAll")
             Button("Reset All Visibility Overrides") {
                 if let identity = state.componentTextDraftIdentity { state.commitComponentVisibility(.resetAllVisibilityOverrides(instance.id), identity: identity) }
             }.disabled(!state.componentTextEditingAvailable || CanonicalComponentVisibility.overrides(on: instance).isEmpty)
                 .accessibilityIdentifier("component.visibility.resetAll")
+            if !state.componentSlotProperties.isEmpty {
             Text("Slots inherit definition fallback; supplied content remains unavailable.").font(.caption)
                 .accessibilityIdentifier("component.slot.supply.unavailable")
+            }
             ComponentFeedbackText(announcement: state.componentAnnouncement).font(.caption)
                 .accessibilityLabel("Component property status").accessibilityValue(state.componentAnnouncement)
                 .accessibilityIdentifier("component.organization.status")
-        }.onChange(of: discovery.entries.map(\.id)) { _, ids in
+        }.confirmationDialog("Reset every component override, including retained conflicts?",
+            isPresented: Binding(get: { resetAllIdentity != nil }, set: { if !$0 { resetAllIdentity = nil } })) {
+                Button("Reset All Overrides", role: .destructive) {
+                    if let identity = resetAllIdentity {
+                        state.commitComponentText(.resetAllOverrides(instance.id), identity: identity)
+                    }
+                    resetAllIdentity = nil
+                }.accessibilityIdentifier("component.properties.resetAll.confirm")
+                Button("Cancel", role: .cancel) { resetAllIdentity = nil }
+                    .accessibilityIdentifier("component.properties.resetAll.cancel")
+            } message: {
+                Text("Retained values will be removed, not retargeted. Undo restores exact values and identities.")
+            }
+        .onChange(of: discovery.entries.map(\.id)) { _, ids in
             if let focusedProperty, !ids.contains(focusedProperty) { self.focusedProperty = nil }
             if let navigationProperty, !ids.contains(navigationProperty) { self.navigationProperty = nil }
         }.onChange(of: focusedProperty) { _, value in
@@ -1315,6 +1755,12 @@ private struct OrganizedComponentInstanceInspectorView: View {
         reader.scrollTo(id, anchor: .center)
         navigationProperty = id
         focusedProperty = id
+    }
+    private func fieldIdentity(_ entry: CanonicalComponentOrganization.Entry) -> String {
+        // Text commits refresh their adopted command identity in place. Other
+        // existing draft editors keep their established revision reset policy.
+        if case .text = entry.id { return instance.id.description + ":" + entry.id.stableDescription }
+        return state.componentTextInspectorKey + ":" + entry.id.stableDescription
     }
     @ViewBuilder private func field(_ entry: CanonicalComponentOrganization.Entry) -> some View {
         switch entry.id {
@@ -1365,7 +1811,7 @@ private struct ComponentRetainedOverrideValueView: View {
         case .text(let text): text
         case .visibility(let visible): visible ? "Visible" : "Hidden"
         case .choice(let mode): mode.rawValue.capitalized
-        case .media(let id): state.imageAssets.first { $0.id == id }?.displayName ?? "Missing image asset · reference retained"
+        case .media(let id): state.documentSession.document.imageAssets.first { $0.id == id }?.displayName ?? "Missing image asset · reference retained"
         case .action(let target):
             switch target {
             case .none: "None"
@@ -1383,7 +1829,7 @@ private struct ComponentRetainedOverrideValueView: View {
             Text(text).textSelection(.enabled)
         case .visibility(let visible): Text(visible ? "Retained value: Visible" : "Retained value: Hidden")
         case .choice(let mode): Text("Retained fit: " + mode.rawValue.capitalized)
-        case .media(let id): Text(state.imageAssets.first { $0.id == id }?.displayName ?? "Missing image asset · reference retained")
+        case .media(let id): Text(state.documentSession.document.imageAssets.first { $0.id == id }?.displayName ?? "Missing image asset · reference retained")
         case .action(let target):
             switch target {
             case .none: Text("Retained destination: None")
@@ -1501,12 +1947,14 @@ private struct ComponentOrganizedChoiceMediaFields: View {
                 let authored = CanonicalComponentMedia.overrides(on: instance)[id]
                 Picker(p.label, selection: Binding(get: { authored ?? p.defaultValue }, set: { value in
                     if let identity = state.componentTextDraftIdentity { state.commitComponentMedia(.setMediaOverride(instanceID: instance.id, propertyID: id, assetID: value), identity: identity) }
-                })) { ForEach(state.imageAssets) { Text($0.displayName).tag($0.id) } }
-                    .disabled(state.imageAssets.isEmpty)
+                })) { ForEach(state.imageAssetsForReuse(search: "")) { Text($0.displayName).tag($0.id) } }
+                    .disabled(state.documentSession.document.imageAssets.isEmpty)
                     .accessibilityLabel(p.label + " component image")
-                    .accessibilityValue(state.imageAssets.first { $0.id == (authored ?? p.defaultValue) }?.displayName ?? "Missing image asset")
+                    .accessibilityValue(state.documentSession.document.imageAssets.first { $0.id == (authored ?? p.defaultValue) }?.displayName ?? "Missing image asset")
                     .accessibilityIdentifier("component.media.value.\(id)")
                 Text(authored == nil ? "Inherited · definition default" : "Authored · this instance").font(.caption)
+                ImageUseActionsView(state: state, target: .componentMedia(instanceID: instance.id, propertyID: id),
+                    currentAssetID: authored ?? p.defaultValue, identifier: "component.media.\(id)")
                 Button("Reset Override") {
                     if let identity = state.componentTextDraftIdentity { state.commitComponentMedia(.resetMediaOverride(instanceID: instance.id, propertyID: id), identity: identity) }
                 }.disabled(authored == nil).accessibilityIdentifier("component.media.reset.\(id)")
@@ -1523,7 +1971,7 @@ private struct ComponentTextInspectorView: View {
             Text("Component Text").font(.headline)
             if let node = state.selectedDefinitionText {
                 ComponentTextDefinitionFields(state: state, node: node)
-                    .disabled(!state.componentTextEditingAvailable)
+                    .disabled(!state.componentDefinitionTextDraftingAvailable)
             } else if let instance = state.selectedComponent {
                 let properties = state.componentTextProperties
                 let overrides = CanonicalComponentText.overrides(on: instance)
@@ -1825,6 +2273,107 @@ private struct ComponentChoiceDefinitionFields: View {
 
 /// SF-0902: media overrides select an existing project AssetID. The picker
 /// never stores a path or resource bytes in the component instance.
+private struct ImageUseActionsView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let target: ImageAssetUseRequest.Target
+    let currentAssetID: AssetID?
+    let identifier: String
+    @State private var choosing: ImageAssetUseRequest?
+    @State private var showingSharedStatus = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+            Button("Choose from Assets…") {
+                if state.prepareForWorkspaceAction(.context) { choosing = state.imageAssetUseRequest(target) }
+            }
+                .accessibilityIdentifier(identifier + ".choose")
+            Button("Import Image…") {
+                guard state.prepareForWorkspaceAction(.context) else { return }
+                if let request = state.imageAssetUseRequest(target) { state.importImageForUse(request) }
+            }.accessibilityIdentifier(identifier + ".import")
+            if let currentAssetID, state.documentSession.document.imageAssets.contains(where: { $0.id == currentAssetID }) {
+                Text(state.imageAssetUsageSummary(currentAssetID)).font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier(identifier + ".references")
+                Menu("Shared Asset Actions") {
+                    Button("Reveal Usage") { state.revealImageUsage(currentAssetID) }
+                    Button("Replace Asset Everywhere…") { showingSharedStatus = true; state.replaceImageAsset(currentAssetID) }
+                }.accessibilityIdentifier(identifier + ".sharedActions")
+            } else if currentAssetID != nil {
+                Text("Asset definition is missing. Choose or import a replacement for these selected uses; the original reference stays unchanged until you commit.")
+                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(identifier + ".missingDefinition")
+            }
+            Text(targetScope).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if showingSharedStatus {
+                Text(state.lastAssetAnnouncement).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(identifier + ".assetStatus")
+            }
+            if state.isImportingImages { ProgressView("Importing image…").controlSize(.small) }
+        }.disabled(state.isImportingImages || state.imageAssetUseRequest(target) == nil)
+            .sheet(item: $choosing) { request in
+                ImageUseAssetChooser(state: state, request: request, dismiss: { choosing = nil })
+            }
+    }
+    private var targetScope: String {
+        if case .componentMedia = target { return "Change this instance only. Reset Override restores the definition image." }
+        if state.editingComponentID != nil { return "Definition change: inherited instances update; authored instance overrides stay independent." }
+        return "Change selected uses only. Shared Asset Actions affects every reference."
+    }
+}
+
+private struct ImageUseAssetChooser: View {
+    @ObservedObject var state: WorkspaceShellState
+    let request: ImageAssetUseRequest
+    let dismiss: () -> Void
+    @State private var search = ""
+    @State private var message = ""
+    private var matches: [ImageAsset] {
+        state.imageAssetsForReuse(search: search)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+            Text("Choose Image for Selected Use").font(.title2)
+            Text(request.scopeDescription).font(.caption).fixedSize(horizontal: false, vertical: true)
+            TextField("Search project images", text: $search).textFieldStyle(.roundedBorder)
+                .focusedValue(\.siteforgeNativeTextEditor, true).accessibilityIdentifier("asset.use.search")
+            if matches.isEmpty {
+                Text(state.documentSession.document.imageAssets.isEmpty ? "No images imported. Import a local raster image to use it here." : "No matching images. Clear the search or import another image.")
+                    .font(.caption).accessibilityIdentifier("asset.use.empty")
+            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+                    ForEach(matches) { asset in
+                        Button {
+                            if state.chooseImageAssetForUse(asset.id, request: request) { dismiss() }
+                            else { message = state.lastImageInspectorAnnouncement }
+                        } label: {
+                            HStack(spacing: SiteForgeVisualSystem.controlInset) {
+                            if let data = state.imageAssetThumbnail(asset.id), let image = NSImage(data: data) {
+                                Image(nsImage: image).resizable().scaledToFit().frame(width: 48, height: 36).accessibilityHidden(true)
+                            } else { Image(systemName: "photo").frame(width: 48, height: 36).accessibilityHidden(true) }
+                            VStack(alignment: .leading) {
+                                Text(asset.displayName).lineLimit(1)
+                                Text("\(asset.pixelWidth) × \(asset.pixelHeight) · \(state.imageAssetUsageCount(asset.id)) references")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }.accessibilityIdentifier("asset.use.choose." + asset.id.description)
+                    }
+                }
+            }.frame(height: 260)
+            if !message.isEmpty { Text(message).font(.caption).accessibilityIdentifier("asset.use.validation") }
+            HStack {
+                Button("Cancel", action: dismiss).keyboardShortcut(.cancelAction).accessibilityIdentifier("asset.use.cancel")
+                Spacer()
+                Button("Import Image…") {
+                    dismiss()
+                    Task { @MainActor in await Task.yield(); state.importImageForUse(request) }
+                }.accessibilityIdentifier("asset.use.import")
+            }
+        }.padding(SiteForgeVisualSystem.sectionSpacing).frame(width: 430)
+            .onExitCommand(perform: dismiss)
+    }
+}
+
 private struct ComponentMediaInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
 
@@ -1845,13 +2394,13 @@ private struct ComponentMediaInspectorView: View {
                                         propertyID: property.id, assetID: assetID), identity: identity)
                                 }
                             })) {
-                            ForEach(state.imageAssets) { asset in
+                            ForEach(state.imageAssetsForReuse(search: "")) { asset in
                                 Text(asset.displayName).tag(asset.id)
                             }
                         }
-                        .disabled(state.imageAssets.isEmpty)
+                        .disabled(state.documentSession.document.imageAssets.isEmpty)
                         .accessibilityLabel(property.label + " component image")
-                        .accessibilityValue(state.imageAssets.first(where: {
+                        .accessibilityValue(state.documentSession.document.imageAssets.first(where: {
                             $0.id == (overrides[property.id] ?? property.defaultValue)
                         })?.displayName ?? "Missing image asset")
                         .accessibilityHint(overrides[property.id] == nil
@@ -2001,7 +2550,7 @@ private struct ComponentActionDefinitionFields: View {
                 .onSubmit { apply() }
             Text("The default is this control’s existing Link Target. Edit it in Interactions.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Button("Edit Default Destination") { state.inspectorTab = .interactions }
+            Button("Edit Default Destination") { _ = state.selectInspectorTab(.interactions) }
                 .accessibilityHint("Uses the existing native Link Target editor for this definition control")
                 .accessibilityIdentifier("component.action.definition.editDefault")
             HStack {
@@ -2248,48 +2797,105 @@ private struct ComponentSlotFallbackFields: View {
 private struct ComponentTextDefinitionFields: View {
     @ObservedObject var state: WorkspaceShellState
     let node: DocumentNode
-    @State private var label: String
-    @State private var content: String
-    @State private var identity: DesignInspectorOperationIdentity?
+    @State private var draft: ComponentDefinitionTextDraft
     @State private var cancelled = false
+    @State private var validation = ""
+    private enum Field: Hashable { case name, content }
+    @FocusState private var focusedField: Field?
 
     init(state: WorkspaceShellState, node: DocumentNode) {
         self.state = state; self.node = node
-        _label = State(initialValue: CanonicalComponentText.property(on: node)?.label ?? "Text")
-        _content = State(initialValue: node.insertionStringProperty("content.text") ?? "")
-        _identity = State(initialValue: state.componentTextDraftIdentity)
+        let binding = CanonicalComponentText.property(on: node)
+        _draft = State(initialValue: .init(label: binding?.label ?? "Text", content: node.insertionStringProperty("content.text") ?? "",
+            bindingID: binding?.id, identity: state.componentTextDraftIdentity, selectionIDs: state.selectionState.orderedIDs))
     }
     private var exposed: ExposedComponentTextProperty? { CanonicalComponentText.property(on: node) }
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             Text(exposed == nil ? "Not exposed · plain text" : "Exposed · plain text · definition default")
                 .font(.caption).accessibilityIdentifier("component.text.definition.provenance")
+            Text("Shared definition default. Inherited instances update; authored instance text remains independent.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("Property name").font(.caption)
-            TextField("Property name", text: Binding(get: { label }, set: { label = $0; cancelled = false }))
+            TextField("Property name", text: Binding(get: { draft.label.value }, set: { draft.label.value = $0; cancelled = false }))
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
+                .focused($focusedField, equals: .name)
                 .accessibilityLabel("Component text property name")
+                .accessibilityValue(InspectorDraftAccessibility.value(draft: draft.label.isDirty ? draft.label.value : nil,
+                    committed: exposed?.label ?? "Text"))
                 .accessibilityIdentifier("component.text.definition.name")
             Text("Default text").font(.caption)
-            TextField("Default text", text: Binding(get: { content }, set: { content = $0; cancelled = false }), axis: .vertical).lineLimit(1...4)
+            TextField("Default text", text: Binding(get: { draft.content.value }, set: { draft.content.value = $0; cancelled = false }), axis: .vertical).lineLimit(1...4)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
+                .focused($focusedField, equals: .content)
                 .accessibilityLabel("Component default text")
+                .accessibilityValue(InspectorDraftAccessibility.value(draft: draft.content.isDirty ? draft.content.value : nil,
+                    committed: node.insertionStringProperty("content.text") ?? ""))
                 .accessibilityIdentifier("component.text.definition.default")
             HStack {
-                Button(exposed == nil ? "Expose Text" : "Apply") { commit() }
+                Button(exposed == nil ? "Expose Text" : "Apply") { commit(allowExpose: true) }
+                    .disabled(draft.identity == nil || (exposed != nil && !draft.isDirty))
                     .accessibilityIdentifier("component.text.definition.apply")
-                Button("Cancel") { cancel() }.accessibilityIdentifier("component.text.definition.cancel")
+                Button("Cancel") { cancel() }.disabled(!draft.isDirty && !draft.hasConflict)
+                    .accessibilityIdentifier("component.text.definition.cancel")
             }
             Button("Remove Text Property") {
-                if let identity { state.commitComponentText(.removeTextProperty(node.id), identity: identity) }
-            }.disabled(exposed == nil).accessibilityIdentifier("component.text.definition.remove")
+                guard let identity = draft.identity else { return }
+                if state.commitComponentText(.removeTextProperty(node.id), identity: identity) { cancel() }
+            }.disabled(exposed == nil || draft.identity == nil).accessibilityIdentifier("component.text.definition.remove")
             if cancelled { Text("Draft cancelled; committed text unchanged.").font(.caption) }
+            if !validation.isEmpty {
+                Text(validation).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("component.text.definition.validation")
+            }
         }
-        .onSubmit { commit() }
+        .onSubmit { commit(allowExpose: true) }
         .onExitCommand { cancel() }
+        .onChange(of: state.componentTextDraftIdentity) { _, _ in adopt() }
+        .onChange(of: node) { _, _ in adopt() }
+        .onChange(of: focusedField) { old, current in
+            guard old != nil, current == nil, draft.isDirty else { return }
+            let expected = draft
+            DispatchQueue.main.async {
+                guard focusedField == nil, draft == expected else { return }
+                commit()
+            }
+        }
+        .onReceive(state.editCommitRequests) { request in
+            guard request.isAccepted else { return }
+            commit()
+            if draft.isDirty || draft.hasConflict { request.reject() }
+        }
     }
-    private func commit() {
-        if let identity { state.commitComponentText(.exposeText(nodeID: node.id, label: label, defaultValue: content), identity: identity) }
+    private func commit(allowExpose: Bool = false) {
+        guard draft.isDirty || (allowExpose && exposed == nil) else { return }
+        guard exposed != nil || allowExpose else {
+            validation = "Choose Expose Text to create this property, or Cancel the draft before leaving."; return
+        }
+        guard let identity = draft.identity, !draft.hasConflict else {
+            validation = "The definition or binding changed. Your draft is retained; Cancel to load the current source."; return
+        }
+        if state.commitComponentText(.exposeText(nodeID: node.id, label: draft.label.value,
+            defaultValue: draft.content.value), identity: identity) {
+            let committed = state.selectedDefinitionText ?? node
+            let binding = CanonicalComponentText.property(on: committed)
+            draft = .init(label: binding?.label ?? "Text", content: committed.insertionStringProperty("content.text") ?? "",
+                bindingID: binding?.id, identity: state.componentTextDraftIdentity, selectionIDs: state.selectionState.orderedIDs)
+            validation = ""; cancelled = false
+        } else { validation = state.componentAnnouncement }
+    }
+    private func adopt() {
+        draft.adopt(label: exposed?.label ?? "Text", content: node.insertionStringProperty("content.text") ?? "",
+            bindingID: exposed?.id, identity: state.componentTextDraftIdentity, selectionIDs: state.selectionState.orderedIDs)
+        if draft.hasConflict { validation = "The definition or binding changed. Cancel to reload; the draft is retained." }
     }
     private func cancel() {
-        label = exposed?.label ?? "Text"; content = node.insertionStringProperty("content.text") ?? ""; cancelled = true
+        let committed = state.selectedDefinitionText ?? node
+        let binding = CanonicalComponentText.property(on: committed)
+        draft = .init(label: binding?.label ?? "Text", content: committed.insertionStringProperty("content.text") ?? "",
+            bindingID: binding?.id, identity: state.componentTextDraftIdentity, selectionIDs: state.selectionState.orderedIDs)
+        validation = ""; cancelled = true
+        state.clearWorkspaceActionNotice()
     }
 }
 
@@ -2298,37 +2904,89 @@ private struct ComponentTextInstanceFields: View {
     let instanceID: NodeID
     let property: ExposedComponentTextProperty
     let authored: String?
-    @State private var draft: String
-    @State private var identity: DesignInspectorOperationIdentity?
+    @State private var draft: ComponentInstanceTextDraft
+    @FocusState private var fieldFocused: Bool
     @State private var cancelled = false
+    @State private var validation = ""
     init(state: WorkspaceShellState, instanceID: NodeID, property: ExposedComponentTextProperty, authored: String?) {
         self.state = state; self.instanceID = instanceID; self.property = property; self.authored = authored
-        _draft = State(initialValue: authored ?? property.defaultValue)
-        _identity = State(initialValue: state.componentTextDraftIdentity)
+        _draft = State(initialValue: .init(committed: authored ?? property.defaultValue,
+            identity: state.componentTextDraftIdentity, selectionIDs: state.selectionState.orderedIDs))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
             Text(property.label).font(.headline).fixedSize(horizontal: false, vertical: true)
             Text(authored == nil ? "Inherited · definition default" : "Authored · this instance")
                 .font(.caption).accessibilityIdentifier("component.text.provenance.\(property.id)")
-            TextField(property.label, text: Binding(get: { draft }, set: { draft = $0; cancelled = false }), axis: .vertical).lineLimit(1...4)
+            TextField(property.label, text: Binding(get: { draft.value }, set: { draft.value = $0; cancelled = false; validation = "" }), axis: .vertical).lineLimit(1...4)
+                .focused($fieldFocused).focusedValue(\.siteforgeNativeTextEditor, true)
                 .accessibilityLabel(property.label + " component text")
                 .accessibilityIdentifier("component.text.value.\(property.id)")
                 .onSubmit { commit() }
             HStack {
-                Button("Apply") { commit() }.accessibilityIdentifier("component.text.apply.\(property.id)")
-                Button("Cancel") { cancel() }.accessibilityIdentifier("component.text.cancel.\(property.id)")
+                if draft.isDirty || draft.conflict != nil {
+                    Button("Apply") { commit() }.accessibilityIdentifier("component.text.apply.\(property.id)")
+                    Button("Cancel") { cancel() }.accessibilityIdentifier("component.text.cancel.\(property.id)")
+                }
                 Button("Reset") {
-                    if let identity { state.commitComponentText(.resetTextOverride(instanceID: instanceID, propertyID: property.id), identity: identity) }
+                    if let identity = state.componentTextDraftIdentity {
+                        // Reset is an explicit alternative to committing a draft;
+                        // any subsequent focus loss must remain mutation-neutral.
+                        cancel()
+                        state.commitComponentText(.resetTextOverride(instanceID: instanceID, propertyID: property.id), identity: identity)
+                    }
                 }.disabled(authored == nil).accessibilityIdentifier("component.text.reset.\(property.id)")
             }
             if cancelled { Text("Draft cancelled; committed text unchanged.").font(.caption) }
+            if !validation.isEmpty {
+                Text(validation).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("component.text.validation.\(property.id)")
+            }
         }.onExitCommand { cancel() }
+            .onReceive(state.editCommitRequests) { request in
+                guard request.isAccepted else { return }
+                commit()
+                if draft.isDirty || draft.conflict != nil { request.reject() }
+            }
+            .onChange(of: state.componentTextDraftIdentity) { _, _ in adopt() }
+            .onChange(of: authored ?? property.defaultValue) { _, _ in adopt() }
+            .onChange(of: fieldFocused) { wasFocused, focused in
+                if wasFocused && !focused && draft.isDirty {
+                    let expected = draft
+                    DispatchQueue.main.async {
+                        guard !fieldFocused, draft == expected else { return }
+                        commit()
+                    }
+                }
+            }
     }
     private func commit() {
-        if let identity { state.commitComponentText(.setTextOverride(instanceID: instanceID, propertyID: property.id, value: draft), identity: identity) }
+        guard draft.isDirty else { return }
+        guard let identity = draft.identity, draft.conflict == nil else {
+            validation = draft.conflict == nil ? "Wait for the current canvas, then retry. Your draft is retained."
+                : "The definition or editing context changed. Cancel to load the current value; your draft has not been committed."
+            return
+        }
+        if state.commitComponentText(.setTextOverride(instanceID: instanceID, propertyID: property.id, value: draft.value), identity: identity) {
+            // Mark the successful event clean before a possible blur event.
+            // Renderer adoption will provide the next usable command identity.
+            draft.adopt(committed: draft.value, identity: state.componentTextDraftIdentity, selectionIDs: state.selectionState.orderedIDs)
+            validation = ""
+        } else {
+            validation = state.componentAnnouncement
+        }
     }
-    private func cancel() { draft = authored ?? property.defaultValue; cancelled = true }
+    private func adopt() {
+        draft.adopt(committed: authored ?? property.defaultValue, identity: state.componentTextDraftIdentity, selectionIDs: state.selectionState.orderedIDs)
+        if draft.conflict != nil {
+            validation = "The definition or editing context changed. Cancel to load the current value; your draft is retained."
+        }
+    }
+    private func cancel() {
+        draft.cancel(committed: authored ?? property.defaultValue, identity: state.componentTextDraftIdentity, selectionIDs: state.selectionState.orderedIDs)
+        state.clearWorkspaceActionNotice()
+        validation = ""; cancelled = true
+    }
 }
 
 private struct ComponentsNavigatorView: View {
@@ -2336,12 +2994,17 @@ private struct ComponentsNavigatorView: View {
     @State private var inspecting: ComponentDependencyRequest?
     @State private var deleting: PageID?
     @State private var renaming: ComponentRenameRequest?
+    @State private var creating: ComponentCreationRequest?
 
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
-            Button("Create from Selection", action: state.createComponent)
+            Button("Create Component…") {
+                if let node = state.selectedCanonicalNodes.first, let identity = state.componentTextDraftIdentity {
+                    creating = .init(nodeID: node.id, name: node.name, identity: identity)
+                }
+            }
                 .disabled(!state.canCreateComponent)
-                .help("Select one authored Frame, Section, Stack or Grid. Nested components are not supported.")
+                .help(state.componentCreationUnavailableReason ?? "Name this reusable component. Creation preserves the selected object's identity and is one undoable change.")
                 .accessibilityIdentifier("components.create")
             HStack {
                 TextField("Search Components", text: $state.componentSearchText)
@@ -2383,8 +3046,14 @@ private struct ComponentsNavigatorView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("components.search.status")
             if state.componentDefinitions.isEmpty {
-                Text("Turn a selected container into a reusable local component.")
+                Text(state.componentCreationUnavailableReason ?? "Create a named reusable component from the selected container.")
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("components.empty.guidance")
+                if !state.canCreateComponent {
+                    Button("Insert Frame to Start") { state.performDefaultInsertion(.frame, provenance: .menu) }
+                        .disabled(state.editingComponentID != nil || !state.insertionAvailability(.frame).isEnabled)
+                        .accessibilityIdentifier("components.empty.insertFrame")
+                }
             }
             ScrollViewReader { scroll in
                 ScrollView {
@@ -2439,6 +3108,9 @@ private struct ComponentsNavigatorView: View {
         .sheet(item: $renaming) { request in
             ComponentRenameView(state: state, request: request) { renaming = nil }
         }
+        .sheet(item: $creating) { request in
+            ComponentCreationView(state: state, request: request) { creating = nil }
+        }
         .sheet(item: $inspecting) { request in
             ComponentDependencyInspectorView(state: state, definitionID: request.id) { inspecting = nil }
         }
@@ -2477,7 +3149,10 @@ private struct ComponentsNavigatorView: View {
                         .accessibilityIdentifier("components.details." + definition.id.description)
                 }
                 HStack {
-                    Button("Rename…") { renaming = .init(id: definition.id, name: definition.name) }
+                    Button("Rename…") {
+                        guard state.prepareForWorkspaceAction(.context) else { return }
+                        renaming = .init(id: definition.id, name: definition.name, context: state.responsiveInspectorEditContext)
+                    }
                         .disabled(editingIsDisabled)
                         .accessibilityIdentifier("components.rename." + definition.id.description)
                     Button("Delete", role: .destructive) { deleting = definition.id }
@@ -2500,6 +3175,49 @@ private struct ComponentsNavigatorView: View {
 
 private struct ComponentDependencyRequest: Identifiable {
     let id: PageID
+}
+
+private struct ComponentCreationRequest: Identifiable {
+    let id = UUID()
+    let nodeID: NodeID
+    let name: String
+    let identity: DesignInspectorOperationIdentity
+}
+
+private struct ComponentCreationView: View {
+    @ObservedObject var state: WorkspaceShellState
+    let request: ComponentCreationRequest
+    let dismiss: () -> Void
+    @State private var name: String
+    @State private var message = ""
+    init(state: WorkspaceShellState, request: ComponentCreationRequest, dismiss: @escaping () -> Void) {
+        self.state = state; self.request = request; self.dismiss = dismiss
+        _name = State(initialValue: request.name)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+            Text("Create Component").font(.title2)
+            Text("The selected container becomes the first linked instance. Definition edits update inherited values; instance overrides stay independent.")
+                .font(.caption).fixedSize(horizontal: false, vertical: true)
+            TextField("Component name", text: $name)
+                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
+                .accessibilityIdentifier("components.create.name").onSubmit(apply)
+            if !message.isEmpty { Text(message).font(.caption).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("components.create.validation") }
+            HStack {
+                Button("Cancel", action: dismiss).keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("components.create.cancel")
+                Spacer()
+                Button("Create", action: apply).keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("components.create.apply")
+            }
+        }.padding(SiteForgeVisualSystem.sectionSpacing).frame(width: 400)
+            .onExitCommand(perform: dismiss)
+    }
+    private func apply() {
+        if state.createComponent(named: name, nodeID: request.nodeID, identity: request.identity) { dismiss() }
+        else { message = state.componentAnnouncement }
+    }
 }
 
 private struct ComponentDependencyInspectorView: View {
@@ -2577,7 +3295,7 @@ private struct ComponentDependencyInspectorView: View {
                                 Text(conflict.reason.explanation).font(.caption)
                                 if let usage = entry.usages.first(where: { $0.nodeID == conflict.instanceID }) {
                                     Button("Inspect Retained Override") {
-                                        state.revealComponentUsage(usage); state.inspectorTab = .content; dismiss()
+                                        state.revealComponentUsage(usage); _ = state.selectInspectorTab(.content); dismiss()
                                     }.accessibilityIdentifier("components.conflict.reveal." + conflict.id)
                                 }
                             }
@@ -2644,6 +3362,7 @@ private struct ComponentDependencyInspectorView: View {
 private struct ComponentRenameRequest: Identifiable {
     let id: PageID
     let name: String
+    let context: ResponsiveInspectorEditContext
 }
 
 private struct ComponentRenameView: View {
@@ -2665,7 +3384,8 @@ private struct ComponentRenameView: View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
             Text("Rename Component").font(.headline)
             TextField("Component name", text: $name)
-                .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
+                .textFieldStyle(.roundedBorder)
+                .focusedValue(\.siteforgeNativeTextEditor, focused ? true : nil)
                 .focused($focused)
                 .accessibilityIdentifier("components.rename.name")
                 .onSubmit(performRename)
@@ -2678,7 +3398,7 @@ private struct ComponentRenameView: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel", action: dismiss).keyboardShortcut(.cancelAction)
+                Button("Cancel", action: close).keyboardShortcut(.cancelAction)
                 Button("Rename", action: performRename).keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("components.rename.apply")
             }
@@ -2688,10 +3408,15 @@ private struct ComponentRenameView: View {
     }
 
     private func performRename() {
-        let revision = state.documentSession.document.revision
-        state.renameComponent(request.id, to: name)
-        if state.documentSession.document.revision != revision { dismiss() }
+        if state.renameComponent(request.id, to: name, expectedContext: request.context) { close() }
         else { message = state.componentAnnouncement }
+    }
+
+    private func close() {
+        // End this sheet's native edit context at the user-event boundary.
+        // A detached focused field must not keep main-window Undo in text mode.
+        focused = false
+        dismiss()
     }
 }
 
@@ -2764,6 +3489,9 @@ private struct AssetsNavigatorView: View {
                     if state.documentSession.document.imageAssets.isEmpty {
                         Button("Import Images…") { state.importImages() }
                             .accessibilityIdentifier("assets.empty.import")
+                    } else {
+                        Button("Clear Search and Filters") { state.clearImageAssetFilters() }
+                            .accessibilityIdentifier("assets.empty.clearFilters")
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2856,7 +3584,7 @@ private struct AssetRow: View {
                 DispatchQueue.main.async { renameFocused = true }
             }
             Button("Organize…", action: onOrganize)
-            Button("Replace…") { state.replaceImageAsset(asset.id) }
+            Button("Replace Asset Everywhere…") { state.replaceImageAsset(asset.id) }
             Button("Reveal Usage") { state.revealImageUsage(asset.id) }
             Divider()
             Button("Delete…", role: .destructive) { state.requestDeleteImageAsset(asset.id) }
@@ -3057,7 +3785,9 @@ private struct ElementCatalogRow: View {
                 Image(systemName: item.systemImage).frame(width: 16)
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.hairlineSpacing) {
                     Text(item.title)
-                    Text(item.keyboardPath).font(.caption2).foregroundStyle(.secondary)
+                    if item.keyboardPath != "No shortcut" {
+                        Text(item.keyboardPath).font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if case .unavailable = availability {
@@ -3187,11 +3917,13 @@ private struct NavigatorLayerRow: View {
                 state.selectLayer(target.id, modifier: modifier)
             } label: {
                 HStack(spacing: SiteForgeVisualSystem.controlInset) {
-                    Image(systemName: target.isLocked ? "lock.fill" : target.isVisible ? "square.dashed" : "eye.slash.fill")
+                    Image(systemName: target.isLocked ? "lock.fill" : !target.isVisible ? "eye.slash.fill" : target.isStructuralRoot ? "rectangle.stack" : "square.dashed")
                         .frame(width: 16)
                     Text(target.name).lineLimit(1)
                     Spacer(minLength: 4)
-                    if !target.isVisible { Text("Hidden here").font(.caption2).foregroundStyle(.secondary) }
+                    if let description = target.layerVisibilityDescription {
+                        Text(description).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
                     if isPrimary { Text("Primary").font(.caption2).foregroundStyle(.secondary) }
                 }
                 .padding(.horizontal, SiteForgeVisualSystem.controlInset)
@@ -3207,7 +3939,7 @@ private struct NavigatorLayerRow: View {
                 if direction == .up { state.performSelectionCommand(.previous, provenance: .keyboard) }
             }
             .accessibilityLabel(target.name)
-            .accessibilityValue("\(target.isLocked ? "Locked; " : "")\(!target.isVisible ? "Hidden at current breakpoint; " : "")\(isPrimary ? "Primary selection" : isSelected ? "Selected" : "Not selected")")
+            .accessibilityValue("\(target.isLocked ? "Locked; " : "")\(target.layerVisibilityDescription.map { $0 + "; " } ?? "")\(isPrimary ? "Primary selection" : isSelected ? "Selected" : "Not selected"); Parent: \(target.parentName ?? "Page")")
             .accessibilityHint(dragAccessibilityHint)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .accessibilityIdentifier("navigator.layer.\(target.id.description)")
@@ -3218,39 +3950,7 @@ private struct NavigatorLayerRow: View {
                 performAccessibilityNest()
             }
             .contextMenu {
-                Button("Cut") {
-                    if !isSelected { state.selectLayer(target.id) }
-                    _ = state.cutSelection(provenance: .contextualMenu)
-                }
-                .disabled(target.isLocked)
-                Button("Copy") {
-                    if !isSelected { state.selectLayer(target.id) }
-                    _ = state.copySelection(provenance: .contextualMenu)
-                }
-                Button("Duplicate") {
-                    if !isSelected { state.selectLayer(target.id) }
-                    _ = state.duplicateSelection(provenance: .contextualMenu)
-                }
-                .disabled(target.isLocked)
-                Divider()
-                Button("Move Before") {
-                    guard let destination = state.dragDestination(before: target.id),
-                          let source = state.selectionState.primaryID else { return }
-                    state.performDragDrop(sourceID: source, destination: destination, provenance: .contextualMenu)
-                }
-                .disabled(moveBeforeAvailability?.isEnabled != true)
-                .accessibilityHint(moveBeforeAvailability?.disabledReason ?? "Select an available layer to move.")
-                Button("Nest In") {
-                    guard let destination = state.dragDestination(nestingIn: target.id),
-                          let source = state.selectionState.primaryID else { return }
-                    state.performDragDrop(sourceID: source, destination: destination, provenance: .contextualMenu)
-                }
-                .disabled(nestAvailability?.isEnabled != true)
-                .accessibilityHint(nestAvailability?.disabledReason ?? "Select an available layer to nest.")
-                Button("Edit Text") {
-                    state.beginTextEditing(nodeID: target.id, provenance: .contextualMenu)
-                }
-                .disabled(!state.textEditingAvailability(nodeID: target.id).isEnabled)
+                NavigatorLayerContextMenu(target: target, state: state)
             }
             if state.isDragNestingPreview(in: target.id) {
                 Text("Drop to nest in \(target.name)")
@@ -3269,6 +3969,54 @@ private struct NavigatorLayerRow: View {
             return LayerDragPayload.provider(for: transfer)
         }
         .onDrop(of: [LayerDragPayload.contentType], delegate: LayerDropDelegate(targetID: target.id, state: state))
+    }
+}
+
+/// The native menu has its own hosting lifetime. Observe the live command state
+/// inside that host rather than capturing a row's earlier selection/availability.
+private struct NavigatorLayerContextMenu: View {
+    let target: SelectionTargetSnapshot
+    @ObservedObject var state: WorkspaceShellState
+
+    private var isSelected: Bool { state.selectionState.orderedIDs.contains(target.id) }
+    private func availability(nesting: Bool) -> DragDropAvailability? {
+        guard let source = state.selectionState.primaryID,
+              let destination = nesting ? state.dragDestination(nestingIn: target.id)
+                : state.dragDestination(before: target.id) else { return nil }
+        return state.dragDropAvailability(sourceID: source, destination: destination,
+                                         provenance: .contextualMenu)
+    }
+
+    var body: some View {
+        Button("Cut") {
+            if !isSelected { state.selectLayer(target.id) }
+            _ = state.cutSelection(provenance: .contextualMenu)
+        }.disabled(target.isLocked)
+        Button("Copy") {
+            if !isSelected { state.selectLayer(target.id) }
+            _ = state.copySelection(provenance: .contextualMenu)
+        }
+        Button("Duplicate") {
+            if !isSelected { state.selectLayer(target.id) }
+            _ = state.duplicateSelection(provenance: .contextualMenu)
+        }.disabled(target.isLocked)
+        Divider()
+        Button("Move Before") {
+            guard let destination = state.dragDestination(before: target.id),
+                  let source = state.selectionState.primaryID else { return }
+            state.performDragDrop(sourceID: source, destination: destination, provenance: .contextualMenu)
+        }
+        .disabled(availability(nesting: false)?.isEnabled != true)
+        .accessibilityHint(availability(nesting: false)?.disabledReason ?? "Select an available layer to move.")
+        Button("Nest In") {
+            guard let destination = state.dragDestination(nestingIn: target.id),
+                  let source = state.selectionState.primaryID else { return }
+            state.performDragDrop(sourceID: source, destination: destination, provenance: .contextualMenu)
+        }
+        .disabled(availability(nesting: true)?.isEnabled != true)
+        .accessibilityHint(availability(nesting: true)?.disabledReason ?? "Select an available layer to nest.")
+        Button("Edit Text") { state.beginTextEditing(nodeID: target.id, provenance: .contextualMenu) }
+            .disabled(!state.textEditingAvailability(nodeID: target.id).isEnabled)
     }
 }
 
@@ -3402,6 +4150,10 @@ private struct PageActionButtons: View {
     @ObservedObject var state: WorkspaceShellState
     let page: DocumentPage
     var body: some View {
+        Button("Page Metadata…") { state.presentWebsiteSettings() }
+            .disabled(page.id != state.effectiveSelectedPageID || state.websiteSettingsIdentity == nil)
+        Button("Page Background…") { state.revealPageBackground(pageID: page.id) }
+            .disabled(page.id != state.effectiveSelectedPageID || state.pageBackgroundUnavailableReason != nil)
         Button("Rename Page…") { state.presentPageEditor(.rename, pageID: page.id) }
         Button("Edit Route…") { state.presentPageEditor(.route, pageID: page.id) }
             .disabled(page.role != .standard)
@@ -3422,6 +4174,7 @@ private struct PageEditorSheet: View {
     @State private var name = ""
     @State private var route = ""
     @State private var error = ""
+    @State private var copyCurrentPage = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
@@ -3430,6 +4183,12 @@ private struct PageEditorSheet: View {
                 Text("Delete \(request.name) and \(request.objects) authored objects? \(request.inboundLinks) incoming links will retain missing targets for repair. Undo restores the page and its links.")
                     .fixedSize(horizontal: false, vertical: true)
             } else {
+                if request.mode == .create {
+                    Toggle("Copy current page content", isOn: $copyCurrentPage)
+                        .accessibilityIdentifier("page.editor.copyCurrent")
+                    Text("Creates independent content and page settings. Existing pages stay unchanged; Header and Footer are not live-linked.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                }
                 if request.mode != .route {
                     Text("Page name").font(.caption)
                     TextField("Page name", text: $name).accessibilityIdentifier("page.editor.name")
@@ -3450,7 +4209,7 @@ private struct PageEditorSheet: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(request.mode == .delete ? "Delete Page" : "Apply", role: request.mode == .delete ? .destructive : nil) {
                     let edit: PageEdit = switch request.mode {
-                    case .create: .create(name: name, route: route)
+                    case .create: copyCurrentPage ? .duplicateNamed(name: name, route: route) : .create(name: name, route: route)
                     case .rename: .rename(name)
                     case .route: .route(route)
                     case .delete: .delete
@@ -3460,7 +4219,7 @@ private struct PageEditorSheet: View {
                 }.keyboardShortcut(.defaultAction).accessibilityIdentifier("page.editor.apply")
             }
         }.padding(SiteForgeVisualSystem.settingsFormPadding).frame(width: 360)
-            .onAppear { name = request.name; route = request.route }
+            .onAppear { name = request.name; route = request.route; copyCurrentPage = false }
     }
 }
 
@@ -3476,7 +4235,7 @@ private struct CanvasPlaceholderView: View {
                     Text("Editing Component: \(state.componentDefinitions.first(where: { $0.id == id })?.name ?? "Unavailable")")
                         .lineLimit(1)
                     Spacer()
-                    Button("Exit Definition", action: state.exitComponentDefinition)
+                    Button(state.componentReturnActionTitle, action: state.exitComponentDefinition)
                         .accessibilityIdentifier("components.exit")
                 }
                 .padding(SiteForgeVisualSystem.controlInset)
@@ -3486,6 +4245,7 @@ private struct CanvasPlaceholderView: View {
                 // composite above the native canvas's backing layers.
                 .zIndex(1)
                 .accessibilityElement(children: .contain)
+                .accessibilityLabel("Component definition editing mode. Instance overrides are retained.")
                 .accessibilityIdentifier("components.editing.context")
             }
             if state.isolationRootID != nil {
@@ -3755,7 +4515,9 @@ private struct ViewportControlsView: View {
                 .accessibilityHint("Selects the responsive geometry breakpoint authored by the Layout Inspector.")
 
             NativeViewportPresetControl(
-                selection: $state.viewportPreset,
+                selection: Binding(get: { state.viewportPreset }, set: { value in
+                    if state.prepareForWorkspaceAction(.context) { state.viewportPreset = value }
+                }),
                 sceneID: focusSceneID,
                 tabRouter: tabRouter,
                 isKeyboardFocusRequested: focus.wrappedValue == .viewportPreset,
@@ -4138,6 +4900,7 @@ enum WorkspaceFocusDiagnosticsPolicy {
 
 @MainActor
 final class WorkspaceWindowTabRouter: ObservableObject {
+    @Published private(set) var keyboardFocusIsVisible = false
     @Published private(set) var diagnosticSnapshot =
         "logical=none; responder=none; window=detached; route=none"
 
@@ -4180,8 +4943,13 @@ final class WorkspaceWindowTabRouter: ObservableObject {
         detachMonitor()
         window = candidate
         lifecycle.bind(to: WorkspaceTabRouterWindowIdentity(window: candidate))
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            self?.route(event) ?? event
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            if event.window === self.window {
+                let visible = event.type == .keyDown
+                if self.keyboardFocusIsVisible != visible { self.keyboardFocusIsVisible = visible }
+            }
+            return event.type == .keyDown ? self.route(event) : event
         }
         scheduleLifecycleDiagnostics(outcome: "attached")
     }
@@ -4533,13 +5301,22 @@ private struct NativeViewportPresetControl: NSViewRepresentable {
         }
 
         func attach(_ button: FocusableViewportPresetPopUpButton) {
-            button.onFocusChange = { [weak self] isFocused in
-                guard let self else { return }
+            button.onFocusChange = { [weak self, weak button] isFocused in
+                guard let self, let button, let window = button.window else { return }
                 if !isFocused, let request = self.currentRequest {
                     self.gate.markRelinquished(request)
                 }
                 if !self.isAdoptingRequestedFocus {
-                    self.onNativeFocusChange?(isFocused)
+                    // Do not reconcile SwiftUI while AppKit is transferring
+                    // first responder to an Inspector field. A synchronous
+                    // focus publication can interrupt that native transition.
+                    let request = self.currentRequest
+                    DispatchQueue.main.async { [weak self, weak button, weak window] in
+                        guard let self, let button, let window,
+                              button.window === window, self.currentRequest == request,
+                              (window.firstResponder === button) == isFocused else { return }
+                        self.onNativeFocusChange?(isFocused)
+                    }
                 }
             }
             button.onWindowChange = { [weak self, weak button] in
@@ -4593,7 +5370,9 @@ private struct NativeViewportPresetControl: NSViewRepresentable {
                 return
             }
             selection?.wrappedValue = preset
-            sender.setAccessibilityValue(ViewportPresetControlContract.accessibilityValue(for: preset))
+            let adopted = selection?.wrappedValue ?? preset
+            sender.selectItem(at: ViewportPresetControlContract.index(for: adopted))
+            sender.setAccessibilityValue(ViewportPresetControlContract.accessibilityValue(for: adopted))
         }
     }
 }
@@ -4856,8 +5635,8 @@ private struct FormAccessibilityInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
 
     var body: some View {
+        GroupBox("Form Accessibility") {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
-            Text("Form Accessibility").font(.headline)
             if let form = state.formContainerAccessibilityPresentation {
                 Text(form.status)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -4876,7 +5655,7 @@ private struct FormAccessibilityInspectorView: View {
                         .keyboardShortcut("v", modifiers: [.command, .option])
                         .disabled(!state.canValidateSelectedFormLocally)
                         .accessibilityIdentifier("inspector.accessibility.form.validate")
-                    Button("Edit in Content") { state.inspectorTab = .content }
+                    Button("Edit in Content") { _ = state.selectInspectorTab(.content) }
                         .accessibilityIdentifier("inspector.accessibility.form.editContent")
                 }
             } else if !state.selectedFormFields.isEmpty {
@@ -4898,7 +5677,7 @@ private struct FormAccessibilityInspectorView: View {
                                  identifier: "inspector.accessibility.formField.options")
                 accessibilityRow("Maximum length", presentation.maximumLength,
                                  identifier: "inspector.accessibility.formField.maximumLength")
-                Button("Edit Field in Content") { state.inspectorTab = .content }
+                Button("Edit Field in Content") { _ = state.selectInspectorTab(.content) }
                     .accessibilityHint("Opens the canonical Form field controls. Changes remain transactional and undoable.")
                     .accessibilityIdentifier("inspector.accessibility.formField.editContent")
             } else {
@@ -4906,6 +5685,7 @@ private struct FormAccessibilityInspectorView: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("inspector.accessibility.form.empty")
             }
+        }
         }
     }
 
@@ -4932,9 +5712,13 @@ private struct GeneralAccessibilityInspectorView: View {
     @State private var message: String?
 
     var body: some View {
+        GroupBox("Accessibility") {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             HStack {
-                Text("Accessibility").font(.headline)
+            Text(roleSummary)
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityLabel("Semantic role: \(roleSummary)")
+                .accessibilityIdentifier("inspector.accessibility.role")
                 Spacer()
                 Button("Reset") {
                     if state.commitAccessibilityMetadata(.reset, operation: "reset") {
@@ -4944,15 +5728,11 @@ private struct GeneralAccessibilityInspectorView: View {
                 .disabled(!isAvailable)
                 .accessibilityIdentifier("inspector.accessibility.reset")
             }
-            Text(roleSummary)
-                .font(.caption).foregroundStyle(.secondary)
-                .accessibilityLabel("Semantic role: \(roleSummary)")
-                .accessibilityIdentifier("inspector.accessibility.role")
             ForEach(CanonicalAccessibilityMetadata.Field.allCases, id: \.self) { field in
                 let value = state.accessibilityMetadataInspectorValue(field)
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
                     HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
-                        Text(field.title).frame(width: 92, alignment: .leading).lineLimit(1)
+                        Text(field.title).frame(width: 112, alignment: .leading).lineLimit(1)
                         TextField(field.title, text: Binding(
                             get: { drafts[field] ?? display(value) },
                             set: { drafts[field] = $0; message = nil }
@@ -4975,7 +5755,7 @@ private struct GeneralAccessibilityInspectorView: View {
                         .accessibilityIdentifier("inspector.accessibility.\(field.rawValue).provenance")
                 }
             }
-            Button("Edit Semantic Element in Design") { state.inspectorTab = .design }
+            Button("Edit Semantic Element in Design") { _ = state.selectInspectorTab(.design) }
                 .disabled(state.selectionState.isEmpty)
                 .accessibilityIdentifier("inspector.accessibility.editSemantic")
             if let message {
@@ -4986,6 +5766,7 @@ private struct GeneralAccessibilityInspectorView: View {
             Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("inspector.accessibility.announcement")
+        }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inspector.accessibility.general")
@@ -5109,6 +5890,7 @@ private struct NativeLinkDestinationFields: View {
 private struct ControlInspectorFieldsView: View {
     @ObservedObject var state: WorkspaceShellState
     let interactions: Bool
+    var presentationID: String? = nil
     @State private var label = ""
     @State private var url = ""
     @State private var kind = "none"
@@ -5118,6 +5900,7 @@ private struct ControlInspectorFieldsView: View {
     @State private var identity: ImageInspectorOperationIdentity?
     @State private var message = ""
     @FocusState private var field: String?
+    @State private var presentationRevision: UInt64?
     private var nodes: [DocumentNode] { state.selectedLinkControls }
     private var document: CanonicalDocument { state.documentSession.document }
     private var target: CanonicalLinkTarget? {
@@ -5145,7 +5928,7 @@ private struct ControlInspectorFieldsView: View {
             } else {
                 Text(interactions ? "Link Target" : "Control Label").font(.headline)
                 Text("\(nodes.count) applicable; \(state.selectionState.count - nodes.count) incompatible unchanged · \(provenance)")
-                    .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("inspector.control.applicability")
+                    .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier(presentationID.map { $0 + ".applicability" } ?? "inspector.control.applicability")
                 Group {
                     if interactions { targetFields } else {
                         TextField(mixedLabel ? "Mixed labels" : "Label", text: Binding(get: { label }, set: {
@@ -5162,16 +5945,27 @@ private struct ControlInspectorFieldsView: View {
                 Text(message.isEmpty ? "Editor selection never follows authored navigation." : message)
                     .font(.caption).fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Control edit status").accessibilityValue(message)
-                    .accessibilityIdentifier("inspector.control.status")
+                    .accessibilityIdentifier(presentationID.map { $0 + ".status" } ?? "inspector.control.status")
             }
         }
         // Native text-field bezels extend beyond their SwiftUI layout rect.
         // Leave room inside the scroll viewport for the bezel and focus ring.
         .padding(.horizontal, 4)
-        .onAppear { refresh() }
-        .onChange(of: state.canvasRenderPlan?.identity) { _, _ in if !dirty && field == nil { refresh() } }
+        .onAppear { refresh(); presentationRevision = document.revision }
+        .onChange(of: state.canvasRenderPlan?.identity) { _, _ in
+            if !dirty && field == nil {
+                if presentationRevision != document.revision { message = "" }
+                presentationRevision = document.revision
+                refresh()
+            }
+        }
         .onChange(of: field) { old, new in
-            if old != nil && dirty { commitDraft("focus-loss") }
+            if old != nil && dirty {
+                DispatchQueue.main.async {
+                    guard field != old, dirty else { return }
+                    commitDraft("focus-loss")
+                }
+            }
             if new != nil { identity = state.linkInspectorIdentity }
         }
         .onExitCommand { dirty = false; refresh(); message = "Draft cancelled; committed properties are unchanged."; field = nil }
@@ -5229,6 +6023,7 @@ private struct ControlInspectorFieldsView: View {
         if state.commitLinkEdit(edit, identity: state.linkInspectorIdentity, provenance: provenance) { field = nil; refresh() }
         else { dirty = wasDirty }
         message = state.lastLinkInspectorAnnouncement
+        presentationRevision = document.revision
     }
     private func commitDraft(_ provenance: String) {
         guard dirty else { return }
@@ -5239,6 +6034,7 @@ private struct ControlInspectorFieldsView: View {
         if state.commitLinkEdit(edit, identity: identity, provenance: provenance) { field = nil }
         else { dirty = true }
         message = state.lastLinkInspectorAnnouncement
+        presentationRevision = document.revision
     }
 }
 
@@ -5253,7 +6049,7 @@ private struct InspectorWorkflowControls: View {
                     set: { state.inspectorSectionQuery = String($0.prefix(256)) }))
                     .accessibilityLabel("Find Inspector sections by property name")
                     .accessibilityIdentifier("inspector.workflow.search")
-                    .onSubmit { if let first = state.discoveredInspectorSections.first { state.inspectorTab = first } }
+                    .onSubmit { if let first = state.discoveredInspectorSections.first { _ = state.selectInspectorTab(first) } }
                     .onExitCommand { state.inspectorSectionQuery = "" }
                 Button("Clear") { state.inspectorSectionQuery = "" }
                     .disabled(state.inspectorSectionQuery.isEmpty)
@@ -5263,7 +6059,7 @@ private struct InspectorWorkflowControls: View {
             ScrollView(.horizontal) {
                 HStack {
                     ForEach(state.discoveredInspectorSections) { section in
-                        Button { state.inspectorTab = section } label: {
+                        Button { _ = state.selectInspectorTab(section) } label: {
                             Label(section.title, systemImage: state.pinnedInspectorSections.contains(section) ? "pin.fill" : "slider.horizontal.3")
                                 .lineLimit(1).fixedSize()
                         }.accessibilityLabel("Reveal " + section.title + " Inspector")
@@ -5333,7 +6129,7 @@ private struct InspectorView: View {
         VStack(spacing: SiteForgeVisualSystem.standardSpacing) {
             ShellTabBar(
                 tabs: InspectorTab.allCases,
-                selection: $state.inspectorTab,
+                selection: Binding(get: { state.inspectorTab }, set: { _ = state.selectInspectorTab($0) }),
                 identifierPrefix: "inspector.tab",
                 title: \InspectorTab.title,
                 accessibilityDescription: { $0.accessibilityDescription },
@@ -5384,6 +6180,7 @@ private struct InspectorView: View {
                 .accessibilityHint(nextStep)
                 .accessibilityIdentifier("inspector.\(state.inspectorTab.rawValue).unavailable")
             } else if state.selectionState.isEmpty {
+                VStack(spacing: SiteForgeVisualSystem.standardSpacing) {
                 ContentUnavailableView(
                     "Nothing Selected",
                     systemImage: "slider.horizontal.3",
@@ -5393,17 +6190,27 @@ private struct InspectorView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Nothing Selected. Select an object to inspect its \(state.inspectorTab.title.lowercased()).")
                 .accessibilityIdentifier("inspector.empty")
+                if state.inspectorTab == .design, let pageID = state.effectiveSelectedPageID {
+                    Button("Page Background…", systemImage: "paintpalette") { state.revealPageBackground(pageID: pageID) }
+                        .disabled(!state.pageEditingIsAvailable || state.pageBackgroundUnavailableReason != nil)
+                        .accessibilityValue(state.pageBackgroundSummary)
+                        .accessibilityIdentifier("inspector.pageBackground.open")
+                    if let reason = state.pageBackgroundUnavailableReason {
+                        Text(reason).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                }
             } else {
                 ScrollViewReader { inspectorReader in
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
-                        Label(state.selectionSummary, systemImage: state.selectionState.count > 1 ? "square.stack.3d.up" : "selection.pin.in.out")
+                        Label(state.isInspectingPageBackground ? "Page Background" : state.selectionSummary, systemImage: state.isInspectingPageBackground ? "paintpalette" : state.selectionState.count > 1 ? "square.stack.3d.up" : "selection.pin.in.out")
                             .font(.headline)
                         if state.layerTargets.first(where: { $0.id == state.selectionState.primaryID })?.isLocked == true {
                             Label("Locked — inspection only", systemImage: "lock.fill")
                                 .foregroundStyle(.secondary)
                         }
-                        InspectorWorkflowControls(state: state)
+                        if !state.isInspectingPageBackground { InspectorWorkflowControls(state: state) }
                         inspectorDetails(reader: inspectorReader)
                     }
                     // The production minimum-height window can extend under the
@@ -5427,6 +6234,9 @@ private struct InspectorView: View {
         .groupBoxStyle(SiteForgeInspectorGroupStyle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(ShellRegion.inspector.rawValue)
+        .onChange(of: state.editingComponentID) { _, id in
+            if id != nil { componentPropertiesExpanded = true }
+        }
     }
 
     @ViewBuilder
@@ -5435,7 +6245,7 @@ private struct InspectorView: View {
         case .design:
             if let instance = state.selectedComponent {
                 Text("Linked Component").font(.headline)
-                Text("Appearance is inherited from the definition. Edit the definition to update linked instances, or detach to edit this instance independently.")
+                Text("Edit this instance's exposed values below. Definition edits update inherited values while authored overrides stay independent.")
                     .font(.caption).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("inspector.component.provenance")
                 if let id = CanonicalComponentReference.definitionID(for: instance),
@@ -5449,6 +6259,10 @@ private struct InspectorView: View {
                     Text("Definition unavailable. Restore the definition to recover this instance.")
                         .font(.caption).fixedSize(horizontal: false, vertical: true)
                 }
+                OrganizedComponentInstanceInspectorView(state: state, instance: instance, reader: reader)
+                    .modifier(SiteForgeInspectorSectionSurface())
+                    .id(state.documentSession.document.id.description + ":" + instance.id.description + ":" +
+                        (CanonicalComponentReference.definitionID(for: instance)?.description ?? "missing"))
             } else {
                 DesignInspectorFieldsView(state: state)
                     .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ","))
@@ -5473,31 +6287,28 @@ private struct InspectorView: View {
                 .accessibilityLabel("Selection geometry")
                 .accessibilityValue(state.transformGeometrySummary)
                 .accessibilityIdentifier("inspector.transform.geometry")
-            Text(state.hasManagedPageStructureSelection
-                 ? "Connected layout derives position/width. Height and original geometry intent stay canonical; Frames remain free-positioned."
-                 : "Fixed geometry remains authored. Base min/max and aspect sizing applies to Frame and Image; automatic sizing is not yet available.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            GeometryInspectorFieldsView(state: state)
-                .id(state.geometryInspectorSelectionKey)
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                SizingInspectorFieldsView(state: state)
+                    .id("sizing:" + state.layoutInspectorViewIdentity)
+                GeometryInspectorFieldsView(state: state)
+                    .id("geometry:" + state.layoutInspectorViewIdentity)
+                if state.hasContainerLayoutSelection {
+                    ContainerLayoutInspectorView(state: state, showFluidValues: {
+                        reader.scrollTo("fluid:" + state.fluidValueInspectorIdentity, anchor: .top)
+                    })
+                        .id("container:" + state.layoutInspectorViewIdentity)
+                }
+            }.modifier(SiteForgeInspectorSectionSurface())
             if !state.hasManagedPageStructureSelection {
                 PositioningInspectorView(state: state).modifier(SiteForgeInspectorSectionSurface())
                     .id("position:" + state.geometryInspectorSelectionKey)
             } else {
                 Text("Page flow owns positioning. Free/fixed/sticky offsets are inactive while connected; Undo conversion restores the original data.").font(.caption)
             }
-            if !state.supportedFluidValueTargets.isEmpty && !state.hasManagedPageStructureSelection {
+            if !state.supportedFluidValueTargets.isEmpty {
                 FluidValueInspectorView(state: state)
                     .modifier(SiteForgeInspectorSectionSurface())
-                    .id("fluid:" + state.geometryInspectorSelectionKey)
-            }
-            SizingInspectorFieldsView(state: state)
-                .modifier(SiteForgeInspectorSectionSurface())
-                .id(state.selectionState.orderedIDs.map(\.description).joined(separator: ","))
-            if state.hasContainerLayoutSelection {
-                Divider()
-                ContainerLayoutInspectorView(state: state)
-                    .id("container:\(state.geometryInspectorSelectionKey)")
+                    .id("fluid:" + state.fluidValueInspectorIdentity)
             }
             if !state.selectionState.isEmpty {
                 Divider()
@@ -5546,11 +6357,14 @@ private struct InspectorView: View {
                     DisclosureGroup("Component Properties", isExpanded: $componentPropertiesExpanded) {
                     if !state.componentOrganizationEntries.isEmpty {
                         ComponentOrganizationInspectorView(state: state)
+                            .id("organization:" + state.componentTextInspectorKey)
                     }
                     if state.selectedDefinitionText != nil {
                         ComponentTextInspectorView(state: state)
                     }
-                    if state.selectedDefinitionVisibilityChild != nil { ComponentVisibilityInspectorView(state: state) }
+                    if state.selectedDefinitionVisibilityChild != nil {
+                        ComponentVisibilityInspectorView(state: state).id("visibility:" + state.componentTextInspectorKey)
+                    }
                     if state.selectedDefinitionChoiceImage != nil {
                         ComponentChoiceInspectorView(state: state)
                     }
@@ -5566,7 +6380,9 @@ private struct InspectorView: View {
                 // Keep discovery state across edits; only value drafts/recovery
                 // capture a new adopted operation identity. Selection or document
                 // replacement still creates a fresh discovery context.
-                .id(state.selectedComponent == nil ? "component-text:" + state.componentTextInspectorKey :
+                .id(state.selectedComponent == nil ? (state.selectedDefinitionText != nil
+                    ? "component-definition-text:" + state.documentSession.document.id.description + ":" + state.selectionState.orderedIDs.map(\.description).joined(separator: ",")
+                    : "component-text:" + state.componentTextInspectorKey) :
                     "component-discovery:" + state.documentSession.document.id.description + ":" +
                     state.selectionState.orderedIDs.map(\.description).joined(separator: ",") + ":" +
                     (state.selectedComponent.flatMap { CanonicalComponentReference.definitionID(for: $0) }?.description ?? "missing"))
@@ -5593,7 +6409,7 @@ private struct InspectorView: View {
                     Button("Edit Text") { _ = state.beginTextEditing(nodeID: node.id, provenance: .pointer) }
                         .disabled(!state.pageEditingIsAvailable)
                         .accessibilityIdentifier("inspector.text.edit")
-                    Button("Typography") { state.inspectorTab = .design }
+                    Button("Typography") { _ = state.selectInspectorTab(.design) }
                         .accessibilityIdentifier("inspector.text.typography")
                 }
             }
@@ -5644,49 +6460,158 @@ private struct InspectorView: View {
     }
 }
 
+private enum PendingReusableStyleAction {
+    case update(CanonicalReusableStyleDefinition, ReusableStyleSelectionCapture, ResponsiveInspectorEditContext, Int, Int)
+    case inherit(ReusableAppearanceProperty, ResponsiveInspectorEditContext)
+
+    var context: ResponsiveInspectorEditContext {
+        switch self { case .update(_, _, let context, _, _), .inherit(_, let context): context }
+    }
+    var edit: AdvancedStyleEdit {
+        switch self {
+        case .update(let definition, let capture, _, _, _):
+            .updateReusableStyle(id: definition.id, name: definition.name, fill: capture.fill, opacity: capture.opacity)
+        case .inherit(let property, _): .useLinkedAppearance(property)
+        }
+    }
+    var title: String {
+        switch self {
+        case .update: "Update Shared Style"
+        case .inherit(.fill, _): "Use Linked Fill"
+        case .inherit(.opacity, _): "Use Linked Opacity"
+        }
+    }
+    var explanation: String {
+        switch self {
+        case .update(let definition, let capture, _, let objects, let pages):
+            "Update ‘\(definition.name)’ to \(capture.fill.hexadecimalRGBA), opacity \(Int((capture.opacity * 100).rounded()))%, for \(objects) authored links across \(pages) pages/definitions. Component instances may inherit changes too. Local fills, None, tokens and box styles are retained. The definition stores a color value, not a live source-token binding."
+        case .inherit(.fill, _):
+            "Remove the selected objects' local fill layers and stops, then use their linked solid fill. Other styles, token definitions, opacity and box styles are retained. Explicit None, image fills and fill-token bindings are protected; Undo restores exact local fill identities."
+        case .inherit(.opacity, _):
+            "Remove only local opacity on the selection and inherit linked opacity. Fill, None, tokens and box styles are unchanged. Undo restores the exact local property."
+        }
+    }
+}
+
 private struct AdvancedStyleInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
     @State private var styleName = ""
     @State private var stateFill = ""
     @State private var stateOpacity = ""
     @State private var editedState: CanonicalInteractionStyleState = .hover
+    @State private var pendingStyleAction: PendingReusableStyleAction?
+    @State private var styleValidation: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
-            Divider()
+        let context = state.responsiveInspectorEditContext
+        let usage = state.reusableStyleUsage
+        let linkedCounts = state.selectedReusableStyleLinkCounts
+        let captureResult = state.reusableStyleCapture
+        let capture: ReusableStyleSelectionCapture? = if case .success(let value) = captureResult { value } else { nil }
+        let fillReset = state.linkedAppearanceAvailability(.fill)
+        let opacityReset = state.linkedAppearanceAvailability(.opacity)
+        return VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             HStack {
                 Text("Reusable Styles").font(.headline)
                 Spacer()
                 Button("Detach") {
-                    _ = state.commitAdvancedStyle(.applyReusableStyles([]), operation: "Reusable style detach")
+                    perform(.applyReusableStyles([]), operation: "Reusable style detach", context: context)
                 }
-                .disabled(state.selectedReusableStyleIDs?.isEmpty != false)
+                .disabled(linkedCounts.isEmpty)
+                .help("Remove all reusable links on the applicable selection. Local values, None and token bindings remain.")
                 .accessibilityIdentifier("inspector.design.style.detach")
             }
-            HStack {
+            Divider().accessibilityHidden(true)
+            Text("Linked styles supply solid fill and opacity only. Later specified values win; local fills, explicit None, tokens and interaction variants can override them. App appearance is separate.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("inspector.design.style.scope")
+            if state.selectedReusableStyleIDs == nil {
+                Text("Mixed links · link/unlink keeps each object's other links and order.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("inspector.design.style.mixed")
+            }
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
                 TextField("Style name", text: $styleName)
                     .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                     .accessibilityIdentifier("inspector.design.style.name")
-                Button("Create from Selection") { createStyle() }
-                    .disabled(styleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Create from Selection") { createStyle(context: context) }
+                    .lineLimit(1).fixedSize()
+                    .disabled(styleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || capture == nil)
                     .accessibilityIdentifier("inspector.design.style.create")
             }
+            if let capture {
+                Text("Snapshot: \(capture.fill.hexadecimalRGBA) · opacity \(Int((capture.opacity * 100).rounded()))% · \(capture.applicableCount) applicable · \(capture.skippedCount) skipped. RGBA8 solid/opacity only; gradients, tokens and box styles are not copied.")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityValue("\(capture.fill.hexadecimalRGBA); opacity \(Int((capture.opacity * 100).rounded())) percent; \(capture.applicableCount) applicable; \(capture.skippedCount) skipped")
+                    .accessibilityIdentifier("inspector.design.style.capture")
+                if capture.boundFillCount > 0 {
+                    Text("Source fill-token bindings stay linked. This snapshot copies the resolved color, not the token reference.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } else if case .failure(let error) = captureResult {
+                Text(error.localizedDescription).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.design.style.captureUnavailable")
+            }
+            HStack {
+                Button("Use Linked Fill…") { pendingStyleAction = .inherit(.fill, context) }
+                    .disabled(!fillReset.isEnabled).help(fillReset.disabledReason ?? "Remove local fill overrides explicitly.")
+                    .accessibilityIdentifier("inspector.design.style.inheritFill")
+                Button("Use Linked Opacity…") { pendingStyleAction = .inherit(.opacity, context) }
+                    .disabled(!opacityReset.isEnabled).help(opacityReset.disabledReason ?? "Remove only local opacity explicitly.")
+                    .accessibilityIdentifier("inspector.design.style.inheritOpacity")
+            }.controlSize(.small)
+            if let reason = fillReset.disabledReason, !linkedCounts.isEmpty {
+                Text(reason).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityValue(reason)
+                    .accessibilityIdentifier("inspector.design.style.fillResetStatus")
+            }
             ForEach(state.reusableStyleDefinitions, id: \.id) { definition in
-                HStack {
-                    Text(definition.name).lineLimit(1)
-                    Spacer()
-                    Button("Apply") {
-                        _ = state.commitAdvancedStyle(.applyReusableStyles([definition.id]), operation: "Reusable style apply")
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+                    HStack {
+                        Text(definition.name).lineLimit(1).help(definition.name)
+                        Spacer()
+                        Text("\(usage[definition.id]?.objects ?? 0) uses · \(linkedCounts[definition.id] ?? 0) selected")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            .accessibilityValue("\(usage[definition.id]?.objects ?? 0) uses; \(linkedCounts[definition.id] ?? 0) selected")
+                            .accessibilityIdentifier("inspector.design.style.\(definition.id).usage")
                     }
+                    HStack {
+                    Button("Link") { perform(.linkReusableStyle(definition.id), operation: "Reusable style link", context: context) }
                     .accessibilityLabel("Apply reusable style \(definition.name)")
-                    Button("Update") { updateStyle(definition) }
+                    .accessibilityIdentifier("inspector.design.style.\(definition.id).link")
+                    Button("Unlink") { perform(.unlinkReusableStyle(definition.id), operation: "Reusable style unlink", context: context) }
+                        .disabled(linkedCounts[definition.id] == nil)
+                        .accessibilityLabel("Unlink only reusable style \(definition.name)")
+                        .accessibilityIdentifier("inspector.design.style.\(definition.id).unlink")
+                    Button("Update…") { updateStyle(definition, context: context) }
+                        .disabled(capture == nil)
                         .accessibilityLabel("Update reusable style \(definition.name) from selection")
+                        .accessibilityIdentifier("inspector.design.style.\(definition.id).update")
                     Button("Delete", role: .destructive) {
-                        _ = state.commitAdvancedStyle(.removeReusableStyle(definition.id), operation: "Reusable style deletion")
+                        perform(.removeReusableStyle(definition.id), operation: "Reusable style deletion", context: context)
                     }
+                    .disabled((usage[definition.id]?.objects ?? 0) > 0)
+                    .help("Unlink every authored use before deleting a definition.")
                     .accessibilityLabel("Delete reusable style \(definition.name)")
+                    }
+                    HStack {
+                        Button { perform(.moveReusableStyle(definition.id, offset: -1), operation: "Reusable style earlier", context: context) }
+                            label: { Label("Earlier", systemImage: "arrow.up") }
+                        .accessibilityLabel("Move \(definition.name) earlier in selected style links")
+                        .accessibilityIdentifier("inspector.design.style.\(definition.id).earlier")
+                        Button { perform(.moveReusableStyle(definition.id, offset: 1), operation: "Reusable style later", context: context) }
+                            label: { Label("Later", systemImage: "arrow.down") }
+                        .accessibilityLabel("Move \(definition.name) later in selected style links")
+                        .accessibilityIdentifier("inspector.design.style.\(definition.id).later")
+                    }.disabled(linkedCounts[definition.id] == nil)
                 }
                 .controlSize(.small)
+            }
+            if let styleValidation {
+                Text(styleValidation).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.design.style.validation")
             }
             Divider()
             Text("Interaction States").font(.headline)
@@ -5721,33 +6646,43 @@ private struct AdvancedStyleInspectorView: View {
         .onChange(of: editedState) { _, _ in restoreStateDraft() }
         .onAppear { restoreStateDraft() }
         .onExitCommand {
+            pendingStyleAction = nil; styleValidation = nil
             styleName = ""; restoreStateDraft()
             state.cancelAdvancedStyleDraft()
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inspector.design.advancedStyles")
+        .confirmationDialog(pendingStyleAction?.title ?? "Shared Styling", isPresented: Binding(
+            get: { pendingStyleAction != nil }, set: { if !$0 { pendingStyleAction = nil } }), titleVisibility: .visible) {
+                if let request = pendingStyleAction {
+                    Button(request.title) {
+                        pendingStyleAction = nil
+                        perform(request.edit, operation: request.title, context: request.context)
+                    }.accessibilityIdentifier("inspector.design.style.confirm")
+                    Button("Cancel", role: .cancel) { pendingStyleAction = nil }
+                }
+            } message: { Text(pendingStyleAction?.explanation ?? "") }
     }
 
-    private func createStyle() {
-        let appearance = selectedAppearance()
+    private func createStyle(context: ResponsiveInspectorEditContext) {
+        guard case .success(let capture) = state.reusableStyleCapture else { return }
         let name = styleName.trimmingCharacters(in: .whitespacesAndNewlines)
         if state.commitAdvancedStyle(.createReusableStyle(id: ReusableStyleID(), name: name,
-            fill: appearance.fill, opacity: appearance.opacity), operation: "Reusable style creation") { styleName = "" }
+            fill: capture.fill, opacity: capture.opacity), operation: "Reusable style creation", expectedContext: context) {
+            styleName = ""; styleValidation = nil
+        } else { styleValidation = state.lastDesignInspectorAnnouncement }
     }
 
-    private func updateStyle(_ definition: CanonicalReusableStyleDefinition) {
-        let appearance = selectedAppearance()
-        _ = state.commitAdvancedStyle(
-            .updateReusableStyle(id: definition.id, name: definition.name,
-                                 fill: appearance.fill, opacity: appearance.opacity),
-            operation: "Reusable style update"
-        )
+    private func updateStyle(_ definition: CanonicalReusableStyleDefinition, context: ResponsiveInspectorEditContext) {
+        guard case .success(let capture) = state.reusableStyleCapture,
+              context == state.responsiveInspectorEditContext else { return }
+        let usage = state.reusableStyleUsage[definition.id]
+        pendingStyleAction = .update(definition, capture, context, usage?.objects ?? 0, usage?.pages ?? 0)
     }
 
-    private func selectedAppearance() -> (fill: CanonicalSolidColor?, opacity: Double?) {
-        let fill: CanonicalSolidColor? = if case .single(let value, _) = state.designInspectorFillValue() { value } else { nil }
-        let opacity: Double? = if case .single(let value, _) = state.designInspectorOpacityValue() { value } else { nil }
-        return (fill, opacity)
+    private func perform(_ edit: AdvancedStyleEdit, operation: String, context: ResponsiveInspectorEditContext) {
+        if state.commitAdvancedStyle(edit, operation: operation, expectedContext: context) { styleValidation = nil }
+        else { styleValidation = state.lastDesignInspectorAnnouncement }
     }
 
     private func restoreStateDraft() {
@@ -5783,6 +6718,8 @@ private struct DesignInspectorFieldsView: View {
     @FocusState private var typographyFocusedField: TypographyDraftField?
     @State private var hexDraft = ""
     @State private var opacityDraft = ""
+    @State private var opacityEdit: LayoutInspectorNumericDraft?
+    @State private var opacityEditContext: ResponsiveInspectorEditContext?
     @State private var borderWidthDraft = ""
     @State private var radiusDraft = ""
     @State private var paddingDraft = ""
@@ -5792,16 +6729,33 @@ private struct DesignInspectorFieldsView: View {
     @State private var fontSizeDraft = ""
     @State private var lineHeightDraft = ""
     @State private var trackingDraft = ""
+    @State private var typographyDrafts: [TypographyDraftField: LayoutInspectorNumericDraft] = [:]
+    @State private var installedFamilies: [InstalledTypographyFamily] = []
+    @State private var choosingFont = false
+    @FocusState private var fontSearchFocused: Bool
+    @State private var fontSearch = ""
+    @State private var fontChoiceContext: ResponsiveInspectorEditContext?
     @State private var message: String?
     @State private var imageFocalXDraft = ""
     @State private var imageFocalYDraft = ""
     @State private var imageAltDraft = ""
+    @State private var imageDrafts: [ImageInspectorDraftField: ImageInspectorDraft] = [:]
+    @FocusState private var imageFocusedField: ImageInspectorDraftField?
     @State private var tokenNameDraft = ""
     @State private var tokenColorDraft = ""
     @State private var editingTokenID: ColorTokenID?
     @State private var tokenTarget: LocalColorTarget = .fill
     @State private var creatingToken = false
     @State private var tokenDraftRevision: UInt64 = 0
+
+    init(state: WorkspaceShellState) {
+        self.state = state
+        _tokenTarget = State(initialValue: LocalColorTarget.initialInspectorTarget(
+            for: state.selectedCanonicalNodes.map(\.kind)))
+    }
+    private var usesTextColorContext: Bool {
+        LocalColorTarget.initialInspectorTarget(for: state.selectedCanonicalNodes.map(\.kind)) == .textForeground
+    }
 
     /// Includes the current revision and is used to reject a command queued
     /// from a control update after another transaction or selection has won.
@@ -5810,18 +6764,69 @@ private struct DesignInspectorFieldsView: View {
     /// Intentionally excludes revision so the successful transaction can
     /// refresh its local draft strings after it advances the document.
     private var selectionIdentityKey: String {
-        state.selectionState.orderedIDs.map(\.description).joined(separator: ",")
+        state.documentSession.document.id.description + ":" + (state.effectiveSelectedPageID?.description ?? "no-page")
+            + ":" + state.selectionState.orderedIDs.map(\.description).joined(separator: ",")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             imageControls
             imageFillControls
-            if state.selectedCanonicalNodes.contains(where: { $0.kind.isTextual }) { typographyControls }
-            GroupBox("Appearance") {
+            if state.selectedCanonicalNodes.contains(where: { $0.kind.isTextual }) {
+                GroupBox("Essentials") {
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                        if state.selectedCanonicalNodes.count == 1,
+                           let text = state.selectedCanonicalNodes.first, text.kind == .text {
+                            Button("Edit Text") { _ = state.beginTextEditing(nodeID: text.id, provenance: .pointer) }
+                                .disabled(!state.pageEditingIsAvailable)
+                                .accessibilityHint("Edit on the canvas using the same native editor. Escape cancels without changing committed text.")
+                                .accessibilityIdentifier("inspector.essentials.editText")
+                        }
+                        if !state.selectedLinkControls.isEmpty {
+                            ControlInspectorFieldsView(state: state, interactions: false, presentationID: "inspector.essentials.label")
+                                .id("essential-label:" + selectionIdentityKey)
+                        }
+                        GeometryInspectorFieldsView(state: state, dimensionsOnly: true)
+                            .id("essential-size:" + state.geometryInspectorSelectionKey)
+                    }
+                }
+                .accessibilityIdentifier("inspector.essentials")
+                typographyControls
+                if usesTextColorContext {
+                    GroupBox("Text Colors") { colorTokenControls }
+                }
+                if !state.selectedLinkControls.isEmpty {
+                    GroupBox("Destination") {
+                        ControlInspectorFieldsView(state: state, interactions: true, presentationID: "inspector.essentials.target")
+                            .id("essential-target:" + selectionIdentityKey)
+                    }
+                }
+            }
+            GroupBox(state.isInspectingPageBackground ? "Page Background" : "Appearance") {
             VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+            if state.isInspectingPageBackground {
+                Text(state.pageBackgroundSummary).font(.caption)
+                    .accessibilityValue(state.pageBackgroundSummary)
+                    .accessibilityIdentifier("inspector.pageBackground.value")
+                Text("Applies to the page, not its child Sections. Use the shared fill layers and color tokens below.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let reason = state.pageBackgroundUnavailableReason {
+                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Transparent / None") {
+                    let expected = selectionContextKey
+                    DispatchQueue.main.async {
+                        guard selectionContextKey == expected, state.isInspectingPageBackground else { return }
+                        _ = state.commitDesignFillLayer(.clearAll, operation: "page-background-none")
+                    }
+                }
+                .help("Remove this Root's fill layers and fill-token binding in one undoable edit. Other styles and child fills stay unchanged.")
+                .accessibilityIdentifier("inspector.pageBackground.none")
+                Divider()
+            }
             let fill = state.designInspectorFillValue()
-            let fillIsApplicable = !isUnavailable(fill)
+            let fillIsApplicable = state.canEditDesignSolidFill
             let fillIsEditable = fillIsApplicable && !state.hasBoundColorTokenSelection
             HStack(spacing: SiteForgeVisualSystem.controlInset) {
                 NativeDesignColorWell(
@@ -5859,21 +6864,38 @@ private struct DesignInspectorFieldsView: View {
             Text(provenanceText(fill))
                 .font(.caption2).foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.design.fillProvenance")
-            colorTokenControls
+            if !usesTextColorContext { colorTokenControls }
+            Text(state.reusableAppearanceSource(.fill)).font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityValue(state.reusableAppearanceSource(.fill))
+                .accessibilityIdentifier("inspector.design.fillSource")
             let opacity = state.designInspectorOpacityValue()
             let opacityIsApplicable = !isUnavailable(opacity)
             HStack(spacing: SiteForgeVisualSystem.controlInset) {
                 Text("Opacity").frame(width: 56, alignment: .leading)
-                TextField("Opacity", text: $opacityDraft)
+                TextField("Opacity", text: Binding(get: { opacityDraft }, set: { next in
+                    guard next != opacityDraft else { return }
+                    if opacityEdit == nil {
+                        opacityEdit = .init(text: next, committed: opacityDraft, scope: state.layoutInspectorDraftScope)
+                        opacityEditContext = state.responsiveInspectorEditContext
+                    } else { opacityEdit?.text = next }
+                    opacityDraft = next
+                }))
                     .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
                     .disabled(!opacityIsApplicable)
                     .focused($opacityFocused)
                     .onSubmit { commitOpacity() }
                     .onChange(of: opacityFocused) { old, current in
-                        if old && !current { DispatchQueue.main.async { guard !opacityFocused else { return }; commitOpacity() } }
+                        if old && !current, let draft = opacityEdit {
+                            let context = opacityEditContext
+                            DispatchQueue.main.async {
+                                guard !opacityFocused, opacityEdit == draft, opacityEditContext == context else { return }
+                                commitOpacity()
+                            }
+                        }
                     }
                     .accessibilityLabel("Opacity percent")
-                    .accessibilityValue(opacityAccessibility(opacity))
+                    .accessibilityValue(InspectorDraftAccessibility.value(draft: opacityEdit?.text, committed: opacityAccessibility(opacity)))
                     .accessibilityHint(opacityIsApplicable ? "Enter a value from 0 through 100 percent and press Return to commit." : unavailableHint(opacity))
                     .accessibilityIdentifier("inspector.design.opacity")
                 NativeDesignOpacityStepper(
@@ -5887,6 +6909,10 @@ private struct DesignInspectorFieldsView: View {
                 )
                 .frame(width: 22, height: 26)
             }
+            Text(state.reusableAppearanceSource(.opacity)).font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityValue(state.reusableAppearanceSource(.opacity))
+                .accessibilityIdentifier("inspector.design.opacitySource")
             if let message { Text(message).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger).accessibilityIdentifier("inspector.design.validation") }
             Text(state.lastDesignInspectorAnnouncement).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("inspector.design.announcement")
             if state.hasBoundColorTokenSelection {
@@ -5897,16 +6923,29 @@ private struct DesignInspectorFieldsView: View {
             }
             FillLayerListInspectorView(state: state)
                 .disabled(state.hasBoundColorTokenSelection)
-                .modifier(SiteForgeInspectorSectionSurface())
+            if !state.isInspectingPageBackground {
             AdvancedStyleInspectorView(state: state).modifier(SiteForgeInspectorSectionSurface())
             VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) { semanticElementControls }
                 .modifier(SiteForgeInspectorSectionSurface())
             VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) { boxStyleControls }
                 .modifier(SiteForgeInspectorSectionSurface())
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Design appearance")
         .accessibilityIdentifier("inspector.design.fields")
+        .disabled(state.isInspectingPageBackground && state.pageBackgroundUnavailableReason != nil)
+        .onReceive(state.editCommitRequests) { request in
+            guard request.isAccepted else { return }
+            if imageDrafts[.alt] != nil { commitImageDraft(.alt) }
+            if imageDrafts[.focalX] != nil || imageDrafts[.focalY] != nil { commitImageDraft(.focalX) }
+            if !imageDrafts.isEmpty { request.reject(); return }
+            if typographyDrafts[.family] != nil { commitFontFamily(provenance: .focusLoss) }
+            for field in [TypographyDraftField.size, .lineHeight, .tracking] where typographyDrafts[field] != nil {
+                commitTypographyNumber(field, provenance: .focusLoss)
+            }
+            if !typographyDrafts.isEmpty { request.reject() }
+        }
         .onAppear { resetDrafts() }
         .onChange(of: selectionContextKey) { _, _ in
             // A selection command may run while the inspector is being
@@ -5915,7 +6954,9 @@ private struct DesignInspectorFieldsView: View {
             // publishing view state during that reconciliation.
             scheduleDraftRefresh(for: selectionIdentityKey)
         }
-        .onExitCommand { resetDrafts(); cancelTokenDraft(); state.cancelDesignInspectorDraft() }
+        .onChange(of: state.layoutInspectorDraftScope) { _, _ in adoptTypographyDrafts() }
+        .onChange(of: state.documentSession.document.revision) { _, _ in adoptTypographyDrafts() }
+        .onExitCommand { typographyDrafts.removeAll(); opacityEdit = nil; opacityEditContext = nil; if !imageDrafts.isEmpty { state.cancelImageInspectorDraft() }; imageDrafts.removeAll(); imageFocusedField = nil; resetDrafts(); cancelTokenDraft(); state.cancelDesignInspectorDraft(); state.clearWorkspaceActionNotice() }
     }
 
     @ViewBuilder private var colorTokenControls: some View {
@@ -5963,6 +7004,9 @@ private struct DesignInspectorFieldsView: View {
                     Spacer()
                     Text(token.color.hexadecimalRGBA).monospacedDigit().font(.caption2)
                 }
+                // Plain-button spacer pixels must activate the same token
+                // as its text and accessibility action, not fall through.
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Color token \(token.name)")
@@ -6046,23 +7090,30 @@ private struct DesignInspectorFieldsView: View {
         return 100
     }
     private func resetDrafts() {
-        if case .single(let image, _) = state.imageInspectorPresentation() {
-            imageFocalXDraft = String(format: "%.0f", image.focalX * 100)
-            imageFocalYDraft = String(format: "%.0f", image.focalY * 100)
-            imageAltDraft = image.altText
-        } else {
-            imageFocalXDraft = ""; imageFocalYDraft = ""; imageAltDraft = ""
+        if imageDrafts.isEmpty {
+            let image = state.imageInspectorSelection
+            imageFocalXDraft = (image?.focalX).map { String(format: "%.0f", $0 * 100) } ?? ""
+            imageFocalYDraft = (image?.focalY).map { String(format: "%.0f", $0 * 100) } ?? ""
+            imageAltDraft = image?.altText ?? ""
         }
         switch state.designInspectorFillValue() {
         case .single(let color, _): hexDraft = color.hexadecimalRGBA
         case .mixed: hexDraft = ""
         case .unavailable: hexDraft = ""
         }
-        switch state.designInspectorOpacityValue() {
-        case .single(let value, _): opacityDraft = String(format: "%.0f", value * 100)
-        case .mixed, .unavailable: opacityDraft = ""
+        if opacityEdit == nil {
+            switch state.designInspectorOpacityValue() {
+            case .single(let value, _): opacityDraft = String(format: "%.0f", value * 100)
+            case .mixed, .unavailable: opacityDraft = ""
+            }
         }
-        message = nil
+        if let opacityEditContext, opacityEditContext != state.responsiveInspectorEditContext {
+            message = "Opacity draft belongs to an earlier selection or revision. Press Escape to reload the current value."
+        } else if imageDrafts.values.contains(where: { !$0.canCommit(in: state.responsiveInspectorEditContext) }) {
+            message = "Image draft belongs to an earlier selection or revision. Press Escape to reload the current values."
+        } else if !imageDrafts.isEmpty {
+            // Invalid/incomplete drafts remain visible until corrected/cancelled.
+        } else if opacityEdit == nil { message = nil }
         switch state.designInspectorBoxStyleValue() {
         case .single(let style, _):
             borderWidthDraft = style.border.map { String(format: "%.1f", $0.width) } ?? ""
@@ -6089,25 +7140,15 @@ private struct DesignInspectorFieldsView: View {
     @ViewBuilder
     private var imageFillControls: some View {
         if !state.imageFillSelection.isEmpty {
+            GroupBox("Image Fill") {
             VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
-                Text("Image Fill").font(.headline)
                 Text(state.imageFillInspectorStatus())
                     .font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("inspector.imageFill.status")
                     .accessibilityValue(state.imageFillInspectorStatus())
-                if state.documentSession.document.imageAssets.isEmpty {
-                    Button("Import Images…") { state.importImages() }
-                        .accessibilityIdentifier("inspector.imageFill.import")
-                } else {
-                    Menu("Choose Image…") {
-                        ForEach(state.documentSession.document.imageAssets) { asset in
-                            Button("\(asset.displayName) · \(asset.pixelWidth) × \(asset.pixelHeight)") {
-                                _ = state.commitImageFillEdit(.setAsset(asset.id))
-                            }
-                        }
-                    }
-                    .accessibilityIdentifier("inspector.imageFill.choose")
-                }
+                ImageUseActionsView(state: state, target: .fill,
+                    currentAssetID: state.selectedCanonicalNodes.first.flatMap(CanonicalImageFill.resolve)?.assetID,
+                    identifier: "inspector.imageFill")
                 HStack {
                     Picker("Mode", selection: Binding(
                         get: { state.imageFillMode() ?? .fill },
@@ -6123,6 +7164,7 @@ private struct DesignInspectorFieldsView: View {
                         .accessibilityIdentifier("inspector.imageFill.remove")
                 }
             }
+            }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inspector.imageFill")
         }
@@ -6130,19 +7172,15 @@ private struct DesignInspectorFieldsView: View {
 
     @ViewBuilder
     private var imageControls: some View {
-        switch state.imageInspectorPresentation() {
-        case .unavailable:
-            EmptyView()
-        case .mixed(let applicable, let skipped):
-            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
-                Text("Image").font(.headline)
-                Text("Mixed image properties across \(applicable) Image\(applicable == 1 ? "" : "s")\(skipped > 0 ? "; \(skipped) incompatible object\(skipped == 1 ? "" : "s") will be skipped" : "").")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("inspector.image.mixed")
-            }
-        case .single(let image, let asset):
+        if let image = state.imageInspectorSelection {
             VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
                 Text("Image").font(.headline)
+                if image.applicableCount > 1 || image.skippedCount > 0 {
+                    Text("\(image.applicableCount) Images · \(image.skippedCount) incompatible skipped. Mixed fields stay blank; edits apply only to selected Images.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("inspector.image.mixed")
+                }
+                if let asset = state.documentSession.document.imageAssets.first(where: { $0.id == image.assetID }) {
                 HStack(spacing: SiteForgeVisualSystem.controlInset) {
                     Group {
                         if let data = state.imageAssetThumbnail(asset.id), let thumbnail = NSImage(data: data) {
@@ -6157,68 +7195,154 @@ private struct DesignInspectorFieldsView: View {
                         Text(asset.displayName).lineLimit(1)
                         Text("\(asset.pixelWidth) × \(asset.pixelHeight)")
                             .font(.caption2).foregroundStyle(.secondary)
+                        Text(asset.originalFilename).font(.caption2).lineLimit(1).help(asset.originalFilename)
+                            .accessibilityIdentifier("inspector.image.source.filename")
                     }
                     Spacer()
-                    Button("Replace…") { state.replaceImageAsset(asset.id) }
-                        .fixedSize()
-                        .accessibilityIdentifier("inspector.image.replace")
                 }
+                } else {
+                    Text(image.assetID == nil ? "Mixed image assets" : "Missing image asset metadata; reference retained")
+                        .font(.caption).accessibilityIdentifier("inspector.image.assetSummary")
+                }
+                Text(state.imageInspectorResourceStatus).font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityValue(state.imageInspectorResourceStatus)
+                    .accessibilityIdentifier("inspector.image.resourceStatus")
+                ImageUseActionsView(state: state, target: .image, currentAssetID: image.assetID, identifier: "inspector.image")
+                Text("Fit Mode")
+                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                    .accessibilityIdentifier("inspector.image.fit.label")
                 Picker("Fit Mode", selection: Binding(
-                    get: { image.fitMode },
-                    set: { scheduleImageInspectorEdit(.fit($0)) }
+                    get: { image.fit },
+                    set: { if let value = $0 { scheduleImageInspectorEdit(.fit(value)) } }
                 )) {
-                    ForEach(ImageFitMode.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                    if image.fit == nil { Text("Mixed").tag(ImageFitMode?.none) }
+                    ForEach(ImageFitMode.allCases, id: \.self) { Text($0.rawValue.capitalized).tag(Optional($0)) }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .accessibilityIdentifier("inspector.image.fit")
+                Text("Fit preserves the whole image; Fill crops at the focal point; Stretch fills the bounds. Original bytes and layout are unchanged.")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                     Text("Focal").frame(width: 42, alignment: .leading)
-                    TextField("X %", text: $imageFocalXDraft)
+                    TextField(image.focalX == nil ? "Mixed X %" : "X %", text: imageDraftBinding(.focalX))
                         .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
-                        .onSubmit { commitImageFocal() }
+                        .focused($imageFocusedField, equals: .focalX)
+                        .onSubmit { commitImageDraft(.focalX) }
                         .accessibilityLabel("Image focal point X percent")
+                        .accessibilityValue(InspectorDraftAccessibility.value(draft: imageDrafts[.focalX]?.text,
+                            committed: image.focalX.map { String(format: "%.0f", $0 * 100) } ?? "Mixed values"))
                         .accessibilityIdentifier("inspector.image.focalX")
-                    TextField("Y %", text: $imageFocalYDraft)
+                    TextField(image.focalY == nil ? "Mixed Y %" : "Y %", text: imageDraftBinding(.focalY))
                         .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
-                        .onSubmit { commitImageFocal() }
+                        .focused($imageFocusedField, equals: .focalY)
+                        .onSubmit { commitImageDraft(.focalY) }
                         .accessibilityLabel("Image focal point Y percent")
+                        .accessibilityValue(InspectorDraftAccessibility.value(draft: imageDrafts[.focalY]?.text,
+                            committed: image.focalY.map { String(format: "%.0f", $0 * 100) } ?? "Mixed values"))
                         .accessibilityIdentifier("inspector.image.focalY")
                     Button("Reset") {
-                        imageFocalXDraft = "50"; imageFocalYDraft = "50"
-                        _ = state.commitImageInspectorEdit(.focal(x: 0.5, y: 0.5))
+                        scheduleImageInspectorEdit(.focal(x: 0.5, y: 0.5))
                     }
                     .fixedSize().accessibilityIdentifier("inspector.image.focalReset")
                 }
-                TextField("Alternative text", text: $imageAltDraft)
+                Text(image.fit == .fill ? "Focal point is active in Fill mode." : "Focal point is retained and used in Fill mode.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                TextField(image.altText == nil ? "Mixed alternative text" : "Alternative text", text: imageDraftBinding(.alt))
                     .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
-                    .disabled(image.isDecorative)
-                    .onSubmit { _ = state.commitImageInspectorEdit(.altText(imageAltDraft)) }
+                    .disabled(image.decorative != false)
+                    .focused($imageFocusedField, equals: .alt)
+                    .onSubmit { commitImageDraft(.alt) }
                     .accessibilityLabel("Image alternative text")
+                    .accessibilityValue(InspectorDraftAccessibility.value(draft: imageDrafts[.alt]?.text,
+                        committed: image.altText ?? "Mixed values"))
                     .accessibilityIdentifier("inspector.image.alt")
-                Toggle("Decorative image", isOn: Binding(
-                    get: { image.isDecorative },
-                    set: { _ = state.commitImageInspectorEdit(.decorative($0)) }
-                ))
-                .toggleStyle(.checkbox)
-                .accessibilityHint("Decorative Images are ignored by authored-site assistive semantics; editor metadata remains available.")
-                .accessibilityIdentifier("inspector.image.decorative")
+                if let decorative = image.decorative {
+                    Toggle("Decorative image", isOn: Binding(
+                        get: { decorative }, set: { scheduleImageInspectorEdit(.decorative($0)) }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .accessibilityHint("Decorative images use empty authored alt text; the stored description is retained for restoration.")
+                    .accessibilityIdentifier("inspector.image.decorative")
+                } else {
+                    Picker("Image meaning", selection: Binding<Bool?>(get: { nil }, set: {
+                        if let value = $0 { scheduleImageInspectorEdit(.decorative(value)) }
+                    })) {
+                        Text("Mixed").tag(Bool?.none)
+                        Text("Informative").tag(Optional(false))
+                        Text("Decorative").tag(Optional(true))
+                    }.accessibilityIdentifier("inspector.image.decorative")
+                }
+                Text(image.decorative == false
+                     ? "Describe informative images. Empty text is not the same as explicitly marking an image decorative."
+                     : "Choose Informative to edit descriptions. Decorative status does not delete the stored description.")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if !imageDrafts.isEmpty {
+                    HStack {
+                        Button("Apply Image Draft") { commitImageDraft(imageDrafts[.alt] != nil ? .alt : .focalX) }
+                            .accessibilityIdentifier("inspector.image.applyDraft")
+                        Button("Cancel Image Draft") { imageDrafts.removeAll(); state.cancelImageInspectorDraft(); resetDrafts() }
+                            .accessibilityIdentifier("inspector.image.cancelDraft")
+                    }.controlSize(.small)
+                }
                 Text(state.lastImageInspectorAnnouncement)
                     .font(.caption2).foregroundStyle(.secondary)
                     .accessibilityIdentifier("inspector.image.status")
                 Divider()
             }
+            .padding(.horizontal, SiteForgeVisualSystem.controlInset)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inspector.image.fields")
+            .onChange(of: imageFocusedField) { old, current in
+                guard let old, old != current, let draft = imageDrafts[old] else { return }
+                DispatchQueue.main.async {
+                    guard imageFocusedField != old, imageDrafts[old] == draft else { return }
+                    // X/Y comprise one edit; allow native traversal between
+                    // the two fields without committing half of a mixed pair.
+                    if old != .alt, (current == .focalX || current == .focalY) { return }
+                    commitImageDraft(old)
+                }
+            }
         }
     }
 
-    private func commitImageFocal() {
-        guard let x = Double(imageFocalXDraft), let y = Double(imageFocalYDraft),
-              x.isFinite, y.isFinite, (0...100).contains(x), (0...100).contains(y) else {
-            message = ImageInspectorError.invalidFocalPoint.localizedDescription
+    private func imageDraftBinding(_ field: ImageInspectorDraftField) -> Binding<String> {
+        Binding(get: {
+            switch field { case .focalX: imageFocalXDraft; case .focalY: imageFocalYDraft; case .alt: imageAltDraft }
+        }, set: { text in
+            let previous: String = switch field { case .focalX: imageFocalXDraft; case .focalY: imageFocalYDraft; case .alt: imageAltDraft }
+            guard text != previous else { return }
+            if imageDrafts[field] == nil {
+                imageDrafts[field] = .init(text: text, openingText: previous, context: state.responsiveInspectorEditContext)
+            } else { imageDrafts[field]?.text = text }
+            switch field { case .focalX: imageFocalXDraft = text; case .focalY: imageFocalYDraft = text; case .alt: imageAltDraft = text }
+        })
+    }
+
+    private func commitImageDraft(_: ImageInspectorDraftField) {
+        let fields: [ImageInspectorDraftField] = [.focalX, .focalY, .alt]
+        let drafts = fields.compactMap { imageDrafts[$0] }
+        guard let first = drafts.first else { return }
+        guard drafts.allSatisfy({ $0.context == first.context && $0.canCommit(in: state.responsiveInspectorEditContext) }) else {
+            message = "Image draft is stale. Press Escape to reload the current selection."
             return
         }
-        if !state.commitImageInspectorEdit(.focal(x: x / 100, y: y / 100)) {
+        if drafts.allSatisfy(\.isUnchanged) {
+            for field in fields { imageDrafts[field] = nil }; resetDrafts(); return
+        }
+        guard let selection = state.imageInspectorSelection else { return }
+        let edit: ImageInspectorEdit
+        do {
+            edit = try selection.detailsEdit(focalXDraft: imageDrafts[.focalX]?.text,
+                focalYDraft: imageDrafts[.focalY]?.text, altDraft: imageDrafts[.alt]?.text)
+        } catch {
+            message = ImageInspectorError.invalidFocalPoint.localizedDescription; return
+        }
+        if state.commitImageInspectorEdit(edit, expectedContext: first.context) {
+            for field in fields { imageDrafts[field] = nil }
+            scheduleDraftRefresh(for: selectionIdentityKey)
+        } else {
             message = state.imageInspectorFailure?.localizedDescription
         }
     }
@@ -6227,12 +7351,16 @@ private struct DesignInspectorFieldsView: View {
     /// control reconciliation. Compile the canonical command on the next
     /// main-actor turn and only if the selected scene/revision is unchanged.
     private func scheduleImageInspectorEdit(_ edit: ImageInspectorEdit) {
-        let expectedContext = selectionContextKey
+        guard imageDrafts.isEmpty else {
+            message = "Apply or cancel the Image draft before changing another image property."; return
+        }
+        let expectedContext = state.responsiveInspectorEditContext
         Task { @MainActor in
             await Task.yield()
-            guard selectionContextKey == expectedContext else { return }
-            _ = state.commitImageInspectorEdit(edit)
-            resetDrafts()
+            guard state.commitImageInspectorEdit(edit, expectedContext: expectedContext) else {
+                message = state.imageInspectorFailure?.localizedDescription; return
+            }
+            scheduleDraftRefresh(for: selectionIdentityKey)
         }
     }
 
@@ -6270,16 +7398,21 @@ private struct DesignInspectorFieldsView: View {
 
     private func scheduleOpacityCommit(
         _ percent: Double,
-        provenance: DesignInspectorProvenance
+        provenance: DesignInspectorProvenance,
+        draft: LayoutInspectorNumericDraft? = nil,
+        context: ResponsiveInspectorEditContext? = nil
     ) {
         let expectedContext = selectionContextKey
         let expectedSelection = selectionIdentityKey
+        let commandContext = context ?? state.responsiveInspectorEditContext
         DispatchQueue.main.async {
             guard selectionContextKey == expectedContext else { return }
-            guard state.commitDesignOpacity(percent: percent, provenance: provenance) else {
+            if let draft { guard opacityEdit == draft, opacityEditContext == commandContext else { return } }
+            guard state.commitDesignOpacity(percent: percent, provenance: provenance, expectedContext: commandContext) else {
                 message = state.designInspectorFailure?.localizedDescription
                 return
             }
+            opacityEdit = nil; opacityEditContext = nil
             scheduleDraftRefresh(for: expectedSelection)
         }
     }
@@ -6289,11 +7422,24 @@ private struct DesignInspectorFieldsView: View {
         scheduleFillCommit(color, provenance: .hexadecimal)
     }
     private func commitOpacity() {
+        // Merely leaving an unchanged field must not bake a linked style into
+        // a local literal. Only actual typing owns a captured opacity draft.
+        guard let draft = opacityEdit, let context = opacityEditContext else { return }
+        guard context == state.responsiveInspectorEditContext,
+              draft.canCommit(in: state.layoutInspectorDraftScope) else {
+            message = DesignInspectorError.stale.localizedDescription
+            return
+        }
+        if draft.hasUnchangedNumericValue {
+            opacityEdit = nil; opacityEditContext = nil; resetDrafts()
+            return
+        }
         guard let value = Double(opacityDraft) else {
             message = DesignInspectorError.invalidOpacity.localizedDescription
             return
         }
-        scheduleOpacityCommit(value, provenance: opacityFocused ? .keyboard : .focusLoss)
+        scheduleOpacityCommit(value, provenance: opacityFocused ? .keyboard : .focusLoss,
+                              draft: draft, context: context)
     }
     private func fillAccessibility(_ value: DesignInspectorValue) -> String { switch value { case .single(let color, let origin): "\(color.hexadecimalRGBA), \(origin == .authored ? "authored" : "defaulted")"; case .mixed: "Mixed values"; case .unavailable(let reason): reason } }
     private func opacityAccessibility(_ value: DesignInspectorOpacityValue) -> String { switch value { case .single(let opacity, let origin): "\(Int((opacity * 100).rounded())) percent, \(origin == .authored ? "authored" : "defaulted")"; case .mixed: "Mixed values"; case .unavailable(let reason): reason } }
@@ -6323,37 +7469,109 @@ private struct DesignInspectorFieldsView: View {
         let enabled: Bool = if case .unavailable = value { false } else { true }
         GroupBox("Typography") {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+        Text(state.typographyRoleSummary)
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .help("Set heading level in Semantic HTML. Layout owns Fixed, Fill and Hug sizing. Font changes can reflow automatic text without rewriting authored geometry.")
+            .accessibilityLabel("Text semantic role")
+            .accessibilityValue(state.typographyRoleSummary)
+            .accessibilityIdentifier("inspector.design.typography.role")
         HStack {
             Spacer()
-            Button("Reset") { commitTypography(.reset, operation: "reset") }
+            Button("Reset") { typographyDrafts.removeAll(); commitTypography(.reset, operation: "reset") }
                 .disabled(!enabled)
                 .accessibilityIdentifier("inspector.design.typography.reset")
         }
-        TextField("Font family", text: $fontFamilyDraft)
+        TextField("Font family", text: typographyDraftBinding(.family, fallback: fontFamilyDraft))
             .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).disabled(!enabled)
             .focused($typographyFocusedField, equals: .family)
             .onSubmit { commitFontFamily() }
             .onChange(of: typographyFocusedField) { old, current in
-                if old == .family && current != .family { commitFontFamily(provenance: .focusLoss) }
+                if old == .family && current != .family { DispatchQueue.main.async { commitFontFamily(provenance: .focusLoss) } }
             }
             .accessibilityLabel("Font family")
-            .accessibilityValue(typographyAccessibility(value, component: "family"))
+            .accessibilityValue(InspectorDraftAccessibility.value(draft: typographyDrafts[.family]?.text,
+                committed: typographyAccessibility(value, component: "family")))
             .accessibilityHint(typographyHint(value))
             .accessibilityIdentifier("inspector.design.typography.family")
+        Button("Choose Installed Font…") {
+            guard state.prepareForWorkspaceAction(.context) else {
+                message = state.workspaceActionStatus
+                return
+            }
+            message = nil
+            fontChoiceContext = state.responsiveInspectorEditContext; choosingFont = true
+        }.disabled(!enabled).accessibilityIdentifier("inspector.design.typography.chooseFont")
+            .popover(isPresented: $choosingFont) {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+                    Text("Installed Font Families").font(.headline)
+                    Text("Uses local installed faces only. Nothing is downloaded or packaged in website output.").font(.caption)
+                    TextField("Search installed fonts", text: $fontSearch).textFieldStyle(.roundedBorder)
+                        .focused($fontSearchFocused)
+                        .focusedValue(\.siteforgeNativeTextEditor, fontSearchFocused ? true : nil)
+                        .accessibilityIdentifier("typography.font.search")
+                    ScrollView {
+                        LazyVStack(alignment: .leading) {
+                            ForEach(InstalledTypographyCatalog.matching(fontSearch, in: installedFamilies)) { family in
+                                HStack(spacing: SiteForgeVisualSystem.controlInset) {
+                                    Button(family.name) { chooseInstalledFont(family.name, weight: nil) }
+                                        .lineLimit(1).help("Use \(family.name) and retain the authored weight. Choose Weights to set both explicitly.")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .accessibilityIdentifier("typography.font.choose." + family.name)
+                                    Spacer(minLength: SiteForgeVisualSystem.controlInset)
+                                    Menu("Weights") {
+                                        ForEach(family.weights, id: \.rawValue) { weight in
+                                            Button(weight.rawValue.capitalized) { chooseInstalledFont(family.name, weight: weight) }
+                                                .accessibilityLabel("Use \(family.name) \(weight.rawValue)")
+                                                .accessibilityIdentifier("typography.font.face.\(family.name).\(weight.rawValue)")
+                                        }
+                                    }
+                                    .fixedSize().disabled(family.weights.isEmpty)
+                                    .accessibilityLabel("Installed upright weights for \(family.name)")
+                                    .accessibilityHint("Choose a weight to apply this family and weight as one undoable edit.")
+                                    .accessibilityIdentifier("typography.font.weights." + family.name)
+                                }
+                            }
+                        }
+                    }.frame(height: 240)
+                    if installedFamilies.isEmpty { Text("Loading installed font metadata…").font(.caption) }
+                    else if InstalledTypographyCatalog.matching(fontSearch, in: installedFamilies).isEmpty { Text("No matching installed family. The authored family field remains available.").font(.caption) }
+                    Text("Family keeps the current weight. Weights applies the chosen family and installed upright weight together. Fonts are not imported or embedded.")
+                        .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if let message {
+                        Text(message).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("typography.font.validation")
+                    }
+                    Button("Cancel") { fontSearchFocused = false; choosingFont = false; fontChoiceContext = nil }.keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("typography.font.cancel")
+                }.padding().frame(width: 320)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Installed font chooser")
+                    .accessibilityIdentifier("typography.font.chooser")
+                    .onExitCommand { fontSearchFocused = false; choosingFont = false; fontChoiceContext = nil }
+                    .onDisappear { fontSearchFocused = false }
+            }
+        Text(installedWeightSummary).font(.caption2).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("inspector.design.typography.faces")
         HStack(spacing: SiteForgeVisualSystem.controlInset) {
-            Picker("Weight", selection: Binding(
-                get: { typography?.weight ?? .regular },
-                set: { commitTypography(.weight($0), operation: "weight", provenance: .picker) }
+            Picker("Weight", selection: Binding<CanonicalFontWeight?>(
+                get: { typography?.weight },
+                set: { if let value = $0 { commitTypography(.weight(value), operation: "weight", provenance: .picker) } }
             )) {
-                ForEach(CanonicalFontWeight.allCases, id: \.rawValue) { Text($0.rawValue.capitalized).tag($0) }
+                if typography == nil { Text("Mixed").tag(Optional<CanonicalFontWeight>.none) }
+                ForEach(CanonicalFontWeight.allCases, id: \.rawValue) { weight in
+                    Text(weight.rawValue.capitalized).tag(Optional(weight)).disabled(!availableTypographyWeights.contains(weight))
+                }
             }
             .disabled(!enabled)
             .accessibilityIdentifier("inspector.design.typography.weight")
-            Picker("Alignment", selection: Binding(
-                get: { typography?.alignment ?? .leading },
-                set: { commitTypography(.alignment($0), operation: "alignment", provenance: .picker) }
+            Picker("Alignment", selection: Binding<CanonicalTextAlignment?>(
+                get: { typography?.alignment },
+                set: { if let value = $0 { commitTypography(.alignment(value), operation: "alignment", provenance: .picker) } }
             )) {
-                ForEach(CanonicalTextAlignment.allCases, id: \.rawValue) { Text($0.rawValue.capitalized).tag($0) }
+                if typography == nil { Text("Mixed").tag(Optional<CanonicalTextAlignment>.none) }
+                ForEach(CanonicalTextAlignment.allCases, id: \.rawValue) { Text($0.rawValue.capitalized).tag(Optional($0)) }
             }
             .labelsHidden().disabled(!enabled)
             .accessibilityLabel("Paragraph alignment")
@@ -6364,6 +7582,23 @@ private struct DesignInspectorFieldsView: View {
             typographyNumberField("Line height", text: $lineHeightDraft, field: .lineHeight, value: typography?.lineHeight)
             typographyNumberField("Tracking", text: $trackingDraft, field: .tracking, value: typography?.tracking)
         }
+        if state.selectedCanonicalNodes.contains(where: {
+            CanonicalFluidValueCodec.value(for: .fontSize, node: $0) != nil || CanonicalFluidValueCodec.value(for: .lineHeight, node: $0) != nil
+        }) {
+            Text("Base typography values. Existing fluid size/line-height rules still win where authored; this edit does not remove them.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("inspector.design.typography.responsiveSource")
+        }
+        Text(state.effectiveTypographySummary)
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel("Effective responsive typography")
+            .accessibilityValue(state.effectiveTypographySummary)
+            .accessibilityIdentifier("inspector.design.typography.effective")
+        Button("Fluid Typography in Layout…") { _ = state.selectInspectorTab(.layout) }
+            .disabled(!enabled)
+            .help("In Fluid Value, choose Font Size or Line Height. Fluid ranges apply across widths; fixed typography remains the fallback.")
+            .accessibilityIdentifier("inspector.design.typography.fluid")
         Text(typographyProvenance(value))
             .font(.caption2).foregroundStyle(.secondary)
             .accessibilityIdentifier("inspector.design.typography.status")
@@ -6377,7 +7612,8 @@ private struct DesignInspectorFieldsView: View {
                 accessibilityLabel: "Text foreground color",
                 onCommit: { commitTypography(.foreground($0), operation: "foreground", provenance: .picker) }
             )
-            TextField("Foreground #RRGGBBAA", text: $textForegroundDraft)
+            .frame(width: 48, height: 26)
+            TextField("#RRGGBBAA", text: $textForegroundDraft)
                 .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true)
                 .disabled(!enabled || state.hasBoundColorTokenSelection(target: .textForeground))
                 .focused($typographyFocusedField, equals: .foreground)
@@ -6403,6 +7639,11 @@ private struct DesignInspectorFieldsView: View {
         }
         }
         }
+        .task {
+            let catalog = await Task.detached(priority: .utility) { InstalledTypographyCatalog.load() }.value
+            guard !Task.isCancelled else { return }
+            installedFamilies = catalog
+        }
     }
 
     private func typographyNumberField(
@@ -6414,35 +7655,121 @@ private struct DesignInspectorFieldsView: View {
         let available: Bool = if case .unavailable = state.typographyInspectorValue() { false } else { true }
         return VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
             Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            TextField(label, text: text)
+            TextField(label, text: typographyDraftBinding(field, fallback: text.wrappedValue))
                 .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit().disabled(!available)
                 .focused($typographyFocusedField, equals: field)
                 .onSubmit { commitTypographyNumber(field) }
                 .onChange(of: typographyFocusedField) { old, current in
-                    if old == field && current != field { commitTypographyNumber(field, provenance: .focusLoss) }
+                    if old == field && current != field { DispatchQueue.main.async { commitTypographyNumber(field, provenance: .focusLoss) } }
                 }
                 .accessibilityLabel(label)
-                .accessibilityValue(value.map(Self.formatTypographyNumber) ?? "Mixed or unavailable")
+                .accessibilityValue(InspectorDraftAccessibility.value(draft: typographyDrafts[field]?.text,
+                    committed: value.map(Self.formatTypographyNumber) ?? "Mixed or unavailable"))
                 .accessibilityIdentifier("inspector.design.typography.\(String(describing: field))")
         }
     }
 
+    private var availableTypographyWeights: [CanonicalFontWeight] {
+        guard !installedFamilies.isEmpty else { return [] }
+        let families = state.selectedCanonicalNodes.filter { $0.kind.isTextual }.compactMap {
+            TypographyCommandRegistry.resolvedTypography(for: $0)?.family
+        }
+        guard !families.isEmpty else { return [] }
+        return CanonicalFontWeight.allCases.filter { weight in
+            families.allSatisfy { name in
+                // Missing authored intent resolves to System without rewriting it.
+                (installedFamilies.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.weights
+                    ?? installedFamilies.first { $0.name == CanonicalTypography.defaultFamily }?.weights ?? []).contains(weight)
+            }
+        }
+    }
+    private var installedWeightSummary: String {
+        guard !installedFamilies.isEmpty else { return "Loading local font families and installed upright weights…" }
+        guard case .single(let style, _) = state.typographyInspectorValue() else { return "Mixed typography. Weight choices are common installed traits, not the primary object's values." }
+        guard let family = installedFamilies.first(where: { $0.name.caseInsensitiveCompare(style.family) == .orderedSame }) else {
+            return "Authored family unavailable; name retained. Native rendering uses System fallback. Choosing an installed family is an explicit edit."
+        }
+        let weights = family.weights.map { $0.rawValue.capitalized }.joined(separator: ", ")
+        return "Installed upright weights: \(weights)." + (family.weights.contains(style.weight) ? "" : " Authored \(style.weight.rawValue) is not a listed face; choose a listed weight explicitly. Native resolution may use a nearest face.")
+    }
+
+    private func chooseInstalledFont(_ name: String, weight: CanonicalFontWeight?) {
+        guard let context = fontChoiceContext,
+              let family = installedFamilies.first(where: { $0.name == name }),
+              weight.map({ family.weights.contains($0) }) ?? true else {
+            message = "That installed font choice is unavailable. Close the chooser and review the current selection."
+            return
+        }
+        let edit: TypographyEdit = weight.map { .fontFace(family: name, weight: $0) } ?? .family(name)
+        if commitTypography(edit, operation: weight == nil ? "font family" : "font family and weight",
+            provenance: .picker, expectedContext: context) {
+            typographyDrafts.removeValue(forKey: .family)
+            fontSearchFocused = false
+            choosingFont = false
+            fontChoiceContext = nil
+        }
+    }
+    private func typographyCommittedString(_ field: TypographyDraftField) -> String? {
+        switch state.typographyInspectorValue() {
+        case .single(let style, _):
+            switch field {
+            case .family: style.family
+            case .size: Self.formatTypographyNumber(style.size)
+            case .lineHeight: Self.formatTypographyNumber(style.lineHeight)
+            case .tracking: Self.formatTypographyNumber(style.tracking)
+            case .foreground: nil
+            }
+        case .mixed: ""
+        case .unavailable: nil
+        }
+    }
+    private func typographyDraftBinding(_ field: TypographyDraftField, fallback: String) -> Binding<String> {
+        Binding(get: { typographyDrafts[field]?.text ?? typographyCommittedString(field) ?? fallback }, set: { value in
+            let committed = typographyCommittedString(field) ?? fallback
+            guard typographyDrafts[field] != nil || value != committed else { return }
+            if typographyDrafts[field] == nil { typographyDrafts[field] = .init(text: value, committed: committed, scope: state.layoutInspectorDraftScope) }
+            else { typographyDrafts[field]?.text = value }
+            message = nil
+        })
+    }
+    private func validatedTypographyDraft(_ field: TypographyDraftField) -> LayoutInspectorNumericDraft? {
+        guard var draft = typographyDrafts[field] else { return nil }
+        draft.adopt(committed: typographyCommittedString(field), scope: state.layoutInspectorDraftScope)
+        typographyDrafts[field] = draft
+        guard draft.canCommit(in: state.layoutInspectorDraftScope) else {
+            message = "Typography value or context changed. Draft retained; Escape cancels before editing the new context."
+            return nil
+        }
+        return draft
+    }
+    private func adoptTypographyDrafts() {
+        for field in Array(typographyDrafts.keys) {
+            typographyDrafts[field]?.adopt(committed: typographyCommittedString(field), scope: state.layoutInspectorDraftScope)
+        }
+        if typographyDrafts.values.contains(where: { $0.conflict != nil }) {
+            message = "Typography value or context changed. Draft retained; Escape cancels before editing the new context."
+        }
+    }
+
     private func commitFontFamily(provenance: DesignInspectorProvenance = .keyboard) {
-        let value = fontFamilyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty, value == fontFamilyDraft else {
+        guard let draft = validatedTypographyDraft(.family) else { return }
+        if draft.text == draft.committed { typographyDrafts.removeValue(forKey: .family); return }
+        let value = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value == draft.text else {
             message = TypographyCommandError.invalidValue.localizedDescription; return
         }
-        commitTypography(.family(value), operation: "font family", provenance: provenance)
+        if commitTypography(.family(value), operation: "font family", provenance: provenance, draftScope: draft.scope) { typographyDrafts.removeValue(forKey: .family) }
     }
 
     private func commitTypographyNumber(_ field: TypographyDraftField, provenance: DesignInspectorProvenance = .keyboard) {
         guard field != .foreground else { return }
-        let draft: String = switch field { case .size: fontSizeDraft; case .lineHeight: lineHeightDraft; case .tracking: trackingDraft; case .family: fontFamilyDraft; case .foreground: "" }
-        guard let number = Double(draft), number.isFinite else {
+        guard let draft = validatedTypographyDraft(field) else { return }
+        if draft.hasUnchangedNumericValue { typographyDrafts.removeValue(forKey: field); return }
+        guard case .success(let number) = GeometryInspectorNumberParser.parse(draft.text), number.isFinite else {
             message = TypographyCommandError.invalidValue.localizedDescription; return
         }
-        let edit: TypographyEdit = switch field { case .size: .size(number); case .lineHeight: .lineHeight(number); case .tracking: .tracking(number); case .family: .family(draft); case .foreground: preconditionFailure("Foreground uses its color parser") }
-        commitTypography(edit, operation: String(describing: field), provenance: provenance)
+        let edit: TypographyEdit = switch field { case .size: .size(number); case .lineHeight: .lineHeight(number); case .tracking: .tracking(number); case .family: .family(draft.text); case .foreground: preconditionFailure("Foreground uses its color parser") }
+        if commitTypography(edit, operation: String(describing: field), provenance: provenance, draftScope: draft.scope) { typographyDrafts.removeValue(forKey: field) }
     }
 
     private func commitTextForeground(provenance: DesignInspectorProvenance = .keyboard) {
@@ -6454,17 +7781,21 @@ private struct DesignInspectorFieldsView: View {
         commitTypography(.foreground(color), operation: "foreground", provenance: provenance)
     }
 
-    private func commitTypography(
+    @discardableResult private func commitTypography(
         _ edit: TypographyEdit,
         operation: String,
-        provenance: DesignInspectorProvenance = .keyboard
-    ) {
-        guard state.commitTypography(edit, operation: operation, provenance: provenance) else {
+        provenance: DesignInspectorProvenance = .keyboard,
+        draftScope: LayoutInspectorDraftScope? = nil,
+        expectedContext: ResponsiveInspectorEditContext? = nil
+    ) -> Bool {
+        guard state.commitTypography(edit, operation: operation, provenance: provenance,
+            draftScope: draftScope, expectedContext: expectedContext) else {
             message = state.lastDesignInspectorAnnouncement
-            return
+            return false
         }
         message = nil
         scheduleDraftRefresh(for: selectionIdentityKey)
+        return true
     }
 
     private static func formatTypographyNumber(_ value: Double) -> String {
@@ -6930,23 +8261,81 @@ private final class AccessibleDesignOpacityStepper: NSStepper {
 private struct SizingInspectorFieldsView: View {
     @ObservedObject var state: WorkspaceShellState
     @FocusState private var focusedField: SizingConstraintField?
-    @State private var drafts: [SizingConstraintField: String] = [:]
+    @State private var drafts: [SizingConstraintField: LayoutInspectorNumericDraft] = [:]
+    @State private var showsBounds = false
     @State private var message: String?
+    @State private var conversionContext: String?
+    @State private var confirmingConversion = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
-            Divider()
             HStack {
-                Text("Sizing").font(.headline)
+                Text("Size & Responsiveness").font(.headline)
                 Spacer()
                 Button("Reset") {
                     if state.commitSizingConstraint(.reset) { drafts.removeAll(); message = nil }
                     else { message = state.lastSizingConstraintAnnouncement }
                 }
-                .disabled(!state.sizingConstraintAvailability.isEnabled)
+                .disabled(!state.sizingModeAvailability.isEnabled)
                 .accessibilityLabel("Reset sizing constraints")
                 .accessibilityIdentifier("inspector.sizing.reset")
             }
+            ForEach(SizingDimension.allCases, id: \.self) { dimension in
+                Picker("Base \(dimension.rawValue) mode", selection: Binding<CanonicalSizingMode?>(
+                    get: { state.sizingMode(for: dimension) },
+                    set: { mode in
+                        guard let mode else { return }
+                        if state.commitSizingConstraint(.setMode(dimension, mode)) { drafts.removeAll(); message = nil }
+                        else { message = state.lastSizingConstraintAnnouncement }
+                    }
+                )) {
+                    if state.sizingMode(for: dimension) == nil { Text("Mixed").tag(Optional<CanonicalSizingMode>.none) }
+                    Text("Fixed").tag(Optional(CanonicalSizingMode.fixed))
+                        .disabled(!state.sizingModeAvailability(dimension, .fixed).isEnabled)
+                    Text("Fill parent").tag(Optional(CanonicalSizingMode.fill))
+                        .disabled(!state.sizingModeAvailability(dimension, .fill).isEnabled)
+                    if dimension == .height {
+                        Text("Hug content").tag(Optional(CanonicalSizingMode.hug))
+                            .disabled(!state.sizingModeAvailability(dimension, .hug).isEnabled)
+                    }
+                }
+                .disabled(!state.sizingModeAvailability.isEnabled)
+                .accessibilityIdentifier("inspector.sizing.\(dimension.rawValue)Mode")
+                .help(state.sizingModeSource(for: dimension))
+                Text(state.sizingModeSource(for: dimension)).font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("inspector.sizing.\(dimension.rawValue)Mode.source")
+                if let source = state.sizingDimensionResolution(dimension)?.numericSource {
+                    Button(source == .fluid ? "Remove Fluid \(dimension.rawValue.capitalized)" : "Reset \(state.viewportPreset.title) \(dimension.rawValue.capitalized)") {
+                        focusedField = nil; drafts.removeAll()
+                        if state.resetSizingDimensionOverride(dimension, expectedScope: state.layoutInspectorDraftScope) { message = nil }
+                        else { message = "Wait for the current canvas, then retry the exact dimension reset." }
+                    }.accessibilityIdentifier("inspector.sizing.\(dimension.rawValue).resetOverride")
+                        .help("Remove only this winning dimension override. Other dimensions and authored base sizing are preserved.")
+                }
+            }
+            if let reason = state.sizingModeAvailability.disabledReason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Make Content Responsive…") {
+                conversionContext = state.responsiveConversionContext
+                confirmingConversion = true
+            }
+            .disabled(!state.sizingModeAvailability.isEnabled || state.responsiveConversionScope?.applicableNodeIDs.isEmpty != false)
+            .accessibilityIdentifier("inspector.sizing.convertContent")
+            .confirmationDialog("Convert selected content and descendants?", isPresented: $confirmingConversion) {
+                Button("Convert and Remove Dimension Overrides") {
+                    guard let conversionContext else { return }
+                    if state.commitSizingConstraint(.convertContent, expectedContext: conversionContext) {
+                        drafts.removeAll(); message = nil
+                    } else { message = state.lastSizingConstraintAnnouncement }
+                    self.conversionContext = nil
+                }
+                Button("Cancel", role: .cancel) { conversionContext = nil }
+            } message: {
+                Text(state.responsiveConversionSummary + " Text and containers will hug content and fill their containing width. Container maximum widths preserve the current base width. Only converted objects lose Width/Height breakpoint and fluid overrides; X/Y, content, styles, links and IDs remain. Images, fixed-size Buttons/Links, managed chrome, empty Frames and aspect-locked objects are skipped. One Undo restores the exact prior properties.")
+            }
+            DisclosureGroup("Bounds & Aspect Ratio", isExpanded: $showsBounds) {
             if let reason = state.sizingConstraintAvailability.disabledReason {
                 Text(reason).font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("inspector.sizing.availability")
@@ -6956,8 +8345,13 @@ private struct SizingInspectorFieldsView: View {
                 HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                     Text(field.title).frame(width: 82, alignment: .leading).lineLimit(1)
                     TextField(field.title, text: Binding(
-                        get: { drafts[field] ?? display(value) },
-                        set: { drafts[field] = $0; message = nil }
+                        get: { drafts[field]?.text ?? display(value) },
+                        set: {
+                            if drafts[field] == nil && $0 == display(value) { return }
+                            if drafts[field] == nil { drafts[field] = .init(text: $0, committed: display(value), scope: state.layoutInspectorDraftScope) }
+                            else { drafts[field]?.text = $0 }
+                            message = nil
+                        }
                     ))
                     .textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
                     .focused($focusedField, equals: field)
@@ -6969,7 +8363,8 @@ private struct SizingInspectorFieldsView: View {
                     }
                     .disabled(!state.sizingConstraintAvailability.isEnabled)
                     .accessibilityLabel(field.title)
-                    .accessibilityValue(accessibilityValue(value))
+                    .accessibilityValue(InspectorDraftAccessibility.value(draft: drafts[field]?.text,
+                        committed: accessibilityValue(value)))
                     .accessibilityHint("Enter a finite value and press Return. Empty removes this bound; Escape cancels the draft.")
                     .accessibilityIdentifier("inspector.sizing.\(field.rawValue)")
                     Text(provenance(value)).font(.caption2).foregroundStyle(.secondary)
@@ -6990,6 +8385,7 @@ private struct SizingInspectorFieldsView: View {
             if state.sizingAspectEnabled == nil, state.sizingConstraintAvailability.isEnabled {
                 Text("Mixed aspect-lock values").font(.caption2).foregroundStyle(.secondary)
             }
+            }.disclosureGroupStyle(SiteForgeInspectorDisclosureStyle(identifier: "inspector.sizing.boundsDisclosure"))
             if let message { Text(message).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger)
                 .accessibilityIdentifier("inspector.sizing.validation") }
             Text(state.lastSizingConstraintAnnouncement).font(.caption2).foregroundStyle(.secondary)
@@ -6998,7 +8394,14 @@ private struct SizingInspectorFieldsView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Sizing constraints")
         .accessibilityIdentifier("inspector.sizing.fields")
-        .onExitCommand { drafts.removeAll(); focusedField = nil; message = nil }
+        .onReceive(state.editCommitRequests) { request in
+            guard request.isAccepted else { return }
+            for field in SizingConstraintField.allCases where drafts[field] != nil { commit(field) }
+            if !drafts.isEmpty { request.reject() }
+        }
+        .onExitCommand { drafts.removeAll(); focusedField = nil; message = nil; state.clearWorkspaceActionNotice() }
+        .onChange(of: state.documentSession.document.revision) { _, _ in adoptDrafts() }
+        .onChange(of: state.layoutInspectorDraftScope) { _, _ in adoptDrafts() }
     }
 
     private func display(_ value: SizingConstraintPresentation) -> String {
@@ -7022,7 +8425,15 @@ private struct SizingInspectorFieldsView: View {
         }
     }
     private func commit(_ field: SizingConstraintField) {
-        let source = drafts[field] ?? display(state.sizingConstraintValue(for: field))
+        guard var draft = drafts[field] else { return }
+        draft.adopt(committed: display(state.sizingConstraintValue(for: field)), scope: state.layoutInspectorDraftScope)
+        drafts[field] = draft
+        guard draft.canCommit(in: state.layoutInspectorDraftScope) else {
+            message = "Sizing context or value changed. Your draft is retained; Escape cancels it before editing the new context."
+            return
+        }
+        if draft.hasUnchangedNumericValue { drafts.removeValue(forKey: field); message = nil; return }
+        let source = draft.text
         let value: Double?
         if source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { value = nil }
         else {
@@ -7031,11 +8442,19 @@ private struct SizingInspectorFieldsView: View {
             case .failure: message = "\(field.title) needs a finite numeric value."; return
             }
         }
-        guard state.commitSizingConstraint(.set(field, value)) else {
+        guard state.commitSizingConstraint(.set(field, value), draftScope: draft.scope) else {
             message = state.lastSizingConstraintAnnouncement; return
         }
         drafts.removeValue(forKey: field)
         message = nil
+    }
+    private func adoptDrafts() {
+        for field in Array(drafts.keys) {
+            drafts[field]?.adopt(committed: display(state.sizingConstraintValue(for: field)), scope: state.layoutInspectorDraftScope)
+        }
+        if drafts.values.contains(where: { $0.conflict != nil }) {
+            message = "Sizing context or value changed. Draft retained; Escape cancels before editing the new context."
+        }
     }
 }
 
@@ -7123,16 +8542,18 @@ private struct PositioningInspectorView: View {
 
 private struct GeometryInspectorFieldsView: View {
     @ObservedObject var state: WorkspaceShellState
+    var dimensionsOnly = false
     @FocusState private var focusedField: GeometryInspectorField?
-    @State private var drafts: [GeometryInspectorField: String] = [:]
+    @State private var drafts: [GeometryInspectorField: LayoutInspectorNumericDraft] = [:]
     @State private var validationMessage: String?
 
     var body: some View {
-        GroupBox("Geometry") {
+        GroupBox(dimensionsOnly ? "Size" : "Position & Dimensions") {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading) {
             ForEach(GeometryInspectorField.allCases.filter { field in
-                (state.selectedPageStructureNode.flatMap(CanonicalPageFlow.role) == nil && !state.hasMixedPageStructureSelection) || field == .height
+                (!dimensionsOnly || field.requiresPositiveValue)
+                    && ((state.selectedPageStructureNode.flatMap(CanonicalPageFlow.role) == nil && !state.hasMixedPageStructureSelection) || field == .height)
             }, id: \.self) { field in
                 fieldRow(field)
             }
@@ -7177,11 +8598,20 @@ private struct GeometryInspectorFieldsView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Layout geometry")
         .accessibilityIdentifier("inspector.layout.geometryFields")
+        .onReceive(state.editCommitRequests) { request in
+            guard request.isAccepted else { return }
+            for field in GeometryInspectorField.allCases where drafts[field] != nil { commit(field, provenance: .pointer) }
+            if !drafts.isEmpty { request.reject() }
+        }
+        .onChange(of: state.documentSession.document.revision) { _, _ in adoptDrafts() }
+        .onChange(of: state.layoutInspectorDraftScope) { _, _ in adoptDrafts() }
+        .onChange(of: state.canvasRenderPlan?.identity) { _, _ in adoptDrafts() }
         .onExitCommand {
-            guard focusedField != nil else { return }
+            guard focusedField != nil || !drafts.isEmpty else { return }
             restoreDrafts()
             focusedField = nil
             state.cancelGeometryInspectorDraft()
+            state.clearWorkspaceActionNotice()
         }
     }
 
@@ -7225,12 +8655,14 @@ private struct GeometryInspectorFieldsView: View {
         value: GeometryInspectorValue
     ) -> Binding<String> {
         Binding(
-            get: { drafts[field] ?? displayValue(for: value) },
+            get: { drafts[field]?.text ?? displayValue(for: value) },
             set: {
                 // Native field-editor reconciliation can write back the
                 // displayed string when focus changes without any typing.
                 guard drafts[field] != nil || $0 != displayValue(for: value) else { return }
-                drafts[field] = $0
+                if drafts[field] == nil {
+                    drafts[field] = .init(text: $0, committed: displayValue(for: value), scope: state.layoutInspectorDraftScope)
+                } else { drafts[field]?.text = $0 }
                 validationMessage = nil
             }
         )
@@ -7250,6 +8682,9 @@ private struct GeometryInspectorFieldsView: View {
         case .mixed:
             Text("Mixed").font(.caption2).foregroundStyle(.secondary)
                 .accessibilityLabel("Mixed values")
+        case .computed(_, let source):
+            Text(source).font(.caption2).foregroundStyle(.secondary)
+                .accessibilityLabel(source)
         case .unavailable:
             Text("Unavailable").font(.caption2).foregroundStyle(.secondary)
                 .accessibilityLabel("Unavailable")
@@ -7258,18 +8693,20 @@ private struct GeometryInspectorFieldsView: View {
 
     private func displayValue(for value: GeometryInspectorValue) -> String {
         switch value {
-        case .single(let value, _): GeometryInspectorNumberParser.format(value)
+        case .single(let value, _), .computed(let value, _): GeometryInspectorNumberParser.format(value)
         case .mixed, .unavailable: ""
         }
     }
 
     private func accessibilityValue(for value: GeometryInspectorValue, field: GeometryInspectorField) -> String {
-        switch value {
+        let committed: String = switch value {
         case .single(let value, let origin):
             "\(GeometryInspectorNumberParser.format(value)); \(state.geometryInspectorResponsiveSource(for: field) ?? (origin == .authored ? "authored" : "defaulted"))"
+        case .computed(let value, let source): "\(GeometryInspectorNumberParser.format(value)); \(source)"
         case .mixed: "Mixed values"
         case .unavailable(let reason): reason
         }
+        return InspectorDraftAccessibility.value(draft: drafts[field]?.text, committed: committed)
     }
 
     private func commit(_ field: GeometryInspectorField, provenance: GeometryInspectorProvenance,
@@ -7277,14 +8714,22 @@ private struct GeometryInspectorFieldsView: View {
         // Traversing an untouched field is not authoring intent. In
         // particular, it must not promote a default to authored, advance the
         // revision or disable the next field while the renderer adopts it.
-        guard let text = drafts[field] ?? (useCurrentValue ? displayValue(for: state.geometryInspectorValue(for: field)) : nil) else { return }
-        switch GeometryInspectorNumberParser.parse(text) {
+        let current = displayValue(for: state.geometryInspectorValue(for: field))
+        guard var draft = drafts[field] ?? (useCurrentValue ? .init(text: current, committed: current, scope: state.layoutInspectorDraftScope) : nil) else { return }
+        draft.adopt(committed: committedDisplay(for: state.geometryInspectorValue(for: field)), scope: state.layoutInspectorDraftScope)
+        drafts[field] = draft
+        guard draft.canCommit(in: state.layoutInspectorDraftScope) else {
+            validationMessage = "Selection, breakpoint or committed value changed. Draft retained; Escape cancels before editing the new context."
+            return
+        }
+        if draft.hasUnchangedNumericValue { drafts.removeValue(forKey: field); validationMessage = nil; return }
+        switch GeometryInspectorNumberParser.parse(draft.text) {
         case .success(let value):
             guard GeometryInspectorCommandRegistry.isValid(value, for: field) else {
                 validationMessage = "\(field.title) must be finite and within the supported range\(field.requiresPositiveValue ? ", with a minimum of 1" : "")."
                 return
             }
-            guard state.commitGeometryInspectorValue(value, field: field, provenance: provenance) else {
+            guard state.commitGeometryInspectorValue(value, field: field, provenance: provenance, draftScope: draft.scope) else {
                 validationMessage = state.geometryInspectorFailure?.localizedDescription
                 return
             }
@@ -7299,6 +8744,20 @@ private struct GeometryInspectorFieldsView: View {
         drafts.removeAll()
         validationMessage = nil
     }
+    private func adoptDrafts() {
+        for field in Array(drafts.keys) {
+            drafts[field]?.adopt(committed: committedDisplay(for: state.geometryInspectorValue(for: field)), scope: state.layoutInspectorDraftScope)
+        }
+        if drafts.values.contains(where: { $0.conflict != nil }) {
+            validationMessage = "Selection, breakpoint or committed value changed. Draft retained; Escape cancels before editing the new context."
+        }
+    }
+    private func committedDisplay(for value: GeometryInspectorValue) -> String? {
+        switch value {
+        case .single, .computed: displayValue(for: value)
+        case .unavailable, .mixed: nil
+        }
+    }
 }
 
 private enum FluidValueDraftField: Hashable { case minimum, preferred, maximum }
@@ -7312,10 +8771,12 @@ private struct FluidValueInspectorView: View {
     @State private var preferred = ""
     @State private var maximum = ""
     @State private var validation: String?
+    @State private var draftContext: ResponsiveInspectorEditContext?
     @FocusState private var focused: FluidValueDraftField?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+        let context = state.responsiveInspectorEditContext
+        return VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
             HStack {
                 Text("Fluid Value").font(.headline)
                 Spacer()
@@ -7329,60 +8790,80 @@ private struct FluidValueInspectorView: View {
                 .accessibilityLabel("Fluid property")
                 .accessibilityIdentifier("inspector.layout.fluid.target")
             }
+            Text("Base fluid range · applies across all viewport widths. Device overrides are retained.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("inspector.layout.fluid.scope")
+            Text(state.fluidValueEffectiveSummary(for: target))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Effective \(target.title.lowercased())")
+                .accessibilityValue(state.fluidValueEffectiveSummary(for: target))
+                .accessibilityIdentifier("inspector.layout.fluid.current")
             switch state.fluidValue(for: target) {
             case .single(let value, let origin, let applicable, let skipped):
                 Text("Linear · \(origin == .authored ? "Authored" : "Defaulted") · \(applicable) applicable\(skipped == 0 ? "" : " · \(skipped) skipped")")
                     .font(.caption2).foregroundStyle(.secondary)
                     .accessibilityIdentifier("inspector.layout.fluid.provenance")
-                fluidFields(value)
-                if let current = state.currentResolvedFluidValue(for: target) {
-                    Text("Current \(state.viewportPreset.title) \(state.viewportPreset.width) px: \(format(current))")
-                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        .accessibilityIdentifier("inspector.layout.fluid.current")
-                }
-                Button("Remove Fluid Value") { remove() }
-                    .accessibilityHint("Restore the fixed authored value without writing an equivalent literal.")
+                fluidFields(value, context: context)
+                Button("Remove Fluid Value") { remove(context: context) }
+                    .accessibilityHint("Remove only the fluid range. Explicit device overrides remain; otherwise the fixed fallback is restored.")
                     .accessibilityIdentifier("inspector.layout.fluid.remove")
             case .mixed(let applicable, let skipped):
                 Text("Mixed fluid values · \(applicable) applicable\(skipped == 0 ? "" : " · \(skipped) skipped")")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    Button("Use One Fluid Value…") { seedDrafts() }
+                    Button("Use One Fluid Value…") { seedDrafts(context: context) }
                         .accessibilityIdentifier("inspector.layout.fluid.unify")
-                    Button("Remove") { remove() }
+                    Button("Remove") { remove(context: context) }
                         .accessibilityLabel("Remove mixed fluid values")
                         .accessibilityIdentifier("inspector.layout.fluid.removeMixed")
                 }
                 draftFields
             case .unavailable(let reason):
                 Text(reason).font(.caption).foregroundStyle(.secondary)
-                Button("Make Fluid") { seedDrafts() }
-                    .disabled(state.fluidFixedValue(for: target) == nil)
+                Button("Make Fluid") { seedDrafts(context: context) }
                     .accessibilityIdentifier("inspector.layout.fluid.enable")
-                if !minimum.isEmpty || !preferred.isEmpty || !maximum.isEmpty { draftFields }
+                if draftContext != nil { draftFields }
             }
             if let validation {
                 Text(validation).font(.caption).foregroundStyle(SiteForgeVisualSystem.danger)
                     .accessibilityIdentifier("inspector.layout.fluid.validation")
             }
-            Text(state.lastFluidValueAnnouncement).font(.caption2).foregroundStyle(.secondary)
+            Text(state.currentFluidValueAnnouncement(for: target)).font(.caption2).foregroundStyle(.secondary)
                 .accessibilityIdentifier("inspector.layout.fluid.announcement")
         }
         .onChange(of: target) { _, _ in resetDrafts() }
-        .onChange(of: focused) { previous, current in
-            if previous != nil, current == nil,
-               !minimum.isEmpty, !preferred.isEmpty, !maximum.isEmpty {
-                DispatchQueue.main.async { if focused == nil { commit(.focusLoss) } }
+        .onAppear {
+            if !state.supportedFluidValueTargets.contains(target), let first = state.supportedFluidValueTargets.first {
+                target = first
             }
         }
-        .onExitCommand { resetDrafts(); focused = nil; state.cancelFluidValueDraft() }
+        .onChange(of: focused) { previous, current in
+            if previous != nil, current == nil,
+               !minimum.isEmpty, !preferred.isEmpty, !maximum.isEmpty, let capturedContext = draftContext {
+                let capturedTarget = target
+                let capturedFields = [minimum, preferred, maximum]
+                DispatchQueue.main.async {
+                    guard focused == nil, draftContext == capturedContext, target == capturedTarget,
+                          [minimum, preferred, maximum] == capturedFields else { return }
+                    commit(.focusLoss)
+                }
+            }
+        }
+        .onChange(of: state.responsiveInspectorEditContext) { _, current in
+            if let draftContext, draftContext != current {
+                validation = "Context changed. Draft retained; Escape cancels before editing the new context."
+            }
+        }
+        .onExitCommand { resetDrafts(); focused = nil; state.cancelFluidValueDraft(target: target) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Fluid responsive value")
         .accessibilityIdentifier("inspector.layout.fluid")
     }
 
-    @ViewBuilder private func fluidFields(_ value: CanonicalFluidValue) -> some View {
-        let hasDraft = !minimum.isEmpty || !preferred.isEmpty || !maximum.isEmpty
+    @ViewBuilder private func fluidFields(_ value: CanonicalFluidValue, context: ResponsiveInspectorEditContext) -> some View {
+        let hasDraft = draftContext != nil
         if hasDraft { draftFields }
         else {
             HStack(spacing: SiteForgeVisualSystem.controlInset) {
@@ -7391,6 +8872,8 @@ private struct FluidValueInspectorView: View {
                 valueLabel("Max", value.maximum)
             }
             Button("Edit Fluid Value…") {
+                guard context == state.responsiveInspectorEditContext else { return }
+                draftContext = context
                 minimum = format(value.minimum); preferred = format(value.preferred); maximum = format(value.maximum)
                 focused = .minimum
             }
@@ -7413,7 +8896,7 @@ private struct FluidValueInspectorView: View {
                     .accessibilityIdentifier("inspector.layout.fluid.draftPreview")
             }
             HStack {
-                Button("Cancel") { resetDrafts(); state.cancelFluidValueDraft() }
+                Button("Cancel") { resetDrafts(); state.cancelFluidValueDraft(target: target) }
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("inspector.layout.fluid.cancel")
                 Spacer()
@@ -7425,9 +8908,13 @@ private struct FluidValueInspectorView: View {
     }
 
     private func fluidField(_ label: String, text: Binding<String>, focus: FluidValueDraftField) -> some View {
-        HStack {
+        let context = state.responsiveInspectorEditContext
+        return HStack {
             Text(label).frame(width: 72, alignment: .leading)
-            TextField(label, text: text).textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
+            TextField(label, text: Binding(get: { text.wrappedValue }, set: {
+                if draftContext == nil { draftContext = context }
+                text.wrappedValue = $0
+            })).textFieldStyle(.roundedBorder).focusedValue(\.siteforgeNativeTextEditor, true).monospacedDigit()
                 .focused($focused, equals: focus)
                 .onSubmit { commit(.keyboard) }
                 .accessibilityLabel("Fluid \(target.title) \(label.lowercased())")
@@ -7442,13 +8929,23 @@ private struct FluidValueInspectorView: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func seedDrafts() {
-        guard let fixed = state.fluidFixedValue(for: target) else { return }
-        minimum = format(max(target == .padding || target == .gap ? 0 : 1, fixed * 0.75))
-        preferred = format(fixed)
-        maximum = format(min(1_000_000_000, max(fixed, fixed * 1.25)))
+    private func seedDrafts(context: ResponsiveInspectorEditContext) {
+        guard context == state.responsiveInspectorEditContext else { return }
+        draftContext = context
+        if let fixed = state.fluidFixedValue(for: target) {
+            minimum = format(max(target == .padding || target == .gap ? 0 : 1, fixed * 0.75))
+            preferred = format(fixed)
+            let upper = min(1_000_000_000, max(fixed, fixed * 1.25))
+            maximum = format(target.accepts(upper) ? upper : fixed)
+            validation = nil
+        } else {
+            // Mixed fixed fallbacks have no legitimate primary value to seed.
+            // Let the user explicitly author one range rather than disabling
+            // the workflow or silently borrowing the first object's numbers.
+            minimum = ""; preferred = ""; maximum = ""
+            validation = "Mixed fixed values. Enter one complete range for the applicable objects; nothing has changed yet."
+        }
         focused = .minimum
-        validation = nil
     }
 
     private var draftPreview: CanonicalFluidValue? {
@@ -7461,6 +8958,7 @@ private struct FluidValueInspectorView: View {
     }
 
     private func commit(_ provenance: FluidValueProvenance) {
+        guard let draftContext else { return }
         let parsed = [minimum, preferred, maximum].map { GeometryInspectorNumberParser.parse($0) }
         guard case .success(let min) = parsed[0], case .success(let preferred) = parsed[1],
               case .success(let max) = parsed[2] else {
@@ -7472,18 +8970,18 @@ private struct FluidValueInspectorView: View {
             validation = "Minimum must be no greater than preferred, preferred no greater than maximum, and all values must be in range."
             return
         }
-        guard state.commitFluidValue(value, target: target, provenance: provenance) else {
+        guard state.commitFluidValue(value, target: target, provenance: provenance, expectedContext: draftContext) else {
             validation = state.fluidValueFailure?.localizedDescription; return
         }
         resetDrafts()
     }
 
-    private func remove() {
-        if state.commitFluidValue(nil, target: target, provenance: .pointer) { resetDrafts() }
+    private func remove(context: ResponsiveInspectorEditContext) {
+        if state.commitFluidValue(nil, target: target, provenance: .pointer, expectedContext: context) { resetDrafts() }
         else { validation = state.fluidValueFailure?.localizedDescription }
     }
 
-    private func resetDrafts() { minimum = ""; preferred = ""; maximum = ""; validation = nil }
+    private func resetDrafts() { minimum = ""; preferred = ""; maximum = ""; validation = nil; draftContext = nil }
     private func format(_ value: Double) -> String { GeometryInspectorNumberParser.format(value) }
 }
 
@@ -7492,8 +8990,9 @@ private struct FluidValueInspectorView: View {
 /// `WorkspaceShellState`; incomplete strings never enter the document model.
 private struct ContainerLayoutInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
+    let showFluidValues: () -> Void
     @FocusState private var focusedField: ContainerLayoutField?
-    @State private var drafts: [ContainerLayoutField: String] = [:]
+    @State private var drafts: [ContainerLayoutField: LayoutInspectorNumericDraft] = [:]
     @State private var validationMessage: String?
 
     var body: some View {
@@ -7521,12 +9020,20 @@ private struct ContainerLayoutInspectorView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Container layout")
         .accessibilityIdentifier("inspector.layout.container")
+        .onReceive(state.editCommitRequests) { request in
+            guard request.isAccepted else { return }
+            for field in ContainerLayoutField.allCases where drafts[field] != nil { commitNumeric(field, provenance: .focusLoss) }
+            if !drafts.isEmpty { request.reject() }
+        }
+        .onChange(of: state.documentSession.document.revision) { _, _ in adoptDrafts() }
+        .onChange(of: state.layoutInspectorDraftScope) { _, _ in adoptDrafts() }
         .onExitCommand {
-            guard let cancelledField = focusedField else { return }
+            guard let cancelledField = focusedField ?? drafts.keys.first else { return }
             drafts.removeAll()
             validationMessage = nil
             focusedField = nil
             state.cancelContainerLayoutDraft(field: cancelledField)
+            state.clearWorkspaceActionNotice()
         }
     }
 
@@ -7575,6 +9082,22 @@ private struct ContainerLayoutInspectorView: View {
                 }
                 subsetLabel(selection)
                 sourceLabel(field)
+                if state.containerLayoutHasFluidValue(for: field) {
+                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+                        Text(state.viewportPreset.responsiveBreakpoint == .desktop
+                            ? "Fluid spacing is active. Edit or remove its range instead of changing the fixed fallback."
+                            : state.hasContainerLayoutOverride(field)
+                                ? "A device override wins over fluid spacing; Reset Override restores the fluid value."
+                                : "Fluid spacing is inherited. A device edit creates an explicit override without changing its range.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Edit Fluid Values…", action: showFluidValues)
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Edit fluid \(field.title.lowercased())")
+                            .help("Open Fluid Value, then choose \(field.title) to edit or remove its range.")
+                            .accessibilityIdentifier("inspector.layout.container.\(field.rawValue).fluid")
+                    }
+                }
             }
         }
     }
@@ -7588,16 +9111,9 @@ private struct ContainerLayoutInspectorView: View {
             } else {
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
                     HStack(spacing: SiteForgeVisualSystem.controlInset) {
-                        Picker("Direction", selection: axisBinding(selection)) {
-                            ForEach(ContainerLayoutAxis.allCases, id: \.self) { axis in
-                                Text(axis.rawValue.capitalized).tag(axis as ContainerLayoutAxis?)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .disabled(!availability.isEnabled)
-                        .accessibilityLabel("Stack direction")
-                        .accessibilityValue(accessibilityValue(selection, field: .axis))
-                        .accessibilityIdentifier("inspector.layout.container.axis")
+                        Text("Direction").fixedSize()
+                            .accessibilityIdentifier("inspector.layout.container.axis.label")
+                        Spacer()
                         Button("Reset") { reset(.axis) }
                             .buttonStyle(.borderless)
                             .fixedSize()
@@ -7605,6 +9121,17 @@ private struct ContainerLayoutInspectorView: View {
                             .accessibilityLabel("Reset Direction to default")
                             .accessibilityIdentifier("inspector.layout.container.axis.reset")
                     }
+                        Picker("Direction", selection: axisBinding(selection)) {
+                            ForEach(ContainerLayoutAxis.allCases, id: \.self) { axis in
+                                Text(axis.rawValue.capitalized).tag(axis as ContainerLayoutAxis?)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .disabled(!availability.isEnabled)
+                        .accessibilityLabel("Stack direction")
+                        .accessibilityValue(accessibilityValue(selection, field: .axis))
+                        .accessibilityIdentifier("inspector.layout.container.axis")
                     subsetLabel(selection)
                     sourceLabel(.axis)
                 }
@@ -7654,8 +9181,13 @@ private struct ContainerLayoutInspectorView: View {
 
     private func numericBinding(_ field: ContainerLayoutField, selection: ContainerLayoutInspectorValue) -> Binding<String> {
         Binding(
-            get: { drafts[field] ?? displayNumber(selection) },
-            set: { drafts[field] = $0; validationMessage = nil }
+            get: { drafts[field]?.text ?? displayNumber(selection) },
+            set: {
+                guard drafts[field] != nil || $0 != displayNumber(selection) else { return }
+                if drafts[field] == nil { drafts[field] = .init(text: $0, committed: displayNumber(selection), scope: state.layoutInspectorDraftScope) }
+                else { drafts[field]?.text = $0 }
+                validationMessage = nil
+            }
         )
     }
 
@@ -7700,11 +9232,12 @@ private struct ContainerLayoutInspectorView: View {
         let revision = state.documentSession.document.revision
         let selection = state.selectionState.orderedIDs
         let breakpoint = state.viewportPreset
+        let scope = state.layoutInspectorDraftScope
         Task { @MainActor in
             guard state.documentSession.document.id == documentID,
                   state.documentSession.document.revision == revision,
                   state.selectionState.orderedIDs == selection,
-                  state.viewportPreset == breakpoint else { return }
+                  state.viewportPreset == breakpoint, state.layoutInspectorDraftScope == scope else { return }
             commit(field, value: value, operation: operation, provenance: .picker)
         }
     }
@@ -7713,9 +9246,15 @@ private struct ContainerLayoutInspectorView: View {
         _ field: ContainerLayoutField,
         provenance: ContainerLayoutProvenance
     ) {
-        let selection = state.containerLayoutValue(for: field)
-        let text = drafts[field] ?? displayNumber(selection)
-        switch GeometryInspectorNumberParser.parse(text) {
+        guard var draft = drafts[field] else { return }
+        draft.adopt(committed: displayNumber(state.containerLayoutValue(for: field)), scope: state.layoutInspectorDraftScope)
+        drafts[field] = draft
+        guard draft.canCommit(in: state.layoutInspectorDraftScope) else {
+            validationMessage = "Layout context or value changed. Draft retained; Escape cancels before editing the new context."
+            return
+        }
+        if draft.hasUnchangedNumericValue { drafts.removeValue(forKey: field); validationMessage = nil; return }
+        switch GeometryInspectorNumberParser.parse(draft.text) {
         case .success(let value):
             let canonical = ContainerLayoutValue.number(value)
             do { try ContainerLayoutCommandRegistry.validate(canonical, field: field) }
@@ -7725,7 +9264,11 @@ private struct ContainerLayoutInspectorView: View {
                     : "\(field.title) must be from 0 through 10,000."
                 return
             }
-            commit(field, value: canonical, operation: field.title.lowercased(), provenance: provenance)
+            if state.commitContainerLayout(field: field, value: canonical, provenance: provenance, draftScope: draft.scope) {
+                drafts.removeValue(forKey: field); validationMessage = nil
+            } else {
+                validationMessage = state.containerLayoutFailure?.localizedDescription ?? "Wait for the current canvas, then retry."
+            }
         case .failure:
             validationMessage = "Enter a complete finite number for \(field.title.lowercased())."
         }
@@ -7747,6 +9290,7 @@ private struct ContainerLayoutInspectorView: View {
     }
 
     private func reset(_ field: ContainerLayoutField) {
+        drafts.removeValue(forKey: field)
         if state.commitContainerLayout(field: field, value: nil, provenance: .pointer) {
             drafts.removeValue(forKey: field)
             validationMessage = nil
@@ -7758,6 +9302,14 @@ private struct ContainerLayoutInspectorView: View {
     private func displayNumber(_ selection: ContainerLayoutInspectorValue) -> String {
         guard case .single(.number(let value), _, _, _) = selection else { return "" }
         return GeometryInspectorNumberParser.format(value)
+    }
+    private func adoptDrafts() {
+        for field in Array(drafts.keys) {
+            drafts[field]?.adopt(committed: displayNumber(state.containerLayoutValue(for: field)), scope: state.layoutInspectorDraftScope)
+        }
+        if drafts.values.contains(where: { $0.conflict != nil }) {
+            validationMessage = "Layout context or value changed. Draft retained; Escape cancels before editing the new context."
+        }
     }
 
     private func accessibilityValue(
@@ -7804,6 +9356,10 @@ private struct ContainerLayoutInspectorView: View {
     private func sourceLabel(_ field: ContainerLayoutField) -> some View {
         if let source = state.containerLayoutResponsiveSource(for: field) {
             Text(source).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                .help(source)
+                .accessibilityLabel("\(field.title) source")
+                .accessibilityValue(source)
+                .accessibilityIdentifier("inspector.layout.container.\(field.rawValue).source")
         }
     }
 
@@ -7821,13 +9377,14 @@ private struct ResponsiveVisibilityInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+        let context = state.responsiveInspectorEditContext
+        return VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
             Text("Breakpoint Visibility").font(.headline)
             switch state.responsiveVisibilityValue {
             case .single(let visible, let origin, let source, let applicable, let skipped):
                 Toggle("Visible at \(state.viewportPreset.title)", isOn: Binding(
                     get: { visible },
-                    set: { _ = state.commitResponsiveVisibility($0, provenance: .pointer) }
+                    set: { _ = state.commitResponsiveVisibility($0, provenance: .pointer, expectedContext: context) }
                 ))
                 .accessibilityValue("\(visible ? "Visible" : "Hidden"); \(source.label(at: state.viewportPreset.responsiveBreakpoint)); \(origin.rawValue)")
                 .accessibilityIdentifier("inspector.layout.visibility")
@@ -7838,12 +9395,12 @@ private struct ResponsiveVisibilityInspectorView: View {
                     .accessibilityIdentifier("inspector.layout.visibility.mixed")
                 HStack(spacing: SiteForgeVisualSystem.controlInset) {
                     Button("Show") {
-                        _ = state.commitResponsiveVisibility(true, provenance: .pointer)
+                        _ = state.commitResponsiveVisibility(true, provenance: .pointer, expectedContext: context)
                     }
                     .accessibilityLabel("Show selected objects at \(state.viewportPreset.title)")
                     .accessibilityIdentifier("inspector.layout.visibility.show")
                     Button("Hide") {
-                        _ = state.commitResponsiveVisibility(false, provenance: .pointer)
+                        _ = state.commitResponsiveVisibility(false, provenance: .pointer, expectedContext: context)
                     }
                     .accessibilityLabel("Hide selected objects at \(state.viewportPreset.title)")
                     .accessibilityIdentifier("inspector.layout.visibility.hide")
@@ -7855,7 +9412,7 @@ private struct ResponsiveVisibilityInspectorView: View {
             }
             if state.viewportPreset != .desktop {
                 Button("Reset Visibility Override") {
-                    _ = state.commitResponsiveVisibility(nil, provenance: .pointer)
+                    _ = state.commitResponsiveVisibility(nil, provenance: .pointer, expectedContext: context)
                 }
                 .disabled(!state.hasVisibilityOverrideAtCurrentBreakpoint)
                 .accessibilityIdentifier("inspector.layout.visibility.reset")
@@ -7954,6 +9511,10 @@ private struct StatusBarView: View {
                 .accessibilityLabel("Document status: \(lifecycle.statusText)")
                 .accessibilityValue(lifecycle.statusText)
                 .accessibilityIdentifier("status.document")
+            if let notice = lifecycle.fileActionNotice {
+                Text(notice).font(.caption).lineLimit(1).help(notice)
+                    .accessibilityLabel(notice).accessibilityIdentifier("status.fileActionNotice")
+            }
             Divider().frame(height: 14)
             Text("Tool: \(state.selectedTool.title)")
                 .foregroundStyle(.secondary)
@@ -8148,6 +9709,7 @@ private struct StaticBuildDiagnosticsView: View {
     }
 
     private func chooseDestination() {
+        guard let compilation = state.staticBuildCompilation, compilation.canWrite else { return }
         let panel = NSSavePanel()
         panel.title = "Create Local Static Output"
         panel.prompt = "Build"
@@ -8155,7 +9717,7 @@ private struct StaticBuildDiagnosticsView: View {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let destination = panel.url else { return }
         let exists = FileManager.default.fileExists(atPath: destination.path)
-        state.writeStaticBuild(to: destination, replacingExisting: exists)
+        state.writeStaticBuild(to: destination, replacingExisting: exists, expectedCompilation: compilation)
     }
 
     private func icon(for severity: StaticBuildFindingSeverity) -> String {
@@ -8264,6 +9826,14 @@ private struct LocalPreviewCanvas: View {
             )
             ZStack(alignment: .topLeading) {
                 Color.white
+                if let background = snapshot.pageBackground {
+                    LocalPreviewObject(object: background, scale: scale, onFollow: onFollow)
+                        .frame(width: background.frame.size.width * scale, height: background.frame.size.height * scale)
+                        .position(x: inset + (background.frame.origin.x + background.frame.size.width / 2 - bounds.origin.x) * scale,
+                                  y: inset + (background.frame.origin.y + background.frame.size.height / 2 - bounds.origin.y) * scale)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
                 ForEach(snapshot.objects.filter { $0.isVisible && $0.navigationOwnerID == nil }.sorted { $0.paintOrder < $1.paintOrder }, id: \.id) { object in
                     LocalPreviewObject(object: object, scale: scale, onFollow: onFollow)
                         .frame(width: object.frame.size.width * scale, height: object.frame.size.height * scale)
@@ -8699,7 +10269,11 @@ struct SiteForgeCommands: Commands {
         // Modern SwiftUI input can use AppKitWindow as its responder rather
         // than a classic field editor. Its focus value is the native draft
         // context; NSTextView remains the inline-editor compatibility path.
+        // The command body can update before AppKit's deferred inline-editor
+        // focus transfer. Keep native editing commands enabled for the live
+        // scene's active editor rather than freezing the pre-focus snapshot.
         focusedNativeTextEditor == true || NSApp.keyWindow?.firstResponder is NSTextView
+            || commandState?.textEditingSession.isActive == true
     }
 
     private func routePasteboardAction(_ selector: Selector, objectAction: (WorkspaceShellState) -> Void) {
@@ -8713,11 +10287,13 @@ struct SiteForgeCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New") {
+                guard commandState?.prepareForWorkspaceAction(.context) != false else { return }
                 if let launchExperience { launchExperience.createBlankProject() }
                 else if WorkspaceLaunchRequestQueue.shared.enqueue(.new) { openWindow(id: "workspace") }
             }
                 .keyboardShortcut("n", modifiers: .command)
             Button("Open…") {
+                guard commandState?.prepareForWorkspaceAction(.context) != false else { return }
                 if let launchExperience { launchExperience.presentOpenPanel() }
                 else if let url = NativeProjectOpenPanel.chooseProject(),
                         WorkspaceLaunchRequestQueue.shared.enqueue(.open(url)) { openWindow(id: "workspace") }
@@ -8733,6 +10309,9 @@ struct SiteForgeCommands: Commands {
         }
 
         CommandGroup(replacing: .saveItem) {
+            Button("Site Settings…") { commandState?.presentWebsiteSettings() }
+                .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.websiteSettingsIdentity == nil)
+            Divider()
             Button("Save") {
                 // Resolve at the native menu action boundary. SwiftUI can
                 // retain a pre-menu FocusedObject snapshot while AppKit clears
@@ -8740,12 +10319,17 @@ struct SiteForgeCommands: Commands {
                 // to the actual workspace window and therefore owns this
                 // command deterministically.
                 guard let target = commandState else { return }
+                guard target.prepareForWorkspaceAction(.save) else { return }
                 if target.lifecycle.fileURL == nil { target.lifecycle.presentSavePanel() }
                 else { Task { _ = await target.lifecycle.save() } }
             }
             .keyboardShortcut("s", modifiers: .command)
-            .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.lifecycle.canSave != true)
-            Button("Save As…") { commandState?.lifecycle.presentSavePanel() }
+            .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.lifecycle.phase == .saving
+                || (commandState?.lifecycle.canSave != true && !nativeTextResponderIsActive))
+            Button("Save As…") {
+                guard let target = commandState, target.prepareForWorkspaceAction(.saveAs) else { return }
+                target.lifecycle.presentSavePanel()
+            }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
             .disabled(launchExperience?.isWorkspaceVisible != true || commandState == nil)
             Button("Revert to Saved") {
@@ -8756,15 +10340,17 @@ struct SiteForgeCommands: Commands {
         }
         CommandGroup(replacing: .undoRedo) {
             Button("Undo") {
-                commandState?.undo()
+                if nativeTextResponderIsActive { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) }
+                else { commandState?.undo() }
             }
                 .keyboardShortcut("z", modifiers: .command)
-                .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.canUndo != true)
+                .disabled(launchExperience?.isWorkspaceVisible != true || (!nativeTextResponderIsActive && commandState?.canUndo != true))
             Button("Redo") {
-                commandState?.redo()
+                if nativeTextResponderIsActive { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }
+                else { commandState?.redo() }
             }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(launchExperience?.isWorkspaceVisible != true || commandState?.canRedo != true)
+                .disabled(launchExperience?.isWorkspaceVisible != true || (!nativeTextResponderIsActive && commandState?.canRedo != true))
         }
 
         CommandGroup(replacing: .pasteboard) {
@@ -9102,10 +10688,13 @@ private struct SiteForgeSupplementaryCommands: Commands {
         }
 
         CommandMenu("Preview") {
-            Button("Open Preview") {
+            Button("Preview Website in Safari") { state?.openBrowserPreview() }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .disabled(state == nil)
+            Button("Canvas Device Preview") {
                 state?.openPreview()
             }
-            .keyboardShortcut("p", modifiers: [.command, .shift])
+            .keyboardShortcut("p", modifiers: [.command, .option])
             .disabled(state == nil)
             // Commands are installed once for the native menu bar while the
             // focused workspace can continue publishing presentation state.
@@ -9395,12 +10984,9 @@ enum CanvasAuthoredTextLayerFactory {
 final class NativeCanvasViewportView: NSView {
     var viewportState = try! CanvasViewportState() {
         didSet {
-            // A raster plan is defined in one immutable viewport generation.
-            // Never visually bridge it into a different generation: doing so
-            // can place the tile surface at a different rect than the live
-            // selection/hit-test/accessibility geometry.  The model prepares
-            // the matching plan asynchronously; until it arrives, keep the
-            // editor honest by showing no authored raster for that generation.
+            // Pan/zoom do not alter world layout. Recompose the last valid
+            // immutable raster while its sharper replacement is prepared;
+            // breakpoint/artboard changes cannot reuse that layout snapshot.
             discardRasterIfViewportGenerationChanged()
             applyArtboardClipMask()
             rebuildOverlay()
@@ -9409,7 +10995,10 @@ final class NativeCanvasViewportView: NSView {
         }
     }
     var renderPlan: CanvasRenderPlan? {
-        didSet { adoptRenderPlan() }
+        didSet {
+            if oldValue?.identity.documentID != renderPlan?.identity.documentID { discardRaster() }
+            adoptRenderPlan()
+        }
     }
     var selectionOverlayPlan: SelectionOverlayPlan? {
         didSet {
@@ -9506,6 +11095,11 @@ final class NativeCanvasViewportView: NSView {
         contentContainer.name = "renderer.authored-content"
         textContainer.name = "renderer.authored-text"
         overlayContainer.name = "renderer.editor-overlays"
+        // Reprojection matrices are top-left coordinate transforms, not
+        // center-anchored animations. Otherwise scaling adds an unintended
+        // (1 - scale) * half-viewport displacement before replacement adopts.
+        contentContainer.anchorPoint = .zero
+        textContainer.anchorPoint = .zero
         // AppKit already flips this view's backing layer. Flipping an owned
         // container again reflects its child coordinates around its height:
         // pointer Y=80 would paint at height-80. Keep composition containers
@@ -10082,14 +11676,14 @@ final class NativeCanvasViewportView: NSView {
     }
 
     private func adoptRenderPlan() {
-        guard let plan = renderPlan else { return }
+        guard let plan = renderPlan else { discardRaster(); return }
         // SwiftUI can deliver the state values in separate reconciliation
         // passes.  A plan from an earlier pan/zoom/fit/preset generation must
         // not be transformed to look current: the tile's local origin would
         // no longer share the exact world-to-viewport rect used by overlays.
         // Drop it and wait for the already-scheduled matching generation.
         guard plan.viewport == viewportState else {
-            discardRaster()
+            discardRasterIfViewportGenerationChanged()
             overlayContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
             rebuildAccessibility(plan)
             return
@@ -10106,7 +11700,7 @@ final class NativeCanvasViewportView: NSView {
             rebuildAccessibility(plan)
             return
         }
-        let objectMap = Dictionary(uniqueKeysWithValues: plan.authoredObjects.map { ($0.id, $0) })
+        let objectMap = Dictionary(uniqueKeysWithValues: plan.paintObjects.map { ($0.id, $0) })
         // Tile membership, tile origins, and object raster positions are all
         // defined in the plan's immutable viewport generation. The view may
         // already have received a newer pan/zoom/resize when this asynchronous
@@ -10152,6 +11746,11 @@ final class NativeCanvasViewportView: NSView {
 
     private func discardRasterIfViewportGenerationChanged() {
         guard let rasterViewportState, rasterViewportState != viewportState else { return }
+        if rasterViewportState.sceneID == viewportState.sceneID,
+           rasterViewportState.contentBounds == viewportState.contentBounds {
+            applyCompositorTransformIfPossible()
+            return
+        }
         discardRaster()
     }
 
@@ -10373,7 +11972,10 @@ final class NativeCanvasViewportView: NSView {
                 }()
                 control.frame = layer.frame.insetBy(dx: -4, dy: -4)
             } else {
-                layer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.08).cgColor
+                // Settled selection must not tint the authored color. A live
+                // transform has only a restrained, noncanonical preview wash.
+                layer.fillColor = overlay.kind == "transform-preview"
+                    ? NSColor.controlAccentColor.withAlphaComponent(0.025).cgColor : nil
                 layer.lineWidth = 2
                 layer.lineDashPattern = overlay.kind == "transform-preview" ? [5, 3] : nil
             }
@@ -10843,7 +12445,9 @@ final class CanvasContentTileLayer: CALayer {
             // transparent source pixels. Missing-resource treatment is drawn
             // explicitly only after native decode fails below.
             case .imagePlaceholder: .clear
-            case .textPlaceholder: .labelColor.withAlphaComponent(0.12)
+            // A legacy text-placeholder style identifies plain text, not an
+            // authored background. Editor selection/focus owns its own chrome.
+            case .textPlaceholder: .clear
             }
             // Object opacity applies once to the complete authored layer
             // stack. Individual layer alpha remains part of normal source-over
@@ -10871,7 +12475,7 @@ final class CanvasContentTileLayer: CALayer {
             } else if let rgba = object.fillRGBA, rgba.count == 4 {
                 // Compatibility for pre-v1 render snapshots only. Workspace
                 // preparation always supplies `fillLayers` for canonical data.
-                renderedSurface = NSColor(calibratedRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+                renderedSurface = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
                 context.setFillColor(renderedSurface.cgColor)
                 context.fill(rect)
             } else {
@@ -10943,7 +12547,7 @@ final class CanvasContentTileLayer: CALayer {
                 }
                 context.strokePath()
                 context.restoreGState()
-            } else if object.style != .imagePlaceholder || !didDrawImage {
+            } else if object.style != .textPlaceholder && (object.style != .imagePlaceholder || !didDrawImage) {
                 let baseStroke = object.style == .frameSurface
                     ? NSColor.separatorColor.withAlphaComponent(0.85)
                     : NSColor.separatorColor
@@ -10952,15 +12556,9 @@ final class CanvasContentTileLayer: CALayer {
                 context.addPath(objectPath)
                 context.strokePath()
             }
-            if [.frameSurface, .sectionSurface, .stackSurface, .gridSurface].contains(object.style), let name = object.displayName {
-                drawFrameName(
-                    name,
-                    in: rect,
-                    zoom: viewportState.zoom.value,
-                    backgroundColor: renderedSurface,
-                    context: context
-                )
-            }
+            // Names belong to Layers and editor selection badges, never to
+            // authored surface pixels. Header/Footer/Section role names are
+            // not website text and must not survive export or deselection.
             // Plain text is composed once by `textContainer` from the same
             // resolved viewport rect. Tile layers deliberately raster only
             // surfaces so a line crossing a tile boundary cannot duplicate,
@@ -10971,7 +12569,8 @@ final class CanvasContentTileLayer: CALayer {
 
     private func nsColor(_ rgba: [Double]) -> NSColor? {
         guard rgba.count == 4 else { return nil }
-        return NSColor(calibratedRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+        // Canonical normalized channels and CSS output are sRGB, not Generic RGB.
+        return NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
     }
 
     private func drawAuthoredFillLayer(_ layer: CanvasAuthoredFillLayer, in rect: CGRect, context: CGContext) {
@@ -10986,8 +12585,9 @@ final class CanvasContentTileLayer: CALayer {
             let colors = ordered.compactMap { nsColor($0.rgba)?.cgColor }
             guard ordered.count >= 2,
                   colors.count == ordered.count,
+                  let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
                   let gradient = CGGradient(
-                    colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                    colorsSpace: colorSpace,
                     colors: colors as CFArray,
                     locations: ordered.map { CGFloat($0.position) }
                   ) else { return }
@@ -11000,7 +12600,12 @@ final class CanvasContentTileLayer: CALayer {
                 x: rect.minX + rect.width * line.end.x,
                 y: rect.minY + rect.height * line.end.y
             )
-            context.drawLinearGradient(gradient, start: start, end: end, options: [])
+            // SF-0508-003: normalized sampling and CSS extend the first/last
+            // stop beyond the interpolation segment. Core Graphics does not
+            // do so by default, leaving transparent diagonal corner wedges.
+            // The existing authored-shape clip still bounds these endpoint caps.
+            context.drawLinearGradient(gradient, start: start, end: end,
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
         }
     }
 
@@ -11023,35 +12628,6 @@ final class CanvasContentTileLayer: CALayer {
             ]
         )
         drawAppKitText(attributed, in: layout.lineFragmentRect, context: context)
-    }
-
-    private func drawFrameName(
-        _ name: String,
-        in rect: CGRect,
-        zoom: Double,
-        backgroundColor: NSColor,
-        context: CGContext
-    ) {
-        let labelRect = rect.insetBy(dx: max(6, 8 * zoom), dy: max(5, 7 * zoom))
-        guard labelRect.width > 20, labelRect.height > 12 else { return }
-        let deviceColor = backgroundColor.usingColorSpace(.deviceRGB) ?? backgroundColor
-        let luminance = 0.2126 * deviceColor.redComponent
-            + 0.7152 * deviceColor.greenComponent
-            + 0.0722 * deviceColor.blueComponent
-        // This label is native-editor chrome rather than a document property.
-        // Choose its contrast from the resolved surface so it remains useful
-        // with both the default pale Frame and authored dark fills.
-        let foreground = luminance > 0.52
-            ? NSColor.black.withAlphaComponent(0.74)
-            : NSColor.white.withAlphaComponent(0.88)
-        let attributed = NSAttributedString(
-            string: name,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: max(10, 12 * zoom), weight: .medium),
-                .foregroundColor: foreground,
-            ]
-        )
-        drawAppKitText(attributed, in: labelRect, context: context)
     }
 
     /// Converts AppKit text drawing at the tile boundary. The canonical world,
@@ -11154,23 +12730,8 @@ struct CanvasTextLayout: Equatable {
 
     private static func resolveFont(_ typography: CanvasTypography?, size: CGFloat) -> NSFont {
         guard let typography else { return .systemFont(ofSize: size) }
-        let weight: NSFont.Weight = switch typography.weight {
-        case "medium": .medium
-        case "semibold": .semibold
-        case "bold": .bold
-        default: .regular
-        }
-        if typography.authoredFamily == CanonicalTypography.defaultFamily || typography.usesFallback {
-            return .systemFont(ofSize: size, weight: weight)
-        }
-        let managerWeight: Int = switch typography.weight {
-        case "medium": 6
-        case "semibold": 9
-        case "bold": 10
-        default: 5
-        }
-        return NSFontManager.shared.font(withFamily: typography.resolvedFamily, traits: [], weight: managerWeight, size: size)
-            ?? .systemFont(ofSize: size, weight: weight)
+        return ResponsiveTextMetrics.platformFont(family: typography.authoredFamily,
+            weight: typography.weight, size: Double(size), opticalSize: typography.size) as NSFont
     }
 
     var isInsideObjectRect: Bool {

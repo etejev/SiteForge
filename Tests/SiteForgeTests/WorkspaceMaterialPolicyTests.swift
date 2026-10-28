@@ -4,6 +4,24 @@ import XCTest
 @testable import SiteForge
 
 final class WorkspaceMaterialPolicyTests: XCTestCase {
+    @MainActor
+    func testNativeOverflowPaintsTheDisplayedPullDownItemAndRetainsAccessibleControl() throws {
+        let button = ShellTabOverflowPopUpButton(frame: .init(x: 0, y: 0, width: 28, height: 28), pullsDown: true)
+        button.addItems(withTitles: ["", "Pages", "Layers"])
+        button.updateDisplayedItem(title: "Pages", fullWidth: false, fontSize: 12)
+        let displayed = try XCTUnwrap(button.item(at: 0))
+        XCTAssertNotNil(displayed.image, "A pull-down menu must paint the first item's icon, not a hidden NSButton.image")
+        XCTAssertTrue(displayed.image?.isTemplate == true)
+        XCTAssertEqual(button.imagePosition, .imageOnly)
+        XCTAssertTrue(button.acceptsFirstResponder)
+        XCTAssertTrue(button.canBecomeKeyView)
+        button.updateDisplayedItem(title: "Layers", fullWidth: true, fontSize: 24)
+        XCTAssertEqual(displayed.title, "Layers")
+        XCTAssertEqual(button.imagePosition, .imageTrailing)
+        XCTAssertEqual(button.font?.pointSize, 24)
+        XCTAssertEqual(button.numberOfItems, 3)
+    }
+
     func testSelectedReferencePaneAllocationKeepsCanvasDominantAtMinimumAndMaximizedWidths() {
         for width in [CGFloat(1100), 1280, 1536, 1710, 2560] {
             let navigator = WorkspaceMetrics.navigatorMaximumWidth(for: width)
@@ -13,8 +31,32 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(width - navigator - inspector - 2, WorkspaceMetrics.minimumCanvasWidth)
             XCTAssertGreaterThanOrEqual(inspector, navigator)
         }
-        XCTAssertEqual(WorkspaceMetrics.navigatorMaximumWidth(for: 1536), 314.88, accuracy: 0.001)
-        XCTAssertEqual(WorkspaceMetrics.inspectorMaximumWidth(for: 1536), 399.36, accuracy: 0.001)
+        XCTAssertEqual(WorkspaceMetrics.navigatorMaximumWidth(for: 1536), 360, accuracy: 0.001)
+        XCTAssertEqual(WorkspaceMetrics.inspectorMaximumWidth(for: 1536), 420, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testNormalPaneMinimaFitAllFiveMeasuredDestinationLabelsWithoutOverflow() {
+        for width in [CGFloat(1280), 1440, 1710, 2560] {
+            for (labels, paneWidth) in [
+                (NavigatorTab.allCases.map(\.title), WorkspaceMetrics.navigatorMinimumWidth(for: width)),
+                (InspectorTab.allCases.map(\.title), WorkspaceMetrics.inspectorMinimumWidth(for: width)),
+            ] {
+                let minima = labels.map { Double(ceil(($0 as NSString).size(withAttributes: [
+                    .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                ]).width) + SiteForgeVisualSystem.microSpacing * 2) }
+                let available = Double(paneWidth - 2 * SiteForgeVisualSystem.panePadding - 2 * SiteForgeVisualSystem.tabStripInset)
+                for selected in minima.indices {
+                    let result = ShellTabLayoutPolicy.allocate(width: available, minimumWidths: minima,
+                        selected: selected, gap: Double(SiteForgeVisualSystem.hairlineSpacing))
+                    XCTAssertFalse(result.overflow, "All normal-size destinations must be directly visible: \(labels)")
+                    XCTAssertEqual(result.indices, Array(minima.indices))
+                    for index in minima.indices { XCTAssertGreaterThanOrEqual(result.widths[index], minima[index]) }
+                }
+            }
+        }
+        XCTAssertEqual(WorkspaceMetrics.navigatorMinimumWidth(for: 1100), 250)
+        XCTAssertEqual(WorkspaceMetrics.inspectorMinimumWidth(for: 1100), 280)
     }
     func testConceptAlignedSettingsHasOneSidebarIncludingInheritedAccessibility() {
         XCTAssertEqual(SettingsDestination.allCases.map(\.rawValue),
@@ -22,8 +64,8 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertEqual(Set(SettingsDestination.allCases.map(\.title)).count,
                        SettingsDestination.allCases.count)
         XCTAssertTrue(SettingsDestination.allCases.allSatisfy { !$0.symbol.isEmpty })
-        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 256)
-        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 400)
+        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 344)
+        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 384)
         XCTAssertGreaterThanOrEqual(SiteForgeVisualSystem.inspectorBottomClearance, 80)
     }
 
@@ -124,6 +166,30 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
     // workspace is deliberately distinct from its authored artboard in both
     // appearances, and normal pane widths can present five one-line labels.
     @MainActor
+    func testDarkEditorialPaletteSeparatesChromeWithoutRecoloringWebsitePaper() throws {
+        let appearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
+        var colors: [NSColor] = []
+        appearance.performAsCurrentDrawingAppearance {
+            colors = [SiteForgeVisualSystem.chromeSurfaceNSColor,
+                      SiteForgeVisualSystem.elevatedSurfaceNSColor,
+                      SiteForgeVisualSystem.canvasPasteboardNSColor,
+                      SiteForgeVisualSystem.artboardSurfaceNSColor,
+                      SiteForgeVisualSystem.chromeSelectionNSColor].compactMap {
+                $0.usingColorSpace(.sRGB)
+            }
+        }
+        XCTAssertEqual(colors.count, 5)
+        let chrome = colors[0], elevated = colors[1], pasteboard = colors[2], paper = colors[3]
+        XCTAssertLessThan(chrome.redComponent, elevated.redComponent)
+        XCTAssertLessThan(elevated.redComponent, pasteboard.redComponent)
+        XCTAssertLessThan(pasteboard.blueComponent, 0.30)
+        XCTAssertGreaterThan(paper.redComponent, 0.98)
+        XCTAssertEqual(paper.redComponent, paper.blueComponent, accuracy: 0.001)
+        XCTAssertEqual(colors[4].alphaComponent, 0.20, accuracy: 0.001)
+        XCTAssertTrue(colors.prefix(4).allSatisfy { $0.alphaComponent == 1 })
+    }
+
+    @MainActor
     func testVisualSystemSeparatesPasteboardArtboardAndSingleRowPaneDestinations() throws {
         func luminance(_ color: NSColor, appearance: NSAppearance.Name) throws -> CGFloat {
             let nativeAppearance = try XCTUnwrap(NSAppearance(named: appearance))
@@ -166,8 +232,8 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertEqual(SiteForgeVisualSystem.settingsSidebarWidth, 250)
         XCTAssertGreaterThan(SiteForgeVisualSystem.settingsContentMaxWidth,
                              SiteForgeVisualSystem.settingsSidebarWidth)
-        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 256)
-        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 400)
+        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 344)
+        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 384)
         XCTAssertLessThan(SiteForgeVisualSystem.navigatorIdealWidth, SiteForgeVisualSystem.inspectorIdealWidth)
         XCTAssertTrue(WorkspaceMetrics.navigatorWidth.contains(SiteForgeVisualSystem.navigatorIdealWidth))
         XCTAssertTrue(WorkspaceMetrics.inspectorWidth.contains(SiteForgeVisualSystem.inspectorIdealWidth))

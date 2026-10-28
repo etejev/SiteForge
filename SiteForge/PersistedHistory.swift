@@ -8,10 +8,9 @@ enum TransactionIdentifierDomain: StableIdentifierDomain {
 typealias TransactionID = StableIdentifier<TransactionIdentifierDomain>
 
 struct PersistedHistorySnapshot: Codable, Equatable, Sendable {
-    /// Version two fixes the v1 inverse-index encoding for a node moved backwards
-    /// within its current parent. V1 remains readable through a deterministic
-    /// in-memory migration so existing packages retain exact undo behavior.
-    static let currentSchemaVersion = 2
+    /// V3 adds canonical website metadata commands. V2 and the v1 inverse-index
+    /// adapter remain readable; older schemas cannot smuggle in newer commands.
+    static let currentSchemaVersion = 3
 
     let format: String
     let schemaVersion: Int
@@ -320,6 +319,11 @@ private extension PersistedHistoryStore {
         case "insertGuide": try requireCommandPayload(value, keys: ["guide", "index"])
         case "setGuidePosition": try requireCommandPayload(value, keys: ["guideID", "position"])
         case "removeGuide": try requireCommandPayload(value, keys: ["guideID"])
+        case "insertImageAsset": try requireCommandPayload(value, keys: ["asset", "index"])
+        case "updateImageAsset": try requireCommandPayload(value, keys: ["asset"])
+        case "removeImageAsset": try requireCommandPayload(value, keys: ["assetID"])
+        case "setColorTokens": try requireCommandPayload(value, keys: ["tokens"])
+        case "setWebsiteMetadata": try requireCommandPayload(value, keys: ["documentID", "metadata"])
         case "batch":
             guard let commands = value as? [Any] else { throw PersistedHistoryError.corrupt }
             for command in commands { try validateDocumentCommand(command) }
@@ -374,9 +378,10 @@ private extension PersistedHistoryStore {
         for entry in snapshot.undoEntries.reversed() {
             try cancellation.check()
             let current = undoDocument
-            let availability = registry.availability(for: entry.inverse, in: undoDocument)
-            guard availability.isEnabled else { throw PersistedHistoryError.inverseMismatch }
-            _ = try registry.apply(entry.inverse, to: &undoDocument)
+            // apply performs the same complete availability validation. Do not
+            // replay/validate the candidate twice before checking its inverse.
+            do { _ = try registry.apply(entry.inverse, to: &undoDocument) }
+            catch CommandExecutionError.disabled(_) { throw PersistedHistoryError.inverseMismatch }
             var roundTrip = undoDocument
             _ = try registry.apply(entry.forward, to: &roundTrip)
             guard sameContent(roundTrip, current) else { throw PersistedHistoryError.inverseMismatch }
@@ -386,9 +391,8 @@ private extension PersistedHistoryStore {
         for entry in snapshot.redoEntries.reversed() {
             try cancellation.check()
             let before = redoDocument
-            let availability = registry.availability(for: entry.forward, in: redoDocument)
-            guard availability.isEnabled else { throw PersistedHistoryError.inverseMismatch }
-            _ = try registry.apply(entry.forward, to: &redoDocument)
+            do { _ = try registry.apply(entry.forward, to: &redoDocument) }
+            catch CommandExecutionError.disabled(_) { throw PersistedHistoryError.inverseMismatch }
             var roundTrip = redoDocument
             _ = try registry.apply(entry.inverse, to: &roundTrip)
             guard sameContent(roundTrip, before) else { throw PersistedHistoryError.inverseMismatch }
@@ -396,22 +400,28 @@ private extension PersistedHistoryStore {
     }
 
     static func sameContent(_ lhs: CanonicalDocument, _ rhs: CanonicalDocument) -> Bool {
-        lhs.id == rhs.id && lhs.pages == rhs.pages && lhs.guides == rhs.guides
+        var left = lhs, right = rhs
+        left.revision = 0; right.revision = 0
+        return left == right
     }
 
     static func migrate(_ snapshot: PersistedHistorySnapshot) throws -> PersistedHistorySnapshot {
+        guard (snapshot.undoEntries + snapshot.redoEntries).allSatisfy({
+            $0.forward.minimumPersistedHistorySchema <= snapshot.schemaVersion
+                && $0.inverse.minimumPersistedHistorySchema <= snapshot.schemaVersion
+        }) else { throw PersistedHistoryError.corrupt }
         switch snapshot.schemaVersion {
         case PersistedHistorySnapshot.currentSchemaVersion:
             return snapshot
-        case 1:
+        case 1, 2:
             return PersistedHistorySnapshot(
                 format: snapshot.format,
                 schemaVersion: PersistedHistorySnapshot.currentSchemaVersion,
                 documentID: snapshot.documentID,
                 documentRevision: snapshot.documentRevision,
                 boundaryRevision: snapshot.boundaryRevision,
-                undoEntries: try snapshot.undoEntries.map(migratingVersionOneEntry),
-                redoEntries: try snapshot.redoEntries.map(migratingVersionOneEntry)
+                undoEntries: try snapshot.undoEntries.map { snapshot.schemaVersion == 1 ? try migratingVersionOneEntry($0) : $0 },
+                redoEntries: try snapshot.redoEntries.map { snapshot.schemaVersion == 1 ? try migratingVersionOneEntry($0) : $0 }
             )
         default:
             throw PersistedHistoryError.unsupportedSchema(snapshot.schemaVersion)

@@ -17,6 +17,10 @@ final class SiteForgeApplicationDelegate: NSObject, NSApplicationDelegate {
         windowPresentation = owner
         owner.install()
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        RecoverySessionEvidence.shared.markCleanShutdown()
+    }
 }
 
 @main

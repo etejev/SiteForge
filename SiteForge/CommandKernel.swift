@@ -72,12 +72,13 @@ enum PageEdit {
     case rename(String)
     case route(String)
     case duplicate
+    case duplicateNamed(name: String, route: String)
     case delete
     case move(Int)
 
     var commandName: CommandName {
         switch self {
-        case .create, .duplicate: .insertPage
+        case .create, .duplicate, .duplicateNamed: .insertPage
         case .rename: .renamePage
         case .route: .setPageRoute
         case .delete: .removePage
@@ -139,7 +140,19 @@ struct PageCommandRegistry {
             let destination = document.pages.first { $0.id != page.id }?.id
             guard let destination else { throw PageAuthoringError.protectedPage }
             return .init(command: .batch(commands), selectedPageID: destination)
-        case .duplicate:
+        case .duplicate, .duplicateNamed:
+            let copyName: String
+            let copyRoute: String
+            if case .duplicateNamed(let name, let route) = edit {
+                copyName = try StaticPagePolicy.name(name)
+                copyRoute = try StaticPagePolicy.route(route).rawValue
+                guard !document.pages.contains(where: { $0.route.rawValue.lowercased() == copyRoute }) else {
+                    throw PageAuthoringError.collision
+                }
+            } else {
+                copyName = try StaticPagePolicy.duplicateName(page.name)
+                copyRoute = StaticPagePolicy.uniqueRoute(stem: "/page-copy", in: document)
+            }
             let newID = PageID()
             let ids = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, NodeID()) })
             let nodes = try page.nodes.map { node in
@@ -185,15 +198,25 @@ struct PageCommandRegistry {
                 return DocumentNode(id: ids[node.id]!, kind: node.kind, name: node.name,
                                     parent: parent, childIDs: node.childIDs.map { ids[$0]! }, properties: properties)
             }
-            let copy = DocumentPage(id: newID, name: try StaticPagePolicy.duplicateName(page.name),
-                route: .init(rawValue: StaticPagePolicy.uniqueRoute(stem: "/page-copy", in: document)),
+            let copy = DocumentPage(id: newID, name: copyName,
+                route: .init(rawValue: copyRoute),
                 role: .standard, provenance: .authored,
                 rootNodeIDs: page.rootNodeIDs.map { ids[$0]! }, nodes: nodes)
             let guides = document.guides.filter { $0.pageID == page.id }.enumerated().map { offset, guide in
                 DocumentCommand.insertGuide(.init(guide: .init(pageID: newID, axis: guide.axis,
                     position: guide.position, provenance: guide.provenance), index: document.guides.count + offset))
             }
-            return .init(command: .batch([.insertPage(.init(page: copy, index: index + 1))] + guides), selectedPageID: newID)
+            var commands = [DocumentCommand.insertPage(.init(page: copy, index: index + 1))] + guides
+            // Page settings belong to the document, not DocumentPage. Keep
+            // their authored intent atomic with the independent content copy.
+            if var metadata = document.websiteMetadata,
+               let original = metadata.pages.first(where: { $0.pageID == page.id }) {
+                metadata.pages.append(.init(pageID: newID, title: original.title,
+                    description: original.description, allowsIndexing: original.allowsIndexing))
+                metadata.pages.sort { $0.pageID.description < $1.pageID.description }
+                commands.append(.setWebsiteMetadata(.init(documentID: document.id, metadata: metadata)))
+            }
+            return .init(command: .batch(commands), selectedPageID: newID)
         }
     }
 
@@ -229,6 +252,7 @@ enum CommandName: String, CaseIterable, Codable, Sendable {
     case updateImageAsset = "document.asset.image.update"
     case removeImageAsset = "document.asset.image.remove"
     case setColorTokens = "document.colorTokens.set"
+    case setWebsiteMetadata = "document.websiteMetadata.set"
     case batch = "document.batch"
     case undo = "history.undo"
     case redo = "history.redo"
@@ -358,6 +382,26 @@ struct SetColorTokensCommand: Codable, Equatable, Sendable {
     let tokens: [LocalColorToken]
 }
 
+struct SetWebsiteMetadataCommand: Codable, Equatable, Sendable {
+    let documentID: DocumentID
+    let metadata: WebsiteMetadata?
+    init(documentID: DocumentID, metadata: WebsiteMetadata?) {
+        self.documentID = documentID; self.metadata = metadata
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case documentID, metadata }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        documentID = try values.decode(DocumentID.self, forKey: .documentID)
+        metadata = try values.decodeIfPresent(WebsiteMetadata.self, forKey: .metadata)
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(documentID, forKey: .documentID)
+        try values.encode(metadata, forKey: .metadata)
+    }
+}
+
 indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case insertPage(InsertPageCommand)
     case removePage(RemovePageCommand)
@@ -376,7 +420,16 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case updateImageAsset(UpdateImageAssetCommand)
     case removeImageAsset(RemoveImageAssetCommand)
     case setColorTokens(SetColorTokensCommand)
+    case setWebsiteMetadata(SetWebsiteMetadataCommand)
     case batch([DocumentCommand])
+
+    var minimumPersistedHistorySchema: Int {
+        switch self {
+        case .setWebsiteMetadata: 3
+        case .batch(let commands): commands.map(\.minimumPersistedHistorySchema).max() ?? 1
+        default: 1
+        }
+    }
 
     var name: CommandName {
         switch self {
@@ -397,6 +450,7 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
         case .updateImageAsset: .updateImageAsset
         case .removeImageAsset: .removeImageAsset
         case .setColorTokens: .setColorTokens
+        case .setWebsiteMetadata: .setWebsiteMetadata
         case .batch: .batch
         }
     }
@@ -448,6 +502,8 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
             [command.assetID.commandTarget]
         case .setColorTokens(let command):
             command.tokens.map { CommandTarget(namespace: "color-token", rawValue: $0.id.rawValue) }
+        case .setWebsiteMetadata(let command):
+            [command.documentID.commandTarget] + (command.metadata?.pages.map { $0.pageID.commandTarget } ?? [])
         case .batch(let commands):
             commands.flatMap(\.targets)
         }
@@ -513,6 +569,7 @@ struct CommandRegistry {
             CommandDescriptor(name: .updateImageAsset, title: "Edit Image Asset", mutatesDocument: true),
             CommandDescriptor(name: .removeImageAsset, title: "Delete Image Asset", mutatesDocument: true),
             CommandDescriptor(name: .setColorTokens, title: "Edit Color Tokens", mutatesDocument: true),
+            CommandDescriptor(name: .setWebsiteMetadata, title: "Edit Site Settings", mutatesDocument: true),
             CommandDescriptor(name: .batch, title: "Grouped Edit", mutatesDocument: true),
             CommandDescriptor(name: .undo, title: "Undo", mutatesDocument: true),
             CommandDescriptor(name: .redo, title: "Redo", mutatesDocument: true),
@@ -708,6 +765,9 @@ struct CommandRegistry {
             guard document.imageAssets.contains(where: { $0.id == value.assetID }) else {
                 return .disabled(reason: "The image asset no longer exists.")
             }
+            guard document.websiteMetadata?.faviconAssetID != value.assetID else {
+                return .disabled(reason: "This image is the site favicon. Choose another favicon or remove it in Site Settings before deleting this asset.")
+            }
             let reference = value.assetID.description
             guard !document.pages.flatMap(\.nodes).contains(where: {
                 $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
@@ -719,6 +779,11 @@ struct CommandRegistry {
 
         case .setColorTokens(let value):
             guard value.tokens != document.colorTokens else { return .disabled(reason: "Color tokens are unchanged.") }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .setWebsiteMetadata(let value):
+            guard value.documentID == document.id else { return .disabled(reason: "The site settings belong to another document.") }
+            guard value.metadata != document.websiteMetadata else { return .disabled(reason: "Site settings are unchanged.") }
             return validationAvailability(afterApplying: command, to: document)
 
         case .batch(let commands):
@@ -806,7 +871,17 @@ struct CommandRegistry {
                 throw CommandExecutionError.disabled("The page no longer exists.")
             }
             let page = document.pages.remove(at: index)
-            return CommandMutation(inverse: .insertPage(InsertPageCommand(page: page, index: index)))
+            let previousMetadata = document.websiteMetadata
+            if var metadata = previousMetadata {
+                metadata.pages.removeAll { $0.pageID == page.id }
+                document.websiteMetadata = metadata.isEmpty ? nil : metadata
+            }
+            let restorePage = DocumentCommand.insertPage(InsertPageCommand(page: page, index: index))
+            if document.websiteMetadata != previousMetadata {
+                return CommandMutation(inverse: .batch([restorePage,
+                    .setWebsiteMetadata(.init(documentID: document.id, metadata: previousMetadata))]))
+            }
+            return CommandMutation(inverse: restorePage)
 
         case .renamePage(let value):
             guard let index = document.pageIndex(for: value.pageID) else {
@@ -1012,6 +1087,12 @@ struct CommandRegistry {
             document.colorTokens = value.tokens
             return CommandMutation(inverse: .setColorTokens(.init(tokens: previous)))
 
+        case .setWebsiteMetadata(let value):
+            guard value.documentID == document.id else { throw CommandExecutionError.disabled("The site settings belong to another document.") }
+            let previous = document.websiteMetadata
+            document.websiteMetadata = value.metadata
+            return CommandMutation(inverse: .setWebsiteMetadata(.init(documentID: document.id, metadata: previous)))
+
         case .batch(let commands):
             var inverses: [DocumentCommand] = []
             for nestedCommand in commands {
@@ -1128,6 +1209,14 @@ final class CommandDiagnostics {
     func recordPageStructureOperation(pageID: PageID, nodeIDs: [NodeID], succeeded: Bool, durationMilliseconds: Double) {
         buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0501-008", "SF-0502-005", "SF-0806-008", "SF-0304-005"],
             commandName: .batch, sanitizedIdentifiers: ([pageID.commandTarget] + nodeIDs.map(\.commandTarget)).map(sanitize),
+            durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
+            failureCategory: succeeded ? nil : .validation))
+    }
+
+    func recordSizingOperation(pageID: PageID?, nodeIDs: [NodeID], succeeded: Bool, durationMilliseconds: Double) {
+        let targets = pageID.map { [$0.commandTarget] } ?? []
+        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0505-003", "SF-0505-005", "SF-0601-005", "SF-0604-005"],
+            commandName: .batch, sanitizedIdentifiers: (targets + nodeIDs.map(\.commandTarget)).map(sanitize),
             durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
             failureCategory: succeeded ? nil : .validation))
     }

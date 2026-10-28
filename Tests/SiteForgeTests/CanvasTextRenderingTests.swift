@@ -5,6 +5,271 @@ import XCTest
 
 @MainActor
 final class CanvasTextRenderingTests: XCTestCase {
+    // SF-0508-003/006, SF-0407-003: a structural page background is real
+    // authored paint without becoming an authored object, hit target or ghost.
+    func testStructuralPageBackgroundPaintsExactPixelsWithoutCanvasObject() async throws {
+        let original = ProjectCreation.blank()
+        var document = original
+        let rootID = document.pages[0].rootNodeIDs[0]
+        let color = CanonicalSolidColor(red: 34.0 / 255, green: 51.0 / 255, blue: 68.0 / 255, alpha: 1)
+        document.pages[0].nodes[0].properties += CanonicalFillLayerCodec.propertyValues(for: [.solid(color: color)]).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value, origin: .authored)
+        }
+        try document.validate()
+        let previewWorker = LocalPreviewRuntimeCompiler()
+        let unpaintedPreview = try await previewWorker.compile(document: original, imageResourceData: [:], pixelRatio: .init(1))
+        let paintedPreview = try await previewWorker.compile(document: document, imageResourceData: [:], pixelRatio: .init(1))
+        XCTAssertNotEqual(unpaintedPreview.deterministicDigest, paintedPreview.deterministicDigest)
+        XCTAssertEqual(paintedPreview.pages.first?.pageBackground?.id, rootID)
+        XCTAssertTrue(paintedPreview.pages.first?.objects.isEmpty == true)
+        let worker = WorkspaceScenePreparationWorker(), core = CanvasRendererCore()
+        for scale in [1.0, 2.0] {
+            let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+                viewportSize: .init(width: 300, height: 120),
+                contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 200, height: 80)),
+                pixelRatio: CanvasPixelRatio(scale))
+            let request = WorkspaceScenePreparationRequest(document: document,
+                activePageID: document.pages[0].id, activeContainerID: nil, viewport: viewport, surfaceID: .init())
+            let prepared = try await worker.prepare(request)
+            let plan = try core.prepare(scene: prepared.renderScene, overlays: prepared.overlays, viewport: viewport)
+            let background = try XCTUnwrap(plan.pageBackground)
+            XCTAssertEqual(background.id, rootID); XCTAssertEqual(background.frame, viewport.contentBounds)
+            XCTAssertTrue(plan.authoredObjects.isEmpty); XCTAssertTrue(plan.accessibilityElements.isEmpty)
+            XCTAssertNil(core.hitTest(.init(x: 80, y: 40), in: plan))
+            XCTAssertTrue(plan.tiles.contains { $0.objectIDs.contains(rootID) })
+            let bytes = rasterizedBytes(object: background, viewport: viewport, backingScale: scale)
+            let inside = rgba(at: (Int(80 * scale), Int(40 * scale)), in: bytes,
+                              width: Int(300 * scale), height: Int(120 * scale))
+            XCTAssertEqual(Double(inside.red), 34, accuracy: 2)
+            XCTAssertEqual(Double(inside.green), 51, accuracy: 2)
+            XCTAssertEqual(Double(inside.blue), 68, accuracy: 2)
+            XCTAssertEqual(inside.alpha, 255)
+            XCTAssertEqual(rgba(at: (Int(250 * scale), Int(100 * scale)), in: bytes,
+                               width: Int(300 * scale), height: Int(120 * scale)).alpha, 0)
+            let cleared = try await worker.prepare(.init(document: original, activePageID: original.pages[0].id,
+                activeContainerID: nil, viewport: viewport, surfaceID: request.surfaceID))
+            let clearedPlan = try core.prepare(scene: cleared.renderScene, overlays: cleared.overlays,
+                viewport: viewport, previous: prepared.renderScene)
+            XCTAssertNil(clearedPlan.pageBackground); XCTAssertTrue(clearedPlan.authoredObjects.isEmpty)
+            XCTAssertNotEqual(clearedPlan.invalidation, .compositorOnly)
+            XCTAssertFalse(clearedPlan.dirtyWorldRegions.isEmpty)
+        }
+        XCTAssertNil(document.pages[0].nodes[0].insertionGeometry)
+    }
+
+    private func fontPairParagraphDocument() throws -> (CanonicalDocument, NodeID) {
+        var document = ProjectCreation.blank()
+        let root = document.pages[0].rootNodeIDs[0]
+        let text = DocumentNode(kind: .text, name: "Heading paragraph", parent: .node(root), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(40)),
+            .init(key: .init(rawValue: "layout.y"), value: .number(40)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(320)),
+            .init(key: .init(rawValue: "layout.height"), value: .number(140)),
+            .init(key: .init(rawValue: "content.text"), value: .string("A meaningful heading\nA second line wraps within the same authored column.")),
+            .init(key: .init(rawValue: CanonicalSemanticElement.key), value: .string("h2")),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "family"), value: .string("Missing SiteForge Pair Fixture")),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "weight"), value: .string("medium")),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "size"), value: .number(18)),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "lineHeight"), value: .number(26)),
+            .init(key: .init(rawValue: CanonicalTypography.namespace + "tracking"), value: .number(0.5))])
+        document.pages[0].nodes[0].childIDs = [text.id]
+        document.pages[0].nodes.append(text)
+        try document.validate()
+        return (document, text.id)
+    }
+
+    // SF-0406-005/006, SF-0507-003/005: the paired edit changes
+    // only font intent; shared renderer/editor/output keep paragraph metrics.
+    func testChosenFontPairSharesRendererInlineAndCompilerParagraphMetrics() async throws {
+        let (document, textID) = try fontPairParagraphDocument()
+        let session = DocumentSession(document: document)
+        let state = WorkspaceShellState(documentSession: session)
+        let live = state.documentSession
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        func adopt() async {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while (state.canvasRenderPlan?.identity.revision != live.document.revision
+                || state.canvasRenderPlan?.identity.viewportGeneration != state.viewportState.generation), ContinuousClock.now < deadline { await Task.yield() }
+            XCTAssertEqual(state.canvasRenderPlan?.identity.revision, live.document.revision)
+        }
+        await adopt(); state.selectLayer(textID)
+        XCTAssertTrue(state.typographyRoleSummary.contains("Heading 2"))
+        XCTAssertTrue(state.commitTypography(.fontFace(family: "System", weight: .semibold),
+            operation: "font family and weight", provenance: .picker, expectedContext: state.responsiveInspectorEditContext))
+        await adopt()
+        let object = try XCTUnwrap(state.canvasRenderPlan?.authoredObjects.first { $0.id == textID })
+        let typography = try XCTUnwrap(object.typography)
+        XCTAssertEqual(typography.authoredFamily, "System"); XCTAssertEqual(typography.weight, "semibold")
+        XCTAssertEqual(typography.size, 18); XCTAssertEqual(typography.lineHeight, 26); XCTAssertEqual(typography.tracking, 0.5)
+        XCTAssertFalse(typography.usesFallback)
+        XCTAssertEqual(object.frame, document.pages[0].nodes[1].insertionGeometry?.frame)
+        for zoom in [0.25, 1.0, 8.0] {
+            for backing in [1.0, 2.0] {
+                let rect = CGRect(x: -40 * zoom, y: 30 * zoom, width: 320 * zoom, height: 140 * zoom)
+                let layout = CanvasTextLayout(viewportObjectRect: rect, zoom: zoom,
+                    text: object.plainText ?? "", typography: typography)
+                let editor = InlineCanvasTextView()
+                editor.frame = rect
+                editor.string = object.plainText ?? ""
+                let caret = NSRange(location: 2, length: 3)
+                editor.setSelectedRange(caret)
+                editor.applyCanvasTextLayout(layout)
+                XCTAssertEqual(editor.string, object.plainText)
+                XCTAssertEqual(editor.selectedRange(), caret)
+                XCTAssertEqual(editor.frame, rect)
+                XCTAssertEqual(editor.font?.fontName, layout.font.fontName)
+                XCTAssertEqual(editor.textContainerInset, layout.textContainerInset)
+                XCTAssertEqual(editor.typingAttributes[.kern] as? CGFloat, layout.tracking)
+                let layer = try XCTUnwrap(CanvasAuthoredTextLayerFactory.makeLayer(for: object,
+                    viewportObjectRect: rect, zoom: zoom, contentsScale: backing))
+                XCTAssertEqual(layer.fontSize, layout.fontSize)
+                XCTAssertEqual(layer.frame.minY, layout.glyphBounds.minY, accuracy: 1 / backing)
+                XCTAssertEqual(layer.frame.width, layout.glyphBounds.width, accuracy: 1 / backing)
+                XCTAssertEqual(layer.borderWidth, 0); XCTAssertNil(layer.backgroundColor)
+            }
+        }
+        let authored = live.document
+        let plan = try MultiPageStaticBuildPlanner.plan(document: authored)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("font-family: system-ui;")); XCTAssertTrue(css.contains("font-weight: 600;"))
+        XCTAssertTrue(css.contains("line-height: 26.0px;")); XCTAssertTrue(css.contains("letter-spacing: 0.5px;"))
+        XCTAssertTrue(css.contains("white-space: pre-wrap;")); XCTAssertFalse(css.contains("@font-face"))
+        XCTAssertTrue(plan.files.contains { $0.path == "index.html" && $0.contents.contains("<h2") })
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(authored)), authored)
+        try live.undo(); XCTAssertEqual(live.document.pages, document.pages)
+        try live.redo(); XCTAssertEqual(live.document.pages, authored.pages)
+    }
+
+    // SF-0507-004/005, SF-0805-003/004: a retained chooser cannot
+    // overwrite a later context; missing font intent and no-op history survive.
+    func testFontChooserCapturedContextPreservesMissingIntentAndNoOpHistory() async throws {
+        let (document, textID) = try fontPairParagraphDocument()
+        let session = DocumentSession(document: document)
+        let state = WorkspaceShellState(documentSession: session)
+        let live = state.documentSession
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        func adopt() async {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while (state.canvasRenderPlan?.identity.revision != live.document.revision
+                || state.canvasRenderPlan?.identity.viewportGeneration != state.viewportState.generation), ContinuousClock.now < deadline { await Task.yield() }
+            XCTAssertEqual(state.canvasRenderPlan?.identity.revision, live.document.revision)
+        }
+        await adopt(); state.selectLayer(textID)
+        XCTAssertTrue(state.canvasRenderPlan?.authoredObjects.first { $0.id == textID }?.typography?.usesFallback == true)
+        let count = live.historySnapshot().undoEntries.count
+        XCTAssertTrue(state.commitTypography(.fontFace(family: "Missing SiteForge Pair Fixture", weight: .medium),
+            operation: "unchanged font pair", expectedContext: state.responsiveInspectorEditContext))
+        XCTAssertEqual(live.historySnapshot().undoEntries.count, count)
+        XCTAssertEqual(live.document, document)
+        let opening = state.responsiveInspectorEditContext
+        state.reviewBreakpoint(.mobile); await adopt()
+        XCTAssertFalse(state.commitTypography(.fontFace(family: "System", weight: .bold),
+            operation: "old font chooser", expectedContext: opening))
+        XCTAssertEqual(live.document, document)
+        XCTAssertTrue(state.typographyResolutionStatus?.contains("preserved") == true)
+        XCTAssertEqual(session.document, document)
+    }
+
+    func testTypographyScopeGuardPreservesMissingFamilyFluidSizingAndExactHistory() async throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id, root = document.pages[0].rootNodeIDs[0]
+        let fluid = CanonicalFluidValue(minimum: 16, preferred: 20, maximum: 30)
+        let text = DocumentNode(kind: .text, name: "Workflow text", parent: .node(root), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(40)), .init(key: .init(rawValue: "layout.y"), value: .number(40)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(320)), .init(key: .init(rawValue: "layout.height"), value: .number(80)),
+            .init(key: .init(rawValue: "content.text"), value: .string("Typography intent remains stable.")),
+            .init(key: .init(rawValue: CanonicalFluidValueCodec.key(.fontSize)), value: .string(try CanonicalFluidValueCodec.encode(fluid, target: .fontSize)))])
+        document.pages[0].nodes[0].childIDs = [text.id]; document.pages[0].nodes.append(text)
+        let fixture = try ApplicationOwnedTestFixture.create("typography-workflow")
+        defer { try? fixture.cleanup() }
+        let session = DocumentSession(document: document)
+        let lifecycle = DocumentLifecycleController(session: session, recoveryDirectory: fixture.url.appendingPathComponent("recovery"))
+        let state = WorkspaceShellState(documentSession: session, lifecycle: lifecycle)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        func ready() async {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while state.canvasRenderPlan?.identity.revision != session.document.revision
+                || state.canvasRenderPlan?.identity.viewportGeneration != state.viewportState.generation {
+                if ContinuousClock.now >= deadline { break }; await Task.yield()
+            }
+            XCTAssertEqual(state.canvasRenderPlan?.identity.revision, session.document.revision)
+        }
+        await ready(); state.selectLayer(text.id)
+        let scope = state.layoutInspectorDraftScope, missing = "Missing SiteForge Workflow Family"
+        XCTAssertTrue(state.commitTypography(.family(missing), operation: "family", draftScope: scope))
+        await ready()
+        XCTAssertTrue(state.typographyResolutionStatus?.contains("preserved") == true)
+        let authored = session.document
+        XCTAssertEqual(TypographyCommandRegistry.resolvedTypography(for: authored.pages[0].nodes[1])?.family, missing)
+        state.reviewBreakpoint(.mobile); await ready()
+        XCTAssertFalse(state.commitTypography(.size(99), operation: "size", draftScope: scope))
+        XCTAssertEqual(session.document, authored)
+        XCTAssertTrue(state.commitTypography(.size(22), operation: "size", draftScope: state.layoutInspectorDraftScope))
+        await ready()
+        let current = session.document
+        XCTAssertEqual(current.pages[0].nodes[1].insertionProperty(CanonicalFluidValueCodec.key(.fontSize)), text.insertionProperty(CanonicalFluidValueCodec.key(.fontSize)))
+        XCTAssertEqual(state.canvasRenderPlan?.authoredObjects.first { $0.id == text.id }?.typography?.size, 16)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(current)), current)
+        try session.undo(); XCTAssertEqual(session.document.pages, authored.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, current.pages)
+        let output = try MultiPageStaticBuildPlanner.plan(document: current)
+        XCTAssertTrue(output.files.contains { $0.contents.contains(missing) })
+        XCTAssertEqual(current.pages[0].nodes[1].id, text.id)
+        XCTAssertEqual(current.pages[0].nodes[1].insertionGeometry, text.insertionGeometry)
+    }
+    func testInstalledFontCatalogOffersOnlyDiscoveredWeightsAndPreservesMissingIntent() async throws {
+        let families = await Task.detached(priority: .utility) { InstalledTypographyCatalog.load() }.value
+        XCTAssertTrue(families.contains { $0.name == "System" && $0.weights == CanonicalFontWeight.allCases })
+        XCTAssertEqual(Set(families.map(\.name)).count, families.count)
+        XCTAssertFalse(families.contains { $0.name.hasPrefix(".") })
+        XCTAssertEqual(InstalledTypographyCatalog.namedWeight(for: 0), .regular)
+        XCTAssertEqual(InstalledTypographyCatalog.namedWeight(for: 0.4), .bold)
+        XCTAssertNil(InstalledTypographyCatalog.namedWeight(for: -0.8))
+        XCTAssertNil(InstalledTypographyCatalog.namedWeight(for: .nan))
+        XCTAssertTrue(InstalledTypographyCatalog.matching(" sYsTeM ", in: families).contains { $0.name == "System" })
+        let authored = "Missing SiteForge Workflow Family"
+        let resolved = ResponsiveTextMetrics.font(family: authored, weight: "bold", size: 20)
+        XCTAssertTrue(resolved.usesFallback)
+        XCTAssertNotEqual(resolved.family, authored)
+        let scope = LayoutInspectorDraftScope(documentID: DocumentID(), pageID: PageID(), sceneID: CanvasViewportSceneID(),
+            orderedNodeIDs: [NodeID()], breakpoint: .desktop, viewportWidth: 1440)
+        var draft = LayoutInspectorNumericDraft(text: authored, committed: "System", scope: scope)
+        draft.adopt(committed: "System", scope: scope)
+        XCTAssertEqual(draft.text, authored)
+        XCTAssertTrue(draft.canCommit(in: scope))
+        draft.adopt(committed: "Georgia", scope: scope)
+        XCTAssertEqual(draft.conflict, .valueChanged)
+        XCTAssertEqual(draft.text, authored)
+    }
+    func testIntrinsicSizingAndLiveCanvasUseSameFontAndWrappingBounds() throws {
+        let text = "Thoughtful writing for a curious world.\nDesign, culture, and the places that shape us."
+        for family in ["System", "Georgia", "Missing SiteForge Sizing Font"] {
+            let typography = CanonicalTypography(family: family, weight: .semibold,
+                size: 40, lineHeight: 48, tracking: 0, alignment: .leading)
+            for width in [320.0, 375, 390, 430, 574, 768, 1024, 1440] {
+                let height = ResponsiveTextMetrics.height(text: text, width: width, typography: typography)
+                let resolved = ResponsiveTextMetrics.font(family: family, weight: "semibold", size: 40)
+                let snapshot = CanvasTypography(authoredFamily: family, resolvedFamily: resolved.family,
+                    weight: "semibold", size: 40, lineHeight: 48, tracking: 0, alignment: .leading,
+                    usesFallback: resolved.usesFallback)
+                XCTAssertEqual(resolved.usesFallback, family.hasPrefix("Missing"))
+                for zoom in [0.25, 1, 8] {
+                    let layout = CanvasTextLayout(viewportObjectRect: .init(x: 0, y: 0,
+                        width: width * zoom, height: height * zoom), zoom: zoom, text: text, typography: snapshot)
+                    let font = ResponsiveTextMetrics.font(family: family, weight: "semibold", size: 40 * zoom)
+                    XCTAssertEqual(layout.font.fontName, font.postScriptName)
+                    XCTAssertTrue(layout.isInsideObjectRect)
+                    let measured = NSAttributedString(string: text, attributes: [.font: layout.font,
+                        .kern: layout.tracking, .paragraphStyle: layout.paragraphStyle]).boundingRect(
+                            with: .init(width: (width - 8) * zoom, height: .greatestFiniteMagnitude),
+                            options: [.usesLineFragmentOrigin, .usesFontLeading])
+                    XCTAssertLessThanOrEqual(measured.height, height * zoom + 1,
+                        "Intrinsic height must contain native wrapping: family \(family), width \(width), zoom \(zoom)")
+                }
+            }
+        }
+    }
+
     func testFittedPreviewTextSharesCanvasMetricsWithoutNativeFontTruncationOrChrome() throws {
         @MainActor func assertSameRect(_ actual: CGRect, _ expected: CGRect) {
             // CALayer stores position/anchor separately: reconstructing a
@@ -275,10 +540,9 @@ final class CanvasTextRenderingTests: XCTestCase {
             }
         }
     }
-    // SF-0405-006, SF-0406-001, SF-0406-002, SF-0406-005 — structural names
-    // are tile-rasterized. Plain text intentionally composes in its own
-    // non-tiled authored subtree, covered by the shared layout and app tests.
-    func testNativeTileFrameNamePixelsStayWithinItsAuthoredFrame() throws {
+    // SF-0405-006, SF-1202-003: structural names are editor metadata, not
+    // authored pixels. Actual text uses the independent authored text layer.
+    func testNativeTileStructuralNamesNeverEnterAuthoredPixels() throws {
         let viewport = try CanvasViewportState(
             worldOrigin: .init(x: 0, y: 0),
             viewportSize: .init(width: 300, height: 120),
@@ -318,13 +582,55 @@ final class CanvasTextRenderingTests: XCTestCase {
             to: rasterizedBytes(object: namedFrame, viewport: viewport),
             width: 300
         )
-        XCTAssertFalse(frameLabelPixels.isEmpty)
-        XCTAssertTrue(
-            frameLabelPixels.allSatisfy { (32..<212).contains($0.x) && (24..<66).contains($0.y) },
-            "Frame-name pixels escaped the authored frame: \(pixelBounds(frameLabelPixels))"
-        )
-        XCTAssertLessThan(try XCTUnwrap(frameLabelPixels.map(\.y).max()), 48,
-                          "Native labels start at the top inset, never reflected into the lower half.")
+        XCTAssertTrue(frameLabelPixels.isEmpty, "Editor names must not alter authored surface bytes")
+    }
+
+    func testNativeViewportRetainsWorldAlignedRasterDuringZoomAndClearsAtArtboardChange() throws {
+        let view = NativeCanvasViewportView(frame: .init(x: 0, y: 0, width: 700, height: 500))
+        view.setFrameSize(view.bounds.size)
+        let initial = try CanvasViewportState(viewportSize: .init(width: 700, height: 500))
+        view.viewportState = initial
+        let object = CanvasRenderObject(id: NodeID(),
+            frame: .init(origin: .init(x: 80, y: 60), size: .init(width: 240, height: 160)),
+            clipRect: nil, paintOrder: 0, style: .frameSurface, isVisible: true,
+            accessibilityLabel: "Authored Frame", fillRGBA: [0.6, 0.2, 0.8, 1])
+        let identity = CanvasRenderRequestIdentity(documentID: DocumentID(), revision: 1,
+            sceneID: initial.sceneID, sceneGeneration: 1, viewportGeneration: 1, scale: initial.pixelRatio)
+        let scene = CanvasRenderSceneSnapshot(identity: identity, surfaceID: CanvasRenderSurfaceID(), objects: [object])
+        let plan = try CanvasRendererCore().prepare(scene: scene,
+            overlays: .init(identity: identity, overlays: []), viewport: initial)
+        view.renderPlan = plan
+        let content = try XCTUnwrap(view.layer?.sublayers?.first { $0.name == "renderer.authored-content" })
+        XCTAssertEqual(content.bounds.size, view.bounds.size)
+        let tiles = try XCTUnwrap(content.sublayers)
+        XCTAssertFalse(tiles.isEmpty)
+        let rasterOrigin = try initial.transform.worldToViewport(object.frame.origin)
+        for zoom in [0.25, 0.5, 1, 1.75, 8] {
+            for origin in [WorldPoint(x: -40, y: 30), WorldPoint(x: 55, y: -25)] {
+                view.viewportState = try CanvasViewportState(sceneID: initial.sceneID, worldOrigin: origin,
+                    viewportSize: initial.viewportSize, contentBounds: initial.contentBounds,
+                    zoom: CanvasZoom(zoom), pixelRatio: initial.pixelRatio)
+                XCTAssertEqual(content.sublayers?.count, tiles.count, "Zoom must not blank the valid scene")
+                XCTAssertTrue(content.sublayers?.first === tiles.first)
+                let native = content.convert(CGPoint(x: rasterOrigin.x, y: rasterOrigin.y), to: view.layer)
+                let expected = try view.viewportState.transform.worldToViewport(object.frame.origin)
+                XCTAssertEqual(native.x, expected.x, accuracy: 0.000001)
+                XCTAssertEqual(native.y, expected.y, accuracy: 0.000001)
+                view.renderPlan = plan // A late old-generation result cannot erase the retained raster.
+                XCTAssertEqual(content.sublayers?.count, tiles.count)
+            }
+        }
+        view.viewportState = try CanvasViewportState(sceneID: initial.sceneID, viewportSize: initial.viewportSize,
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 390, height: 844)))
+        XCTAssertTrue(content.sublayers?.isEmpty ?? true, "A different artboard must resolve its own layout")
+        view.viewportState = initial
+        view.renderPlan = plan
+        XCTAssertFalse(content.sublayers?.isEmpty ?? true)
+        view.viewportState = try CanvasViewportState(viewportSize: initial.viewportSize,
+                                                     contentBounds: initial.contentBounds)
+        XCTAssertTrue(content.sublayers?.isEmpty ?? true, "A new scene cannot reuse another scene's pixels")
+        view.renderPlan = nil
+        XCTAssertTrue(content.sublayers?.isEmpty ?? true)
     }
 
     // SF-0401-001, SF-0401-004, SF-0402-006, SF-0405-006, SF-0406-001 —
@@ -712,6 +1018,65 @@ final class CanvasTextRenderingTests: XCTestCase {
         XCTAssertEqual(gradientOutside.alpha, 0, "Pixels outside the authored object bounds must remain transparent.")
     }
 
+    // SF-0507-003/005, SF-0508-003: plain text paints glyphs, not editor boxes.
+    func testCommittedPlainTextHasTransparentNonGlyphPixelsAtBothBackingScales() throws {
+        let frame = WorldRect(origin: .init(x: 40, y: 30), size: .init(width: 160, height: 60))
+        for scale in [1.0, 2.0] {
+            let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+                viewportSize: .init(width: 300, height: 120), pixelRatio: .init(scale))
+            let object = CanvasRenderObject(id: NodeID(), frame: frame, clipRect: nil,
+                paintOrder: 0, style: .textPlaceholder, isVisible: true,
+                accessibilityLabel: "Plain text", plainText: "Text")
+            let pixels = rasterizedBytes(object: object, viewport: viewport, backingScale: scale, includeText: true)
+            let width = Int(300 * scale), height = Int(120 * scale)
+            for point in [(40, 31), (199, 31), (40, 88), (199, 88), (42, 32), (197, 32), (42, 87), (197, 87), (120, 28), (120, 92)] {
+                XCTAssertEqual(rgba(at: (x: Int(Double(point.0) * scale), y: Int(Double(point.1) * scale)),
+                    in: pixels, width: width, height: height).alpha, 0,
+                    "Plain text must not bake the editor's placeholder rectangle into authored pixels")
+            }
+            let inkPixels = pixels.enumerated().filter { $0.offset % 4 == 3 && $0.element > 0 }.count
+            XCTAssertGreaterThan(inkPixels, 10, "Transparent fallback must not erase actual glyphs")
+            XCTAssertLessThan(inkPixels, Int(frame.size.width * frame.size.height * scale * scale / 2))
+            XCTAssertEqual(object.frame, frame)
+        }
+    }
+
+    // SF-0508-003: a diagonal interpolation segment must extend endpoint
+    // colors to every authored corner, without painting outside the shape.
+    func testDiagonalGradientEndpointCapsCoverAuthoredCornersWithoutEscapingBounds() throws {
+        let frame = WorldRect(origin: .init(x: 40, y: 30), size: .init(width: 160, height: 60))
+        for scale in [1.0, 2.0] {
+            let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+                viewportSize: .init(width: 300, height: 120),
+                contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 300, height: 120)),
+                pixelRatio: .init(scale))
+            for angle in [45.0, 135, 225, 315] {
+                let layer = CanvasAuthoredFillLayer(id: UUID(), kind: .linearGradient,
+                    isEnabled: true, rgba: nil, angleDegrees: angle, stops: [
+                        .init(id: UUID(), position: 0, rgba: [22.0 / 255, 13.0 / 255, 43.0 / 255, 1]),
+                        .init(id: UUID(), position: 0.5, rgba: [106.0 / 255, 54.0 / 255, 200.0 / 255, 1]),
+                        .init(id: UUID(), position: 1, rgba: [197.0 / 255, 46.0 / 255, 83.0 / 255, 1]),
+                    ])
+                let object = CanvasRenderObject(id: NodeID(), frame: frame,
+                    clipRect: viewport.contentBounds, paintOrder: 0, style: .frameSurface,
+                    isVisible: true, accessibilityLabel: "Diagonal gradient", fillLayers: [layer])
+                let pixels = rasterizedBytes(object: object, viewport: viewport, backingScale: scale)
+                let pixelWidth = Int(300 * scale), pixelHeight = Int(120 * scale)
+                for point in [(42, 32), (197, 32), (42, 87), (197, 87), (120, 60)] {
+                    let color = rgba(at: (x: Int(Double(point.0) * scale), y: Int(Double(point.1) * scale)),
+                        in: pixels, width: pixelWidth, height: pixelHeight)
+                    XCTAssertEqual(Int(color.alpha), 255, accuracy: 1,
+                        "No transparent diagonal wedge at \(point), angle \(angle), scale \(scale)")
+                }
+                for point in [(38, 60), (202, 60), (120, 28), (120, 92)] {
+                    XCTAssertEqual(rgba(at: (x: Int(Double(point.0) * scale), y: Int(Double(point.1) * scale)),
+                        in: pixels, width: pixelWidth, height: pixelHeight).alpha, 0)
+                }
+                XCTAssertEqual(object.frame, frame)
+            }
+        }
+    }
+
     // SF-0506-003/005/008 — production raster composition is shadow, rounded
     // clipped fill, then authored border. Editor overlays are not in this tile.
     func testBorderRadiusAndShadowUseProductionTileCompositionWithoutGeometryDrift() throws {
@@ -754,9 +1119,10 @@ final class CanvasTextRenderingTests: XCTestCase {
         XCTAssertEqual(object.frame, frame)
     }
 
-    private func rasterizedBytes(object: CanvasRenderObject, viewport: CanvasViewportState) -> Data {
-        let width = 300
-        let height = 120
+    private func rasterizedBytes(object: CanvasRenderObject, viewport: CanvasViewportState, backingScale: Double = 1, includeText: Bool = false) -> Data {
+        let logicalWidth = 300, logicalHeight = 120
+        let width = Int(Double(logicalWidth) * backingScale)
+        let height = Int(Double(logicalHeight) * backingScale)
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         bytes.withUnsafeMutableBytes { rawBuffer in
             let context = CGContext(
@@ -768,11 +1134,12 @@ final class CanvasTextRenderingTests: XCTestCase {
                 space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             )!
+            context.scaleBy(x: backingScale, y: backingScale)
             // Render through the same native layer composition used by the
             // native viewport. Calling tile.draw(in:) directly bypasses
             // CALayer's geometry transform and cannot prove text/clip parity.
             let root = CALayer()
-            root.frame = CGRect(x: 0, y: 0, width: width, height: height)
+            root.frame = CGRect(x: 0, y: 0, width: logicalWidth, height: logicalHeight)
             // `NativeCanvasViewportView` is an `NSView.isFlipped` host. Its
             // root layer establishes top-left coordinates. Owned containers
             // must not reflect their descendants a second time.
@@ -785,13 +1152,21 @@ final class CanvasTextRenderingTests: XCTestCase {
             // A nonzero tile origin proves the unreflected container
             // keeps tile placement and tile-local text/clipping coordinates
             // in the same authored viewport space.
-            layer.frame = CGRect(x: 8, y: 12, width: width - 8, height: height - 12)
-            layer.contentsScale = 1
+            layer.frame = CGRect(x: 8, y: 12, width: logicalWidth - 8, height: logicalHeight - 12)
+            layer.contentsScale = backingScale
             layer.viewportState = viewport
             layer.objects = [object]
             layer.tileOrigin = layer.frame.origin
             container.addSublayer(layer)
             layer.setNeedsDisplay()
+            if includeText, let text = CanvasAuthoredTextLayerFactory.makeLayer(for: object,
+                viewport: viewport, contentsScale: backingScale) {
+                let textContainer = CALayer()
+                textContainer.frame = root.bounds
+                textContainer.isGeometryFlipped = false
+                root.addSublayer(textContainer)
+                textContainer.addSublayer(text)
+            }
             root.render(in: context)
         }
         return Data(bytes)
