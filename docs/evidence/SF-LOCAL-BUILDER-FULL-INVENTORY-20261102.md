@@ -5,6 +5,25 @@ SF-0507-003/004, SF-0606-002/003/004/006/007/008, SF-0806-006,
 SF-0901-006, SF-1203-003/006 and SF-1211-004. This is a diagnostic inventory,
 not complete milestone acceptance.
 
+## Hosted compile follow-up
+
+[SiteForge CI run 42743446225](https://github.com/etejev/SiteForge/actions/runs/42743446225)
+on checkpoint `955f910` failed building with Xcode 26.6 (17F113), exit 65;
+tests never started. `WorkspaceShellView.swift` reported a type-check
+timeout at the inline component-property row move handler (1795:40)
+and an extra argument at the eleventh outer command declaration (11196:9).
+The row and typed move handler now compile separately from the discovery
+view. The supplementary menus and View toolbar command group now compose
+as one outer child, in their original order and native slots. Focus,
+accessibility IDs, command targets, shortcuts, and draft/source identity
+checks are unchanged (SF-0701-006, SF-0902-006, SF-0401-006).
+
+An unsigned clean `xcodebuild build` in fresh DerivedData passed with
+Xcode 27.2 (27B52), the only installed version located locally. Xcode 26.6
+confirmation requires a hosted build of the reviewed correction. The
+earlier exact 4/4 UI replay is separate evidence; no UI or full suite was
+rerun for this compile-only follow-up.
+
 ## November 9 ordinary full gate and targeted replay
 
 `full-51ae6ac8-6773-45a1-bb4c-c4155c54bbb3.xcresult` completed exit 65

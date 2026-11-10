@@ -4,6 +4,14 @@
 
 ### Latest integrated receipt
 
+Hosted CI for `955f910` stopped before tests on Xcode 26.6. The local
+follow-up is limited to extracting the typed component-property row and
+grouping the existing commands below the outer builder's child limit
+(SF-0701-006, SF-0902-006, SF-0401-006). See the
+[compile follow-up](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#hosted-compile-follow-up).
+The clean Xcode 27.2 build passed; Xcode 26.6 confirmation remains pending.
+No editor feature work or local suite rerun was performed.
+
 OD-030 exact ordinary image replay passed 1/1, 171.265s. The subsequent
 full run ended exit 65: 888 non-UI and 163 UI passed; four UI failed,
 three opt-in UI skipped, zero unrun. The owner requested exact failure

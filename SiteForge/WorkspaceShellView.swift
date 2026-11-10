@@ -1785,26 +1785,7 @@ private struct OrganizedComponentInstanceInspectorView: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
                         ForEach(discovery.entries.filter { $0.group == group }) { entry in
-                            field(entry)
-                                .id(fieldIdentity(entry))
-                                .disabled(!state.componentTextEditingAvailable)
-                                .id(entry.id).focusable().focused($focusedProperty, equals: entry.id)
-                                .accessibilityElement(children: .contain)
-                                .accessibilityLabel(entry.label + ", " + entry.id.organizationKind + ", " + (entry.group ?? "ungrouped"))
-                                .onMoveCommand { direction in
-                                    if focusedProperty == entry.id && (direction == .up || direction == .down) {
-                                        reveal(discovery.neighbor(of: entry.id, offset: direction == .up ? -1 : 1), reader: reader)
-                                    }
-                                }
-                            Button("Edit Property Source…") {
-                                _ = state.revealComponentPropertySource(instanceID: instance.id, property: entry.id,
-                                    expectedContext: sourceContext)
-                            }
-                            .controlSize(.small)
-                            .accessibilityLabel("Edit shared definition source for " + entry.label)
-                            .accessibilityHint("Selects the property on the original component. Linked copies use its default unless changed separately. Back to this copy restores this selection.")
-                            .accessibilityIdentifier("component.property.source." + entry.id.stableDescription)
-                            .disabled(state.componentTextDraftIdentity == nil)
+                            propertyRow(entry, sourceContext: sourceContext)
                         }
                     }
                 } label: {
@@ -1870,6 +1851,39 @@ private struct OrganizedComponentInstanceInspectorView: View {
             if let value { navigationProperty = value }
         }
     }
+    @ViewBuilder private func propertyRow(
+        _ entry: CanonicalComponentOrganization.Entry,
+        sourceContext: ResponsiveInspectorEditContext
+    ) -> some View {
+        field(entry)
+            .id(fieldIdentity(entry))
+            .disabled(!state.componentTextEditingAvailable)
+            .id(entry.id).focusable().focused($focusedProperty, equals: entry.id)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(entry.label + ", " + entry.id.organizationKind + ", " + (entry.group ?? "ungrouped"))
+            .onMoveCommand { direction in movePropertyFocus(direction, from: entry.id) }
+        Button("Edit Property Source…") {
+            _ = state.revealComponentPropertySource(instanceID: instance.id, property: entry.id,
+                expectedContext: sourceContext)
+        }
+        .controlSize(.small)
+        .accessibilityLabel("Edit shared definition source for " + entry.label)
+        .accessibilityHint("Selects the property on the original component. Linked copies use its default unless changed separately. Back to this copy restores this selection.")
+        .accessibilityIdentifier("component.property.source." + entry.id.stableDescription)
+        .disabled(state.componentTextDraftIdentity == nil)
+    }
+
+    private func movePropertyFocus(_ direction: MoveCommandDirection, from id: ComponentOverridePropertyIdentity) {
+        guard focusedProperty == id else { return }
+        let offset: Int
+        switch direction {
+        case .up: offset = -1
+        case .down: offset = 1
+        default: return
+        }
+        reveal(discovery.neighbor(of: id, offset: offset), reader: reader)
+    }
+
     private func reveal(_ id: ComponentOverridePropertyIdentity?, reader: ScrollViewProxy) {
         guard let id else { return }
         reader.scrollTo(id, anchor: .center)
@@ -11191,8 +11205,13 @@ struct SiteForgeCommands: Commands {
             .disabled(commandState?.selectionAvailability(.clear).isEnabled != true)
         }
 
-        SiteForgeSupplementaryCommands(state: commandState)
+        supplementaryAndViewportCommands
+    }
 
+    // Keep the outer builder at ten children for toolchains with fixed-arity
+    // CommandsBuilder overloads. The command groups retain their native slots.
+    @CommandsBuilder private var supplementaryAndViewportCommands: some Commands {
+        SiteForgeSupplementaryCommands(state: commandState)
         CommandGroup(after: .toolbar) {
             Divider()
             Button("Quick Open…") { commandState?.isQuickOpenPresented = true }
