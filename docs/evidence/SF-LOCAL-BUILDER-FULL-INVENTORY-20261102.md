@@ -18,7 +18,16 @@ No change to user interaction, click accounting, assertions, production
 code, or test selection (SF-0801-002, SF-0802-006, SF-0308-006, SF-0806-006).
 Clean unsigned `build-for-testing` passed with Xcode 27.2 (27B52),
 including the UI target for arm64 and x86_64. No tests were launched;
-Xcode 26.6 confirmation depends on the push-triggered run.
+Xcode 26.6 still reported the same three calls in
+[run 42746063990](https://github.com/etejev/SiteForge/actions/runs/42746063990)
+on `e715e1e` (lines 4307, 7058, 7071). No tests ran. The follow-up moves
+the native chooser, pointer/menu actions, and focus/typing into XCTest
+instance methods. The only remaining nested helper in those two methods
+records the same action strings into the same phase counters without
+capturing the XCTest case. Waits, diagnostics, assertions and click counts
+are preserved. The actual UI target compiled again with the unsigned
+Xcode 27.2 `build-for-testing` command, exit 0. No local tests were run;
+the Xcode 26.6 result must come from the next push-triggered run.
 
 ## Hosted compile follow-up
 

@@ -5,11 +5,12 @@
 ### Latest integrated receipt
 
 The hosted follow-up for `8e214a7` cleared both original app compiler
-errors and stopped while compiling UI tests on Xcode 26.6. The fix-only
-follow-up explicitly isolates the two affected XCTest methods and their
-native interaction helpers on the main actor. See the
+errors and stopped while compiling UI tests on Xcode 26.6. Explicit actor
+annotations in `e715e1e` did not resolve the three nested capture errors.
+The fix-only follow-up moves the chooser and related-page native actions
+to instance helpers, leaving only test-local click accounting in a nested
+function. See the
 [hosted compile evidence](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#hosted-ui-test-compile-follow-up).
-Clean local build-for-testing passed on Xcode 27.2; no tests were run locally.
 
 Hosted CI for `955f910` stopped before tests on Xcode 26.6. The local
 follow-up is limited to extracting the typed component-property row and

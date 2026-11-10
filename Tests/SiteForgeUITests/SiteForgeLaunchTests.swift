@@ -4295,6 +4295,18 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-SOURCE-07 reused assets preserve image geometry and semantic edits")
     }
 
+    private func chooseWorkflowImage(_ url: URL, in application: XCUIApplication) {
+        XCTAssertTrue(waitForNativeOpenPanel(in: application))
+        application.typeKey("g", modifierFlags: [.command, .shift])
+        let path = application.sheets.textFields["PathTextField"]
+        XCTAssertTrue(path.waitForExistence(timeout: 3))
+        replaceText(in: path, with: url.path, application: application); path.typeKey(.return, modifierFlags: [])
+        let go = application.sheets.buttons["Go"]
+        if path.exists && go.exists && go.isEnabled { go.click() }
+        let confirm = application.buttons["OKButton"]
+        XCTAssertTrue(waitForHittable(confirm, in: application)); confirm.click()
+    }
+
     @MainActor
     func testPracticalImageReuseScopedReplacementAndTypographyJourney() throws {
         let firstURL = try makeLocalImageFixture(named: "workflow-picture-one.png")
@@ -4303,18 +4315,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let project = fixtureRoot.appendingPathComponent("image-type-workflow.siteforge")
         var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
         XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
-        @MainActor func chooseFile(_ url: URL) {
-            XCTAssertTrue(waitForNativeOpenPanel(in: application))
-            application.typeKey("g", modifierFlags: [.command, .shift])
-            let path = application.sheets.textFields["PathTextField"]
-            XCTAssertTrue(path.waitForExistence(timeout: 3))
-            replaceText(in: path, with: url.path, application: application); path.typeKey(.return, modifierFlags: [])
-            let go = application.sheets.buttons["Go"]
-            if path.exists && go.exists && go.isEnabled { go.click() }
-            let confirm = application.buttons["OKButton"]
-            XCTAssertTrue(waitForHittable(confirm, in: application)); confirm.click()
-        }
-        componentMenu("Insert", "Import and Insert Image…", in: application); chooseFile(firstURL)
+        componentMenu("Insert", "Import and Insert Image…", in: application); chooseWorkflowImage(firstURL, in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
         let firstImage = canvasObject(named: "Image: workflow-picture-one; alternative text is empty", in: application)
         XCTAssertTrue(firstImage.waitForExistence(timeout: 5))
@@ -4325,7 +4326,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let secondID = try XCTUnwrap(images.allElementsBoundByIndex.first { $0.identifier != firstID }?.identifier)
         let before = application.descendants(matching: .any)[secondID].firstMatch.frame
         selectInspectorTab("Design", identifier: "design", in: application)
-        revealComponentPointerTarget("inspector.image.import", in: application).click(); chooseFile(secondURL)
+        revealComponentPointerTarget("inspector.image.import", in: application).click(); chooseWorkflowImage(secondURL, in: application)
         XCTAssertTrue(waitForValue(application.staticTexts["inspector.image.status"], containing: "selected uses"))
         XCTAssertEqual(application.descendants(matching: .any)[secondID].firstMatch.frame, before)
         attachWindowScreenshot(application, named: "SF-LOCAL-BUILDER-004 selected-use replacement preserves geometry")
@@ -4339,7 +4340,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-LOCAL-BUILDER-004 explicit global replacement reference scope")
         let globalReplacement = application.dialogs.firstMatch.buttons["Choose Global Replacement…"]
         XCTAssertTrue(waitForHittable(globalReplacement, in: application))
-        globalReplacement.click(); chooseFile(thirdURL)
+        globalReplacement.click(); chooseWorkflowImage(thirdURL, in: application)
         XCTAssertTrue(application.staticTexts["workflow-picture-three.png"].waitForExistence(timeout: 5))
         componentMenu("Edit", "Undo", in: application)
         XCTAssertTrue(application.staticTexts["workflow-picture-two.png"].waitForExistence(timeout: 5))
@@ -7026,6 +7027,34 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "Workflow typography exact Undo Redo without destination changes")
     }
 
+    // Keep native wait diagnostics on the XCTest instance rather than
+    // capturing it in a local function crossing XCTest's autoclosure boundary.
+    private func tapRelatedPageControl(_ element: XCUIElement, _ action: String,
+                                       in application: XCUIApplication, record: (String) -> Void) {
+        XCTAssertTrue(waitForHittable(element, in: application), action)
+        XCTAssertTrue(element.isEnabled, action)
+        element.click()
+        record(action)
+    }
+
+    private func chooseRelatedPageMenu(_ action: String, in application: XCUIApplication,
+                                       record: (String) -> Void) {
+        tapRelatedPageControl(application.menuBars.menuBarItems["Page"], "Open Page menu", in: application, record: record)
+        tapRelatedPageControl(application.menuItems[action], action, in: application, record: record)
+    }
+
+    private func typeRelatedPageDraft(_ identifier: String, _ value: String,
+                                      in application: XCUIApplication, record: (String) -> Void) {
+        let field = application.textFields[identifier]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        tapRelatedPageControl(field, "Focus " + identifier, in: application, record: record)
+        XCTAssertTrue(waitForKeyboardFocus(identifier: identifier, in: application))
+        field.typeKey(.leftArrow, modifierFlags: .command)
+        field.typeKey(.rightArrow, modifierFlags: [.command, .shift])
+        field.typeKey(.delete, modifierFlags: [])
+        field.typeText(value)
+    }
+
     @MainActor
     func testRelatedPageReuseNavigationActionAuditAndNativeReopenJourney() throws {
         continueAfterFailure = false
@@ -7054,57 +7083,40 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         var phase = ""
         var clicks: [String: [String]] = [:]
-        @MainActor func tap(_ element: XCUIElement, _ action: String) {
-            XCTAssertTrue(waitForHittable(element, in: application), action)
-            XCTAssertTrue(element.isEnabled, action)
-            element.click()
+        func record(_ action: String) {
             if !phase.isEmpty { clicks[phase, default: []].append(action) }
-        }
-        @MainActor func pageMenu(_ action: String) {
-            tap(application.menuBars.menuBarItems["Page"], "Open Page menu")
-            tap(application.menuItems[action], action)
-        }
-        @MainActor func draft(_ identifier: String, _ value: String) {
-            let field = application.textFields[identifier]
-            XCTAssertTrue(field.waitForExistence(timeout: 5))
-            tap(field, "Focus " + identifier)
-            XCTAssertTrue(waitForKeyboardFocus(identifier: identifier, in: application))
-            field.typeKey(.leftArrow, modifierFlags: .command)
-            field.typeKey(.rightArrow, modifierFlags: [.command, .shift])
-            field.typeKey(.delete, modifierFlags: [])
-            field.typeText(value)
         }
 
         // Add a real destination after authoring the source Header, so the
         // matched navigation task has two genuinely missing destinations.
-        pageMenu("New Page…")
-        draft("page.editor.name", "Contact")
-        draft("page.editor.route", "/contact")
-        tap(application.buttons["page.editor.apply"], "Create comparison destination")
-        tap(pageRow(named: "Legacy Surface", in: application), "Select source")
+        chooseRelatedPageMenu("New Page…", in: application, record: record)
+        typeRelatedPageDraft("page.editor.name", "Contact", in: application, record: record)
+        typeRelatedPageDraft("page.editor.route", "/contact", in: application, record: record)
+        tapRelatedPageControl(application.buttons["page.editor.apply"], "Create comparison destination", in: application, record: record)
+        tapRelatedPageControl(pageRow(named: "Legacy Surface", in: application), "Select source", in: application, record: record)
         phase = "old-page"
-        pageMenu("Duplicate Page")
+        chooseRelatedPageMenu("Duplicate Page", in: application, record: record)
         XCTAssertTrue(pageRow(named: "Legacy Surface Copy", in: application).waitForExistence(timeout: 5))
-        pageMenu("Rename Page…")
-        draft("page.editor.name", "Related")
-        tap(application.buttons["page.editor.apply"], "Apply name")
-        pageMenu("Edit Route…")
-        draft("page.editor.route", "/related")
-        tap(application.buttons["page.editor.apply"], "Apply route")
+        chooseRelatedPageMenu("Rename Page…", in: application, record: record)
+        typeRelatedPageDraft("page.editor.name", "Related", in: application, record: record)
+        tapRelatedPageControl(application.buttons["page.editor.apply"], "Apply name", in: application, record: record)
+        chooseRelatedPageMenu("Edit Route…", in: application, record: record)
+        typeRelatedPageDraft("page.editor.route", "/related", in: application, record: record)
+        tapRelatedPageControl(application.buttons["page.editor.apply"], "Apply route", in: application, record: record)
         XCTAssertTrue(pageRow(named: "Related", in: application).waitForExistence(timeout: 5))
 
         phase = ""
         for _ in 0..<3 { componentMenu("Edit", "Undo", in: application) }
         XCTAssertTrue(waitForNonexistence(pageRow(named: "Related", in: application)))
-        tap(pageRow(named: "Legacy Surface", in: application), "Select unchanged source")
+        tapRelatedPageControl(pageRow(named: "Legacy Surface", in: application), "Select unchanged source", in: application, record: record)
         XCTAssertEqual(pageRow(named: "Legacy Surface", in: application).identifier, sourceID)
         phase = "new-page"
-        pageMenu("New Page…")
-        draft("page.editor.name", "Related")
-        draft("page.editor.route", "/related")
-        tap(application.checkBoxes["page.editor.copyCurrent"], "Copy current page content")
+        chooseRelatedPageMenu("New Page…", in: application, record: record)
+        typeRelatedPageDraft("page.editor.name", "Related", in: application, record: record)
+        typeRelatedPageDraft("page.editor.route", "/related", in: application, record: record)
+        tapRelatedPageControl(application.checkBoxes["page.editor.copyCurrent"], "Copy current page content", in: application, record: record)
         attachWindowScreenshot(application, named: "Workflow reuse named independent page copy")
-        tap(application.buttons["page.editor.apply"], "Apply name route and content")
+        tapRelatedPageControl(application.buttons["page.editor.apply"], "Apply name route and content", in: application, record: record)
         let copied = pageRow(named: "Related", in: application)
         XCTAssertTrue(copied.waitForExistence(timeout: 5))
         XCTAssertTrue(copied.label.contains("/related"))
@@ -7115,7 +7127,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         componentMenu("Edit", "Redo", in: application)
         XCTAssertTrue(pageRow(named: "Related", in: application).waitForExistence(timeout: 5))
         XCTAssertEqual(pageRow(named: "Related", in: application).identifier, copyID)
-        tap(pageRow(named: "Related", in: application), "Select redone page")
+        tapRelatedPageControl(pageRow(named: "Related", in: application), "Select redone page", in: application, record: record)
         selectStructuralLayer("Header", in: application)
         let copiedHeader = canvasObject(named: "Header", in: application).identifier
         XCTAssertNotEqual(copiedHeader, originalHeader)
@@ -7127,7 +7139,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         phase = "old-navigation"
         for identifier in missing {
             let control = revealStructuralLayoutControl(application.descendants(matching: .any)[identifier], in: application)
-            tap(control, "Include one page")
+            tapRelatedPageControl(control, "Include one page", in: application, record: record)
         }
         phase = ""
         for _ in missing { componentMenu("Edit", "Undo", in: application) }
@@ -7135,7 +7147,8 @@ final class SiteForgeLaunchTests: XCTestCase {
             XCTAssertEqual((application.descendants(matching: .any)[identifier].value as? NSNumber)?.intValue, 0)
         }
         phase = "new-navigation"
-        tap(revealStructuralLayoutControl(application.buttons["inspector.navigation.includeAll"], in: application), "Include All Pages")
+        tapRelatedPageControl(revealStructuralLayoutControl(application.buttons["inspector.navigation.includeAll"], in: application),
+                              "Include All Pages", in: application, record: record)
         phase = ""
         for identifier in missing {
             XCTAssertEqual((application.descendants(matching: .any)[identifier].value as? NSNumber)?.intValue, 1)
@@ -7170,7 +7183,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         selectShellTab("Pages", directIdentifier: "navigator.tab.pages", overflowIdentifier: "navigator.tab.overflow", in: application)
         XCTAssertTrue(pageRow(named: "Related", in: application).waitForExistence(timeout: 5))
         XCTAssertEqual(pageRow(named: "Related", in: application).identifier, copyID)
-        tap(pageRow(named: "Legacy Surface", in: application), "Inspect original page")
+        tapRelatedPageControl(pageRow(named: "Legacy Surface", in: application), "Inspect original page", in: application, record: record)
         selectStructuralLayer("Header", in: application)
         XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, originalHeader)
         selectInspectorTab("Content", identifier: "content", in: application)
