@@ -13,39 +13,143 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  core:
     runs-on: macos-latest
-    # The 504 non-UI / 81 UI gate reached the former 60-minute limit on hosted
-    # macOS while XCTest was still progressing. Keep bounded runner headroom;
-    # this does not extend individual XCTest waits or application budgets.
     timeout-minutes: 90
+    env:
+      SITEFORGE_DERIVED_DATA: ${{ runner.temp }}/SiteForge/DerivedData
+      SITEFORGE_TEST_RESULTS_ROOT: ${{ runner.temp }}/siteforge-ci/TestResults
+      SITEFORGE_CI_PREBUILT_TESTS: '1'
     steps:
       - uses: actions/checkout@v5
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
-      - name: Record macOS verification environment
+      - name: Prepare repository verification
+        timeout-minutes: 8
         run: |
-          sw_vers
-          uname -m
-          xcodebuild -version
-          xcode-select -p
-      - name: Verify
-        env:
-          SITEFORGE_DERIVED_DATA: ${{ runner.temp }}/SiteForge/DerivedData
-        run: |
-          /bin/zsh scripts/setup-verification-runtime.sh
           mkdir -p "$RUNNER_TEMP/siteforge-ci"
+          sudo xcode-select -s /Applications/Xcode.app
+          { sw_vers; uname -m; xcodebuild -version; xcode-select -p; } | tee "$RUNNER_TEMP/siteforge-ci/environment.log"
           set -o pipefail
-          ./sf verify 2>&1 | tee "$RUNNER_TEMP/siteforge-ci/verify.log"
-      - name: Upload verification diagnostics
-        if: failure()
+          /bin/zsh scripts/setup-verification-runtime.sh 2>&1 | tee "$RUNNER_TEMP/siteforge-ci/setup.log"
+          /bin/zsh scripts/check-repository.sh 2>&1 | tee "$RUNNER_TEMP/siteforge-ci/repository.log"
+          python3 scripts/test-ci-test-accounting.py
+      - name: Build app and test targets
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          xcodebuild -project SiteForge.xcodeproj -scheme SiteForge -destination platform=macOS \
+            -derivedDataPath "$SITEFORGE_DERIVED_DATA" build-for-testing 2>&1 | tee "$RUNNER_TEMP/siteforge-ci/build.log"
+      - name: Discover the complete scheme
+        timeout-minutes: 8
+        run: |
+          set -o pipefail
+          xcodebuild -project SiteForge.xcodeproj -scheme SiteForge -destination platform=macOS \
+            -derivedDataPath "$SITEFORGE_DERIVED_DATA" test-without-building -parallel-testing-enabled NO \
+            -enumerate-tests -test-enumeration-style flat -test-enumeration-format json \
+            -test-enumeration-output-path "$RUNNER_TEMP/siteforge-ci/enumeration.json" \
+            2>&1 | tee "$RUNNER_TEMP/siteforge-ci/discovery.log"
+          python3 scripts/ci-test-accounting.py discover "$RUNNER_TEMP/siteforge-ci/enumeration.json"
+      - name: Run all non-UI tests
+        id: tests
+        timeout-minutes: 40
+        run: ./sf test half
+      - name: Collect non-UI accounting
+        if: always()
+        timeout-minutes: 2
+        run: python3 scripts/ci-test-accounting.py receipt "$RUNNER_TEMP/siteforge-ci" core "$GITHUB_SHA" "${{ steps.tests.outcome || 'skipped' }}"
+      - name: Upload non-UI accounting
+        if: always()
+        timeout-minutes: 2
         uses: actions/upload-artifact@v5
         with:
-          name: siteforge-verify-failure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/siteforge-ci/verify.log
-            ${{ runner.temp }}/SiteForge/DerivedData/Logs/Test/*.xcresult
-            ${{ runner.temp }}/SiteForge/TestResults/*.xcresult
-            ${{ runner.temp }}/SiteForge/TestResults/*.log
-          if-no-files-found: warn
+          name: siteforge-accounting-core
+          path: ${{ runner.temp }}/siteforge-ci/receipt.json
+          if-no-files-found: error
           retention-days: 7
+      - name: Upload non-UI diagnostics
+        if: always()
+        timeout-minutes: 4
+        uses: actions/upload-artifact@v5
+        with:
+          name: siteforge-diagnostics-core
+          path: ${{ runner.temp }}/siteforge-ci/
+          if-no-files-found: error
+          retention-days: 7
+
+  ui:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      SITEFORGE_DERIVED_DATA: ${{ runner.temp }}/SiteForge/DerivedData
+      SITEFORGE_TEST_RESULTS_ROOT: ${{ runner.temp }}/siteforge-ci/TestResults
+      SITEFORGE_CI_PREBUILT_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Record macOS verification environment
+        timeout-minutes: 2
+        run: |
+          mkdir -p "$RUNNER_TEMP/siteforge-ci"
+          sudo xcode-select -s /Applications/Xcode.app
+          { sw_vers; uname -m; xcodebuild -version; xcode-select -p; } | tee "$RUNNER_TEMP/siteforge-ci/environment.log"
+      - name: Build app and test targets
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          xcodebuild -project SiteForge.xcodeproj -scheme SiteForge -destination platform=macOS \
+            -derivedDataPath "$SITEFORGE_DERIVED_DATA" build-for-testing 2>&1 | tee "$RUNNER_TEMP/siteforge-ci/build.log"
+      - name: Run exact UI shard
+        id: tests
+        timeout-minutes: 65
+        shell: zsh {0}
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          selectors=$(python3 scripts/ci-test-accounting.py selectors "$SHARD")
+          print -r -- "$selectors" | tee "$RUNNER_TEMP/siteforge-ci/selectors.txt"
+          ./sf test focused "${(@f)selectors}"
+      - name: Collect UI accounting
+        if: always()
+        timeout-minutes: 2
+        run: python3 scripts/ci-test-accounting.py receipt "$RUNNER_TEMP/siteforge-ci" "ui-${{ matrix.shard }}" "$GITHUB_SHA" "${{ steps.tests.outcome || 'skipped' }}"
+      - name: Upload UI accounting
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v5
+        with:
+          name: siteforge-accounting-ui-${{ matrix.shard }}
+          path: ${{ runner.temp }}/siteforge-ci/receipt.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload UI diagnostics
+        if: always()
+        timeout-minutes: 4
+        uses: actions/upload-artifact@v5
+        with:
+          name: siteforge-diagnostics-ui-${{ matrix.shard }}
+          path: ${{ runner.temp }}/siteforge-ci/
+          if-no-files-found: error
+          retention-days: 7
+
+  verify:
+    if: always()
+    needs: [core, ui]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: siteforge-accounting-*
+          path: receipts
+      - name: Require complete, passing selector accounting
+        env:
+          CORE_RESULT: ${{ needs.core.result }}
+          UI_RESULT: ${{ needs.ui.result }}
+        run: |
+          set -o pipefail
+          python3 scripts/ci-test-accounting.py verify receipts "$GITHUB_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$CORE_RESULT" = success && test "$UI_RESULT" = success

@@ -1,5 +1,39 @@
 # Open Decisions
 
+## OD-031 — Hosted verification capacity
+
+Status: owner approved eight independent macOS UI jobs plus one non-UI
+job, the 90-minute per-job cap, complete selector accounting, and retained
+diagnostics. No broader runner/settings or coverage changes authorized.
+Affected: SF-1605-008 and SF-LOCAL-BUILDER-012–016 UI acceptance evidence.
+
+Run 42746959758's single Verify job was canceled after 90m21s (the workflow
+has a 90-minute timeout). All 888 non-UI tests passed, but UI reached 46
+passes, 14 failures, one started without an outcome, and 109 never started.
+The diagnostic upload was skipped on cancellation. Fixing the 14 known
+failures alone cannot establish complete suite coverage.
+
+Recommended: approve eight independent macOS UI jobs and one non-UI/repo
+job under the existing 90-minute per-job cap. Assign exact UI selectors
+longest-duration-first from the completed 170-method local inventory;
+the measured local sums are 25.6–25.7 minutes per shard (20–22 methods).
+The 46 overlapping hosted passes ran about 1.24× slower in aggregate;
+using 2× plus ten minutes setup projects approximately 62 minutes per
+UI job, not a guarantee. Use one independent desktop per shard, no
+same-desktop parallelization. Keep fail-fast off; require disjoint lists
+whose union equals the full discovery inventory, verify result accounting
+including the existing owner-only skips, and retain each shard's log and
+result even on test failure. Use a final required aggregate outcome.
+
+Alternatives: increase the serial job budget based on a complete measured
+run (less concurrency, much longer wall time), or use an approved dedicated
+verification host (operational/access cost and separate trust boundary).
+Sharding increases concurrent runner demand and repeated setup usage; it
+does not remove tests or relax assertions. Decision deadline: before the
+next hosted checkpoint push. Safe temporary assumption: fail closed until
+all job and selector receipts confirm coverage; do not interpret a missing
+artifact or canceled shard as a pass.
+
 ## OD-030 — Complete macOS UI automation authorization
 
 Status: exact ordinary-identity image replay passed. The later full run

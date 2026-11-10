@@ -140,8 +140,16 @@ test_app() {
   mkdir -p "${result_bundle:h}"
   local test_status log_path
   log_path="${result_bundle:r}.log"
+  local test_action=test
+  if [[ ${SITEFORGE_CI_PREBUILT_TESTS:-0} == 1 ]]; then
+    [[ ${GITHUB_ACTIONS:-} == true && ( "$level" == focused || "$level" == half ) ]] || {
+      print -u2 "Prebuilt tests require a hosted focused or core invocation."; return 2
+    }
+    test_action=test-without-building
+    test_arguments+=(-parallel-testing-enabled NO)
+  fi
   set +e
-  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" -resultBundlePath "$result_bundle" "${TEST_BUILD_IDENTITY_ARGS[@]}" test "${test_arguments[@]}" 2>&1 | tee "$log_path"
+  xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" -resultBundlePath "$result_bundle" "${TEST_BUILD_IDENTITY_ARGS[@]}" "$test_action" "${test_arguments[@]}" 2>&1 | tee "$log_path"
   test_status=${pipestatus[1]}
   set -e
   cleanup_test_fixtures

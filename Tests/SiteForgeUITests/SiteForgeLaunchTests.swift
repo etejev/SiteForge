@@ -1118,7 +1118,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         let alignment = application.popUpButtons["inspector.navigation.alignment"]
         XCTAssertTrue(alignment.waitForExistence(timeout: 5))
         XCTAssertEqual(alignment.value as? String, "End", "Inspector must expose the same trailing default as native layout and Safari")
-        XCTAssertTrue(application.textFields["inspector.navigation.title"].isHittable)
+        let titleField = application.textFields["inspector.navigation.title"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        XCTAssertTrue(revealStructuralLayoutControl(titleField, in: application).isHittable)
         attachWindowScreenshot(application, named: "SF-DARK editorial Content section")
         selectInspectorTab("Accessibility", identifier: "accessibility", in: application)
         XCTAssertTrue(application.buttons["inspector.accessibility.reset"].waitForExistence(timeout: 5))
@@ -6316,7 +6318,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertEqual(pageRows(in: application).count, 2)
         XCTAssertTrue(application.descendants(matching: .any)["canvas.viewport.controls"].exists)
         for tab in ["design", "layout", "content", "interactions", "accessibility"] {
-            XCTAssertTrue(application.buttons["inspector.tab.\(tab)"].exists, tab)
+            let title = tab.capitalized
+            selectInspectorTab(title, identifier: tab, in: application)
+            XCTAssertTrue(application.buttons["inspector.tab.\(tab)"].isSelected
+                || application.descendants(matching: .any)["inspector.tab.overflow"].value as? String == title, tab)
         }
         XCTAssertTrue(application.descendants(matching: .any)["status.zoom"].exists)
         XCTAssertTrue(application.descendants(matching: .any)["status.breakpoint"].exists)
@@ -9036,7 +9041,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         browser.lifetime = .keepAlways; add(browser)
         safari.typeKey("w", modifierFlags: .command); application.activate()
         application.buttons["preview.website.export"].click()
-        let cancel = application.buttons["Cancel"].firstMatch
+        let cancel = application.windows["save-panel"].buttons["CancelButton"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 5)); XCTAssertTrue(cancel.isHittable); cancel.click()
         XCTAssertTrue(application.staticTexts["preview.website.url"].exists)
         XCTAssertTrue(application.buttons["preview.website.export"].isEnabled)
@@ -9635,11 +9640,16 @@ final class SiteForgeLaunchTests: XCTestCase {
         replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: title, in: application)
         componentMenu("Insert", "Insert Footer after Page Content", in: application)
         let footerTitle = "Phone Footer Layout Receipt"
-        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: footerTitle, in: application)
         selectNavigatorTab("Layers", identifier: "layers", in: application)
         let footer = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Footer")).firstMatch
         XCTAssertTrue(footer.waitForExistence(timeout: 3))
         let footerID = footer.identifier.replacingOccurrences(of: "navigator.layer.", with: "")
+        let footerSelected = NSPredicate { _, _ in footer.exists && footer.isSelected }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: footerSelected, object: nil)],
+                                       timeout: 5), .completed)
+        let footerTitleField = application.textFields["inspector.navigation.title"]
+        XCTAssertTrue(footerTitleField.waitForExistence(timeout: 5))
+        replaceStructuralLayoutField(footerTitleField, with: footerTitle, in: application)
         let titleRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Site title")).firstMatch
         XCTAssertTrue(titleRow.waitForExistence(timeout: 3))
         let titleID = titleRow.identifier.replacingOccurrences(of: "navigator.layer.", with: "")
@@ -11448,6 +11458,20 @@ final class SiteForgeLaunchTests: XCTestCase {
         let identifier = element.identifier
         let scroll = application.descendants(matching: .any)["inspector.selection.scroll"]
         var liveElement = liveStructuralLayoutControl(identifier, in: application)
+        // Scrolling cannot repair horizontal clipping. A 1100-point window
+        // on a 1024-point display must move before the strict scroll/display
+        // intersection check, including callers that bypass the component helper.
+        if let visible = NSScreen.main?.visibleFrame {
+            for _ in 0..<2 {
+                guard liveElement.exists, !liveElement.frame.isEmpty, !liveElement.frame.isInfinite else { break }
+                let delta = PointerWindowPlacement.horizontalTranslation(
+                    window: application.windows.firstMatch.frame, target: liveElement.frame, visible: visible
+                )
+                guard delta != 0 else { break }
+                PointerWindowPlacement.moveWindowHorizontally(by: delta, in: application)
+                liveElement = liveStructuralLayoutControl(identifier, in: application)
+            }
+        }
         for _ in 0..<10 {
             if isSafelyVisibleForPointer(liveElement, inside: scroll) { break }
             let targetFrame = liveElement.frame

@@ -4,6 +4,17 @@
 
 ### Latest integrated receipt
 
+`56650d2` compiled on hosted Xcode 26.6 and ran all 888 non-UI tests
+successfully. The serial UI job was canceled near its 90-minute limit:
+46 passed, 14 failed, one interrupted, 109 never started. Fix-only
+follow-up: repair shared native pointer placement, verify the compact
+overflow and exact modal/field targets, and retain partial receipts.
+Owner approved [OD-031](OPEN_DECISIONS.md#od-031--hosted-verification-capacity).
+The candidate schedules eight isolated UI shards and one core job; the
+aggregate `verify` fails on missing, duplicate, skipped outside policy,
+failed, or interrupted coverage. Local accounting checks pass; hosted
+execution must still confirm the workflow and unresolved assertions.
+
 The hosted follow-up for `8e214a7` cleared both original app compiler
 errors and stopped while compiling UI tests on Xcode 26.6. Explicit actor
 annotations in `e715e1e` did not resolve the three nested capture errors.

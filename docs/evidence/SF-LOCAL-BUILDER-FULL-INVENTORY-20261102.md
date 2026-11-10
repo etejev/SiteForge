@@ -5,6 +5,74 @@ SF-0507-003/004, SF-0606-002/003/004/006/007/008, SF-0806-006,
 SF-0901-006, SF-1203-003/006 and SF-1211-004. This is a diagnostic inventory,
 not complete milestone acceptance.
 
+## Hosted execution and capacity — run 42746959758
+
+[Run 42746959758](https://github.com/etejev/SiteForge/actions/runs/42746959758),
+job 129601250899 at `56650d2`, compiled app and UI targets on Xcode 26.6.
+All 888 non-UI passed. The job concluded `cancelled` after 90m21s,
+consistent with the configured 90-minute cap; the log reports only that
+the operation was canceled. No diagnostics artifact was uploaded. Log
+inventory: 46 UI passes, 14 UI failures, no skips reached, one test
+started without outcome (`testFormFieldTemplateMenuParityInspectorAndHistoryJourney`),
+and 109 never started, from `testFormInputTemplateInsertsOnlyIntoSelectedFormJourney`
+through `testWorldGridArtboardHierarchyVisualJourney` in the complete inventory.
+
+| Exact method | First causal observation |
+| --- | --- |
+| `testApplicationLaunchesCompleteNativeShellAtPracticalMinimumSize` | Direct Interactions button absent at the compact pane width; test now exercises the supported direct or native overflow route and verifies the resulting selection. |
+| `testAuroraRelatedPageReuseNativeCopyAndSafariJourney` | Safari passed the foreground gate; AX showed `IsPageLoaded=false` with a loopback address and no expected link. No evidence that link semantics or app activation caused this. The earlier ordinary replay passed; unresolved on hosted. |
+| `testAutomaticNarrowChromeNativeAndMeasuredSafariMenuJourney` | Header field succeeded; Footer title query had no matching AX snapshot after insertion. Require the actual selected Footer row and live field before editing. |
+| `testComponentActionNativeInspectorDraftResetHistoryAndReopenJourney` | `component.action.target.*.type` frame ended at X=1029 on a 1024-point display. |
+| `testComponentDirectPropertySourceRetainsDefinitionDraftAndExactInstanceJourney` | Definition name field ended at X=1029. |
+| `testComponentPropertyDiscoveryNativeSearchClearTraversalAndContextJourney` | Definition name field ended at X=1029. |
+| `testComponentPropertyOrganizationNativeKeyboardCancelHistoryAndReopenJourney` | Definition name field ended at X=1029. |
+| `testComponentRetainedOverrideRecoveryConfirmationUndoAndReopenJourney` | Definition name field ended at X=1029. |
+| `testComponentSlotFallbackNativeAuthoringCancelHistoryAndReopenJourney` | Slot remove control ended at X=1030. |
+| `testComponentTextPropertiesTwoInstancesResetHistoryAndReopenJourney` | Definition name field ended at X=1029. |
+| `testComponentVisibilityDefinitionInstanceResetAndReopenJourney` | Visibility definition name field ended at X=1029. |
+| `testConnectedFluidPreflightSafariExportCancelAndReopenJourney` | The global Cancel lookup matched a Touch Bar element. Scope the click to the existing native `save-panel` `CancelButton`; keep preview and reopen checks. |
+| `testCustomResponsiveViewportWidthEntryComparisonAndCancellationJourney` | Comparison card showed 1440 and Escape dismissed it; the committed width field check then failed. Log does not include actual field value and records an XCTest internal application-specifier assertion. Earlier ordinary run passed; unresolved on hosted. |
+| `testDarkEditorialEditorAndSharedInspectorVisualJourney` | Content alignment read End, but title was tested for hittability without revealing it in the compact scroll pane. Check the real field after standard reveal and retain the strict geometry check. |
+
+The eight component failures shared the same ordering defect: the Inspector
+helper demanded containment before the component helper could translate
+the real window. Vertical scrolling cannot change the offending X extent.
+The shared Inspector path now performs bounded native title-bar movement
+before its unchanged strict display/scroll intersection assertion. No
+product minimum, workflow, or test tolerance changed (SF-0201-006,
+SF-0701-006, SF-0902-006, SF-1204-006). The exact hosted geometry remains
+to be confirmed on the narrower display. See OD-031 for the measured
+capacity decision; no next push against the unchanged serial gate.
+
+Local focused attempt `focused-48e1d177-9b64-47c2-b06c-c1c054eb0c57.xcresult`
+found a duplicate Footer binding at compile time. After the correction,
+`focused-01ddadc1-d3b8-4046-a379-dd674405f7e7.xcresult` compiled the UI
+target on Xcode 27.2 but exited 65 before executing any of the five selected
+methods (minimum shell, narrow chrome, component discovery, fluid export,
+and dark editorial). XCTest reported “Timed out while enabling automation
+mode.” No focused runtime pass or new 1024-point reproduction is claimed.
+Do not repeat unchanged without normal macOS automation authorization.
+
+### OD-031 approved hosted gate
+
+The owner approved eight isolated macOS UI jobs and one core job with the
+existing 90-minute cap. The retained 170-selector XCTest inventory supplies
+timings; deterministic longest-first assignment yields 21–22 methods and
+1,534–1,540 historical seconds per shard. The hosted core job enumerates
+the complete built scheme, then runs the non-UI target. Each UI runner
+builds once, runs only its exact selectors serially and reserves time for
+receipt/diagnostic upload. The aggregate checks the exact candidate SHA,
+all nine job receipts, full selector union, native skip reasons, and job
+outcomes. A canceled runner may prevent artifact recovery; that remains a
+failure, not a skip or a pass. Local full verification is unchanged.
+
+Local validation: four synthetic accounting tests passed; all 1,058
+records from the completed ordinary XCTest bundle parsed and all 170 UI
+IDs matched the timing manifest. Workflow shape, shell syntax, harness
+shim (four cases), traceability and diff checks passed. A compile-only
+UI enumeration attempt was unable to enable local UI automation; no
+local UI tests or full suite were rerun for this workflow change.
+
 ## Hosted UI test compile follow-up
 
 [Run 42745329588](https://github.com/etejev/SiteForge/actions/runs/42745329588)
