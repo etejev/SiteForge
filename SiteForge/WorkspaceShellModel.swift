@@ -9,14 +9,41 @@ import SwiftUI
 final class WorkspaceEditCommitRequest {
     enum Action: String { case save = "Save", saveAs = "Save As", preview = "Preview", context = "Change context", close = "Close" }
     let action: Action
+    let requiresCleanEditors: Bool
     private(set) var isAccepted = true
-    init(_ action: Action) { self.action = action }
+    init(_ action: Action, requiresCleanEditors: Bool = false) {
+        self.action = action; self.requiresCleanEditors = requiresCleanEditors
+    }
     func reject() { isAccepted = false }
 }
 
 /// Allocate complete labels, never cropped scroll fragments. Surplus width is
 /// shared across visible segments; destinations that cannot fit use More.
 enum ShellTabLayoutPolicy {
+    @MainActor
+    static func rowHeight(fontSize: CGFloat) -> CGFloat {
+        guard fontSize.isFinite, fontSize > 0 else { return SiteForgeVisualSystem.tabStripHeight }
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        return max(SiteForgeVisualSystem.tabStripHeight,
+            ceil(font.ascender - font.descender + font.leading) + 2 * SiteForgeVisualSystem.compactSpacing)
+    }
+
+    @MainActor
+    static func measuredMinimumWidths(labels: [String], fontSize: CGFloat) -> [Double] {
+        guard fontSize.isFinite, fontSize > 0 else { return [] }
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        return labels.map {
+            Double(ceil(($0 as NSString).size(withAttributes: [.font: font]).width)
+                + SiteForgeVisualSystem.microSpacing * 2)
+        }
+    }
+
+    static func requiredWidth(minimumWidths: [Double], gap: Double = 1) -> Double {
+        guard !minimumWidths.isEmpty, minimumWidths.allSatisfy({ $0.isFinite && $0 > 0 }),
+              gap.isFinite, gap >= 0 else { return 0 }
+        return minimumWidths.reduce(0, +) + gap * Double(minimumWidths.count - 1)
+    }
+
     struct Allocation: Equatable {
         let indices: [Int]
         let widths: [Double]
@@ -32,7 +59,7 @@ enum ShellTabLayoutPolicy {
             return .init(indices: [], widths: [], overflow: false)
         }
         let all = Array(minimumWidths.indices)
-        let fits = minimumWidths.reduce(0, +) + gap * Double(all.count - 1) <= width
+        let fits = requiredWidth(minimumWidths: minimumWidths, gap: gap) <= width
         if !fits && minimumWidths[selected] + gap + overflowWidth > width {
             return .init(indices: [], widths: [], overflow: true, menuWidth: width)
         }
@@ -55,6 +82,138 @@ enum ShellTabLayoutPolicy {
 extension NSPasteboard.PasteboardType {
     static let siteForgeObjects = Self("com.siteforge.authored-objects.v1")
     static let siteForgeInspectorGeometry = Self("com.siteforge.inspector-geometry.v1")
+    static let siteForgeFormatting = Self("com.siteforge.formatting.v1")
+}
+
+enum StaticBuildFindingSource: Equatable { case browserPreview, checkWebsite }
+
+struct StaticBuildFindingOrigin: Equatable {
+    let pageID: PageID?
+    let definitionID: PageID?
+    let sceneID: CanvasViewportSceneID
+}
+
+struct StaticBuildFindingEditorRequest: Equatable {
+    let id: UUID
+    let documentID: DocumentID
+    let revision: UInt64
+    let pageID: PageID
+    let nodeID: NodeID
+    let sceneID: CanvasViewportSceneID
+    let destination: StaticBuildFindingEditor
+    let inspectorTab: InspectorTab
+}
+
+struct FormattingActionCapture: Equatable, Sendable {
+    let edit: ResponsiveInspectorEditContext
+    let renderer: CanvasRenderRequestIdentity
+    let styleState: CanonicalInteractionStyleState
+    let componentDefinitionID: PageID?
+}
+
+struct FormattingTransferDiagnostic: Equatable, Sendable {
+    let requirementID = "SF-0702-008"
+    let operation: String
+    let family: FormattingFamily
+    let documentIdentifier: String
+    let selectedCount: Int
+    let failureCategory: String
+    let durationMilliseconds: Double
+}
+
+enum PreparedFormattingCopy: Sendable {
+    case ready(Data)
+    case unavailable(FormattingTransferError)
+}
+
+actor FormattingTransferWorker {
+    private func availableImages(for transfer: FormattingTransfer, document: CanonicalDocument,
+                                 package: ProjectPackage) throws -> Set<AssetID> {
+        guard transfer.properties.contains(where: { $0.key == CanonicalImageFill.assetKey }) else { return [] }
+        guard document.id == package.document.id,
+              let property = transfer.properties.first(where: { $0.key == CanonicalImageFill.assetKey }),
+              case .string(let raw) = property.value, let id = AssetID(uuidString: raw),
+              let asset = document.imageAssets.first(where: { $0.id == id }),
+              let index = try ProjectResourceIndex.decode(from: package),
+              let descriptor = index.resources.first(where: { $0.id == asset.resourceID }),
+              descriptor.sha256 == asset.contentHash, descriptor.byteCount == asset.byteCount else { throw FormattingTransferError.missingDependency }
+        do { _ = try package.resourceData(for: descriptor) } catch { throw FormattingTransferError.missingDependency }
+        return [id]
+    }
+    func copyCandidates(document: CanonicalDocument, pageID: PageID, nodeIDs: [NodeID],
+                        package: ProjectPackage) throws -> [FormattingFamily: PreparedFormattingCopy] {
+        var result: [FormattingFamily: PreparedFormattingCopy] = [:]
+        for family in FormattingFamily.allCases {
+            try Task.checkCancellation()
+            do {
+                let transfer = try FormattingTransfer.capture(family: family, document: document, pageID: pageID, orderedNodeIDs: nodeIDs)
+                let images = try availableImages(for: transfer, document: document, package: package)
+                try transfer.validateDependencies(in: document, availableImageIDs: images)
+                result[family] = .ready(try transfer.encoded())
+            } catch let error as FormattingTransferError { result[family] = .unavailable(error) }
+            catch is CancellationError { throw CancellationError() }
+            catch { result[family] = .unavailable(.invalidPayload) }
+        }
+        return result
+    }
+    func paste(_ data: Data, family: FormattingFamily, identity: DesignInspectorOperationIdentity,
+               nodeIDs: [NodeID], document: CanonicalDocument, context: TransformValidationContext,
+               package: ProjectPackage, breakpoint: ResponsiveBreakpoint) throws -> PreparedDesignInspectorEdit {
+        try Task.checkCancellation()
+        let transfer = try FormattingTransfer.decode(data)
+        guard transfer.family == family else { throw FormattingTransferError.wrongFamily }
+        try transfer.validateDependencies(in: document)
+        let images = try availableImages(for: transfer, document: document, package: package)
+        let prepared = try DesignInspectorCommandRegistry().prepare(FormattingPasteCommand(identity: identity, orderedNodeIDs: nodeIDs,
+            transfer: transfer, cancelled: false, breakpoint: breakpoint), in: document, context: context, availableImageIDs: images)
+        try Task.checkCancellation()
+        return prepared
+    }
+}
+
+struct PageChromeCopySheetRequest: Identifiable {
+    let id = UUID()
+    let capture: FormattingActionCapture
+    let sourcePageID: PageID
+    let sourceName: String
+    let sourceRoles: [PageFlowRole: NodeID]
+    let initialRoles: Set<PageFlowRole>
+    let targets: [PageChromeCopyTarget]
+}
+struct PageChromeCopyDiagnostic: Equatable, Sendable {
+    let requirementID = "SF-0308-008"
+    let documentIdentifier: String
+    let sourcePageIdentifier: String
+    let targetCount: Int
+    let failureCategory: String
+    let durationMilliseconds: Double
+}
+actor PageChromeCopyWorker {
+    func prepare(_ request: PageChromeCopyRequest, document: CanonicalDocument, package: ProjectPackage) throws -> PreparedPageChromeCopy {
+        try Task.checkCancellation()
+        guard package.document.id == document.id, request.documentID == document.id,
+              request.revision == document.revision,
+              let source = document.pages.first(where: { $0.id == request.sourcePageID }),
+              request.sourceRoles == PageChromeCopyRegistry.sourceRoles(source) else { throw PageChromeCopyError.stale }
+        let nodes = try PageChromeCopyRegistry.dependencyNodes(request: request, document: document)
+        let assetIDs = Set(nodes.flatMap(CanonicalGraphReferences.assets))
+        let index: ProjectResourceIndex?
+        if assetIDs.isEmpty { index = nil }
+        else {
+            do { index = try ProjectResourceIndex.decode(from: package) }
+            catch { throw PageChromeCopyError.dependency }
+        }
+        for id in assetIDs {
+            try Task.checkCancellation()
+            guard let asset = document.imageAssets.first(where: { $0.id == id }),
+                  let descriptor = index?.resources.first(where: { $0.id == asset.resourceID }),
+                  descriptor.sha256 == asset.contentHash, descriptor.byteCount == asset.byteCount else { throw PageChromeCopyError.dependency }
+            do { _ = try package.resourceData(for: descriptor) } catch { throw PageChromeCopyError.dependency }
+        }
+        let prepared = try PageChromeCopyRegistry().prepare(request, document: document, availableImageIDs: assetIDs)
+        try Task.checkCancellation()
+        return prepared
+    }
 }
 
 /// Scene-local immutable ownership for the currently open preview. It never
@@ -214,7 +373,7 @@ struct LocalPreviewState: Equatable, Sendable {
             : "Multi-page Preview could not be prepared. The last valid page remains visible; try Refresh Preview."
     }
     mutating func rejectComponentRecovery() {
-        status = "Preview blocked by retained component intent. Restore original definitions/bindings or explicitly reset unresolved overrides."
+        status = "Preview needs original component data or a decision about affected custom values. Inspect the component in Content; recover original data or explicitly remove affected values. The document is unchanged."
             + (snapshot == nil ? "" : " The previous valid snapshot is unchanged.")
     }
 
@@ -567,8 +726,8 @@ enum InspectorSectionDiscovery {
         let matches = InspectorTab.allCases.filter { tab in
             let keywords: String = switch tab {
             case .design: "design fill color opacity layers gradient border radius shadow typography font tracking alignment"
-            case .layout: "layout geometry x y width height padding gap columns direction breakpoint inherited override responsive"
-            case .content: "content text image asset component property group choice media action slot fallback form"
+            case .layout: "layout geometry x y width height padding inner spacing gap space between items columns direction breakpoint screen size inherited uses desktop override responsive fluid smooth scaling fixed exact size hug fit content fill available space"
+            case .content: "content text image asset component original copy custom value property group choice media action slot fallback default contents attention recovery form"
             case .interactions: "interactions link destination page navigation context button"
             case .accessibility: "accessibility label description alt decorative role focus"
             }
@@ -604,12 +763,179 @@ enum ViewportPreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// SF-0602: validates editor presentation, never authored node geometry.
+enum ViewportWidthPolicy {
+    static let minimum = TransformPolicy.minimumDimension
+    static let maximum = LayoutPolicy.maximumDimension
+
+    static func isValid(_ width: Double) -> Bool {
+        width.isFinite && width >= minimum && width <= maximum
+    }
+
+    static func parse(_ text: String, locale: Locale = .current) -> Double? {
+        guard case .success(let width) = GeometryInspectorNumberParser.parse(text, locale: locale),
+              isValid(width) else { return nil }
+        return width
+    }
+
+    static func preset(for width: Double) -> ViewportPreset {
+        switch ResponsiveBreakpoint.resolving(width: width) {
+        case .desktop: .desktop
+        case .tablet: .tablet
+        case .mobile: .mobile
+        }
+    }
+}
+
+struct ViewportWidthDiagnostic: Equatable, Sendable {
+    let requirementID = "SF-0602-008"
+    let operation = "commit-inspection-width"
+    let sceneIdentifier: String
+    let durationMilliseconds: Double
+    let failureCategory: String
+}
+
+/// Derived inspection context, not a canonical audit/suppression record.
+struct ResponsiveLayoutReviewOrigin: Hashable, Sendable {
+    let documentID: DocumentID
+    let revision: UInt64
+    let pageID: PageID
+}
+
+struct ResponsiveLayoutReviewDiagnostic: Equatable, Sendable {
+    let requirementID = "SF-0606-008"
+    let operation: String
+    let documentIdentifier: String
+    let pageIdentifier: String
+    let nodeIdentifier: String?
+    let durationMilliseconds: Double
+    let failureCategory: String
+}
+
+struct ResponsiveLayoutFinding: Identifiable, Equatable, Sendable {
+    enum Classification: String, Equatable, Sendable { case review }
+    let classification = Classification.review
+    enum Boundary: String, Hashable, Sendable { case artboard, clippedContainer }
+    enum Edge: String, Hashable, Sendable { case left, right }
+    struct ID: Hashable, Sendable {
+        let origin: ResponsiveLayoutReviewOrigin
+        let nodeID: NodeID
+        let width: Double
+        let isCurrentSample: Bool
+        let boundary: Boundary
+        let edge: Edge
+    }
+    let id: ID
+    let breakpoint: ResponsiveBreakpoint
+    let containingNodeID: NodeID?
+    let objectBounds: WorldRect
+    let containingBounds: WorldRect
+    let widthSource: String
+    var overflow: Double {
+        id.edge == .left ? containingBounds.minX - objectBounds.minX
+            : objectBounds.maxX - containingBounds.maxX
+    }
+    var contextDescription: String {
+        func format(_ value: Double) -> String {
+            let display = GeometryInspectorNumberParser.format(value)
+            return value != 0 && display == GeometryInspectorNumberParser.format(0) ? String(value) : display
+        }
+        return "Review \(id.edge.rawValue) edge: \(format(overflow)) CSS px beyond \(id.boundary == .artboard ? "artboard" : "content clip"). "
+            + "X \(format(objectBounds.minX)), width \(format(objectBounds.size.width)); containing X \(format(containingBounds.minX)), width \(format(containingBounds.size.width)). \(widthSource)."
+    }
+    var nextAction: String {
+        "Review element in Layout. Inspect X, Width, responsive sizing and parent padding; no automatic fix is applied."
+    }
+}
+
+enum ResponsiveLayoutReviewPolicy {
+    // Bounded presentation only; the total remains explicit rather than
+    // claiming that an omitted row means an all-clear result.
+    static let maximumPresentedFindings = 200
+    struct Result: Equatable, Sendable {
+        let findings: [ResponsiveLayoutFinding]
+        let totalCount: Int
+    }
+    static func inspect(origin: ResponsiveLayoutReviewOrigin, page: DocumentPage,
+                        scene: CanvasRenderSceneSnapshot, artboard: WorldRect,
+                        width: Double, isCurrentSample: Bool, selectedNodeIDs: [NodeID],
+                        checkpoint: () throws -> Void = {}) throws -> Result {
+        guard origin.pageID == page.id, scene.identity.documentID == origin.documentID,
+              scene.identity.revision == origin.revision, ViewportWidthPolicy.isValid(width),
+              artboard.isValid, artboard.size.width == width else { throw CanvasRendererError.staleResult }
+        guard scene.schemaVersion == CanvasRenderSceneSnapshot.currentSchemaVersion else {
+            throw CanvasRendererError.unsupportedSchema(scene.schemaVersion)
+        }
+        let breakpoint = ResponsiveBreakpoint.resolving(width: width)
+        let selected = Set(selectedNodeIDs)
+        let ordered = page.canonicalDepthFirstNodes()
+        let nodes = Dictionary(uniqueKeysWithValues: ordered.map { ($0.id, $0) })
+        let visible = page.effectiveVisibleNodeIDs(breakpoint: breakpoint)
+        let chrome = Set(page.rootNodeIDs.filter { nodes[$0]?.insertionGeometry == nil } + page.nodes.flatMap { node in
+            [CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: node),
+             CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: node)].compactMap { $0 }
+        })
+        var clipOwner: [NodeID: NodeID] = [:]
+        var viewportDependent = Set<NodeID>()
+        for node in ordered {
+            try checkpoint()
+            if !CanonicalPageFlow.isManaged(node), let mode = CanonicalPositioning.resolve(node)?.mode,
+               mode == .fixed || mode == .sticky { viewportDependent.insert(node.id) }
+            guard case .node(let parentID) = node.parent, let parent = nodes[parentID] else { continue }
+            if viewportDependent.contains(parentID) { viewportDependent.insert(node.id) }
+            if DesignBoxStyleCommandRegistry.contentBoxKinds.contains(parent.kind),
+               DesignBoxStyleCommandRegistry.resolvedStyle(for: parent)?.clipsContent == true {
+                clipOwner[node.id] = parentID
+            } else { clipOwner[node.id] = clipOwner[parentID] }
+        }
+        var objects: [NodeID: CanvasRenderObject] = [:]
+        for object in scene.objects {
+            try checkpoint()
+            guard object.frame.isValid, object.clipRect?.isValid != false else { throw CanvasRendererError.invalidObject(object.id) }
+            guard objects.updateValue(object, forKey: object.id) == nil else { throw CanvasRendererError.duplicateObject(object.id) }
+        }
+        var findings: [ResponsiveLayoutFinding] = []
+        var total = 0
+        for node in ordered {
+            try checkpoint()
+            guard !chrome.contains(node.id), visible.contains(node.id),
+                  !viewportDependent.contains(node.id),
+                  selected.isEmpty || selected.contains(node.id),
+                  let object = objects[node.id], object.isVisible else { continue }
+            let mode = CanonicalSizingConstraints.effectiveMode(.width, node: node,
+                breakpoint: breakpoint, width: width)
+            let resolution = CanonicalSizingConstraints.dimensionResolution(.width, node: node,
+                breakpoint: breakpoint, width: width)
+            let winning = resolution.numericSource?.label
+                ?? "\(resolution.modeOrigin == .authored ? "Authored" : "Defaulted") Desktop sizing mode"
+            let source = "\(mode.rawValue.capitalized) sizing: \(winning)"
+            // Canvas clips at the artboard and at opted-in ancestor clips.
+            // Ordinary overflow-visible containers are NOT implicit clips.
+            let owner = clipOwner[node.id]
+            let bounds = owner == nil ? artboard : (object.clipRect ?? artboard)
+            let boundary: ResponsiveLayoutFinding.Boundary = owner == nil ? .artboard : .clippedContainer
+            for edge in [ResponsiveLayoutFinding.Edge.left, .right] {
+                let crosses = edge == .left ? object.frame.minX < bounds.minX : object.frame.maxX > bounds.maxX
+                guard crosses else { continue }
+                total += 1
+                guard findings.count < maximumPresentedFindings else { continue }
+                findings.append(.init(id: .init(origin: origin, nodeID: node.id, width: width,
+                    isCurrentSample: isCurrentSample, boundary: boundary, edge: edge),
+                    breakpoint: breakpoint, containingNodeID: owner, objectBounds: object.frame,
+                    containingBounds: bounds, widthSource: source))
+            }
+        }
+        return .init(findings: findings, totalCount: total)
+    }
+}
+
 /// Scene-local responsive review. It projects the same canonical resolvers
 /// used by layout and rendering; comparison never becomes project content or
 /// invents another breakpoint cascade.
 struct ResponsiveBreakpointReview: Identifiable, Equatable, Sendable {
     let breakpoint: ResponsiveBreakpoint
-    let viewportWidth: Int
+    let viewportWidth: Double
+    var isCurrentWidthSample = false
     let objectCount: Int
     let visibleCount: Int
     let changedFromDesktopCount: Int
@@ -622,11 +948,16 @@ struct ResponsiveBreakpointReview: Identifiable, Equatable, Sendable {
     let primaryIsVisible: Bool?
     let primaryProvenance: String?
     let primaryFluidSummary: String?
+    var layoutFindings: [ResponsiveLayoutFinding] = []
+    var totalLayoutFindingCount = 0
 
-    var id: BreakpointID { breakpoint.id }
-    var title: String { breakpoint.title }
+    var id: String { breakpoint.rawValue + ":" + String(viewportWidth) + ":" + String(isCurrentWidthSample) }
+    var title: String { isCurrentWidthSample ? "Current width · \(breakpoint.title)" : breakpoint.title }
     var differenceSummary: String {
-        breakpoint == .desktop
+        if isCurrentWidthSample {
+            return "Current inspection sample; \(changedFromDesktopCount) differences from the Desktop 1440 reference"
+        }
+        return breakpoint == .desktop
             ? "Desktop base source"
             : changedFromDesktopCount == 0
                 ? "Matches Desktop for this review scope"
@@ -634,13 +965,15 @@ struct ResponsiveBreakpointReview: Identifiable, Equatable, Sendable {
     }
     var accessibilityValue: String {
         var values = [
-            "\(viewportWidth) point viewport",
+            "\(GeometryInspectorNumberParser.format(viewportWidth)) CSS px viewport",
             "\(visibleCount) of \(objectCount) reviewed objects visible",
             differenceSummary,
-            Self.count(geometryOverrideCount, label: "geometry override"),
-            Self.count(containerOverrideCount, label: "container override"),
-            Self.count(visibilityOverrideCount, label: "visibility override"),
-            Self.count(fluidValueCount, label: "fluid value"),
+            "\(totalLayoutFindingCount) horizontal boundary reviews",
+            AuthoringLanguage.reviewCustomizationCount(geometryOverrideCount, name: "Custom size or position"),
+            AuthoringLanguage.reviewCustomizationCount(containerOverrideCount, name: "Custom layout"),
+            AuthoringLanguage.reviewCustomizationCount(visibilityOverrideCount, name: "Custom visibility"),
+            Self.count(fluidValueCount, label: "smooth scaling range"),
+            AuthoringLanguage.reviewCountsHelp,
         ]
         if let primaryName, let primaryGeometry, let primaryIsVisible, let primaryProvenance {
             values.append("\(primaryName), \(primaryIsVisible ? "visible" : "hidden"), \(primaryProvenance), x \(Self.number(primaryGeometry.origin.x)), y \(Self.number(primaryGeometry.origin.y)), width \(Self.number(primaryGeometry.size.width)), height \(Self.number(primaryGeometry.size.height))")
@@ -657,17 +990,19 @@ struct ResponsiveBreakpointReview: Identifiable, Equatable, Sendable {
 }
 
 enum ResponsiveBreakpointReviewPolicy {
-    static func reviews(page: DocumentPage, selectedNodeIDs: [NodeID]) -> [ResponsiveBreakpointReview] {
+    static func reviews(page: DocumentPage, selectedNodeIDs: [NodeID], currentViewportWidth: Double? = nil) -> [ResponsiveBreakpointReview] {
         let selected = Set(selectedNodeIDs)
         let authored = page.nodes.filter { $0.insertionGeometry != nil }
         let scoped = selected.isEmpty ? authored : authored.filter { selected.contains($0.id) }
         let desktopGeometry = page.resolvedStructuralGeometry(
             breakpoint: .desktop, viewportWidth: Double(ViewportPreset.desktop.width))
         let desktopVisible = page.effectiveVisibleNodeIDs(breakpoint: .desktop)
-        return ResponsiveBreakpoint.allCases.map { breakpoint in
-            let reviewWidth = Double(ViewportPreset.allCases.first {
-                $0.responsiveBreakpoint == breakpoint
-            }?.width ?? 0)
+        var samples = ViewportPreset.allCases.map { ($0.responsiveBreakpoint, Double($0.width), false) }
+        if let width = currentViewportWidth, ViewportWidthPolicy.isValid(width) {
+            samples.append((ResponsiveBreakpoint.resolving(width: width), width, true))
+        }
+        return samples.compactMap { breakpoint, reviewWidth, isCurrent -> ResponsiveBreakpointReview? in
+            guard !Task.isCancelled else { return nil }
             let geometry = page.resolvedStructuralGeometry(
                 breakpoint: breakpoint, viewportWidth: reviewWidth)
             let visible = page.effectiveVisibleNodeIDs(breakpoint: breakpoint)
@@ -725,7 +1060,8 @@ enum ResponsiveBreakpointReviewPolicy {
             }
             return .init(
                 breakpoint: breakpoint,
-                viewportWidth: ViewportPreset.allCases.first { $0.responsiveBreakpoint == breakpoint }?.width ?? 0,
+                viewportWidth: reviewWidth,
+                isCurrentWidthSample: isCurrent,
                 objectCount: scoped.count,
                 visibleCount: scoped.filter { visible.contains($0.id) }.count,
                 changedFromDesktopCount: changed,
@@ -740,6 +1076,35 @@ enum ResponsiveBreakpointReviewPolicy {
                 primaryFluidSummary: fluidSummary
             )
         }
+    }
+}
+
+actor ResponsiveBreakpointReviewWorker {
+    private let sceneWorker = WorkspaceScenePreparationWorker()
+    func prepare(document: CanonicalDocument, pageID: PageID, selectedNodeIDs: [NodeID], width: Double) async throws -> [ResponsiveBreakpointReview] {
+        try Task.checkCancellation()
+        guard let page = document.pages.first(where: { $0.id == pageID }) else { throw CanvasRendererError.staleResult }
+        var result = ResponsiveBreakpointReviewPolicy.reviews(page: page, selectedNodeIDs: selectedNodeIDs,
+            currentViewportWidth: width)
+        let origin = ResponsiveLayoutReviewOrigin(documentID: document.id, revision: document.revision, pageID: pageID)
+        for index in result.indices {
+            try Task.checkCancellation()
+            let sample = result[index]
+            let bounds = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: sample.viewportWidth,
+                height: CanonicalPageFlow.contentHeight(page, breakpoint: sample.breakpoint, width: sample.viewportWidth)))
+            let viewport = try CanvasViewportState(viewportSize: .init(width: sample.viewportWidth, height: 900), contentBounds: bounds)
+            let prepared = try await sceneWorker.prepare(.init(document: document, activePageID: pageID,
+                activeContainerID: nil, viewport: viewport, surfaceID: .init(),
+                breakpoint: sample.breakpoint, viewportWidth: sample.viewportWidth))
+            let finding = try ResponsiveLayoutReviewPolicy.inspect(origin: origin, page: page,
+                scene: prepared.renderScene, artboard: bounds, width: sample.viewportWidth,
+                isCurrentSample: sample.isCurrentWidthSample, selectedNodeIDs: selectedNodeIDs,
+                checkpoint: { try Task.checkCancellation() })
+            result[index].layoutFindings = finding.findings
+            result[index].totalLayoutFindingCount = finding.totalCount
+        }
+        try Task.checkCancellation()
+        return result
     }
 }
 
@@ -760,6 +1125,7 @@ enum ShellFocus: Hashable {
     case navigatorPage(PageID)
     case navigatorLayer(NodeID)
     case viewportPreset
+    case viewportWidth
     case viewportCompare
     case viewportGrid
     case viewportZoomOut
@@ -786,7 +1152,7 @@ enum ShellFocusTraversal {
         [
             .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents,
         ] + pageIDs.map(ShellFocus.navigatorPage) + layerIDs.map(ShellFocus.navigatorLayer) + [
-            .viewportPreset, .viewportCompare, .viewportGrid, .viewportZoomOut, .viewportZoomIn,
+            .viewportPreset, .viewportWidth, .viewportCompare, .viewportGrid, .viewportZoomOut, .viewportZoomIn,
             .viewportReset, .viewportFitCanvas, .viewportFit, .viewportCanvas,
             .inspectorDesign, .inspectorLayout, .inspectorContent, .inspectorInteractions, .inspectorAccessibility,
         ]
@@ -820,6 +1186,7 @@ extension ShellFocus {
         case let .navigatorPage(id): NavigatorPageAccessibility.identifier(for: id)
         case let .navigatorLayer(id): "navigator.layer.\(id.description)"
         case .viewportPreset: "canvas.viewport.preset"
+        case .viewportWidth: "canvas.viewport.width"
         case .viewportCompare: "canvas.viewport.compare"
         case .viewportGrid: "canvas.grid.toggle"
         case .viewportZoomOut: "canvas.zoom.out"
@@ -914,6 +1281,29 @@ enum WorkspaceMetrics {
     static let inspectorWidth: ClosedRange<CGFloat> = 280...420
     static let minimumCanvasWidth: CGFloat = 500
     static let uiTestScreenEdgeInset: CGFloat = 16
+    struct SidePaneAllocation: Equatable {
+        let navigatorMinimum: CGFloat
+        let navigatorMaximum: CGFloat
+        let inspectorMinimum: CGFloat
+        let inspectorMaximum: CGFloat
+    }
+
+    /// Measured complete strips may raise a pane's minimum only when they fit
+    /// its existing budget. Increased text/compact panes use explicit overflow;
+    /// they cannot steal the canvas minimum or grow the window implicitly.
+    static func sidePaneAllocation(windowWidth: CGFloat, navigatorRequired: CGFloat,
+                                   inspectorRequired: CGFloat) -> SidePaneAllocation {
+        let width = windowWidth.isFinite ? max(minimumWindowSize.width, windowWidth) : minimumWindowSize.width
+        let navMax = navigatorMaximumWidth(for: width), inspectorMax = inspectorMaximumWidth(for: width)
+        func minimum(_ base: CGFloat, _ maximum: CGFloat, _ required: CGFloat) -> CGFloat {
+            guard required.isFinite, required <= maximum else { return base }
+            return max(base, required)
+        }
+        return .init(navigatorMinimum: minimum(navigatorMinimumWidth(for: width), navMax, navigatorRequired),
+            navigatorMaximum: navMax,
+            inspectorMinimum: minimum(inspectorMinimumWidth(for: width), inspectorMax, inspectorRequired),
+            inspectorMaximum: inspectorMax)
+    }
     // Measured 12-point semibold labels, all five native targets, gaps and pane
     // gutters require 323/353 points. A normal-width workspace reserves these
     // rows; constrained windows retain explicit overflow rather than tiny type.
@@ -1303,7 +1693,8 @@ actor WorkspaceScenePreparationWorker {
         let orderedActiveNodes = isolatedNodeIDs.map { ids in allActiveNodes.filter { ids.contains($0.id) } }
             ?? allActiveNodes
         let resolvedGeometry = activePage?.resolvedStructuralGeometry(
-            breakpoint: request.breakpoint, viewportWidth: request.viewportWidth) ?? [:]
+            breakpoint: request.breakpoint, viewportWidth: request.viewportWidth,
+            availablePageIDs: Set(request.document.websitePages.map(\.id))) ?? [:]
         let effectivelyVisible = activePage?.effectiveVisibleNodeIDs(breakpoint: request.breakpoint) ?? []
         let activeNodesByID = Dictionary(uniqueKeysWithValues: (activePage?.nodes ?? []).map { ($0.id, $0) })
         let reusableStyleIndex = try CanonicalReusableStyleIndex(document: request.document)
@@ -1546,7 +1937,9 @@ actor WorkspaceScenePreparationWorker {
                 semanticElement: SemanticElementCommandRegistry.resolvedElement(for: node)?.0.rawValue,
                 previewLink: previewLink,
                 navigation: navigationSnapshots[node.id],
-                navigationOwnerID: CanonicalPageFlow.isNavigationLink(node) ? { if case .node(let id) = node.parent { id } else { nil } }() : nil
+                navigationOwnerID: CanonicalPageFlow.isNavigationLink(node) ? { if case .node(let id) = node.parent { id } else { nil } }() : nil,
+                parentNodeID: { if case .node(let id) = node.parent { id } else { nil } }(),
+                pageFlowRole: CanonicalPageFlow.role(node)
             )
             if isPageBackground {
                 if !fillLayers.isEmpty || canonicalAppearance.fill != nil || imageAssetID != nil {
@@ -1676,6 +2069,7 @@ enum LocalPreviewRuntimeError: Error, Equatable, Sendable {
     case cancelled
     case noWebsitePages
     case componentRecoveryRequired
+    case invalidViewportWidth
 }
 
 /// Builds every website page through the same immutable scene resolver used
@@ -1685,17 +2079,18 @@ actor LocalPreviewRuntimeCompiler {
     private let sceneWorker = WorkspaceScenePreparationWorker()
 
     func compile(document: CanonicalDocument, package: ProjectPackage, pixelRatio: CanvasPixelRatio,
-                 breakpoint: ResponsiveBreakpoint = .desktop) async throws -> LocalPreviewRuntimeSnapshot {
+                 breakpoint: ResponsiveBreakpoint = .desktop, viewportWidth: Double? = nil) async throws -> LocalPreviewRuntimeSnapshot {
         let input = try ProjectImageResourceSnapshot(document: document, package: package)
         return try await compile(document: document, imageResourceData: input.images,
-                                 pixelRatio: pixelRatio, breakpoint: breakpoint)
+                                 pixelRatio: pixelRatio, breakpoint: breakpoint, viewportWidth: viewportWidth)
     }
 
     func compile(
         document: CanonicalDocument,
         imageResourceData: [AssetID: Data],
         pixelRatio: CanvasPixelRatio,
-        breakpoint: ResponsiveBreakpoint = .desktop
+        breakpoint: ResponsiveBreakpoint = .desktop,
+        viewportWidth: Double? = nil
     ) async throws -> LocalPreviewRuntimeSnapshot {
         let pages = document.pages.filter { $0.role != .componentDefinition }
         guard !pages.isEmpty else { throw LocalPreviewRuntimeError.noWebsitePages }
@@ -1708,12 +2103,14 @@ actor LocalPreviewRuntimeCompiler {
         var snapshots: [LocalPreviewPageSnapshot] = []
         snapshots.reserveCapacity(pages.count)
         var pageDigests: [String] = []
-        let width = Double(ViewportPreset.allCases.first { $0.responsiveBreakpoint == breakpoint }?.width
+        let width = viewportWidth ?? Double(ViewportPreset.allCases.first { $0.responsiveBreakpoint == breakpoint }?.width
                            ?? ViewportPreset.desktop.width)
+        guard ViewportWidthPolicy.isValid(width) else { throw LocalPreviewRuntimeError.invalidViewportWidth }
+        let resolvedBreakpoint = viewportWidth == nil ? breakpoint : ResponsiveBreakpoint.resolving(width: width)
         for page in pages {
             guard !Task.isCancelled else { throw LocalPreviewRuntimeError.cancelled }
             let bounds = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: width,
-                height: CanonicalPageFlow.contentHeight(page, breakpoint: breakpoint, width: width)))
+                height: CanonicalPageFlow.contentHeight(page, breakpoint: resolvedBreakpoint, width: width)))
             let viewport = try CanvasViewportState(
                 viewportSize: .init(width: width, height: 900),
                 contentBounds: bounds,
@@ -1725,7 +2122,7 @@ actor LocalPreviewRuntimeCompiler {
                 activeContainerID: nil,
                 viewport: viewport,
                 surfaceID: CanvasRenderSurfaceID(),
-                breakpoint: breakpoint,
+                breakpoint: resolvedBreakpoint,
                 viewportWidth: width,
                 imageResourceData: imageResourceData
             ))
@@ -1912,6 +2309,20 @@ struct ComponentDependencySnapshot: Equatable, Sendable {
         case overrideConflict = "Unresolved component override"
         case missingActionDestination = "Missing component action destination"
         case capacityExceeded = "Component dependency index capacity exceeded"
+
+        var presentation: String {
+            switch self {
+            case .missingDefinition: "Original component unavailable"
+            case .missingAsset: "Image unavailable — locate or replace it"
+            case .missingToken: "Color token unavailable — recover or choose an available color"
+            case .missingStyle: "Reusable style unavailable — recover it or remove its link"
+            case .nestedComponent: "A linked component inside another component is not supported here"
+            case .cyclicDependency: "Components link back to each other — remove the circular link"
+            case .overrideConflict: "Custom values need attention — inspect the affected copy"
+            case .missingActionDestination: "Destination unavailable — choose another destination"
+            case .capacityExceeded: "Component inspection is at its limit — remove unused components or open a smaller project"
+            }
+        }
     }
 
     struct Entry: Identifiable, Equatable, Sendable {
@@ -2283,13 +2694,63 @@ final class WorkspaceShellState: ObservableObject {
     @Published var pinnedInspectorSections: Set<InspectorTab> = []
     @Published var inspectorTransferField: GeometryInspectorField = .width
     @Published private(set) var inspectorWorkflowAnnouncement = "Inspector discovery is local to this window."
-    @Published var viewportPreset: ViewportPreset = .desktop {
+    @Published private(set) var formattingTransferStatus = "Base formatting only; geometry, content and existing state variants stay unchanged."
+    @Published private(set) var isPreparingFormattingCopy = false
+    @Published private(set) var isPastingFormatting = false
+    @Published private var preparedFormattingCopies: [FormattingFamily: PreparedFormattingCopy] = [:]
+    private var preparedFormattingCapture: FormattingActionCapture?
+    private var copiedFormattingClipboard: (changeCount: Int, family: FormattingFamily)?
+    private let formattingWorker = FormattingTransferWorker()
+    private var formattingCopyRequestID = UUID()
+    private var formattingPasteRequestID = UUID()
+    private var formattingPasteTask: Task<Void, Never>?
+    private var pendingFormattingAdoption: (documentID: DocumentID, revision: UInt64, message: String)?
+    @Published private(set) var lastFormattingFailureCategory = "none"
+    @Published private(set) var lastFormattingDiagnostic: FormattingTransferDiagnostic?
+    // The existing viewport is the sole owner: presets are reference actions,
+    // while the displayed scope follows its actual CSS/layout width.
+    var viewportLayoutWidth: Double { viewportState.contentBounds.size.width }
+    var viewportPreset: ViewportPreset {
+        get { ViewportWidthPolicy.preset(for: viewportLayoutWidth) }
+        set { _ = commitViewportWidth(Double(newValue.width)) }
+    }
+    @Published private(set) var viewportWidthStatus = "Width is scene-local CSS pixels; project geometry is unchanged."
+    @Published private(set) var lastViewportWidthDiagnostic: ViewportWidthDiagnostic?
+    @Published private var preparedResponsiveReviews: [ResponsiveBreakpointReview] = []
+    private var responsiveReviewContext: ResponsiveInspectorEditContext?
+    private var responsiveReviewGeneration: UInt64?
+    var responsiveBreakpointReviews: [ResponsiveBreakpointReview] {
+        guard responsiveReviewContext == responsiveInspectorEditContext,
+              responsiveReviewGeneration == viewportState.generation else { return [] }
+        return preparedResponsiveReviews
+    }
+    @Published private(set) var isPreparingResponsiveComparison = false
+    @Published private(set) var responsiveComparisonStatus = "Compare representative and current widths; findings are geometric Review suggestions, not automatic errors."
+    @Published private(set) var responsiveLayoutReviewStatus = ""
+    private var responsiveLayoutReviewStatusContext: ResponsiveInspectorEditContext?
+    @Published private(set) var responsiveLayoutInspectorRequestID: UUID?
+    var hasCurrentResponsiveLayoutInspectorRequest: Bool {
+        responsiveLayoutInspectorRequestID != nil && responsiveLayoutReviewStatusContext == responsiveInspectorEditContext
+    }
+    @Published private(set) var responsiveComparisonFailureCategory = "none"
+    @Published private(set) var lastResponsiveLayoutReviewDiagnostic: ResponsiveLayoutReviewDiagnostic?
+    private struct PendingResponsiveLayoutReview {
+        let finding: ResponsiveLayoutFinding
+        let sceneID: CanvasViewportSceneID
+        let generation: UInt64
+        let openingSelection: [NodeID]
+    }
+    private var pendingResponsiveLayoutReview: PendingResponsiveLayoutReview?
+    @Published var isResponsiveComparisonPresented = false {
         didSet {
-            guard viewportPreset != oldValue else { return }
-            updateViewportContentBounds()
+            let request = UUID(); responsivePresentationRequestID = request
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, self.responsivePresentationRequestID == request else { return }
+                self.scheduleResponsiveComparison()
+            }
         }
     }
-    @Published var isResponsiveComparisonPresented = false
     @Published private(set) var viewportState: CanvasViewportState
     @Published private(set) var preparedViewportScene: PreparedCanvasViewportScene?
     @Published private(set) var canvasRenderPlan: CanvasRenderPlan?
@@ -2370,6 +2831,17 @@ final class WorkspaceShellState: ObservableObject {
     @Published private(set) var lastLinkInspectorAnnouncement = "Button and Link properties"
     @Published private(set) var lastFormInspectorAnnouncement = "Form field properties"
     @Published var pageEditorRequest: PageEditorRequest?
+    @Published var pageChromeCopySheet: PageChromeCopySheetRequest?
+    @Published private(set) var pageChromeCopyStatus = "Independent editable copies. Later source edits do not propagate. Existing chrome is kept."
+    @Published private(set) var isPreparingPageChromeCopy = false
+    @Published private(set) var isAwaitingPageChromeCopyAdoption = false
+    @Published private(set) var pageChromeCopiedTargets: [PageID] = []
+    @Published private(set) var lastPageChromeCopyDiagnostic: PageChromeCopyDiagnostic?
+    private let pageChromeCopyWorker = PageChromeCopyWorker()
+    private var pageChromeCopyTask: Task<Void, Never>?
+    private var pageChromeCopyOperationID = UUID()
+    private var pageChromeCopyStarted: UInt64?
+    private var pendingPageChromeCopyAdoption: (documentID: DocumentID, revision: UInt64, message: String)?
     @Published private(set) var pageAnnouncement = ""
     @Published private(set) var componentAnnouncement = ""
     @Published var componentSearchText = ""
@@ -2458,6 +2930,28 @@ final class WorkspaceShellState: ObservableObject {
     @Published var staticBuildProfile: LocalBuildProfile = .development
     @Published private(set) var staticBuildPhase: StaticBuildWorkspacePhase = .idle
     @Published private(set) var staticBuildCompilation: StaticBuildCompilation?
+    @Published private(set) var staticBuildFindingReceipt: StaticBuildFindingReceipt?
+    @Published private(set) var isRevealingBuildFinding = false
+    @Published private(set) var buildFindingRevealStatus = ""
+    @Published private(set) var buildFindingEditorRequest: StaticBuildFindingEditorRequest?
+    private var browserFindingOrigin: StaticBuildFindingOrigin?
+    private var staticFindingOrigin: StaticBuildFindingOrigin?
+    private var findingRevealTask: Task<Void, Never>?
+    private var findingRevealID = UUID()
+    private struct PendingFindingReveal {
+        let receipt: StaticBuildFindingReceipt
+        let finding: StaticBuildFinding
+        let source: StaticBuildFindingSource
+        let pageID: PageID
+        let nodeID: NodeID
+        let sceneID: CanvasViewportSceneID
+        let openingSelection: [NodeID]
+        let destination: StaticBuildFindingEditor
+        let inspectorTab: InspectorTab
+        let breakpoint: ResponsiveBreakpoint
+        let viewportWidth: Double
+    }
+    private var pendingFindingReveal: PendingFindingReveal?
     @Published private(set) var staticBuildStatus = "Run preflight to inspect local static output."
     let documentSession: DocumentSession
     let lifecycle: DocumentLifecycleController
@@ -2542,6 +3036,10 @@ final class WorkspaceShellState: ObservableObject {
     private let announcementPoster: AccessibilityAnnouncementPoster
     private var viewportDocumentID: DocumentID
     private var preparationTask: Task<Void, Never>?
+    private let responsiveReviewWorker = ResponsiveBreakpointReviewWorker()
+    private var responsiveReviewTask: Task<Void, Never>?
+    private var responsiveReviewRequestID = UUID()
+    private var responsivePresentationRequestID = UUID()
     private var previewPreparationTask: Task<Void, Never>?
     private var previewPreparationID = UUID()
     private var staticBuildTask: Task<Void, Never>?
@@ -2566,11 +3064,15 @@ final class WorkspaceShellState: ObservableObject {
     /// Must run at the command event, before any snapshot or context change.
     /// Deferred SwiftUI focus-loss is too late for File > Save / toolbar Preview.
     @discardableResult
-    func prepareForWorkspaceAction(_ action: WorkspaceEditCommitRequest.Action) -> Bool {
-        guard !isPreparingWorkspaceAction else { return true }
+    func prepareForWorkspaceAction(_ action: WorkspaceEditCommitRequest.Action, requiresCleanEditors: Bool = false) -> Bool {
+        guard !isPreparingWorkspaceAction else { return !requiresCleanEditors }
         isPreparingWorkspaceAction = true
         defer { isPreparingWorkspaceAction = false }
-        let request = WorkspaceEditCommitRequest(action)
+        let request = WorkspaceEditCommitRequest(action, requiresCleanEditors: requiresCleanEditors)
+        if requiresCleanEditors,
+           textEditingSession.isActive || (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true {
+            request.reject()
+        }
         editCommitRequests.send(request)
         if request.isAccepted, textEditingSession.isActive { commitTextEditing() }
         guard request.isAccepted, !textEditingSession.isActive else {
@@ -2676,6 +3178,16 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func openBrowserPreview() {
+        guard !isBuildDiagnosticsPresented else {
+            buildFindingRevealStatus = "Close Check Website before opening Website Preview."
+            return
+        }
+        if browserPreview.isExporting {
+            guard prepareForWorkspaceAction(.context, requiresCleanEditors: true) else { return }
+            isBrowserPreviewPresented = true
+            buildFindingRevealStatus = "Export is still running. Wait for it to finish or choose Cancel Export; Refresh has not started."
+            return
+        }
         guard prepareForWorkspaceAction(.preview) else { return }
         cancelDragDrop()
         cancelInsertion(resetTool: true)
@@ -2686,15 +3198,23 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func refreshBrowserPreview() {
+        guard !browserPreview.isExporting else {
+            buildFindingRevealStatus = "Wait for Export to finish, or cancel Export before refreshing."
+            return
+        }
         guard prepareForWorkspaceAction(.preview) else { return }
         startBrowserPreviewBuild()
     }
 
     private func startBrowserPreviewBuild() {
+        cancelBuildFindingReveal(silent: true)
+        buildFindingEditorRequest = nil; buildFindingRevealStatus = ""
         let document = documentSession.document
         let originPageID = effectiveSelectedPageID, originDefinitionID = editingComponentID
+        browserFindingOrigin = currentBuildFindingOrigin
         browserPreview.build(document: document, pageID: originPageID,
-                             package: lifecycle.staticBuildResourceSnapshot()) { [weak self] id, revision in
+                             package: lifecycle.staticBuildResourceSnapshot(),
+                             isDocumentCurrent: { [weak self] id in self?.documentSession.document.id == id }) { [weak self] id, revision in
             self?.documentSession.document.id == id && self?.documentSession.document.revision == revision
                 && self?.effectiveSelectedPageID == originPageID && self?.editingComponentID == originDefinitionID
         }
@@ -2834,7 +3354,8 @@ final class WorkspaceShellState: ObservableObject {
             previewState.rejectComponentRecovery(); announcementPoster.post(previewState.status); return
         }
         if previewState.runtime?.documentID == documentSession.document.id,
-           previewState.runtime?.revision == documentSession.document.revision {
+           previewState.runtime?.revision == documentSession.document.revision,
+           previewState.runtime?.pages.allSatisfy({ $0.viewportBounds.size.width == viewportLayoutWidth }) == true {
             previewState.noteAlreadyCurrent(revision: documentSession.document.revision)
             announcementPoster.post(previewState.status)
             return
@@ -2864,19 +3385,45 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func openBuildDiagnostics() {
+        guard !isBrowserPreviewPresented else {
+            buildFindingRevealStatus = "Close Website Preview before opening Check Website."
+            return
+        }
+        if presentRunningStaticBuild() { return }
         guard prepareForWorkspaceAction(.preview) else { return }
         isBuildDiagnosticsPresented = true
-        if staticBuildCompilation?.revision != documentSession.document.revision {
+        if staticBuildCompilation?.documentID != documentSession.document.id
+            || staticBuildCompilation?.revision != documentSession.document.revision
+            || staticBuildCompilation?.profile != staticBuildProfile
+            || staticBuildFindingReceipt == nil || staticFindingOrigin != currentBuildFindingOrigin
+            || staticBuildPhase == .stale || staticBuildPhase == .cancelled {
             startStaticBuildPreflight()
         }
     }
 
     func runStaticBuildPreflight() {
+        guard !isBrowserPreviewPresented else {
+            buildFindingRevealStatus = "Close Website Preview before opening Check Website."
+            return
+        }
+        if presentRunningStaticBuild() { return }
         guard prepareForWorkspaceAction(.preview) else { return }
+        isBuildDiagnosticsPresented = true
         startStaticBuildPreflight()
     }
 
+    private func presentRunningStaticBuild() -> Bool {
+        guard staticBuildPhase == .writing, staticBuildTask != nil else { return false }
+        isBuildDiagnosticsPresented = true
+        buildFindingRevealStatus = "Local output is still being written. Wait for it to finish, or choose Cancel before checking again. The selected snapshot has not changed."
+        announcementPoster.post(buildFindingRevealStatus)
+        return true
+    }
+
     private func startStaticBuildPreflight() {
+        cancelBuildFindingReveal(silent: true)
+        buildFindingEditorRequest = nil; buildFindingRevealStatus = ""
+        staticBuildFindingReceipt = nil
         cancelStaticBuild(silent: true)
         guard staticBuildRequestID < UInt64.max else {
             staticBuildPhase = .failed("request-exhausted")
@@ -2885,6 +3432,8 @@ final class WorkspaceShellState: ObservableObject {
         }
         staticBuildRequestID += 1
         let request = staticBuildRequestID
+        let receiptID = UUID()
+        staticFindingOrigin = currentBuildFindingOrigin
         let document = documentSession.document
         let profile = LocalBuildProfileSelection(profile: staticBuildProfile)
         let package = lifecycle.staticBuildResourceSnapshot()
@@ -2903,6 +3452,7 @@ final class WorkspaceShellState: ObservableObject {
                 return
             }
             staticBuildCompilation = result
+            staticBuildFindingReceipt = .init(id: receiptID, compilation: result)
             staticBuildPhase = result.canWrite ? .ready : .failed("preflight-blocked")
             let blocking = result.findings.filter { $0.severity == .error }.count
             staticBuildStatus = blocking == 0
@@ -2917,15 +3467,21 @@ final class WorkspaceShellState: ObservableObject {
         guard staticBuildTask != nil else { return }
         staticBuildTask?.cancel(); staticBuildTask = nil
         if staticBuildRequestID < UInt64.max { staticBuildRequestID += 1 }
-        if !silent {
-            staticBuildPhase = .cancelled
-            staticBuildStatus = "Static build cancelled. The last valid output is unchanged."
-            announcementPoster.post(staticBuildStatus)
-        }
+        // Silent dismissal suppresses the announcement, not the operation's
+        // state transition. Otherwise a taskless `writing` phase looks busy
+        // forever when the results panel is reopened.
+        staticBuildPhase = .cancelled
+        staticBuildStatus = "Static build cancelled. The last valid output is unchanged."
+        buildFindingRevealStatus = ""
+        if !silent { announcementPoster.post(staticBuildStatus) }
     }
 
     func writeStaticBuild(to destination: URL, replacingExisting: Bool,
                           expectedCompilation: StaticBuildCompilation? = nil) {
+        guard !isOpeningBuildFinding else {
+            buildFindingRevealStatus = "Finish opening the repair location before exporting website files."
+            return
+        }
         guard prepareForWorkspaceAction(.preview) else { return }
         guard case .ready = staticBuildPhase,
               let compilation = staticBuildCompilation,
@@ -2943,6 +3499,7 @@ final class WorkspaceShellState: ObservableObject {
         staticBuildRequestID += 1
         let request = staticBuildRequestID
         staticBuildPhase = .writing
+        buildFindingRevealStatus = ""
         staticBuildStatus = "Writing staged local output…"
         staticBuildTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
@@ -2952,6 +3509,7 @@ final class WorkspaceShellState: ObservableObject {
                                                   expectedRevision: compilation.revision,
                                                   replacingExisting: replacingExisting)
                 guard staticBuildRequestID == request else { return }
+                buildFindingRevealStatus = ""
                 guard documentSession.document.id == compilation.documentID,
                       documentSession.document.revision == compilation.revision,
                       staticBuildProfile == compilation.profile else {
@@ -2963,6 +3521,7 @@ final class WorkspaceShellState: ObservableObject {
                 staticBuildStatus = "Local static output created successfully. Nothing was published."
             } catch let error as LocalStaticBuildWriteError {
                 guard staticBuildRequestID == request else { return }
+                buildFindingRevealStatus = ""
                 let message: String = switch error {
                 case .unsafeDestination: "Choose a safe local folder outside the project package."
                 case .destinationExists: "Choose a new folder or explicitly approve replacement."
@@ -2976,6 +3535,7 @@ final class WorkspaceShellState: ObservableObject {
                 staticBuildStatus = message
             } catch {
                 guard staticBuildRequestID == request else { return }
+                buildFindingRevealStatus = ""
                 staticBuildPhase = .failed("unexpected")
                 staticBuildStatus = "Static output failed safely. The project and last valid output are unchanged."
             }
@@ -2992,15 +3552,220 @@ final class WorkspaceShellState: ObservableObject {
         announcementPoster.post(staticBuildStatus)
     }
 
-    func revealStaticBuildFinding(_ finding: StaticBuildFinding) {
-        guard let nodeID = finding.affectedNodeID,
-              let page = documentSession.document.pages.first(where: { page in
-                  page.nodes.contains(where: { $0.id == nodeID })
-              }) else { return }
-        selectPage(page.id)
-        navigatorTab = .layers
-        selectLayer(nodeID)
-        staticBuildStatus = "Selected the affected object in Layers."
+    private var currentBuildFindingOrigin: StaticBuildFindingOrigin {
+        .init(pageID: effectiveSelectedPageID, definitionID: editingComponentID, sceneID: viewportState.sceneID)
+    }
+    private func ownsFindingReceipt(_ receipt: StaticBuildFindingReceipt, source: StaticBuildFindingSource,
+                                    allowRevealedPage: Bool = false) -> Bool {
+        switch source {
+        case .browserPreview:
+            return isBrowserPreviewPresented && (allowRevealedPage
+                ? browserPreview.ownsFindingAttempt(receipt) : browserPreview.ownsCurrentFindings(receipt))
+        case .checkWebsite:
+            return isBuildDiagnosticsPresented && staticBuildFindingReceipt == receipt
+                && staticBuildCompilation?.documentID == receipt.documentID
+                && staticBuildCompilation?.revision == receipt.revision
+                && staticBuildCompilation?.profile == staticBuildProfile
+                && staticBuildPhase != .preflighting && staticBuildPhase != .writing
+                && staticBuildPhase != .cancelled && staticBuildPhase != .stale
+        }
+    }
+    func buildFindingRevealAvailability(_ finding: StaticBuildFinding, receipt: StaticBuildFindingReceipt,
+                                        source: StaticBuildFindingSource) -> StaticBuildFindingRevealAvailability {
+        guard let id = finding.affectedNodeID else { return .noTarget }
+        guard !isRevealingBuildFinding, pendingFindingReveal == nil else { return .unavailable("") }
+        guard !browserPreview.isExporting, staticBuildPhase != .writing else {
+            return .unavailable("Wait for Export to finish, or cancel it before opening an editor.")
+        }
+        let origin = source == .browserPreview ? browserFindingOrigin : staticFindingOrigin
+        guard ownsFindingReceipt(receipt, source: source), receipt.contains(finding, document: documentSession.document),
+              origin == currentBuildFindingOrigin else {
+            return .unavailable(source == .browserPreview ? "Refresh Preview to check this current page and revision." : "Choose Check Website to check this current page and revision.")
+        }
+        guard transformValidationContext.isLifecycleAvailable, layoutInspectorHasCurrentScene else {
+            return .unavailable("Wait for the current canvas and resolve any document recovery prompt, then try again.")
+        }
+        let target: StaticBuildFindingTarget
+        do {
+            target = try .prepare(finding, receipt: receipt, document: documentSession.document,
+                breakpoint: viewportPreset.responsiveBreakpoint)
+        } catch let error as StaticBuildFindingTarget.Failure { return .unavailable(error.recovery) }
+        catch { return .unavailable("Check this object again before opening its editor.") }
+        guard let page = documentSession.document.pages.first(where: { $0.id == target.pageID }) else {
+            return .unavailable("The original page is unavailable. Check the current document again.")
+        }
+        guard editingComponentID == nil || editingComponentID == page.id else {
+            return .unavailable("Return from the original component to its page, then check the website again.")
+        }
+        guard isolationRootID == nil || (page.id == effectiveSelectedPageID && activeAuthoringPage?.nodes.contains { $0.id == id } == true) else {
+            return .unavailable("Exit isolation before opening this object, then check the website again.")
+        }
+        return .action(target.destination.title)
+    }
+
+    @discardableResult
+    func revealStaticBuildFinding(_ finding: StaticBuildFinding, receipt: StaticBuildFindingReceipt) -> Task<Void, Never>? {
+        revealBuildFinding(finding, receipt: receipt, source: .checkWebsite)
+    }
+    @discardableResult
+    func revealBrowserBuildFinding(_ finding: StaticBuildFinding, receipt: StaticBuildFindingReceipt) -> Task<Void, Never>? {
+        revealBuildFinding(finding, receipt: receipt, source: .browserPreview)
+    }
+    private func revealBuildFinding(_ finding: StaticBuildFinding, receipt: StaticBuildFindingReceipt,
+                                    source: StaticBuildFindingSource) -> Task<Void, Never>? {
+        guard case .action = buildFindingRevealAvailability(finding, receipt: receipt, source: source) else {
+            if case .unavailable(let reason) = buildFindingRevealAvailability(finding, receipt: receipt, source: source) {
+                if !reason.isEmpty { buildFindingRevealStatus = reason; announcementPoster.post(reason) }
+            }
+            return nil
+        }
+        guard prepareForWorkspaceAction(.context, requiresCleanEditors: true),
+              case .action = buildFindingRevealAvailability(finding, receipt: receipt, source: source),
+              let target = try? StaticBuildFindingTarget.prepare(finding, receipt: receipt,
+                document: documentSession.document, breakpoint: viewportPreset.responsiveBreakpoint),
+              let page = documentSession.document.pages.first(where: { $0.id == target.pageID }) else {
+            buildFindingRevealStatus = "Finish the current edit or press Escape to cancel its draft, then choose the repair action again. No navigation occurred."
+            announcementPoster.post(buildFindingRevealStatus); return nil
+        }
+        let context = responsiveInspectorEditContext
+        let document = documentSession.document
+        let id = target.nodeID, destination = target.destination
+        let requestID = UUID(); findingRevealID = requestID
+        buildFindingEditorRequest = nil
+        isRevealingBuildFinding = true
+        buildFindingRevealStatus = "Checking the exact object before opening its editor…"
+        let request = WorkspaceScenePreparationRequest(document: document, activePageID: page.id,
+            activeContainerID: nil, isolationRootID: isolationRootID, viewport: viewportState,
+            surfaceID: renderSurfaceID, breakpoint: viewportPreset.responsiveBreakpoint, viewportWidth: viewportLayoutWidth)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if findingRevealID == requestID {
+                    findingRevealTask = nil; isRevealingBuildFinding = false
+                    announcementPoster.post(buildFindingRevealStatus)
+                }
+            }
+            do {
+                let prepared = try await scenePreparationWorker.prepare(request)
+                try Task.checkCancellation()
+                guard findingRevealID == requestID, context == responsiveInspectorEditContext,
+                      ownsFindingReceipt(receipt, source: source), receipt.contains(finding, document: documentSession.document),
+                      let target = prepared.selectionScene?.targets.first(where: { $0.id == id }),
+                      target.isAvailable, target.isVisible, !target.isLocked,
+                      transformValidationContext.isLifecycleAvailable,
+                      !browserPreview.isExporting, staticBuildPhase != .writing,
+                      prepareForWorkspaceAction(.context, requiresCleanEditors: true),
+                      context == responsiveInspectorEditContext else {
+                    buildFindingRevealStatus = "The object or editing context is no longer available. Finish any draft and refresh the check. No page or selection changed."
+                    return
+                }
+                // No suspension after this point: preparation/cancellation is
+                // finished before the existing navigation event is applied.
+                if page.role == .componentDefinition, editingComponentID == nil {
+                    guard adoptComponentDefinition(page.id) else {
+                        buildFindingRevealStatus = "The original component cannot be opened from this context. Return to its page and check again."
+                        return
+                    }
+                    pendingSelectionAfterInsertion = nil
+                } else if effectiveSelectedPageID != page.id { adoptSelectedPage(page.id) }
+                navigatorTab = .layers; inspectorSectionQuery = ""
+                switch destination {
+                case .pageContents: inspectorTab = .content
+                case .layout: inspectorTab = .layout
+                case .designBox: inspectorTab = .design
+                case .object: break
+                }
+                pendingFindingReveal = .init(receipt: receipt, finding: finding, source: source,
+                    pageID: page.id, nodeID: id, sceneID: viewportState.sceneID,
+                    openingSelection: selectionState.orderedIDs, destination: destination,
+                    inspectorTab: inspectorTab, breakpoint: viewportPreset.responsiveBreakpoint, viewportWidth: viewportLayoutWidth)
+                buildFindingRevealStatus = "Opening the exact object; waiting for the live canvas and Inspector."
+                scheduleScenePreparation()
+            } catch {
+                guard findingRevealID == requestID else { return }
+                buildFindingRevealStatus = error is CancellationError
+                    ? "Opening cancelled. No page or selection changed."
+                    : "The object could not be prepared safely. Refresh the check; the editor is unchanged."
+            }
+        }
+        findingRevealTask = task
+        return task
+    }
+
+    func cancelBuildFindingReveal(silent: Bool = false) {
+        guard findingRevealTask != nil || pendingFindingReveal != nil else { return }
+        findingRevealTask?.cancel(); findingRevealTask = nil; findingRevealID = UUID()
+        pendingFindingReveal = nil; isRevealingBuildFinding = false
+        if !silent { buildFindingRevealStatus = "Opening cancelled. No content changed." }
+    }
+    var isOpeningBuildFinding: Bool { isRevealingBuildFinding || pendingFindingReveal != nil }
+    var isAdoptingBuildFinding: Bool { pendingFindingReveal != nil }
+    var hasCurrentBuildFindingEditorRequest: Bool {
+        guard let request = buildFindingEditorRequest else { return false }
+        return request.documentID == documentSession.document.id && request.revision == documentSession.document.revision
+            && request.pageID == effectiveSelectedPageID && request.sceneID == viewportState.sceneID
+            && selectionState.primaryID == request.nodeID && inspectorTab == request.inspectorTab
+    }
+    var buildFindingInspectorAnchor: String? {
+        guard hasCurrentBuildFindingEditorRequest, let request = buildFindingEditorRequest else { return nil }
+        switch request.destination {
+        case .pageContents: return "page-structure-content:" + request.documentID.description + request.nodeID.description
+        case .layout: return "position:" + geometryInspectorSelectionKey
+        case .designBox: return "inspector.design.boxStyle"
+        case .object: return "inspector.selection.top"
+        }
+    }
+    private func validatePendingBuildFindingReveal() {
+        guard let pending = pendingFindingReveal else { return }
+        guard pending.receipt.documentID == documentSession.document.id,
+              pending.receipt.revision == documentSession.document.revision,
+              ownsFindingReceipt(pending.receipt, source: pending.source, allowRevealedPage: true),
+              pending.pageID == effectiveSelectedPageID, pending.sceneID == viewportState.sceneID,
+              pending.inspectorTab == inspectorTab, pending.breakpoint == viewportPreset.responsiveBreakpoint,
+              pending.viewportWidth == viewportLayoutWidth, transformValidationContext.isLifecycleAvailable,
+              pending.openingSelection == selectionState.orderedIDs else {
+            cancelBuildFindingReveal(); return
+        }
+    }
+    private func completeBuildFindingReveal(from plan: CanvasRenderPlan) {
+        guard let pending = pendingFindingReveal,
+              plan.identity.documentID == pending.receipt.documentID,
+              plan.identity.revision == pending.receipt.revision,
+              plan.identity.sceneID == pending.sceneID, plan.identity.viewportGeneration == viewportState.generation,
+              effectiveSelectedPageID == pending.pageID else { return }
+        guard let target = selectionScene?.targets.first(where: { $0.id == pending.nodeID }),
+              target.isAvailable, target.isVisible, !target.isLocked,
+              prepareForWorkspaceAction(.context, requiresCleanEditors: true) else {
+            cancelBuildFindingReveal(silent: true)
+            buildFindingRevealStatus = "The current object or editor is unavailable. Finish any draft and review Layers before checking again. No automatic repair was applied."
+            return
+        }
+        // Use the existing Layers route, not canvas traversal: an off-artboard
+        // object may be editable without a fabricated canvas hit/AX target.
+        adoptLayerSelection(pending.nodeID)
+        guard selectionState.primaryID == pending.nodeID else {
+            cancelBuildFindingReveal(silent: true)
+            buildFindingRevealStatus = "The exact object could not be selected. Review its state in Layers and check again."
+            return
+        }
+        pendingFindingReveal = nil
+        buildFindingEditorRequest = .init(id: UUID(), documentID: pending.receipt.documentID,
+            revision: pending.receipt.revision, pageID: pending.pageID, nodeID: pending.nodeID,
+            sceneID: pending.sceneID, destination: pending.destination, inspectorTab: pending.inspectorTab)
+        buildFindingRevealStatus = "Opened the affected object. Edit its existing properties, then return to Preview and choose Refresh, or run Check Website again. No automatic repair was applied."
+        switch pending.source {
+        case .browserPreview: isBrowserPreviewPresented = false
+        case .checkWebsite: isBuildDiagnosticsPresented = false
+        }
+        announcementPoster.post(buildFindingRevealStatus)
+    }
+    private func failBuildFindingReveal(for request: WorkspaceScenePreparationRequest) {
+        guard let pending = pendingFindingReveal, request.activePageID == pending.pageID,
+              request.document.id == pending.receipt.documentID,
+              request.document.revision == pending.receipt.revision else { return }
+        cancelBuildFindingReveal(silent: true)
+        buildFindingRevealStatus = "The canvas could not finish opening this object. Resolve its current error and check the website again; no automatic repair was applied."
+        announcementPoster.post(buildFindingRevealStatus)
     }
 
     func followPreviewLink(_ link: CanvasPreviewLink) {
@@ -3026,6 +3791,9 @@ final class WorkspaceShellState: ObservableObject {
         let definitionID = editingComponentID
         let ratio = viewportState.pixelRatio
         let breakpoint = viewportPreset.responsiveBreakpoint
+        let previewWidth = viewportLayoutWidth
+        let previewScene = viewportState.sceneID
+        let previewGeneration = viewportState.generation
         let package = lifecycle.staticBuildResourceSnapshot()
         previewPreparationTask = Task(priority: .userInitiated) { @MainActor [weak self] in
             guard let self else { return }
@@ -3035,11 +3803,14 @@ final class WorkspaceShellState: ObservableObject {
                     document: document,
                     package: package,
                     pixelRatio: ratio,
-                    breakpoint: breakpoint
+                    breakpoint: breakpoint,
+                    viewportWidth: previewWidth
                 )
                 guard !Task.isCancelled, isPreviewPresented, previewPreparationID == request,
                       documentSession.document.id == document.id,
                       effectiveSelectedPageID == initialPageID, editingComponentID == definitionID,
+                      viewportLayoutWidth == previewWidth,
+                      viewportState.sceneID == previewScene, viewportState.generation == previewGeneration,
                       runtime.documentID == document.id,
                       runtime.revision == document.revision else { return }
                 previewState.adopt(runtime, initialPageID: initialPageID)
@@ -3900,16 +4671,247 @@ final class WorkspaceShellState: ObservableObject {
     private var activeAuthoringPage: DocumentPage? {
         documentSession.document.pages.first { $0.id == effectiveSelectedPageID }
     }
-    var responsiveBreakpointReviews: [ResponsiveBreakpointReview] {
-        guard let page = activeAuthoringPage else { return [] }
-        return ResponsiveBreakpointReviewPolicy.reviews(page: page, selectedNodeIDs: selectionState.orderedIDs)
+    func showResponsiveComparison() {
+        guard prepareForWorkspaceAction(.context) else { return }
+        isResponsiveComparisonPresented = true
+    }
+    private func scheduleResponsiveComparison() {
+        responsiveReviewTask?.cancel()
+        let request = UUID(); responsiveReviewRequestID = request
+        preparedResponsiveReviews = []
+        responsiveReviewContext = nil; responsiveReviewGeneration = nil
+        guard isResponsiveComparisonPresented, let page = activeAuthoringPage else {
+            if !isResponsiveComparisonPresented { pendingResponsiveLayoutReview = nil }
+            isPreparingResponsiveComparison = false
+            return
+        }
+        isPreparingResponsiveComparison = true
+        responsiveComparisonFailureCategory = "none"
+        responsiveComparisonStatus = "Resolving shared layout at four widths…"
+        let context = responsiveInspectorEditContext
+        let generation = viewportState.generation
+        let document = documentSession.document
+        let started = DispatchTime.now().uptimeNanoseconds
+        let worker = responsiveReviewWorker
+        responsiveReviewTask = Task(priority: .userInitiated) { @MainActor [weak self] in
+            do {
+                let reviews = try await worker.prepare(document: document, pageID: page.id,
+                    selectedNodeIDs: context.scope.orderedNodeIDs, width: context.scope.viewportWidth)
+                guard let self, !Task.isCancelled, self.isResponsiveComparisonPresented,
+                      self.responsiveReviewRequestID == request,
+                      self.responsiveInspectorEditContext == context,
+                      self.viewportState.generation == generation else { return }
+                self.responsiveReviewContext = context
+                self.responsiveReviewGeneration = generation
+                self.preparedResponsiveReviews = reviews
+                self.isPreparingResponsiveComparison = false
+                self.responsiveComparisonStatus = "\(reviews.reduce(0) { $0 + $1.totalLayoutFindingCount }) horizontal boundary reviews across four samples. Other checks are not evaluated."
+                self.recordResponsiveLayoutReview("compare", documentID: document.id, pageID: page.id,
+                    started: started, failure: "none")
+                self.announcementPoster.post(self.responsiveComparisonStatus)
+            } catch {
+                guard let self, self.responsiveReviewRequestID == request else { return }
+                self.isPreparingResponsiveComparison = false
+                self.responsiveComparisonFailureCategory = Task.isCancelled || error is CancellationError ? "cancelled" : "comparison-failed"
+                self.responsiveComparisonStatus = self.responsiveComparisonFailureCategory == "cancelled"
+                    ? "Comparison cancelled. Refresh to review the current context."
+                    : "Comparison unavailable for this context. Refresh after the document and layout are ready; no content changed."
+                self.recordResponsiveLayoutReview("compare", documentID: document.id, pageID: page.id,
+                    started: started, failure: self.responsiveComparisonFailureCategory)
+            }
+        }
+    }
+    func refreshResponsiveComparison() {
+        guard prepareForWorkspaceAction(.context) else { return }
+        scheduleResponsiveComparison()
+    }
+    private func recordResponsiveLayoutReview(_ operation: String, documentID: DocumentID,
+                                             pageID: PageID, nodeID: NodeID? = nil, started: UInt64, failure: String) {
+        lastResponsiveLayoutReviewDiagnostic = .init(operation: operation,
+            documentIdentifier: DiagnosticStableIdentifier.sanitize(documentID.description, domain: .viewport, kind: "document"),
+            pageIdentifier: DiagnosticStableIdentifier.sanitize(pageID.description, domain: .viewport, kind: "page"),
+            nodeIdentifier: nodeID.map { DiagnosticStableIdentifier.sanitize($0.description, domain: .viewport, kind: "node") },
+            durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000,
+            failureCategory: failure)
+    }
+    func cancelResponsiveComparison() {
+        responsiveReviewTask?.cancel(); responsiveReviewRequestID = UUID()
+        responsivePresentationRequestID = UUID()
+        if pendingResponsiveLayoutReview != nil {
+            pendingResponsiveLayoutReview = nil
+            responsiveLayoutReviewStatus = "Review navigation cancelled; no content or history changed."
+        }
+        preparedResponsiveReviews = []; responsiveReviewContext = nil; responsiveReviewGeneration = nil
+        isPreparingResponsiveComparison = false
+        responsiveComparisonFailureCategory = "cancelled"
+        responsiveComparisonStatus = "Comparison cancelled. Refresh to review the current context."
+        announcementPoster.post(responsiveComparisonStatus)
+    }
+    func responsiveFindingName(_ finding: ResponsiveLayoutFinding) -> String {
+        guard finding.id.origin.documentID == documentSession.document.id,
+              finding.id.origin.revision == documentSession.document.revision,
+              finding.id.origin.pageID == effectiveSelectedPageID else { return "Earlier selection" }
+        return activeAuthoringPage?.nodes.first { $0.id == finding.id.nodeID }?.name ?? "Unavailable element"
+    }
+    private func isCurrentResponsiveFinding(_ finding: ResponsiveLayoutFinding) -> Bool {
+        finding.id.origin.documentID == documentSession.document.id
+            && finding.id.origin.revision == documentSession.document.revision
+            && finding.id.origin.pageID == effectiveSelectedPageID
+            && responsiveBreakpointReviews.contains { $0.layoutFindings.contains(finding) }
+            && activeAuthoringPage?.nodes.contains { $0.id == finding.id.nodeID } == true
+    }
+    @discardableResult
+    func reviewResponsiveLayoutFinding(_ finding: ResponsiveLayoutFinding) -> Bool {
+        let started = DispatchTime.now().uptimeNanoseconds
+        responsiveLayoutReviewStatusContext = nil
+        var failure = "stale-context"
+        defer { recordResponsiveLayoutReview("review-element", documentID: finding.id.origin.documentID,
+            pageID: finding.id.origin.pageID, nodeID: finding.id.nodeID, started: started, failure: failure) }
+        guard isCurrentResponsiveFinding(finding) else {
+            responsiveLayoutReviewStatus = "This review belongs to an earlier document, revision or scope. Refresh comparison; no content changed."
+            announcementPoster.post(responsiveLayoutReviewStatus); return false
+        }
+        guard prepareForWorkspaceAction(.context, requiresCleanEditors: true), isCurrentResponsiveFinding(finding) else {
+            failure = "pending-or-changed-context"
+            responsiveLayoutReviewStatus = "Finish or cancel the pending draft/composition, then refresh this review. No layout fix was applied."
+            announcementPoster.post(responsiveLayoutReviewStatus); return false
+        }
+        let context = responsiveInspectorEditContext
+        guard commitViewportWidth(finding.id.width, expectedContext: context) else {
+            failure = "width-not-adopted"
+            responsiveLayoutReviewStatus = viewportWidthStatus
+            return false
+        }
+        pendingResponsiveLayoutReview = .init(finding: finding, sceneID: viewportState.sceneID,
+            generation: viewportState.generation, openingSelection: selectionState.orderedIDs)
+        responsiveLayoutReviewStatus = "Opening the exact sampled width; waiting for its live selection/layout snapshot."
+        if let plan = canvasRenderPlan { completeResponsiveLayoutReview(from: plan) }
+        failure = pendingResponsiveLayoutReview != nil ? "navigation-requested"
+            : responsiveLayoutReviewStatusContext == responsiveInspectorEditContext ? "none" : "navigation-not-completed"
+        return true
+    }
+    private func completeResponsiveLayoutReview(from plan: CanvasRenderPlan) {
+        guard let pending = pendingResponsiveLayoutReview else { return }
+        let finding = pending.finding
+        guard finding.id.origin.documentID == documentSession.document.id,
+              finding.id.origin.revision == documentSession.document.revision,
+              finding.id.origin.pageID == effectiveSelectedPageID,
+              pending.sceneID == viewportState.sceneID, pending.generation == viewportState.generation,
+              finding.id.width == viewportLayoutWidth,
+              pending.openingSelection == selectionState.orderedIDs,
+              isResponsiveComparisonPresented else {
+            pendingResponsiveLayoutReview = nil
+            responsiveLayoutReviewStatus = "Review context changed before adoption. Refresh comparison to choose the element again."
+            return
+        }
+        guard plan.identity.documentID == finding.id.origin.documentID,
+              plan.identity.revision == finding.id.origin.revision,
+              plan.identity.sceneID == pending.sceneID,
+              plan.identity.viewportGeneration == pending.generation else { return }
+        pendingResponsiveLayoutReview = nil
+        let started = DispatchTime.now().uptimeNanoseconds
+        var failure = "navigation-not-completed"
+        defer { recordResponsiveLayoutReview("adopt-review-selection", documentID: finding.id.origin.documentID,
+            pageID: finding.id.origin.pageID, nodeID: finding.id.nodeID, started: started, failure: failure) }
+        guard prepareForWorkspaceAction(.context, requiresCleanEditors: true),
+              finding.id.origin.documentID == documentSession.document.id,
+              finding.id.origin.revision == documentSession.document.revision,
+              finding.id.origin.pageID == effectiveSelectedPageID,
+              pending.sceneID == viewportState.sceneID, pending.generation == viewportState.generation,
+              pending.openingSelection == selectionState.orderedIDs else {
+            responsiveLayoutReviewStatus = "Finish the pending edit, then choose Review element again."
+            return
+        }
+        selectLayer(finding.id.nodeID)
+        guard selectionState.primaryID == finding.id.nodeID, selectInspectorTab(.layout) else {
+            responsiveLayoutReviewStatus = "Element is unavailable or locked for selection. Inspect its Layers state; no substitute was selected."
+            return
+        }
+        navigatorTab = .layers
+        inspectorSectionQuery = ""
+        isResponsiveComparisonPresented = false
+        responsiveLayoutInspectorRequestID = UUID()
+        // Reuse viewport reveal without Reveal Selection's optional widening.
+        // The reviewed sample must stay exact, including fully off-page intent.
+        var revealUnavailable = false
+        if let object = plan.authoredObjects.first(where: { $0.id == finding.id.nodeID }) {
+            let bounds = viewportState.contentBounds
+            let x = max(bounds.minX, object.frame.minX), y = max(bounds.minY, object.frame.minY)
+            let maxX = min(bounds.maxX, object.frame.maxX), maxY = min(bounds.maxY, object.frame.maxY)
+            if maxX > x, maxY > y {
+                do {
+                    var next = viewportState
+                    try next.reveal(.init(origin: .init(x: x, y: y), size: .init(width: maxX - x, height: maxY - y)))
+                    viewportState = next
+                    scheduleScenePreparation()
+                } catch { revealUnavailable = true }
+            }
+        }
+        responsiveLayoutReviewStatus = "Review at \(GeometryInspectorNumberParser.format(viewportLayoutWidth)) CSS px. "
+            + finding.contextDescription + " " + sizingModeSource(for: .width)
+            + (selectionOutsideActiveArtboard ? " Selection is outside this artboard; Layout remains available without a canvas ghost." : "")
+            + (revealUnavailable ? " Canvas reveal is unavailable; the exact width and Layout selection are retained." : "")
+        responsiveLayoutReviewStatusContext = responsiveInspectorEditContext
+        failure = "none"
+        announcementPoster.post(responsiveLayoutReviewStatus)
     }
     func reviewBreakpoint(_ breakpoint: ResponsiveBreakpoint) {
-        guard prepareForWorkspaceAction(.context) else { return }
         guard let preset = ViewportPreset.allCases.first(where: { $0.responsiveBreakpoint == breakpoint }) else { return }
-        viewportPreset = preset
+        guard commitViewportWidth(Double(preset.width)) else { return }
         lastViewportAnnouncement = "Reviewing \(breakpoint.title) at \(preset.width) points; document content is unchanged"
         announcementPoster.post(lastViewportAnnouncement)
+    }
+
+    @discardableResult
+    func commitViewportWidthDraft(_ text: String, expectedContext: ResponsiveInspectorEditContext,
+                                  locale: Locale = .current) -> Bool {
+        guard let width = ViewportWidthPolicy.parse(text, locale: locale) else {
+            viewportWidthStatus = "SF-0602-004: Enter a complete finite CSS width from 1 to 1,000,000,000. The current viewport is unchanged."
+            lastViewportWidthDiagnostic = .init(sceneIdentifier: DiagnosticStableIdentifier.sanitize(
+                viewportState.sceneID.description, domain: .viewport, kind: "scene"),
+                durationMilliseconds: 0, failureCategory: "invalid-width")
+            announcementPoster.post(viewportWidthStatus)
+            return false
+        }
+        return commitViewportWidth(width, expectedContext: expectedContext)
+    }
+
+    @discardableResult
+    func commitViewportWidth(_ width: Double, expectedContext: ResponsiveInspectorEditContext? = nil) -> Bool {
+        let started = DispatchTime.now().uptimeNanoseconds
+        func finish(_ category: String, _ message: String) -> Bool {
+            viewportWidthStatus = message
+            lastViewportWidthDiagnostic = .init(sceneIdentifier: DiagnosticStableIdentifier.sanitize(
+                viewportState.sceneID.description, domain: .viewport, kind: "scene"),
+                durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000,
+                failureCategory: category)
+            if category != "none" { announcementPoster.post(message) }
+            return category == "none"
+        }
+        guard ViewportWidthPolicy.isValid(width) else {
+            return finish("invalid-width", "SF-0602-004: Enter a finite width from 1 to 1,000,000,000 CSS px. The current width is unchanged.")
+        }
+        guard expectedContext == nil || expectedContext == responsiveInspectorEditContext else {
+            return finish("stale-context", "SF-0602-004: Width draft belongs to an earlier page, selection or viewport. Escape to restore the current width.")
+        }
+        guard textEditingSession.draft?.markedRange == nil,
+              (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() != true,
+              prepareForWorkspaceAction(.context) else {
+            return finish("pending-edit", "SF-0602-004: Finish composition or the pending editor draft, then retry width. The viewport is unchanged.")
+        }
+        guard expectedContext == nil || expectedContext == responsiveInspectorEditContext else {
+            return finish("stale-context", "SF-0602-004: Another edit changed the context. Escape to restore the current width and retry.")
+        }
+        guard width != viewportLayoutWidth else { return finish("none", "Inspection width is unchanged.") }
+        do {
+            try updateViewportContentBounds(width: width)
+            let message = "\(viewportPreset.title) at \(GeometryInspectorNumberParser.format(width)) CSS px; scene only, document unchanged."
+            lastViewportAnnouncement = message
+            announcementPoster.post(message)
+            return finish("none", message)
+        } catch {
+            return finish("viewport-budget", "SF-0602-004: That width cannot fit the current canvas budget. The last valid viewport is retained.")
+        }
     }
     var componentDefinitions: [DocumentPage] { documentSession.document.componentDefinitions }
     var filteredComponentDefinitions: [DocumentPage] {
@@ -4185,7 +5187,7 @@ final class WorkspaceShellState: ObservableObject {
         performComponentEdit(.resetOverrideConflicts(instanceID: instanceID, expectedPropertyIDs: expectedPropertyIDs,
             confirmed: true), draftIdentity: identity)
         guard documentSession.document.revision != revision else { return false }
-        componentAnnouncement = "Reset \(expectedPropertyIDs.count) retained override(s). Undo restores their exact authored values and identities."
+        componentAnnouncement = "Removed \(expectedPropertyIDs.count) affected custom value(s). Missing original data is not restored. Undo restores exact values and identities."
         announcementPoster.post(componentAnnouncement)
         return true
     }
@@ -4211,7 +5213,7 @@ final class WorkspaceShellState: ObservableObject {
         guard editComponentDefinition(definitionID) else { return }
         pendingSelectionAfterInsertion = sourceID
         navigatorTab = .layers; inspectorTab = .content
-        componentAnnouncement = "Inspecting original component definition. Use Undo or restore original binding data to recover its stable identity."
+        componentAnnouncement = "Inspecting original properties. Missing property data must be recovered with Undo or the original saved project; no replacement was selected."
         announcementPoster.post(componentAnnouncement)
     }
     @discardableResult
@@ -4235,7 +5237,7 @@ final class WorkspaceShellState: ObservableObject {
         pendingSelectionAfterInsertion = destination.sourceNodeID
         navigatorTab = .layers
         inspectorTab = .content
-        componentAnnouncement = "Editing the shared property source. Definition defaults update inherited instances; authored instance overrides stay independent. Return to Instance restores the original selection."
+        componentAnnouncement = "Editing the property on the original component. Linked copies use its default unless changed separately. Back to this copy restores your exact selection."
         announcementPoster.post(componentAnnouncement)
         return true
     }
@@ -4341,7 +5343,7 @@ final class WorkspaceShellState: ObservableObject {
         editComponentDefinition(definitionID)
         pendingSelectionAfterInsertion = slot.sourceNodeID
         _ = selectInspectorTab(.content)
-        componentAnnouncement = "Editing definition fallback; changes apply to every inheriting instance."
+        componentAnnouncement = "Editing default contents on the original component; linked copies use these contents. Back to this copy restores your selection."
         announcementPoster.post(componentAnnouncement)
     }
     var canCreateComponent: Bool {
@@ -4437,11 +5439,15 @@ final class WorkspaceShellState: ObservableObject {
         guard let context = componentReturnContext,
               context.resolve(in: documentSession.document)?.reason == .restored,
               context.returnsToInstance else { return "Return to Page" }
-        return "Return to Instance"
+        return AuthoringLanguage.backToCopy
     }
     @discardableResult
     func editComponentDefinition(_ id: PageID) -> Bool {
         guard prepareForWorkspaceAction(.context) else { return false }
+        return adoptComponentDefinition(id)
+    }
+    @discardableResult
+    private func adoptComponentDefinition(_ id: PageID) -> Bool {
         guard let definition = componentDefinitions.first(where: { $0.id == id }),
               let pageID = effectiveSelectedPageID, editingComponentID == nil,
               let context = ComponentDefinitionReturnContext(document: documentSession.document,
@@ -4471,7 +5477,7 @@ final class WorkspaceShellState: ObservableObject {
         pendingSelectionAfterInspectorEdit = destination.selection
         switch destination.reason {
         case .restored: componentAnnouncement = context.returnsToInstance
-            ? "Returned to the original instance; authored overrides are retained."
+            ? "Back to this copy; its custom values are unchanged."
             : "Returned to the original page and selection."
         case .selectionUnavailable: componentAnnouncement = "Returned to the original page. The previous selection is no longer available."
         case .pageUnavailable: componentAnnouncement = "The original page is unavailable. Returned to an existing page without selecting a substitute."
@@ -4505,6 +5511,93 @@ final class WorkspaceShellState: ObservableObject {
             route: mode == .create ? StaticPagePolicy.uniqueRoute(stem: "/new-page", in: documentSession.document) : page.route.rawValue,
             inboundLinks: PageCommandRegistry().inboundLinkCount(to: id, in: documentSession.document),
             objects: max(0, page.nodes.count - 1))
+    }
+
+    var canCopyPageChrome: Bool {
+        pageEditingIsAvailable && editingComponentID == nil && formattingActionCapture != nil
+            && activeAuthoringPage.map { $0.role != .notFound && !PageChromeCopyRegistry.sourceRoles($0).isEmpty } == true
+    }
+    func presentPageChromeCopy(role: PageFlowRole? = nil) {
+        guard canCopyPageChrome, prepareForWorkspaceAction(.context, requiresCleanEditors: true),
+              let page = activeAuthoringPage, let capture = formattingActionCapture else { return }
+        cancelPageChromeCopyPreparation()
+        let roles = PageChromeCopyRegistry.sourceRoles(page)
+        pageChromeCopiedTargets = []
+        pageChromeCopyStatus = "Independent editable copies. Later source edits do not propagate. Existing chrome is kept."
+        pageChromeCopySheet = .init(capture: capture, sourcePageID: page.id, sourceName: page.name,
+            sourceRoles: roles, initialRoles: role.flatMap { roles[$0] != nil ? Set([$0]) : nil } ?? Set(roles.keys),
+            targets: PageChromeCopyRegistry.targets(document: documentSession.document, sourcePageID: page.id))
+    }
+    func preparePageChromeCopy(sheet: PageChromeCopySheetRequest, roles: Set<PageFlowRole>, targets: [PageID]) {
+        guard !isPreparingPageChromeCopy, !isAwaitingPageChromeCopyAdoption,
+              pageChromeCopySheet?.id == sheet.id, formattingActionCapture == sheet.capture,
+              pageEditingIsAvailable, prepareForWorkspaceAction(.context, requiresCleanEditors: true),
+              formattingActionCapture == sheet.capture else {
+            pageChromeCopyStatus = PageChromeCopyError.stale.localizedDescription
+            recordPageChromeCopyDiagnostic(targets.count, category: "stale")
+            announcementPoster.post(pageChromeCopyStatus); return
+        }
+        let document = documentSession.document, package = lifecycle.staticBuildResourceSnapshot()
+        let request = PageChromeCopyRequest(documentID: document.id, revision: document.revision,
+            sourcePageID: sheet.sourcePageID, sourceRoles: sheet.sourceRoles, roles: roles, targetPageIDs: targets)
+        let operationID = UUID(); pageChromeCopyOperationID = operationID
+        pageChromeCopyStarted = DispatchTime.now().uptimeNanoseconds
+        isPreparingPageChromeCopy = true
+        pageChromeCopyStatus = "Preparing selected pages; no content has committed. Cancel leaves every page unchanged."
+        let worker = pageChromeCopyWorker
+        pageChromeCopyTask = Task(priority: .userInitiated) { @MainActor [weak self] in
+            do {
+                let prepared = try await worker.prepare(request, document: document, package: package)
+                guard let self, !Task.isCancelled, self.pageChromeCopyOperationID == operationID else { return }
+                guard self.pageChromeCopySheet?.id == sheet.id, self.formattingActionCapture == sheet.capture,
+                      self.pageEditingIsAvailable, self.prepareForWorkspaceAction(.context, requiresCleanEditors: true),
+                      self.formattingActionCapture == sheet.capture else { throw PageChromeCopyError.stale }
+                self.pendingSelectionAfterInspectorEdit = self.selectionState
+                do { try self.documentSession.execute(prepared.command) }
+                catch { self.pendingSelectionAfterInspectorEdit = nil; throw error }
+                self.isPreparingPageChromeCopy = false; self.isAwaitingPageChromeCopyAdoption = true
+                self.pageChromeCopiedTargets = prepared.copiedPageIDs
+                let summary = "Copied \(prepared.copiedRoleCount) Header/Footer roles to \(prepared.copiedPageIDs.count) pages; skipped \(prepared.skipped.count) existing/ineligible roles. Copies are independent; source and body content are unchanged."
+                self.pendingPageChromeCopyAdoption = (document.id, self.documentSession.document.revision, summary)
+                self.pageChromeCopyStatus = "One transaction committed; waiting for the matching canvas revision."
+                self.recordPageChromeCopyDiagnostic(targets.count, category: "committed-awaiting-render")
+            } catch {
+                guard let self, self.pageChromeCopyOperationID == operationID else { return }
+                self.isPreparingPageChromeCopy = false
+                let category = (error as? PageChromeCopyError) ?? (error is CancellationError ? .cancelled : .invalidGraph)
+                self.pageChromeCopyStatus = category.localizedDescription
+                self.recordPageChromeCopyDiagnostic(targets.count, category: category.rawValue)
+                self.announcementPoster.post(self.pageChromeCopyStatus)
+            }
+        }
+    }
+    func cancelPageChromeCopyPreparation() {
+        guard isPreparingPageChromeCopy else { return }
+        pageChromeCopyTask?.cancel(); pageChromeCopyOperationID = UUID(); isPreparingPageChromeCopy = false
+        pageChromeCopyStatus = PageChromeCopyError.cancelled.localizedDescription
+        recordPageChromeCopyDiagnostic(0, category: "cancelled")
+        announcementPoster.post(pageChromeCopyStatus)
+    }
+    private func recordPageChromeCopyDiagnostic(_ count: Int, category: String) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        lastPageChromeCopyDiagnostic = .init(documentIdentifier: DiagnosticStableIdentifier.sanitize(
+            documentSession.document.id.description, domain: .viewport, kind: "chrome-document"),
+            sourcePageIdentifier: DiagnosticStableIdentifier.sanitize(pageChromeCopySheet?.sourcePageID.description ?? "unavailable",
+                domain: .viewport, kind: "chrome-page"), targetCount: count, failureCategory: category,
+            durationMilliseconds: Double(now - (pageChromeCopyStarted ?? now)) / 1_000_000)
+    }
+    private func adoptPageChromeCopyStatus(from plan: CanvasRenderPlan) {
+        guard let pending = pendingPageChromeCopyAdoption else { return }
+        guard documentSession.document.id == pending.documentID, documentSession.document.revision == pending.revision else {
+            pendingPageChromeCopyAdoption = nil; isAwaitingPageChromeCopyAdoption = false
+            pageChromeCopyStatus = "Copies committed at an earlier revision. The document has since changed; inspect target pages before continuing."
+            return
+        }
+        guard plan.identity.documentID == pending.documentID, plan.identity.revision == pending.revision else { return }
+        pendingPageChromeCopyAdoption = nil; isAwaitingPageChromeCopyAdoption = false
+        pageChromeCopyStatus = pending.message; pageAnnouncement = pending.message
+        recordPageChromeCopyDiagnostic(pageChromeCopiedTargets.count, category: "none")
+        announcementPoster.post(pending.message)
     }
 
     @discardableResult
@@ -4679,6 +5772,13 @@ final class WorkspaceShellState: ObservableObject {
     func cancelViewportPreparation() {
         preparationTask?.cancel()
         preparationTask = nil
+        responsiveReviewTask?.cancel()
+        responsiveReviewRequestID = UUID()
+        responsivePresentationRequestID = UUID()
+        pendingResponsiveLayoutReview = nil
+        preparedResponsiveReviews = []
+        responsiveReviewContext = nil; responsiveReviewGeneration = nil
+        isPreparingResponsiveComparison = false
     }
 
     func prepareViewportScene(objects: [CanvasViewportSceneObject]) async throws -> PreparedCanvasViewportScene {
@@ -4800,11 +5900,16 @@ final class WorkspaceShellState: ObservableObject {
         guard let plan = canvasRenderPlan,
               let primaryID = selectionState.primaryID,
               let object = plan.authoredObjects.first(where: { $0.id == primaryID }) else { return }
-        // Desktop is the largest existing preview artboard. This changes only
-        // editor presentation and reveals fixed Desktop geometry; it never
-        // moves or reflows the canonical document.
-        if selectionOutsideActiveArtboard, viewportPreset != .desktop {
-            viewportPreset = .desktop
+        // Reveal may widen inspection, never move fixed canonical geometry.
+        // Negative/off-top content cannot be exposed by inventing page origin.
+        if selectionOutsideActiveArtboard {
+            guard object.frame.maxX > 0, object.frame.maxY > 0 else {
+                lastViewportAnnouncement = "Selection is before the artboard origin. Inspect X/Y in Layout to place it on the page."
+                announcementPoster.post(lastViewportAnnouncement)
+                return
+            }
+            let width = max(viewportLayoutWidth, max(Double(ViewportPreset.desktop.width), object.frame.maxX))
+            guard commitViewportWidth(width) else { return }
         }
         do {
             try viewportState.reveal(object.frame)
@@ -4920,6 +6025,165 @@ final class WorkspaceShellState: ObservableObject {
             : "Property clipboard unavailable. Copy again when clipboard access is available."
         announcementPoster.post(inspectorWorkflowAnnouncement)
     }
+
+    var formattingActionCapture: FormattingActionCapture? {
+        guard layoutInspectorHasCurrentScene, let plan = canvasRenderPlan,
+              plan.identity.viewportGeneration == viewportState.generation else { return nil }
+        return .init(edit: responsiveInspectorEditContext, renderer: plan.identity,
+            styleState: forcedStyleState, componentDefinitionID: editingComponentID)
+    }
+    func prepareFormattingCopies() async {
+        guard let capture = formattingActionCapture else { return }
+        guard preparedFormattingCapture != capture else { return }
+        let request = UUID(); formattingCopyRequestID = request
+        isPreparingFormattingCopy = true
+        defer { if formattingCopyRequestID == request { isPreparingFormattingCopy = false } }
+        guard capture.styleState == .default else { return }
+        let document = documentSession.document
+        let package = lifecycle.staticBuildResourceSnapshot()
+        guard let pageID = capture.edit.scope.pageID else { return }
+        do {
+            let result = try await formattingWorker.copyCandidates(document: document, pageID: pageID,
+                nodeIDs: capture.edit.scope.orderedNodeIDs, package: package)
+            guard !Task.isCancelled, formattingCopyRequestID == request, formattingActionCapture == capture else { return }
+            preparedFormattingCopies = result; preparedFormattingCapture = capture
+            isPreparingFormattingCopy = false
+        } catch {
+            guard formattingCopyRequestID == request else { return }
+            isPreparingFormattingCopy = false
+        }
+    }
+    func formattingCopyAvailability(_ family: FormattingFamily) -> TransformAvailability {
+        guard forcedStyleState == .default else { return .disabled("Return to Default state to reuse base formatting; state variants are not transferred.") }
+        guard let capture = formattingActionCapture, !capture.edit.scope.orderedNodeIDs.isEmpty else { return .disabled("Select compatible ordinary elements and wait for the current canvas.") }
+        guard !isPastingFormatting else { return .disabled("Wait for or cancel the pending formatting paste.") }
+        guard preparedFormattingCapture == capture else { return .disabled("Checking the common canonical formatting bundle…") }
+        switch preparedFormattingCopies[family] {
+        case .ready: return .enabled
+        case .unavailable(let error): return .disabled(error.localizedDescription)
+        case nil: return .disabled("Formatting is unavailable for this selection.")
+        }
+    }
+    func formattingPasteAvailability(_ family: FormattingFamily) -> TransformAvailability {
+        guard forcedStyleState == .default else { return .disabled("Paste edits base formatting, not Hover/Pressed/Focus variants. Return to Default first.") }
+        guard formattingActionCapture != nil, transformValidationContext.isLifecycleAvailable, !isPastingFormatting else { return .disabled("Wait for the live editable canvas or cancel the pending paste.") }
+        let visible = Set(selectionScene?.targets.filter { $0.isVisible && $0.isAvailable && !$0.isLocked }.map(\.id) ?? [])
+        guard selectedCanonicalNodes.contains(where: { family.supports($0) && visible.contains($0.id) }) else { return .disabled("Select a visible, unlocked compatible \(family == .textStyle ? "Text, Button or Link" : "Frame, Section, Stack, Grid or Button").") }
+        guard NSPasteboard.general.availableType(from: [.siteForgeFormatting]) != nil else { return .disabled("Copy \(family.title) in this project first. Ordinary text clipboard contents are not formatting.") }
+        if let copied = copiedFormattingClipboard, copied.changeCount == NSPasteboard.general.changeCount, copied.family != family {
+            return .disabled("Clipboard contains \(copied.family.title). Choose Paste \(copied.family.title), or copy \(family.title) first.")
+        }
+        return .enabled
+    }
+    func formattingTargetSummary(_ family: FormattingFamily) -> String {
+        let applicable = selectedCanonicalNodes.filter { family.supports($0) && !$0.selectionBooleanProperty("locked") && !$0.selectionBooleanProperty("hidden") }.count
+        return "Base \(family.title): \(applicable) potentially applicable; \(selectedCanonicalNodes.count - applicable) incompatible/hidden/locked. Payload and references are validated before one atomic paste."
+    }
+    func copyFormatting(_ family: FormattingFamily) {
+        let started = DispatchTime.now().uptimeNanoseconds
+        var category = "pending-or-unavailable"
+        defer { recordFormattingDiagnostic("copy", family: family, started: started, category: category) }
+        guard formattingCopyAvailability(family).isEnabled,
+              prepareForWorkspaceAction(.context, requiresCleanEditors: true),
+              preparedFormattingCapture == formattingActionCapture,
+              case .ready(let data) = preparedFormattingCopies[family] else {
+            formattingTransferStatus = formattingCopyAvailability(family).disabledReason ?? "Finish or cancel the pending draft before copying formatting."
+            announcementPoster.post(formattingTransferStatus); return
+        }
+        NSPasteboard.general.clearContents()
+        guard NSPasteboard.general.setData(data, forType: .siteForgeFormatting) else {
+            formattingTransferStatus = "Formatting clipboard is unavailable. Retry Copy; no document changed."
+            lastFormattingFailureCategory = "clipboard-unavailable"
+            category = "clipboard-unavailable"
+            announcementPoster.post(formattingTransferStatus); return
+        }
+        lastFormattingFailureCategory = "none"
+        category = "none"
+        copiedFormattingClipboard = (NSPasteboard.general.changeCount, family)
+        formattingTransferStatus = "Copied base \(family.title). Defaults, token/style links and fluid intent remain canonical; source content is unchanged."
+        announcementPoster.post(formattingTransferStatus)
+    }
+    func pasteFormatting(_ family: FormattingFamily) {
+        guard formattingPasteAvailability(family).isEnabled,
+              prepareForWorkspaceAction(.context, requiresCleanEditors: true),
+              let capture = formattingActionCapture, let pageID = capture.edit.scope.pageID,
+              let data = NSPasteboard.general.data(forType: .siteForgeFormatting) else {
+            formattingTransferStatus = formattingPasteAvailability(family).disabledReason ?? "Finish or cancel the pending draft before pasting formatting."
+            announcementPoster.post(formattingTransferStatus); return
+        }
+        let clipboardChange = NSPasteboard.general.changeCount
+        formattingPasteTask?.cancel()
+        let request = UUID(); formattingPasteRequestID = request
+        let document = documentSession.document, context = transformValidationContext
+        let package = lifecycle.staticBuildResourceSnapshot()
+        let worker = formattingWorker
+        let started = DispatchTime.now().uptimeNanoseconds
+        isPastingFormatting = true
+        formattingTransferStatus = "Preparing one base \(family.title) paste; no formatting has committed yet."
+        formattingPasteTask = Task(priority: .userInitiated) { @MainActor [weak self] in
+            do {
+                let prepared = try await worker.paste(data, family: family,
+                    identity: .init(documentID: document.id, pageID: pageID, revision: document.revision,
+                        sceneID: capture.edit.scope.sceneID, rendererGeneration: capture.renderer.sceneGeneration),
+                    nodeIDs: capture.edit.scope.orderedNodeIDs, document: document, context: context, package: package,
+                    breakpoint: capture.edit.scope.breakpoint)
+                guard let self, !Task.isCancelled, self.formattingPasteRequestID == request else { return }
+                defer { self.isPastingFormatting = false }
+                guard self.transformValidationContext.isLifecycleAvailable, self.formattingActionCapture == capture, NSPasteboard.general.changeCount == clipboardChange,
+                      self.prepareForWorkspaceAction(.context, requiresCleanEditors: true), self.formattingActionCapture == capture else {
+                    self.formattingTransferStatus = FormattingTransferError.stale.localizedDescription
+                    self.lastFormattingFailureCategory = "stale-context"
+                    self.recordFormattingDiagnostic("paste", family: family, started: started, category: "stale-context")
+                    self.announcementPoster.post(self.formattingTransferStatus); return
+                }
+                self.pendingSelectionAfterInspectorEdit = self.selectionState
+                do { try self.documentSession.execute(prepared.documentCommand) }
+                catch { self.pendingSelectionAfterInspectorEdit = nil; throw error }
+                let reasons = Set(prepared.skippedReasons.values).sorted().joined(separator: " ")
+                let message = "Pasted base \(family.title) across \(prepared.applicableNodeIDs.count) compatible targets (already-matching intent retained); skipped \(prepared.skippedNodeIDs.count). Undo restores the complete paste. " + reasons
+                self.pendingFormattingAdoption = (document.id, self.documentSession.document.revision, message)
+                self.lastFormattingFailureCategory = "none"
+                self.recordFormattingDiagnostic("paste", family: family, started: started, category: "committed-awaiting-render")
+                self.formattingTransferStatus = "Base formatting committed in one transaction; waiting for the matching canvas revision."
+            } catch {
+                guard let self, self.formattingPasteRequestID == request else { return }
+                self.isPastingFormatting = false
+                let category = (error as? FormattingTransferError) ?? (error is CancellationError ? .cancelled : .invalidPayload)
+                self.lastFormattingFailureCategory = category == .noChanges ? "none" : category.rawValue
+                self.recordFormattingDiagnostic("paste", family: family, started: started, category: category.rawValue)
+                self.formattingTransferStatus = category.localizedDescription
+                self.announcementPoster.post(self.formattingTransferStatus)
+            }
+        }
+    }
+    func cancelFormattingTransfer() {
+        formattingPasteTask?.cancel(); formattingPasteRequestID = UUID(); isPastingFormatting = false
+        formattingTransferStatus = "Pending formatting transfer cancelled; committed formatting and history are unchanged."
+        lastFormattingFailureCategory = "cancelled"
+        announcementPoster.post(formattingTransferStatus)
+    }
+    func cancelFormattingTransferIfPending() {
+        guard isPastingFormatting else { return }
+        cancelFormattingTransfer()
+    }
+    private func recordFormattingDiagnostic(_ operation: String, family: FormattingFamily, started: UInt64, category: String) {
+        lastFormattingDiagnostic = .init(operation: operation, family: family,
+            documentIdentifier: DiagnosticStableIdentifier.sanitize(documentSession.document.id.description, domain: .viewport, kind: "formatting-document"),
+            selectedCount: selectionState.count, failureCategory: category,
+            durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+    }
+    private func adoptFormattingStatus(from plan: CanvasRenderPlan) {
+        guard let pending = pendingFormattingAdoption else { return }
+        guard documentSession.document.id == pending.documentID, documentSession.document.revision == pending.revision else {
+            pendingFormattingAdoption = nil
+            formattingTransferStatus = "Formatting committed at an earlier revision; the current document has since changed."
+            return
+        }
+        guard plan.identity.documentID == pending.documentID, plan.identity.revision == pending.revision else { return }
+        pendingFormattingAdoption = nil
+        formattingTransferStatus = pending.message
+        announcementPoster.post(formattingTransferStatus)
+    }
     func pasteInspectorGeometry() {
         guard pageEditingIsAvailable, canvasRenderPlan != nil, effectiveSelectedPageID != nil else {
             inspectorWorkflowAnnouncement = "Layout paste unavailable until the active document and canvas are ready. No value changed."
@@ -4950,9 +6214,9 @@ final class WorkspaceShellState: ObservableObject {
     func sizingModeSource(for dimension: SizingDimension) -> String {
         guard let resolution = sizingDimensionResolution(dimension) else { return "Mixed sizing or incompatible selection; inspect each object separately." }
         if let numeric = resolution.numericSource {
-            return "Effective Fixed · \(numeric.label). Base \(resolution.declaredMode.rawValue.capitalized) is retained."
+            return "\(AuthoringLanguage.sizing(.fixed)) · \(numeric.label). Base \(AuthoringLanguage.sizing(resolution.declaredMode)) is retained."
         }
-        return "Effective \(resolution.effectiveMode.rawValue.capitalized) · \(resolution.modeOrigin == .authored ? "authored at Desktop" : "default at Desktop")"
+        return "\(AuthoringLanguage.sizing(resolution.effectiveMode)) · \(resolution.modeOrigin == .authored ? "Set here · Desktop" : "Default · Desktop")"
     }
 
     func sizingDimensionResolution(_ dimension: SizingDimension) -> SizingDimensionResolution? {
@@ -5042,7 +6306,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     var sizingModeAvailability: TransformAvailability {
-        guard viewportPreset == .desktop else { return .disabled("Sizing modes are authored at Desktop and inherited unless numeric breakpoint or fluid geometry overrides them.") }
+        guard viewportPreset == .desktop else { return .disabled("Set base sizing at Desktop. Screen-size overrides or Smooth scaling can take priority; the base value is retained.") }
         guard selectedCanonicalNodes.contains(where: {
             CanonicalSizingConstraints.supportedKinds.contains($0.kind) && $0.insertionGeometry != nil
                 && !$0.insertionBooleanProperty("locked") && !$0.insertionBooleanProperty("hidden")
@@ -5081,7 +6345,7 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     var sizingConstraintAvailability: TransformAvailability {
-        guard viewportPreset == .desktop else { return .disabled("Base sizing is edited at Desktop; breakpoint sizing overrides are not available in this slice.") }
+        guard viewportPreset == .desktop else { return .disabled("Edit base sizing limits at Desktop. Screen-size-specific sizing limits are not available.") }
         let applicable = selectedCanonicalNodes.filter { node in
             CanonicalSizingConstraints.boundsSupportedKinds.contains(node.kind) && !node.insertionBooleanProperty("locked")
                 && !node.insertionBooleanProperty("hidden") && node.insertionGeometry != nil
@@ -5148,7 +6412,7 @@ final class WorkspaceShellState: ObservableObject {
     func geometryInspectorResponsiveSource(for field: GeometryInspectorField) -> String? {
         if viewportPreset.responsiveBreakpoint == .desktop {
             if case .single(_, let origin) = geometryInspectorValue(for: field) {
-                return origin == .authored ? "authored at Desktop" : "defaulted at Desktop"
+                return origin == .authored ? "Set here · Desktop" : "Default · Desktop"
             }
             return geometryInspectorValue(for: field) == .mixed ? "Mixed Desktop values" : nil
         }
@@ -5159,10 +6423,10 @@ final class WorkspaceShellState: ObservableObject {
         guard !nodes.isEmpty else { return nil }
         let sources = nodes.compactMap {
             ResponsiveGeometryResolver.value(for: field, node: $0, breakpoint: viewportPreset.responsiveBreakpoint,
-                viewportWidth: Double(viewportPreset.width))?.2
+                viewportWidth: viewportLayoutWidth)?.2
         }
         guard sources.count == nodes.count, let first = sources.first,
-              sources.dropFirst().allSatisfy({ $0 == first }) else { return "Mixed breakpoint sources" }
+              sources.dropFirst().allSatisfy({ $0 == first }) else { return "Mixed screen-size sources" }
         return first.label
     }
 
@@ -5210,7 +6474,7 @@ final class WorkspaceShellState: ObservableObject {
             in: documentSession.document,
             context: transformValidationContext,
             breakpoint: viewportPreset.responsiveBreakpoint,
-            viewportWidth: Double(viewportPreset.width)
+            viewportWidth: viewportLayoutWidth
         )
     }
 
@@ -5242,7 +6506,7 @@ final class WorkspaceShellState: ObservableObject {
         let applicable = selectedCanonicalNodes.filter { target.supports($0.kind) }
         let values = applicable.compactMap {
             FluidValueCommandRegistry.effectiveValue(for: target, node: $0,
-                breakpoint: viewportPreset.responsiveBreakpoint, viewportWidth: Double(viewportPreset.width))?.0
+                breakpoint: viewportPreset.responsiveBreakpoint, viewportWidth: viewportLayoutWidth)?.0
         }
         guard let first = values.first, values.count == applicable.count,
               values.allSatisfy({ $0 == first }) else { return nil }
@@ -5254,9 +6518,9 @@ final class WorkspaceShellState: ObservableObject {
         let applicable = selected.filter { target.supports($0.kind) }
         let values = applicable.compactMap {
             FluidValueCommandRegistry.effectiveValue(for: target, node: $0,
-                breakpoint: viewportPreset.responsiveBreakpoint, viewportWidth: Double(viewportPreset.width))
+                breakpoint: viewportPreset.responsiveBreakpoint, viewportWidth: viewportLayoutWidth)
         }
-        let prefix = "Current \(viewportPreset.title) \(viewportPreset.width) px"
+        let prefix = "Current \(viewportPreset.title) \(GeometryInspectorNumberParser.format(viewportLayoutWidth)) px"
         guard !applicable.isEmpty, values.count == applicable.count, let first = values.first else {
             return "\(prefix): no applicable resolved value"
         }
@@ -5322,8 +6586,8 @@ final class WorkspaceShellState: ObservableObject {
             fluidValueFailure = nil
             let skipped = prepared.skippedNodeIDs.isEmpty ? "" : "; \(prepared.skippedNodeIDs.count) incompatible object(s) unchanged"
             lastFluidValueAnnouncement = value == nil
-                ? "Fluid \(target.title.lowercased()) removed; fixed authored value restored where no device override wins\(skipped). \(fluidValueEffectiveSummary(for: target))"
-                : "Fluid \(target.title.lowercased()) committed for \(prepared.applicableNodeIDs.count) object(s)\(skipped)"
+                ? "Smooth scaling for \(target.title.lowercased()) removed; uses the base exact value unless a screen-size override wins\(skipped). \(fluidValueEffectiveSummary(for: target))"
+                : "Smooth scaling for \(target.title.lowercased()) applied to \(prepared.applicableNodeIDs.count) object(s)\(skipped)"
             announcementPoster.post(lastFluidValueAnnouncement)
             recordFluidValueDiagnostic(command, started: started, result: .success,
                                        resultRevision: documentSession.document.revision, failure: nil)
@@ -5364,7 +6628,7 @@ final class WorkspaceShellState: ObservableObject {
         fluidValueFailure = nil
         fluidValueAnnouncementContext = responsiveInspectorEditContext
         fluidValueAnnouncementTarget = target
-        lastFluidValueAnnouncement = "Fluid-value draft cancelled; committed content is unchanged"
+        lastFluidValueAnnouncement = "Smooth-scaling draft cancelled; saved content is unchanged"
         announcementPoster.post(lastFluidValueAnnouncement)
     }
 
@@ -5372,7 +6636,7 @@ final class WorkspaceShellState: ObservableObject {
         let values = selectedCanonicalNodes.filter { ContainerLayoutCommandRegistry.supports(field, kind: $0.kind) }
             .compactMap { ResponsiveContainerLayoutResolver.value(for: field, node: $0,
                 breakpoint: viewportPreset.responsiveBreakpoint,
-                viewportWidth: Double(viewportPreset.width))?.2 }
+                viewportWidth: viewportLayoutWidth)?.2 }
         guard let first = values.first, values.dropFirst().allSatisfy({ $0 == first }) else {
             return values.isEmpty ? nil : "Mixed layout sources"
         }
@@ -5768,10 +7032,10 @@ final class WorkspaceShellState: ObservableObject {
 
     var effectiveTypographySummary: String {
         let value = TypographyCommandRegistry.selectionValue(nodes: selectedCanonicalNodes,
-            viewportWidth: Double(viewportPreset.width))
+            viewportWidth: viewportLayoutWidth)
         switch value {
         case .single(let typography, _):
-            return "Rendered at \(viewportPreset.title) \(viewportPreset.width) px: size \(GeometryInspectorNumberParser.format(typography.size)), line height \(GeometryInspectorNumberParser.format(typography.lineHeight))"
+            return "Rendered at \(viewportPreset.title) \(GeometryInspectorNumberParser.format(viewportLayoutWidth)) px: size \(GeometryInspectorNumberParser.format(typography.size)), line height \(GeometryInspectorNumberParser.format(typography.lineHeight))"
         case .mixed(let applicable, let skipped):
             return "Rendered typography: Mixed · \(applicable) applicable · \(skipped) skipped"
         case .unavailable(let reason): return reason
@@ -5994,6 +7258,10 @@ final class WorkspaceShellState: ObservableObject {
             lastDesignInspectorAnnouncement = skipped == 0
                 ? "Design \(operation) committed for \(applied) object\(applied == 1 ? "" : "s")"
                 : "Design \(operation) committed for \(applied) object\(applied == 1 ? "" : "s"); skipped \(skipped) incompatible object\(skipped == 1 ? "" : "s")"
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
+        } catch DesignBoxStyleError.noChanges {
+            lastDesignInspectorAnnouncement = "Appearance unchanged"
             announcementPoster.post(lastDesignInspectorAnnouncement)
             return true
         } catch let error as DesignBoxStyleError {
@@ -6236,15 +7504,8 @@ final class WorkspaceShellState: ObservableObject {
             announcementPoster.post(lastDesignInspectorAnnouncement)
             return true
         } catch DesignInspectorError.noChanges {
-            // A native Return/focus-loss of the current valid value is a
-            // successful neutral edit, not a red validation failure. The
-            // registry has already checked identity and applicability.
             designInspectorFailure = nil
             lastDesignInspectorAnnouncement = "Design appearance is unchanged."
-            return true
-        } catch DesignInspectorError.noChanges {
-            designInspectorFailure = nil
-            lastDesignInspectorAnnouncement = "Design \(operation) unchanged"
             announcementPoster.post(lastDesignInspectorAnnouncement)
             return true
         } catch let error as DesignInspectorError {
@@ -6544,7 +7805,7 @@ final class WorkspaceShellState: ObservableObject {
             guard !prepared.isEmpty else { throw GeometryInspectorError.noApplicableTargets }
             _ = try documentSession.execute(.batch(prepared))
             geometryInspectorFailure = nil
-            lastGeometryInspectorAnnouncement = "Removed \(viewportPreset.title) geometry overrides; values now inherit from Desktop"
+            lastGeometryInspectorAnnouncement = "Removed custom size and position for \(viewportPreset.title); uses Smooth scaling where set, otherwise Desktop values"
             announcementPoster.post(lastGeometryInspectorAnnouncement)
             return true
         } catch let error as GeometryInspectorError {
@@ -6595,6 +7856,11 @@ final class WorkspaceShellState: ObservableObject {
         provenance: SelectionProvenance
     ) {
         guard prepareForWorkspaceAction(.context) else { return }
+        adoptSelectionCommand(name, targetID: targetID, provenance: provenance)
+    }
+    private func adoptSelectionCommand(
+        _ name: SelectionCommandName, targetID: NodeID? = nil, provenance: SelectionProvenance
+    ) {
         guard let scene = selectionScene else { return }
         cancelTransform()
         let start = DispatchTime.now().uptimeNanoseconds
@@ -6799,14 +8065,19 @@ final class WorkspaceShellState: ObservableObject {
                 in: documentSession.document,
                 context: textEditingValidationContext
             )
+            if selectionState.orderedIDs != [nodeID] {
+                adoptSelectionScope(for: nodeID)
+                performSelectionCommand(.replace, targetID: nodeID, provenance: .lifecycleRepair)
+            }
+            guard selectionState.orderedIDs == [nodeID] else { return false }
+            // Selection crosses the workspace edit boundary. Establish it
+            // before opening the draft, otherwise that boundary immediately
+            // commits the just-created session before NSTextView can compose.
             retainedTextEditingFrame = canvasRenderPlan?.authoredObjects.first(where: {
                 $0.id == nodeID
             })?.frame
             textEditingSession.begin(activation)
             textEditingFailure = nil
-            if selectionState.orderedIDs != [nodeID] {
-                performSelectionCommand(.replace, targetID: nodeID, provenance: .lifecycleRepair)
-            }
             lastTextEditingAnnouncement = "Editing plain text"
             announcementPoster.post(lastTextEditingAnnouncement)
             return true
@@ -6995,6 +8266,27 @@ final class WorkspaceShellState: ObservableObject {
 
     func selectLayer(_ id: NodeID, modifier: SelectionPointerModifier = .replace) {
         guard prepareForWorkspaceAction(.context) else { return }
+        adoptLayerSelection(id, modifier: modifier)
+    }
+    private func adoptLayerSelection(_ id: NodeID, modifier: SelectionPointerModifier = .replace) {
+        adoptSelectionScope(for: id)
+        let command: SelectionCommandName = switch modifier {
+        case .replace: .replace
+        case .add: .add
+        case .toggle: .toggle
+        }
+        adoptSelectionCommand(command, targetID: id, provenance: .layersNavigator)
+        if selectionState.primaryID == id {
+            let documentID = documentSession.document.id
+            if recentLayerDocumentID != documentID {
+                recentLayerIDs = []
+                recentLayerDocumentID = documentID
+            }
+            recentLayerIDs = QuickOpenRecentLayerPolicy.recording(id, in: recentLayerIDs)
+        }
+    }
+
+    private func adoptSelectionScope(for id: NodeID) {
         if let scene = selectionScene,
            let target = scene.targets.first(where: { $0.id == id }),
            target.parentID != scene.activeContainerID {
@@ -7006,20 +8298,6 @@ final class WorkspaceShellState: ObservableObject {
             )
             _ = try? selectionRegistry.adopt(scoped, boundary: .rendererGeneration, state: &selectionState)
             selectionScene = scoped
-        }
-        let command: SelectionCommandName = switch modifier {
-        case .replace: .replace
-        case .add: .add
-        case .toggle: .toggle
-        }
-        performSelectionCommand(command, targetID: id, provenance: .layersNavigator)
-        if selectionState.primaryID == id {
-            let documentID = documentSession.document.id
-            if recentLayerDocumentID != documentID {
-                recentLayerIDs = []
-                recentLayerDocumentID = documentID
-            }
-            recentLayerIDs = QuickOpenRecentLayerPolicy.recording(id, in: recentLayerIDs)
         }
     }
 
@@ -8962,24 +10240,30 @@ final class WorkspaceShellState: ObservableObject {
         }
     }
 
-    private func updateViewportContentBounds() {
+    private func updateViewportContentBounds(width: Double) throws {
         // The prior selection plan is expressed in the prior immutable
         // viewport snapshot. Do not reinterpret it with the newly selected
         // artboard while asynchronous renderer preparation is in flight: that
         // would draw a stale Desktop outline over the Mobile pasteboard.
         // Canonical selection identity stays intact and is rebuilt only when
         // the matching renderer plan adopts.
-        selectionOverlayPlan = nil
+        var next = viewportState
         let bounds = WorldRect(
             origin: WorldPoint(x: 0, y: 0),
-            size: WorldSize(width: Double(viewportPreset.width), height: CanonicalPageFlow.contentHeight(activeAuthoringPage,
-                breakpoint: viewportPreset.responsiveBreakpoint, width: Double(viewportPreset.width)))
+            size: WorldSize(width: width, height: CanonicalPageFlow.contentHeight(activeAuthoringPage,
+                breakpoint: ResponsiveBreakpoint.resolving(width: width), width: width))
         )
-        try? viewportState.setContentBounds(bounds)
+        try next.setContentBounds(bounds)
         // A preset is presentation state. Fit with a pasteboard gutter so the
         // real artboard boundary remains visible; authored coordinates and
         // selection identity stay unchanged.
-        try? viewportState.fit(.fitDocument)
+        try next.fit(.fitDocument)
+        cancelInsertion(resetTool: true)
+        cancelTransform()
+        cancelCanvasSelectionMarquee()
+        cancelGuideEditing()
+        selectionOverlayPlan = nil
+        viewportState = next
         cancelDragDrop()
         scheduleScenePreparation()
     }
@@ -9018,9 +10302,9 @@ final class WorkspaceShellState: ObservableObject {
         }
         repairSelectedGuide()
         guard document.id != viewportDocumentID else {
-            let bounds = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: Double(viewportPreset.width),
+            let bounds = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: viewportLayoutWidth,
                 height: CanonicalPageFlow.contentHeight(activeAuthoringPage, breakpoint: viewportPreset.responsiveBreakpoint,
-                    width: Double(viewportPreset.width))))
+                    width: viewportLayoutWidth)))
             if bounds != viewportState.contentBounds { try? viewportState.setContentBounds(bounds) }
             scheduleScenePreparation()
             return
@@ -9032,8 +10316,8 @@ final class WorkspaceShellState: ObservableObject {
             viewportSize: viewportState.viewportSize,
             contentBounds: WorldRect(
                 origin: WorldPoint(x: 0, y: 0),
-                size: WorldSize(width: Double(viewportPreset.width), height: CanonicalPageFlow.contentHeight(activeAuthoringPage,
-                    breakpoint: viewportPreset.responsiveBreakpoint, width: Double(viewportPreset.width)))
+                size: WorldSize(width: viewportLayoutWidth, height: CanonicalPageFlow.contentHeight(activeAuthoringPage,
+                    breakpoint: viewportPreset.responsiveBreakpoint, width: viewportLayoutWidth))
             ),
             pixelRatio: viewportState.pixelRatio
         )
@@ -9073,6 +10357,10 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private func scheduleScenePreparation() {
+        if let context = responsiveLayoutReviewStatusContext, context != responsiveInspectorEditContext {
+            responsiveLayoutReviewStatus = ""; responsiveLayoutReviewStatusContext = nil
+        }
+        if isResponsiveComparisonPresented { scheduleResponsiveComparison() }
         scheduleComponentDependencyPreparation()
         preparationTask?.cancel()
         let imageResources: [AssetID: Data] = Dictionary(uniqueKeysWithValues: documentSession.document.imageAssets.compactMap { asset -> (AssetID, Data)? in
@@ -9088,7 +10376,7 @@ final class WorkspaceShellState: ObservableObject {
             viewport: viewportState,
             surfaceID: renderSurfaceID,
             breakpoint: viewportPreset.responsiveBreakpoint,
-            viewportWidth: Double(viewportPreset.width),
+            viewportWidth: viewportLayoutWidth,
             imageResourceData: imageResources
         )
         let expectedIdentity = CanvasRenderRequestIdentity(
@@ -9150,12 +10438,17 @@ final class WorkspaceShellState: ObservableObject {
                     previousRenderScene = prepared.renderScene
                     canvasRenderPlan = plan
                     canvasRendererFailure = nil
+                    validatePendingBuildFindingReveal()
                     adoptSelectionScene(
                         prepared.selectionScene,
                         from: plan,
                         boundary: selectionBoundary
                     )
                     pendingSelectionLifecycleBoundary = nil
+                    completeBuildFindingReveal(from: plan)
+                    completeResponsiveLayoutReview(from: plan)
+                    adoptFormattingStatus(from: plan)
+                    adoptPageChromeCopyStatus(from: plan)
                     await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
                         operation: "prepare",
                         plan: plan,
@@ -9178,6 +10471,7 @@ final class WorkspaceShellState: ObservableObject {
                     ))
                 } catch let error as CanvasRendererError {
                     canvasRendererFailure = error
+                    failBuildFindingReveal(for: request)
                     await canvasRenderDiagnostics.append(CanvasRenderDiagnosticFactory.make(
                         operation: "prepare", plan: nil, identity: expectedIdentity, surfaceID: renderSurfaceID,
                         durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
@@ -9206,7 +10500,9 @@ final class WorkspaceShellState: ObservableObject {
                     durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000,
                     result: .cancelled, failureCategory: "cancelled"
                 ))
-            } catch {}
+            } catch {
+                if !Task.isCancelled { failBuildFindingReveal(for: request) }
+            }
         }
     }
 
@@ -9408,6 +10704,10 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     private func announceSelection() {
+        if let context = responsiveLayoutReviewStatusContext, context != responsiveInspectorEditContext {
+            responsiveLayoutReviewStatus = ""; responsiveLayoutReviewStatusContext = nil
+        }
+        if isResponsiveComparisonPresented { scheduleResponsiveComparison() }
         lastSelectionAnnouncement = selectionState.isEmpty
             ? "Selection cleared"
             : selectionState.count == 1

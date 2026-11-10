@@ -33,6 +33,16 @@ struct CanonicalShadow: Equatable, Sendable {
     }
 }
 
+enum ShadowInspectorDraftParser {
+    static func parse(_ text: String, color: CanonicalSolidColor) -> CanonicalShadow? {
+        let pieces = text.split(separator: ",", omittingEmptySubsequences: false)
+        let values = pieces.map { $0.trimmingCharacters(in: .whitespaces) }.compactMap(Double.init)
+        guard pieces.count == 4, values.count == 4, values.allSatisfy(\.isFinite) else { return nil }
+        let shadow = CanonicalShadow(color: color, offsetX: values[0], offsetY: values[1], blur: values[2], spread: values[3])
+        return shadow.isValid ? shadow : nil
+    }
+}
+
 struct CanonicalBoxStyle: Equatable, Sendable {
     let border: CanonicalBorder?
     let cornerRadius: Double?
@@ -2301,7 +2311,7 @@ struct AdvancedStyleCommandRegistry: Sendable {
         var samples: [(CanonicalSolidColor, Double)] = []
         for node in applicable {
             guard CanonicalImageFill.resolve(node) == nil else {
-                throw AdvancedStyleCommandError.unavailable("Reusable snapshots support one solid fill and opacity; image fills remain local.")
+                throw AdvancedStyleCommandError.unavailable("A color-style sample supports one solid color and opacity, not image fills. Nothing changed; select a solid-color object or use Reuse Formatting for its full appearance.")
             }
             let appearance = try CanonicalResolvedAppearance.resolve(node: node, index: index)
             let layers = LocalColorTokenResolver.resolvedLayers(for: node, in: document).filter(\.isEnabled)
@@ -2310,12 +2320,12 @@ struct AdvancedStyleCommandRegistry: Sendable {
             else if layers.isEmpty, CanonicalFillLayerCodec.layers(for: node) == nil { fill = appearance.fill }
             else { fill = nil }
             guard let fill else {
-                throw AdvancedStyleCommandError.unavailable("Capture needs one common solid fill and opacity. Gradients, layered fills and Transparent / None remain local; they are not flattened or replaced.")
+                throw AdvancedStyleCommandError.unavailable("A color-style sample needs one common solid color and opacity. Gradients, layered fills and Transparent / None are unchanged, not flattened. Select compatible objects or use Reuse Formatting for fuller appearance transfer.")
             }
             samples.append((fill, appearance.opacity))
         }
         guard let first = samples.first, samples.allSatisfy({ $0.0 == first.0 && $0.1 == first.1 }) else {
-            throw AdvancedStyleCommandError.unavailable("The applicable selection has mixed fill or opacity. Choose matching values before capturing a reusable snapshot.")
+            throw AdvancedStyleCommandError.unavailable("The compatible selection has mixed color or opacity. Nothing changed; select objects with matching values before making a color-style sample.")
         }
         guard let storedColor = CanonicalSolidColor.parse(hexadecimal: first.0.hexadecimalRGBA) else {
             throw AdvancedStyleCommandError.invalidValue
@@ -3086,6 +3096,30 @@ struct ResponsiveInspectorEditContext: Equatable, Sendable {
     let revision: UInt64
 }
 
+/// Scene-local ownership for legacy string editors (colors and compound values
+/// as well as numbers). Refresh may replace a clean display, never a draft.
+struct InspectorTextDraftState: Equatable, Sendable {
+    var text: String
+    private(set) var committed: String
+    let context: ResponsiveInspectorEditContext
+    private(set) var isConflicted = false
+    var isDirty: Bool { text != committed }
+
+    init(text: String, committed: String, context: ResponsiveInspectorEditContext) {
+        self.text = text; self.committed = committed; self.context = context
+    }
+    mutating func adopt(committed next: String, context current: ResponsiveInspectorEditContext) {
+        if !isDirty && !isConflicted {
+            self = .init(text: next, committed: next, context: current)
+        } else if current != context || next != committed {
+            isConflicted = true
+        }
+    }
+    func canCommit(in current: ResponsiveInspectorEditContext) -> Bool {
+        isDirty && !isConflicted && context == current
+    }
+}
+
 /// Availability validates a prospective canonical transaction, not an inline
 /// text draft. Reuse that result only while every command-owning input agrees;
 /// actual commits still go through the registry's full validation.
@@ -3263,6 +3297,366 @@ struct InspectorGeometryTransfer: Equatable, Sendable {
         try GeometryInspectorCommandRegistry().prepare(.init(identity: identity, orderedNodeIDs: orderedNodeIDs,
             field: field, value: value, provenance: .keyboard, breakpoint: breakpoint),
             in: document, context: context, cancellation: cancellation)
+    }
+}
+
+// SF-0702/0703/0308: an inert private transfer of closed canonical intent,
+// not another style store and never executable clipboard commands.
+enum FormattingFamily: String, Codable, CaseIterable, Hashable, Sendable {
+    case textStyle, appearance
+    var title: String { self == .textStyle ? "Text Style" : "Appearance" }
+    func supports(_ node: DocumentNode) -> Bool {
+        node.insertionGeometry != nil && !CanonicalPageFlow.isNavigationLink(node)
+            && (self == .textStyle ? node.kind.isTextual : DesignInspectorCommandRegistry.fillKinds.contains(node.kind))
+    }
+    static let retiredFillKeys: Set<String> = ["style.fill", "style.fill.red", "style.fill.green", "style.fill.blue", "style.fill.alpha"]
+    func owns(_ key: String) -> Bool {
+        switch self {
+        case .textStyle:
+            return Set(["family", "weight", "size", "lineHeight", "tracking", "alignment"]
+                .map { CanonicalTypography.namespace + $0 }
+                + CanonicalTextForeground.channels.map { CanonicalTextForeground.prefix + $0 }
+                + [LocalColorTokenBinding.key(for: .textForeground), CanonicalFluidValueCodec.key(.fontSize), CanonicalFluidValueCodec.key(.lineHeight)]).contains(key)
+        case .appearance:
+            let box = ["border.width", "border.style", "border.color.red", "border.color.green", "border.color.blue", "border.color.alpha",
+                "radius.uniform", "shadow.color.red", "shadow.color.green", "shadow.color.blue", "shadow.color.alpha",
+                "shadow.offsetX", "shadow.offsetY", "shadow.blur", "shadow.spread", "shadow.enabled"]
+            return key.hasPrefix(CanonicalFillLayerCodec.namespaceRoot + ".")
+                || Self.retiredFillKeys.contains(key) || box.map { DesignBoxStyleCommandRegistry.namespace + $0 }.contains(key)
+                || ["style.opacity", "style.border", LocalColorTokenBinding.key(for: .fill),
+                    LocalColorTokenBinding.key(for: .border), LocalColorTokenBinding.key(for: .outerShadow), LocalColorTokenBinding.legacyKey,
+                    CanonicalReusableStyleIndex.appliedKey, CanonicalImageFill.assetKey, CanonicalImageFill.modeKey].contains(key)
+        }
+    }
+}
+
+enum FormattingTransferError: String, Error, LocalizedError, Equatable, Sendable {
+    case invalidPayload, oversized, mixedSource, unavailable, wrongFamily, foreignDocument, missingDependency, stale, cancelled, noApplicableTargets, noChanges
+    var errorDescription: String? {
+        switch self {
+        case .invalidPayload: "Formatting data is malformed or unsupported. Copy the style again in SiteForge."
+        case .oversized: "This formatting bundle exceeds the private clipboard limit. Use a smaller style bundle."
+        case .mixedSource: "Copy requires one compatible source or an identical common bundle. Select one source; no primary value is borrowed."
+        case .unavailable: "Select ordinary compatible elements. Managed navigation and component instances use their existing owner controls."
+        case .wrongFamily: "The clipboard contains a different formatting family. Choose its matching Paste action, or copy the intended family first."
+        case .foreignDocument: "Formatting reuse is limited to the same project. Cross-project references are not retargeted or flattened."
+        case .missingDependency: "A referenced token, named style or image is unavailable. Restore or replace it in the source project, then copy again."
+        case .stale: "The page, selection, viewport or document changed. Retry formatting on the current selection."
+        case .cancelled: "Formatting transfer cancelled; committed content is unchanged."
+        case .noApplicableTargets: "No selected element supports this complete formatting family. No object changed."
+        case .noChanges: "The selected elements already have this canonical formatting. No Undo entry was added."
+        }
+    }
+}
+
+struct FormattingProperty: Codable, Equatable, Sendable {
+    let key: String
+    let value: PropertyValue
+    let origin: PropertyOrigin
+    init(key: String, value: PropertyValue, origin: PropertyOrigin) { self.key = key; self.value = value; self.origin = origin }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case key, value, origin }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        key = try container.decode(String.self, forKey: .key)
+        value = try container.decode(PropertyValue.self, forKey: .value)
+        origin = try container.decode(PropertyOrigin.self, forKey: .origin)
+    }
+}
+
+struct FormattingTransfer: Codable, Equatable, Sendable {
+    static let maximumBytes = 1_024 * 1_024
+    static let maximumProperties = 4_096
+    static let maximumSelection = 1_000
+    private static let normalizationID = NodeID(UUID(uuidString: "07020000-0000-4000-8000-000000000009")!)
+    let version: Int
+    let family: FormattingFamily
+    let sourceDocumentID: DocumentID
+    let sourcePageID: PageID
+    let sourceRevision: UInt64
+    let properties: [FormattingProperty]
+    init(family: FormattingFamily, sourceDocumentID: DocumentID, sourcePageID: PageID,
+         sourceRevision: UInt64, properties: [FormattingProperty], version: Int = 1) {
+        self.version = version; self.family = family; self.sourceDocumentID = sourceDocumentID
+        self.sourcePageID = sourcePageID; self.sourceRevision = sourceRevision; self.properties = properties
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case version, family, sourceDocumentID, sourcePageID, sourceRevision, properties }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        family = try container.decode(FormattingFamily.self, forKey: .family)
+        sourceDocumentID = try container.decode(DocumentID.self, forKey: .sourceDocumentID)
+        sourcePageID = try container.decode(PageID.self, forKey: .sourcePageID)
+        sourceRevision = try container.decode(UInt64.self, forKey: .sourceRevision)
+        properties = try container.decode([FormattingProperty].self, forKey: .properties)
+        try validate()
+    }
+    func encoded() throws -> Data {
+        try validate()
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(self)
+        guard data.count <= Self.maximumBytes else { throw FormattingTransferError.oversized }
+        return data
+    }
+    static func decode(_ data: Data) throws -> Self {
+        guard !data.isEmpty, data.count <= maximumBytes else { throw FormattingTransferError.oversized }
+        var depth = 0, quoted = false, escaped = false
+        for byte in data {
+            if escaped { escaped = false; continue }
+            if quoted && byte == 92 { escaped = true; continue }
+            if byte == 34 { quoted.toggle(); continue }
+            guard !quoted else { continue }
+            if byte == 123 || byte == 91 { depth += 1 }
+            if byte == 125 || byte == 93 { depth -= 1 }
+            guard (0...16).contains(depth) else { throw FormattingTransferError.oversized }
+        }
+        guard depth == 0, !quoted else { throw FormattingTransferError.invalidPayload }
+        do {
+            let decoder = JSONDecoder(); decoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
+            let value = try decoder.decode(Self.self, from: data)
+            guard try value.encoded() == data else { throw FormattingTransferError.invalidPayload }
+            return value
+        } catch let error as FormattingTransferError { throw error }
+        catch { throw FormattingTransferError.invalidPayload }
+    }
+    private var probe: DocumentNode {
+        .init(id: Self.normalizationID, kind: family == .textStyle ? .text : .frame, name: "Formatting validation",
+            parent: .page(sourcePageID), properties: properties.map { .init(key: .init(rawValue: $0.key), value: $0.value, origin: $0.origin) })
+    }
+    func validate() throws {
+        guard version == 1, properties.count <= Self.maximumProperties,
+              properties.map(\.key) == properties.map(\.key).sorted(), Set(properties.map(\.key)).count == properties.count,
+              properties.allSatisfy({ family.owns($0.key) && $0.key.utf8.count <= 256 }) else { throw FormattingTransferError.invalidPayload }
+        for property in properties {
+            switch property.value {
+            case .number(let number): guard number.isFinite else { throw FormattingTransferError.invalidPayload }
+            case .string(let string): guard string.utf8.count <= 32_768 else { throw FormattingTransferError.oversized }
+            case .boolean: break
+            }
+            if FormattingFamily.retiredFillKeys.contains(property.key) || property.key == LocalColorTokenBinding.legacyKey {
+                throw FormattingTransferError.invalidPayload // Legacy values are adapted on Copy, never written on Paste.
+            }
+            if property.key == "style.border" {
+                guard case .string(let border) = property.value, ["none", "subtle"].contains(border) else { throw FormattingTransferError.invalidPayload }
+            }
+        }
+        var candidate = ProjectCreation.blank()
+        let root = candidate.pages[0].rootNodeIDs[0]
+        var node = probe
+        node.parent = .node(root)
+        // References are validated against the real project, not fabricated
+        // definitions/resources in this isolated canonical-value probe.
+        let referenceKeys = Set(LocalColorTarget.allCases.map { LocalColorTokenBinding.key(for: $0) }
+            + [CanonicalReusableStyleIndex.appliedKey, CanonicalImageFill.assetKey, CanonicalImageFill.modeKey])
+        do {
+            if family == .appearance { _ = try CanonicalFillLayerCodec.decodeLayers(for: node) }
+            if let applied = node.insertionProperty(CanonicalReusableStyleIndex.appliedKey) {
+                guard case .string = applied.value else { throw FormattingTransferError.invalidPayload }
+            }
+            _ = try CanonicalReusableStyleIndex.strictlyDecodedAppliedIDs(node)
+            try CanonicalImageFill.validate(node)
+            try LocalColorTokenBinding.validate(node)
+            for key in LocalColorTarget.allCases.map({ LocalColorTokenBinding.key(for: $0) }) {
+                if let property = node.insertionProperty(key) {
+                    guard case .string(let raw) = property.value, let id = ColorTokenID(uuidString: raw), id.description == raw else { throw FormattingTransferError.invalidPayload }
+                }
+            }
+            node.properties.removeAll { referenceKeys.contains($0.key.rawValue) }
+            node.properties += [("layout.x", 0.0), ("layout.y", 0.0), ("layout.width", 240.0), ("layout.height", 160.0)].map {
+                .init(key: .init(rawValue: $0.0), value: .number($0.1))
+            }
+            candidate.pages[0].nodes[0].childIDs = [node.id]; candidate.pages[0].nodes.append(node)
+            try candidate.validate()
+        } catch let error as FormattingTransferError { throw error }
+        catch { throw FormattingTransferError.invalidPayload }
+    }
+    func validateDependencies(in document: CanonicalDocument, availableImageIDs: Set<AssetID>? = nil) throws {
+        guard sourceDocumentID == document.id else { throw FormattingTransferError.foreignDocument }
+        guard sourceRevision <= document.revision else { throw FormattingTransferError.stale }
+        let node = probe
+        for target in LocalColorTarget.allCases {
+            if let id = LocalColorTokenBinding.id(for: node, target: target), !document.colorTokens.contains(where: { $0.id == id }) {
+                throw FormattingTransferError.missingDependency
+            }
+        }
+        do {
+            let styles = try CanonicalReusableStyleIndex(document: document)
+            for id in try CanonicalReusableStyleIndex.strictlyDecodedAppliedIDs(node) where styles.byID[id] == nil {
+                throw FormattingTransferError.missingDependency
+            }
+        } catch { throw FormattingTransferError.missingDependency }
+        if let image = CanonicalImageFill.resolve(node) {
+            guard document.imageAssets.contains(where: { $0.id == image.assetID }),
+                  availableImageIDs?.contains(image.assetID) != false else { throw FormattingTransferError.missingDependency }
+        }
+    }
+    static func capture(family: FormattingFamily, document: CanonicalDocument, pageID: PageID,
+                        orderedNodeIDs: [NodeID]) throws -> Self {
+        guard let page = document.pages.first(where: { $0.id == pageID }), !orderedNodeIDs.isEmpty,
+              orderedNodeIDs.count <= maximumSelection, Set(orderedNodeIDs).count == orderedNodeIDs.count else { throw FormattingTransferError.unavailable }
+        let nodes = try orderedNodeIDs.map { id -> DocumentNode in
+            guard let node = page.nodes.first(where: { $0.id == id }), family.supports(node) else { throw FormattingTransferError.unavailable }
+            return node
+        }
+        let bundles = try nodes.map { try normalizedIntent(for: $0, family: family) }
+        guard let first = bundles.first, bundles.allSatisfy({ $0 == first }) else { throw FormattingTransferError.mixedSource }
+        let transfer = Self(family: family, sourceDocumentID: document.id, sourcePageID: pageID, sourceRevision: document.revision, properties: first)
+        try transfer.validate(); try transfer.validateDependencies(in: document)
+        return transfer
+    }
+    static func normalizedIntent(for node: DocumentNode, family: FormattingFamily) throws -> [FormattingProperty] {
+        try Task.checkCancellation()
+        var raw = node.properties.filter { family.owns($0.key.rawValue) }.map { FormattingProperty(key: $0.key.rawValue, value: $0.value, origin: $0.origin) }
+        if family == .appearance {
+            raw.removeAll { FormattingFamily.retiredFillKeys.contains($0.key) || $0.key == LocalColorTokenBinding.legacyKey }
+            if node.insertionProperty(CanonicalFillLayerCodec.orderKey) == nil,
+               let legacy = CanonicalFillLayerCodec.legacySolidLayer(for: node) {
+                let origin = node.insertionProperty("style.fill.red")?.origin ?? node.insertionProperty("style.fill")?.origin ?? .defaulted
+                raw += CanonicalFillLayerCodec.propertyValues(for: [legacy]).map { .init(key: $0.key, value: $0.value, origin: origin) }
+            }
+            if let binding = node.insertionProperty(LocalColorTokenBinding.legacyKey) {
+                raw.append(.init(key: LocalColorTokenBinding.key(for: .fill), value: binding.value, origin: binding.origin))
+            }
+        }
+        return try remap(raw, family: family, targetID: normalizationID, existing: nil)
+    }
+    func properties(for target: DocumentNode) throws -> [FormattingProperty] {
+        try Self.remap(properties, family: family, targetID: target.id, existing: target)
+    }
+    private static func remap(_ input: [FormattingProperty], family: FormattingFamily,
+                              targetID: NodeID, existing: DocumentNode?) throws -> [FormattingProperty] {
+        var output = input
+        if family == .appearance {
+            let probe = DocumentNode(kind: .frame, name: "Formatting layers", parent: .page(PageID()),
+                properties: input.map { .init(key: .init(rawValue: $0.key), value: $0.value, origin: $0.origin) })
+            if case .layers(let layers) = try CanonicalFillLayerCodec.decodeLayers(for: probe) {
+                let previous = existing.flatMap(CanonicalFillLayerCodec.layers(for:)) ?? []
+                var layerIDs: [String: String] = [:]
+                var stopIDs: [String: [String: String]] = [:]
+                for (index, layer) in layers.enumerated() {
+                    let mapped = index < previous.count ? previous[index].id
+                        : FillLayerID(DocumentPage.deterministicUUID(namespace: targetID.rawValue, label: "formatting-layer-\(index)"))
+                    layerIDs[layer.id.description] = mapped.description
+                    var mappedStops: [String: String] = [:]
+                    for (stopIndex, stop) in layer.stops.enumerated() {
+                        let oldStops = index < previous.count ? previous[index].stops : []
+                        let mappedStop = stopIndex < oldStops.count ? oldStops[stopIndex].id
+                            : GradientStopID(DocumentPage.deterministicUUID(namespace: mapped.rawValue, label: "formatting-stop-\(stopIndex)"))
+                        mappedStops[stop.id.description] = mappedStop.description
+                    }
+                    stopIDs[layer.id.description] = mappedStops
+                }
+                output = output.map { property in
+                    guard property.key.hasPrefix(CanonicalFillLayerCodec.namespaceRoot + ".") else { return property }
+                    var parts = property.key.split(separator: ".").map(String.init)
+                    let sourceLayer = parts.count > 4 ? parts[4] : ""
+                    if parts.count > 4 { parts[4] = layerIDs[sourceLayer] ?? sourceLayer }
+                    if parts.count > 6, parts[5] == "stop" { parts[6] = stopIDs[sourceLayer]?[parts[6]] ?? parts[6] }
+                    let key = parts.joined(separator: ".")
+                    let value: PropertyValue
+                    if property.key == CanonicalFillLayerCodec.orderKey || property.key.hasSuffix(".stops"), case .string(let raw) = property.value {
+                        let mapping = property.key == CanonicalFillLayerCodec.orderKey ? layerIDs : (stopIDs[sourceLayer] ?? [:])
+                        value = .string(raw.split(separator: ",").map { mapping[String($0)] ?? String($0) }.joined(separator: ","))
+                    } else { value = property.value }
+                    return .init(key: key, value: value, origin: property.origin)
+                }
+            }
+        } else {
+            for target in [FluidValueTarget.fontSize, .lineHeight] {
+                guard let index = output.firstIndex(where: { $0.key == CanonicalFluidValueCodec.key(target) }), case .string(let raw) = output[index].value else { continue }
+                let value = try CanonicalFluidValueCodec.decode(raw, target: target)
+                let id = existing.flatMap { CanonicalFluidValueCodec.value(for: target, node: $0)?.0.id }
+                    ?? FluidValueID(DocumentPage.deterministicUUID(namespace: targetID.rawValue, label: "formatting-fluid-\(target.rawValue)"))
+                output[index] = .init(key: output[index].key,
+                    value: .string(try CanonicalFluidValueCodec.encode(.init(id: id, minimum: value.minimum, preferred: value.preferred,
+                        maximum: value.maximum, curve: value.curve), target: target)), origin: output[index].origin)
+            }
+        }
+        return output.sorted { $0.key < $1.key }
+    }
+}
+
+struct FormattingPasteCommand: Sendable {
+    let identity: DesignInspectorOperationIdentity
+    let orderedNodeIDs: [NodeID]
+    let transfer: FormattingTransfer
+    let cancelled: Bool
+    let breakpoint: ResponsiveBreakpoint
+    init(identity: DesignInspectorOperationIdentity, orderedNodeIDs: [NodeID], transfer: FormattingTransfer,
+         cancelled: Bool, breakpoint: ResponsiveBreakpoint = .desktop) {
+        self.identity = identity; self.orderedNodeIDs = orderedNodeIDs; self.transfer = transfer
+        self.cancelled = cancelled; self.breakpoint = breakpoint
+    }
+}
+
+extension DesignInspectorCommandRegistry {
+    func prepare(_ command: FormattingPasteCommand, in document: CanonicalDocument,
+                 context: TransformValidationContext, availableImageIDs: Set<AssetID> = []) throws -> PreparedDesignInspectorEdit {
+        guard !command.cancelled else { throw FormattingTransferError.cancelled }
+        let identity = command.identity
+        guard context.isLifecycleAvailable, identity.documentID == document.id, identity.revision == document.revision,
+              identity.pageID == context.activePageID, identity.sceneID == context.currentSceneID,
+              identity.rendererGeneration == context.rendererGeneration, identity.rendererGeneration == document.revision,
+              command.orderedNodeIDs == context.selectedNodeIDs, !command.orderedNodeIDs.isEmpty,
+              Set(command.orderedNodeIDs).count == command.orderedNodeIDs.count,
+              command.orderedNodeIDs.count <= FormattingTransfer.maximumSelection,
+              document.revision < UInt64.max - 1,
+              let pageIndex = document.pages.firstIndex(where: { $0.id == identity.pageID }) else { throw FormattingTransferError.stale }
+        try command.transfer.validate()
+        try command.transfer.validateDependencies(in: document, availableImageIDs: availableImageIDs)
+        var candidate = document
+        let visible = document.pages[pageIndex].effectiveVisibleNodeIDs(breakpoint: command.breakpoint)
+        var changes: [DocumentCommand] = [], applicable: [NodeID] = [], skipped: [NodeID] = [], reasons: [NodeID: String] = [:]
+        for id in command.orderedNodeIDs {
+            try Task.checkCancellation()
+            guard let index = document.pages[pageIndex].nodes.firstIndex(where: { $0.id == id }) else { throw FormattingTransferError.stale }
+            let node = document.pages[pageIndex].nodes[index]
+            let imageFillCompatible = !command.transfer.properties.contains { $0.key == CanonicalImageFill.assetKey } || [.frame, .section].contains(node.kind)
+            let shadowFlagCompatible = !command.transfer.properties.contains { $0.key == DesignBoxStyleCommandRegistry.namespace + "shadow.enabled" }
+                || DesignBoxStyleCommandRegistry.contentBoxKinds.contains(node.kind)
+            let fillTokenCompatible = !command.transfer.properties.contains { $0.key == LocalColorTokenBinding.key(for: .fill) }
+                || [.frame, .section, .stack, .grid].contains(node.kind)
+            let reason: String?
+            if !command.transfer.family.supports(node) { reason = "Unsupported family or managed navigation; use its owner controls." }
+            else if !imageFillCompatible { reason = "Image-fill bundles require a Frame or Section." }
+            else if !shadowFlagCompatible { reason = "Explicit shadow enable/disable requires a Frame or Section." }
+            else if !fillTokenCompatible { reason = "This fill-token binding requires a Frame, Section, Stack or Grid." }
+            else if !context.availableNodeIDs.contains(id) { reason = "Element is unavailable in the live authoring scene." }
+            else if node.selectionBooleanProperty("locked") { reason = "Unlock this element before changing its formatting." }
+            else if node.selectionBooleanProperty("hidden") || !visible.contains(id) { reason = "Show this element at the current breakpoint before changing its formatting." }
+            else { reason = nil }
+            if let reason {
+                skipped.append(id); reasons[id] = reason
+                continue
+            }
+            applicable.append(id)
+            if try FormattingTransfer.normalizedIntent(for: node, family: command.transfer.family) == command.transfer.properties {
+                continue // Equivalent intent, including legacy defaults: no migration-only history entry.
+            }
+            let desired = try command.transfer.properties(for: node)
+            let byKey = Dictionary(uniqueKeysWithValues: desired.map { ($0.key, $0) })
+            let owned = node.properties.filter { command.transfer.family.owns($0.key.rawValue) }
+            for old in owned where byKey[old.key.rawValue] == nil {
+                changes.append(.removeProperty(.init(pageID: identity.pageID, nodeID: id, propertyID: old.id)))
+            }
+            for property in desired {
+                let old = node.insertionProperty(property.key)
+                guard old?.value != property.value || old?.origin != property.origin else { continue }
+                changes.append(.setProperty(.init(pageID: identity.pageID, nodeID: id,
+                    property: .init(id: old?.id ?? PropertyID(), key: .init(rawValue: property.key), value: property.value, origin: property.origin))))
+            }
+            candidate.pages[pageIndex].nodes[index].properties.removeAll { command.transfer.family.owns($0.key.rawValue) }
+            candidate.pages[pageIndex].nodes[index].properties += desired.map {
+                .init(id: node.insertionProperty($0.key)?.id ?? PropertyID(), key: .init(rawValue: $0.key), value: $0.value, origin: $0.origin)
+            }
+        }
+        guard !applicable.isEmpty else { throw FormattingTransferError.noApplicableTargets }
+        do { try candidate.validate() } catch { throw FormattingTransferError.invalidPayload }
+        guard !changes.isEmpty else { throw FormattingTransferError.noChanges }
+        let batch = DocumentCommand.batch(changes)
+        guard CommandRegistry().availability(for: batch, in: document).isEnabled else { throw FormattingTransferError.invalidPayload }
+        return .init(applicableNodeIDs: applicable, skippedNodeIDs: skipped, skippedReasons: reasons, documentCommand: batch)
     }
 }
 
@@ -4335,7 +4729,7 @@ enum ContainerLayoutError: Error, Equatable, LocalizedError, Sendable {
         case .unavailableTarget: "The selected container is unavailable in the current scene."
         case .invalidValue: "Enter a supported finite container-layout value."
         case .fluidValueWins:
-            "A fluid value controls Desktop spacing. Edit or remove it in Fluid Value before changing fixed spacing. Tablet and Mobile overrides remain available."
+            "Smooth scaling controls Desktop spacing. Nothing changed; edit or remove its range in Smooth scaling before changing the exact value. Tablet and Mobile overrides remain available."
         case .noApplicableTargets: "The selection has no object that supports this layout control."
         case .noChanges: "The selected containers already use that layout value."
         case .revisionExhausted: "The document cannot accept another revision."
@@ -5577,7 +5971,7 @@ struct FormFieldInspectorPresentation: Equatable, Sendable {
         }
         func aggregate(_ values: [(String, PropertyOrigin?)], fallback: String? = nil) -> FormInspectorAggregateValue {
             let resolved = values.map { value, origin in
-                (value, origin.map { $0 == .authored ? "Authored" : "Defaulted" } ?? (fallback ?? "Computed fallback"))
+                (value, origin.map(AuthoringLanguage.propertySource) ?? (fallback ?? "Default fallback"))
             }
             guard let first = resolved.first else { return .unavailable("Unavailable") }
             guard resolved.dropFirst().allSatisfy({ $0.0 == first.0 }) else { return .mixed }

@@ -34,7 +34,12 @@ struct WebsitePreviewHTTPContent: Sendable {
                   !path.contains("\\"), !path.contains("%"), !path.contains("\0"),
                   result.updateValue(bytes, forKey: path) == nil else { throw WebsitePreviewError.invalidOutput }
         }
-        guard result["index.html"] != nil else { throw WebsitePreviewError.invalidOutput }
+        // Historical/standard-only projects may have a named page without a
+        // home route. Preview opens the compiler's selected page path; do not
+        // invent an index or reject otherwise valid immutable website output.
+        guard plan.files.contains(where: { $0.path.hasSuffix(".html") }) else {
+            throw WebsitePreviewError.invalidOutput
+        }
         files = result
     }
 
@@ -223,7 +228,27 @@ struct WebsitePreviewExportRequest: Sendable {
     @Published private(set) var url: URL?
     @Published private(set) var revision: UInt64?
     @Published private(set) var documentID: DocumentID?
-    @Published private(set) var findings: [StaticBuildFinding] = []
+    @Published private(set) var findingReceipt: StaticBuildFindingReceipt?
+    var findings: [StaticBuildFinding] { findingReceipt?.findings ?? [] }
+    private var findingContextIsCurrent: (@MainActor () -> Bool)?
+    private var successfulBuildID: UUID?
+    private var artifactDocumentIsCurrent: (@MainActor (DocumentID) -> Bool)?
+    var artifactSummary: String {
+        guard let revision else {
+            if let receipt = findingReceipt { return "No successful website yet. Findings describe revision \(receipt.revision); Export remains unavailable." }
+            return "No successful website is available yet. Export stays unavailable until a build succeeds."
+        }
+        if let receipt = findingReceipt, receipt.id != successfulBuildID {
+            return "Last successful website: revision \(revision). Findings below are from a later attempt (revision \(receipt.revision)); Safari and Export still use the earlier successful website."
+        }
+        return "Safari and Export use the successful website revision \(revision). Refresh builds your latest committed edits."
+    }
+    func ownsFindingAttempt(_ receipt: StaticBuildFindingReceipt) -> Bool {
+        receipt == findingReceipt && receipt.id == requestID && !isBuilding && !isExporting
+    }
+    func ownsCurrentFindings(_ receipt: StaticBuildFindingReceipt) -> Bool {
+        ownsFindingAttempt(receipt) && findingContextIsCurrent?() == true
+    }
     private var task: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
     private var requestID = UUID()
@@ -258,14 +283,18 @@ struct WebsitePreviewExportRequest: Sendable {
     }
 
     @discardableResult
-    func build(document: CanonicalDocument, pageID: PageID?, package: ProjectPackage, isCurrent: @escaping @MainActor (DocumentID, UInt64) -> Bool) -> Task<Void, Never> {
+    func build(document: CanonicalDocument, pageID: PageID?, package: ProjectPackage,
+               isDocumentCurrent: @escaping @MainActor (DocumentID) -> Bool = { _ in true },
+               isCurrent: @escaping @MainActor (DocumentID, UInt64) -> Bool) -> Task<Void, Never> {
         task?.cancel()
         exportTask?.cancel(); exportTask = nil
         let request = UUID(); requestID = request
         pendingBuildIdentity = (document.id, document.revision)
         exportRequestID = UUID(); isExporting = false
         browserOpenRequestID = UUID(); isOpeningBrowser = false
-        isBuilding = true; status = "Building website…"; findings = []
+        let capturedDocumentID = document.id, capturedRevision = document.revision
+        findingContextIsCurrent = { isCurrent(capturedDocumentID, capturedRevision) }
+        isBuilding = true; status = "Building website…"; findingReceipt = nil
         let work = Task { [weak self] in
             guard let self else { return }
             defer { if requestID == request { pendingBuildIdentity = nil; isBuilding = false } }
@@ -274,22 +303,25 @@ struct WebsitePreviewExportRequest: Sendable {
             do {
                 let (result, root) = try await builder.prepare(document: document, package: package)
                 preparedRoot = root
-                guard !Task.isCancelled, requestID == request, isCurrent(document.id, document.revision) else { throw WebsitePreviewError.cancelled }
-                findings = result.findings
+                guard !Task.isCancelled, requestID == request, isDocumentCurrent(document.id),
+                      isCurrent(document.id, document.revision) else { throw WebsitePreviewError.cancelled }
+                findingReceipt = .init(id: request, compilation: result)
                 guard let nextPlan = result.plan, result.canWrite else {
                     if let root { await builder.removeOwnedOutput(root); preparedRoot = nil }
                     guard requestID == request else { return }
-                    status = "Build needs attention. Fix the listed issues and Retry. Last successful preview is unchanged."
+                    status = "Build needs attention. Follow the listed repairs, then choose Refresh. Last successful preview is unchanged."
                     isBuilding = false; return
                 }
                 let nextServer = LoopbackWebsiteServer(); newServer = nextServer
                 let base = try await nextServer.start(plan: nextPlan)
-                guard !Task.isCancelled, requestID == request, isCurrent(document.id, document.revision) else { throw WebsitePreviewError.cancelled }
+                guard !Task.isCancelled, requestID == request, isDocumentCurrent(document.id),
+                      isCurrent(document.id, document.revision) else { throw WebsitePreviewError.cancelled }
                 let page = document.websitePages.first { $0.id == pageID } ?? document.websitePages.first { $0.role == .home }
                 let path = try page.map { try MultiPageStaticBuildPlanner.outputPath(for: $0) } ?? "index.html"
                 let oldServer = server, oldRoot = outputRoot
                 server = nextServer; outputRoot = root; plan = nextPlan
-                documentID = document.id; revision = document.revision
+                documentID = document.id; revision = document.revision; successfulBuildID = request
+                artifactDocumentIsCurrent = isDocumentCurrent
                 url = base.appendingPathComponent(path)
                 isBuilding = false; status = "Website revision \(document.revision) is ready."
                 await oldServer?.stop()
@@ -303,7 +335,7 @@ struct WebsitePreviewExportRequest: Sendable {
                 isBuilding = false
                 status = Task.isCancelled || error is CancellationError || error as? WebsitePreviewError == .cancelled
                     ? "Build cancelled or superseded. Last successful preview is unchanged."
-                    : "Preview could not start. Retry, or export the website locally."
+                    : "Preview could not start. Choose Refresh to try again. Export is available only for a successful website."
             }
         }
         task = work
@@ -311,6 +343,9 @@ struct WebsitePreviewExportRequest: Sendable {
     }
 
     func noteRevision(documentID: DocumentID, revision: UInt64) {
+        if let receipt = findingReceipt, receipt.documentID != documentID {
+            stop(); findingReceipt = nil; return
+        }
         if let pending = pendingBuildIdentity {
             if pending.documentID != documentID { stop(); return }
             if pending.revision != revision {
@@ -323,6 +358,8 @@ struct WebsitePreviewExportRequest: Sendable {
         if let built = self.revision, built != revision, !isBuilding {
             browserOpenRequestID = UUID(); isOpeningBrowser = false
             status = "Safari is showing revision \(built). Refresh to build your latest edits."
+        } else if let receipt = findingReceipt, receipt.revision != revision, !isBuilding {
+            status = "These findings describe revision \(receipt.revision). Refresh to check your latest committed edits."
         }
     }
 
@@ -337,35 +374,40 @@ struct WebsitePreviewExportRequest: Sendable {
 
     func stop() {
         task?.cancel(); requestID = UUID()
+        findingContextIsCurrent = nil
+        artifactDocumentIsCurrent = nil
         exportTask?.cancel(); exportTask = nil
         pendingBuildIdentity = nil; exportRequestID = UUID(); isExporting = false
         browserOpenRequestID = UUID(); isOpeningBrowser = false
         let oldServer = server, oldRoot = outputRoot
-        server = nil; outputRoot = nil; plan = nil; url = nil; revision = nil; documentID = nil
+        server = nil; outputRoot = nil; plan = nil; url = nil; revision = nil; documentID = nil; successfulBuildID = nil
         isBuilding = false; status = "Website preview stopped."
         Task { await oldServer?.stop(); if let oldRoot { await builder.removeOwnedOutput(oldRoot) } }
     }
 
     func openAgain() {
-        guard let url, !isOpeningBrowser, !isExporting else { return }
+        guard let url, let documentID, artifactDocumentIsCurrent?(documentID) == true,
+              !isOpeningBrowser, !isExporting else { return }
         let request = requestID
         let openRequest = UUID(); browserOpenRequestID = openRequest
         isOpeningBrowser = true; status = "Opening Safari…"
         Task { [weak self] in
             guard let self else { return }
             let result = await browserOpener(url)
-            guard requestID == request, browserOpenRequestID == openRequest, self.url == url else { return }
+            guard requestID == request, browserOpenRequestID == openRequest, self.url == url,
+                  artifactDocumentIsCurrent?(documentID) == true else { return }
             isOpeningBrowser = false
             switch result {
             case .opened: status = "Website opened in Safari."
             case .unavailable: status = "Safari is unavailable. Install Safari or export the website for another browser."
-            case .failed: status = "Safari could not open. Retry Open Again or export the website."
+            case .failed: status = "Safari could not open. Choose Open Again or export the displayed successful website."
             }
         }
     }
 
     func makeExportRequest() -> WebsitePreviewExportRequest? {
-        guard !isBuilding, !isExporting, let plan, let documentID else { return nil }
+        guard !isBuilding, !isExporting, let plan, let documentID,
+              artifactDocumentIsCurrent?(documentID) == true else { return nil }
         return .init(buildID: requestID, documentID: documentID, plan: plan)
     }
 
@@ -380,7 +422,7 @@ struct WebsitePreviewExportRequest: Sendable {
                 replacingExisting: Bool = false) -> Task<Void, Never>? {
         guard let intent = captured ?? makeExportRequest(), !isBuilding, !isExporting,
               intent.buildID == requestID, intent.documentID == documentID,
-              intent.plan == plan else { return nil }
+              artifactDocumentIsCurrent?(intent.documentID) == true, intent.plan == plan else { return nil }
         let plan = intent.plan
         let request = requestID
         let exportRequest = UUID(); exportRequestID = exportRequest
@@ -391,10 +433,12 @@ struct WebsitePreviewExportRequest: Sendable {
             do {
                 try Task.checkCancellation()
                 try await builder.export(plan, to: destination, replacing: replacingExisting)
-                guard requestID == request, exportRequestID == exportRequest else { return }
+                guard requestID == request, exportRequestID == exportRequest,
+                      artifactDocumentIsCurrent?(intent.documentID) == true else { return }
                 status = "Exported the same website revision \(plan.revision) used by Safari."
             } catch {
-                guard requestID == request, exportRequestID == exportRequest else { return }
+                guard requestID == request, exportRequestID == exportRequest,
+                      artifactDocumentIsCurrent?(intent.documentID) == true else { return }
                 let category = error as? LocalStaticBuildWriteError ?? (error is CancellationError ? .cancelled : .writeFailed)
                 exportFailure = category
                 switch category {
@@ -402,7 +446,7 @@ struct WebsitePreviewExportRequest: Sendable {
                 case .insufficientSpace: status = "Export needs more disk space. Free space or choose another destination."
                 case .unsafeDestination: status = "Export destination is unsafe. Choose another folder."
                 case .destinationExists: status = "Export destination already exists. Confirm replacement or choose another folder."
-                case .stale, .cancelled: status = "Export was cancelled or superseded. Retry the current website revision."
+                case .stale, .cancelled: status = "Export was cancelled or superseded. Choose Export again for the displayed successful website."
                 case .writeFailed: status = "Export did not finish. Choose a writable destination and retry."
                 }
             }
@@ -412,14 +456,76 @@ struct WebsitePreviewExportRequest: Sendable {
     }
 }
 
+struct StaticBuildFindingRepairRow: View {
+    let finding: StaticBuildFinding
+    let availability: StaticBuildFindingRevealAvailability
+    let identifierPrefix: String
+    let reveal: () -> Void
+    private var severity: String {
+        switch finding.severity {
+        case .error: "Needs repair"
+        case .warning: "Warning"
+        case .information: "Information"
+        case .unsupported: "Not supported for output"
+        case .policyBlocked: "Blocked by policy"
+        }
+    }
+    private var symbol: String {
+        switch finding.severity {
+        case .error: "xmark.octagon.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .information: "info.circle.fill"
+        case .unsupported: "questionmark.diamond.fill"
+        case .policyBlocked: "lock.shield.fill"
+        }
+    }
+    private var severityColor: Color {
+        switch finding.severity { case .error: .red; case .warning: .orange; case .information: .secondary; case .unsupported, .policyBlocked: .yellow }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.compactSpacing) {
+            Label { Text(severity) } icon: { Image(systemName: symbol).foregroundStyle(severityColor) }
+                .font(.headline)
+            Text(finding.explanation).fixedSize(horizontal: false, vertical: true)
+            Text(finding.repair).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            switch availability {
+            case .action(let title):
+                InspectorActionLayout {
+                    Button(action: reveal) { InspectorActionLabel(title: title) }
+                        // Keep Tab discovery independent of the system's
+                        // optional all-controls traversal preference. The
+                        // custom focus host forwards Space to the same action
+                        // and consumes it, avoiding a second activation.
+                        .focusable()
+                        .onKeyPress(.space, phases: .down) { _ in reveal(); return .handled }
+                        .accessibilityHint("Opens this exact object in the existing editor without changing its content.")
+                        .accessibilityIdentifier(identifierPrefix + ".reveal." + finding.id)
+                }
+            case .unavailable(let reason):
+                if !reason.isEmpty {
+                    Text(reason).font(.caption).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(identifierPrefix + ".unavailable." + finding.id)
+                }
+            case .noTarget: EmptyView()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(severity + ": " + finding.explanation)
+        .help(finding.requirementID + " · " + finding.code)
+    }
+}
+
 struct BrowserPreviewPanel: View {
     @ObservedObject var controller: BrowserPreviewController
     let refresh: () -> Void
     let dismiss: () -> Void
-
-    private var actionableFindings: [StaticBuildFinding] {
-        controller.findings.filter { $0.severity != .information }
-    }
+    let availability: (StaticBuildFinding, StaticBuildFindingReceipt) -> StaticBuildFindingRevealAvailability
+    let reveal: (StaticBuildFinding, StaticBuildFindingReceipt) -> Void
+    let repairStatus: String
+    let isOpeningFinding: Bool
+    let isAdoptingFinding: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -427,50 +533,59 @@ struct BrowserPreviewPanel: View {
                 Label("Website Preview", systemImage: "safari").font(.title2.weight(.semibold))
                 Spacer()
                 Button("Done", action: dismiss).keyboardShortcut(.cancelAction)
+                    .disabled(isAdoptingFinding)
                     .accessibilityIdentifier("preview.website.done")
             }
-            Text("Build your website locally and open it in Safari. Export uses the same HTML, CSS and assets. Nothing is published.")
+            ScrollView {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+            Text("Preview the supported website locally in Safari. Nothing is published.")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .help("Export uses the same successful HTML, CSS and assets. Unsupported output is reported without changing your document.")
             HStack {
-                if controller.isBuilding || controller.isExporting || controller.isOpeningBrowser { ProgressView().controlSize(.small) }
-                Text(controller.status).frame(maxWidth: .infinity, alignment: .leading)
+                if controller.isBuilding || controller.isExporting || controller.isOpeningBrowser || isOpeningFinding { ProgressView().controlSize(.small) }
+                Text(controller.status).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                     .accessibilityValue(controller.status)
                     .accessibilityIdentifier("preview.website.status")
+            }
+            Text(controller.artifactSummary).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("preview.website.artifact")
+            if !repairStatus.isEmpty {
+                Text(repairStatus).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("preview.website.repairStatus")
             }
             if let url = controller.url {
                 Text(url.absoluteString).font(.callout.monospaced()).textSelection(.enabled)
                     .accessibilityIdentifier("preview.website.url")
             }
-            if !actionableFindings.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(actionableFindings) { finding in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(finding.explanation)
-                                Text(finding.repair).font(.caption).foregroundStyle(.secondary)
-                            }
+            if let receipt = controller.findingReceipt, receipt.findings.contains(where: { $0.severity != .information }) {
+                    LazyVStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                        ForEach(receipt.findings.filter { $0.severity != .information }) { finding in
+                            StaticBuildFindingRepairRow(finding: finding, availability: availability(finding, receipt),
+                                identifierPrefix: "preview.website.finding", reveal: { reveal(finding, receipt) })
+                            Divider().accessibilityHidden(true)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(maxHeight: 220)
             }
-            HStack {
-                Button("Refresh", action: refresh).disabled(controller.isBuilding)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            InspectorActionLayout {
+                Button("Refresh", action: refresh).disabled(controller.isBuilding || controller.isExporting || isOpeningFinding)
                     .accessibilityIdentifier("preview.website.refresh")
-                Button("Open Again", action: controller.openAgain).disabled(controller.url == nil || controller.isOpeningBrowser || controller.isExporting || controller.isBuilding)
+                Button("Open Again", action: controller.openAgain).disabled(controller.url == nil || controller.isOpeningBrowser || controller.isExporting || controller.isBuilding || isOpeningFinding)
                     .accessibilityIdentifier("preview.website.open")
                 Button("Cancel Build", action: controller.cancel).disabled(!controller.isBuilding)
                 if controller.isExporting {
                     Button("Cancel Export", action: controller.cancelExport)
                         .accessibilityIdentifier("preview.website.export.cancel")
                 }
-                Button("Stop", action: controller.stop).disabled(controller.url == nil && !controller.isBuilding)
-                Spacer()
-                Button("Export…", action: export).disabled(controller.plan == nil || controller.isExporting || controller.isBuilding)
+                Button("Stop", action: controller.stop).disabled((controller.url == nil && !controller.isBuilding) || isAdoptingFinding)
+                Button("Export…", action: export).disabled(controller.plan == nil || controller.isExporting || controller.isBuilding || isOpeningFinding)
+                    .accessibilityValue(controller.revision.map { "Successful website revision \($0)" } ?? "No successful website")
                     .accessibilityIdentifier("preview.website.export")
             }
         }
         .padding(24)
-        .frame(minWidth: 660, idealWidth: 740)
+        .frame(minWidth: 660, idealWidth: 740, minHeight: 480, idealHeight: 600)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("preview.website")
     }

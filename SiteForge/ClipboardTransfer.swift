@@ -1260,17 +1260,11 @@ struct ClipboardTransferRegistry {
     }
 
     private static func assetReferences(_ node: DocumentNode) -> [AssetID] {
-        [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].compactMap {
-            node.insertionStringProperty($0).flatMap(AssetID.init(uuidString:))
-        } + node.properties.compactMap { property in
-            guard CanonicalComponentMedia.overrideID(property.key.rawValue) != nil,
-                  case .string(let raw) = property.value else { return nil }
-            return AssetID(uuidString: raw)
-        }
+        CanonicalGraphReferences.assets(node)
     }
 
     private static func tokenReferences(_ node: DocumentNode) -> [ColorTokenID] {
-        LocalColorTarget.allCases.compactMap { LocalColorTokenBinding.id(for: node, target: $0) }
+        CanonicalGraphReferences.tokens(node)
     }
 }
 

@@ -4,6 +4,87 @@ import XCTest
 @testable import SiteForge
 
 final class WorkspaceMaterialPolicyTests: XCTestCase {
+    // SF-LOCAL-BUILDER-014 / SF-0201-009, SF-0701-006.
+    @MainActor
+    func testMeasuredSidebarTabsHonorActualPaneBudgetAtNormalCompactAndIncreasedText() {
+        let gutters = 2 * (SiteForgeVisualSystem.panePadding + SiteForgeVisualSystem.tabStripInset)
+        let gap = Double(SiteForgeVisualSystem.hairlineSpacing)
+        for window in [CGFloat(1100), 1182, 1200, 1278, 1280, 1440, 1710, 2560] {
+            for font in [CGFloat(12), 18, 24] {
+                let face = NSFont.systemFont(ofSize: font, weight: .semibold)
+                let height = ShellTabLayoutPolicy.rowHeight(fontSize: font)
+                XCTAssertGreaterThanOrEqual(height, ceil(face.ascender - face.descender + face.leading)
+                    + 2 * SiteForgeVisualSystem.compactSpacing)
+                if font == 12 { XCTAssertEqual(height, SiteForgeVisualSystem.tabStripHeight) }
+                let nav = ShellTabLayoutPolicy.measuredMinimumWidths(labels: NavigatorTab.allCases.map(\.title), fontSize: font)
+                let inspector = ShellTabLayoutPolicy.measuredMinimumWidths(labels: InspectorTab.allCases.map(\.title), fontSize: font)
+                let panes = WorkspaceMetrics.sidePaneAllocation(windowWidth: window,
+                    navigatorRequired: gutters + CGFloat(ShellTabLayoutPolicy.requiredWidth(minimumWidths: nav, gap: gap)),
+                    inspectorRequired: gutters + CGFloat(ShellTabLayoutPolicy.requiredWidth(minimumWidths: inspector, gap: gap)))
+                XCTAssertLessThanOrEqual(panes.navigatorMinimum, panes.navigatorMaximum)
+                XCTAssertLessThanOrEqual(panes.inspectorMinimum, panes.inspectorMaximum)
+                XCTAssertGreaterThanOrEqual(window - panes.navigatorMaximum - panes.inspectorMaximum - 2,
+                    WorkspaceMetrics.minimumCanvasWidth.nextDown) // one floating-point ULP, not a visual-point tolerance
+                for (labels, lower, upper) in [(nav, panes.navigatorMinimum, panes.navigatorMaximum),
+                                               (inspector, panes.inspectorMinimum, panes.inspectorMaximum)] {
+                    for pane in [lower, (lower + upper) / 2, upper] {
+                        let available = Double(pane - gutters)
+                        for selected in labels.indices {
+                            let result = ShellTabLayoutPolicy.allocate(width: available, minimumWidths: labels, selected: selected, gap: gap)
+                            XCTAssertEqual(result.overflow, ShellTabLayoutPolicy.requiredWidth(minimumWidths: labels, gap: gap) > available)
+                            if window >= 1280, font == 12 { XCTAssertFalse(result.overflow) }
+                            XCTAssertTrue(result.indices.contains(selected) || (result.overflow && result.indices.isEmpty))
+                            XCTAssertEqual(result.indices, result.indices.sorted())
+                            for (offset, index) in result.indices.enumerated() {
+                                XCTAssertGreaterThanOrEqual(result.widths[offset], labels[index])
+                            }
+                            let gaps = max(0, result.indices.count - 1) + (result.overflow && !result.indices.isEmpty ? 1 : 0)
+                            XCTAssertEqual(result.widths.reduce(0, +) + Double(gaps) * gap + result.menuWidth, available, accuracy: 0.001)
+                        }
+                    }
+                }
+            }
+        }
+        let invalid = WorkspaceMetrics.sidePaneAllocation(windowWidth: .nan, navigatorRequired: .infinity, inspectorRequired: .nan)
+        XCTAssertTrue(invalid.navigatorMinimum.isFinite && invalid.inspectorMinimum.isFinite)
+    }
+
+    func testInspectorActionFlowKeepsLongActionsOrderedContainedAndNonoverlapping() {
+        for width in [CGFloat(208), 232, 280, 308, 336, 372] {
+            for scale in [CGFloat(1), 1.5, 2] {
+                let sizes = [CGSize(width: 140 * scale, height: 24 * scale),
+                             CGSize(width: 105 * scale, height: 24 * scale),
+                             CGSize(width: 330 * scale, height: 48 * scale),
+                             CGSize(width: 80 * scale, height: 24 * scale)]
+                let frames = InspectorControlLayoutPolicy.actionFrames(sizes: sizes, width: width, spacing: 8)
+                XCTAssertEqual(frames.count, sizes.count)
+                for index in frames.indices {
+                    XCTAssertGreaterThanOrEqual(frames[index].minX, 0)
+                    XCTAssertLessThanOrEqual(frames[index].maxX, width)
+                    XCTAssertEqual(frames[index].height, sizes[index].height)
+                    for previous in frames.indices where previous < index {
+                        XCTAssertFalse(frames[index].intersects(frames[previous]))
+                        XCTAssertTrue(frames[index].minY > frames[previous].minY || frames[index].minX > frames[previous].minX)
+                    }
+                }
+            }
+        }
+        XCTAssertTrue(InspectorControlLayoutPolicy.actionFrames(sizes: [.init(width: CGFloat.infinity, height: 20)], width: 232, spacing: 8).isEmpty)
+    }
+
+    func testInspectorFieldColumnsUseCompleteMinimumsInsteadOfSqueezingOrTinyType() {
+        for minimum in [CGFloat(96), 144, 192] {
+            for width in [CGFloat(208), 232, 280, 308, 336, 372] {
+                let count = InspectorControlLayoutPolicy.columnCount(width: width, minimum: minimum, count: 3, maximum: 3, spacing: 12)
+                XCTAssertTrue((1...3).contains(count))
+                let fieldWidth = (width - CGFloat(count - 1) * 12) / CGFloat(count)
+                XCTAssertGreaterThanOrEqual(fieldWidth, min(width, minimum))
+                if count < 3 { XCTAssertGreaterThan(CGFloat(count + 1) * minimum + CGFloat(count) * 12, width) }
+            }
+        }
+        XCTAssertEqual(InspectorControlLayoutPolicy.columnCount(width: .nan, minimum: 96, count: 3, maximum: 3, spacing: 12), 1)
+    }
+
     @MainActor
     func testNativeOverflowPaintsTheDisplayedPullDownItemAndRetainsAccessibleControl() throws {
         let button = ShellTabOverflowPopUpButton(frame: .init(x: 0, y: 0, width: 28, height: 28), pullsDown: true)
@@ -19,6 +100,7 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertEqual(displayed.title, "Layers")
         XCTAssertEqual(button.imagePosition, .imageTrailing)
         XCTAssertEqual(button.font?.pointSize, 24)
+        XCTAssertEqual(button.menu?.font.pointSize, 24)
         XCTAssertEqual(button.numberOfItems, 3)
     }
 

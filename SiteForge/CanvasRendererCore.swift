@@ -56,6 +56,16 @@ struct CanvasAuthoredShadow: Codable, Hashable, Sendable {
 
 enum CanvasTextAlignment: String, Codable, Hashable, Sendable { case leading, center, trailing }
 
+/// Derived paint capacity, not authored overflow state. The native text layer
+/// and static title projection share the same inset and complete-line budget.
+enum CanvasTextLayoutPolicy {
+    static let horizontalInset: Double = 4
+    static func visibleLineCapacity(height: Double, lineHeight: Double) -> Int {
+        guard height.isFinite, lineHeight.isFinite, height > 0, lineHeight > 0 else { return 0 }
+        return max(1, Int(min(1_000_000, floor(height / lineHeight))))
+    }
+}
+
 struct CanvasTypography: Codable, Hashable, Sendable {
     let authoredFamily: String
     let resolvedFamily: String
@@ -214,6 +224,8 @@ enum CanvasAuthoredFillCompositor {
 
 struct CanvasRenderObject: Codable, Hashable, Sendable {
     let id: NodeID
+    let parentNodeID: NodeID?
+    let pageFlowRole: PageFlowRole?
     let frame: WorldRect
     let clipRect: WorldRect?
     let paintOrder: Int
@@ -253,6 +265,16 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     let navigation: PageNavigationSnapshot?
     let navigationOwnerID: NodeID?
 
+    /// Canvas navigation retains a paint-only Menu label. Native Preview
+    /// replaces that proxy with a real control, never an overlaid text host
+    /// that duplicates its label and intercepts its pointer surface.
+    var paintsStandalonePreviewText: Bool { plainText != nil && navigation == nil }
+    /// Pure paint has no independent visitor action. Page chrome supplies its
+    /// semantic container around these surfaces and the real child controls.
+    var isNativePreviewDecoration: Bool {
+        plainText == nil && navigation == nil && imageAssetID == nil && previewLink == nil
+    }
+
     init(
         id: NodeID,
         frame: WorldRect,
@@ -281,9 +303,13 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         semanticElement: String? = nil,
         previewLink: CanvasPreviewLink? = nil,
         navigation: PageNavigationSnapshot? = nil,
-        navigationOwnerID: NodeID? = nil
+        navigationOwnerID: NodeID? = nil,
+        parentNodeID: NodeID? = nil,
+        pageFlowRole: PageFlowRole? = nil
     ) {
         self.id = id
+        self.parentNodeID = parentNodeID
+        self.pageFlowRole = pageFlowRole
         self.frame = frame
         self.clipRect = clipRect
         self.paintOrder = paintOrder
@@ -437,12 +463,68 @@ struct CanvasPreviewNavigationGeometry: Equatable, Sendable {
     }
 }
 
+/// A visitor page fits available width, never its full document height.
+/// Tall pages scroll instead of shrinking native links/menus into unusable
+/// thumbnails. This is presentation only; authored bounds stay unchanged.
+struct CanvasPreviewPresentationGeometry: Equatable, Sendable {
+    let scale: Double
+    let contentSize: WorldSize
+    static let inset = 28.0
+
+    init?(bounds: WorldRect, available: WorldSize) {
+        guard [bounds.size.width, bounds.size.height, available.width, available.height]
+            .allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
+        scale = min(1, max(1, available.width - Self.inset * 2) / bounds.size.width)
+        contentSize = .init(width: max(available.width, bounds.size.width * scale + Self.inset * 2),
+                            height: max(available.height, bounds.size.height * scale + Self.inset * 2))
+    }
+}
+
 struct CanvasPreviewSceneSnapshot: Equatable, Sendable {
     let documentID: DocumentID
     let revision: UInt64
     let objects: [CanvasRenderObject]
     let deterministicDigest: String
     var pageBackground: CanvasRenderObject? = nil
+}
+
+/// A native accessibility owner follows canonical ancestry, never rectangle
+/// overlap. World frames remain unchanged; the view only subtracts the owner
+/// origin when positioning its existing child views.
+struct CanvasPreviewPresentationGroup: Identifiable, Equatable, Sendable {
+    let id: NodeID
+    let container: CanvasRenderObject?
+    let objects: [CanvasRenderObject]
+
+    static func resolve(_ source: [CanvasRenderObject]) -> [Self] {
+        let objects = source.filter { $0.isVisible && $0.navigationOwnerID == nil }
+            .sorted { $0.paintOrder == $1.paintOrder ? $0.id.description < $1.id.description : $0.paintOrder < $1.paintOrder }
+        var byID: [NodeID: CanvasRenderObject] = [:]
+        for object in source where byID[object.id] == nil { byID[object.id] = object }
+        var owners: [NodeID: NodeID] = [:], resolved = Set<NodeID>()
+        for object in objects {
+            var path: [NodeID] = [], visited = Set<NodeID>(), cursor: NodeID? = object.id
+            var owner: NodeID?
+            while let id = cursor, visited.insert(id).inserted, let node = byID[id] {
+                if resolved.contains(id) { owner = owners[id]; break }
+                path.append(id)
+                if node.pageFlowRole == .header || node.pageFlowRole == .footer { owner = id; break }
+                cursor = node.parentNodeID
+            }
+            for id in path { resolved.insert(id); owners[id] = owner }
+        }
+        var members: [NodeID: [CanvasRenderObject]] = [:], order: [NodeID] = []
+        for object in objects {
+            let id = owners[object.id] ?? object.id
+            if members[id] == nil { order.append(id) }
+            members[id, default: []].append(object)
+        }
+        return order.compactMap { id in
+            guard let items = members[id], let first = byID[id] else { return nil }
+            let container = first.pageFlowRole == .header || first.pageFlowRole == .footer ? first : nil
+            return .init(id: id, container: container, objects: items)
+        }
+    }
 }
 
 struct LocalPreviewPageSnapshot: Equatable, Sendable, Identifiable {
@@ -483,6 +565,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
     /// Only canonical plain text enters this static projection. The emitter
     /// escapes it at the final HTML-context boundary.
     let textContent: String?
+    let isManagedChromeTitle: Bool
     /// Canonical typography intent is immutable metadata here; output maps
     /// only its closed allowlist and never consults installed fonts.
     let typography: CanonicalTypography?
@@ -518,6 +601,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
          semanticElement: String, cssSelector: String, formField: InternalFormField?,
          control: InternalStaticControl? = nil, anchorID: String? = nil,
          textContent: String? = nil, typography: CanonicalTypography? = nil,
+         isManagedChromeTitle: Bool = false,
          textForeground: CanonicalSolidColor? = nil,
          image: InternalStaticImage? = nil, imageFill: InternalStaticImage? = nil,
          fillLayers: [CanonicalFillLayer] = [],
@@ -540,6 +624,7 @@ struct InternalRenderTreeNode: Equatable, Sendable {
         self.control = control
         self.anchorID = anchorID
         self.textContent = textContent
+        self.isManagedChromeTitle = isManagedChromeTitle
         self.typography = typography
         self.textForeground = textForeground
         self.image = image
@@ -669,12 +754,17 @@ enum InternalDocumentRenderTreeCompiler {
         guard Set(page.nodes.map(\.id)).count == page.nodes.count else { throw SafeHTMLEmissionError.invalidIdentity }
         let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
         let connected = page.usesConnectedOutput
+        let managedTitleIDs = Set(page.nodes.compactMap { owner -> NodeID? in
+            guard [.header, .footer].contains(CanonicalPageFlow.role(owner)) else { return nil }
+            return CanonicalPageChrome.reference(CanonicalPageChrome.titleKey, on: owner)
+        })
         let navigationSurfaces = Set(page.nodes.compactMap { owner -> NodeID? in
             guard [.header, .footer].contains(CanonicalPageFlow.role(owner)) else { return nil }
             return CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner) ?? owner.id
         })
         let geometry = page.resolvedStructuralGeometry(breakpoint: breakpoint,
-            viewportWidth: CanonicalPageFlow.pageWidth(breakpoint, viewportWidth))
+            viewportWidth: CanonicalPageFlow.pageWidth(breakpoint, viewportWidth),
+            availablePageIDs: Set(staticRoutes.keys))
         let nodes = try page.canonicalDepthFirstNodes().enumerated().map { paintOrder, node in
             let formField = try field(for: node, nodesByID: nodesByID)
             let control = try control(for: node, staticRoutes: staticRoutes, sectionIDs: sectionIDs)
@@ -702,6 +792,7 @@ enum InternalDocumentRenderTreeCompiler {
                 anchorID: sectionIDs[page.id]?.contains(node.id) == true ? anchorID(for: node.id) : nil,
                 textContent: node.kind == .text ? node.insertionStringProperty("content.text") : nil,
                 typography: node.kind.isTextual ? CanonicalTypography.resolved(for: node) : nil,
+                isManagedChromeTitle: managedTitleIDs.contains(node.id) && node.kind == .text,
                 textForeground: LocalColorTokenResolver.textForeground(for: node, tokens: colorTokens),
                 image: staticImage(for: node, outputPaths: imageOutputPaths, assets: imageAssets),
                 imageFill: staticImageFill(for: node, outputPaths: imageOutputPaths),
@@ -936,6 +1027,9 @@ enum StaticTypographyOutputEmitter {
             "text-align: \(alignment(style.alignment));",
             "white-space: pre-wrap;",
         ]
+        if node.isManagedChromeTitle {
+            declarations.append("--sf-text-height: \(number(node.frame.size.height))px;")
+        }
         if style.family == CanonicalTypography.defaultFamily {
             declarations.insert("font-family: system-ui;", at: 0)
         } else {
@@ -962,6 +1056,14 @@ enum StaticTypographyOutputEmitter {
         let typography = "\(typographySelector) { \(declarations.joined(separator: " ")) }"
         if node.control == nil {
             guard node.textContent != nil, node.formField == nil else { return typography }
+            if node.isManagedChromeTitle {
+                // Keep the semantic node and complete accessible text. A neutral
+                // inline box owns truncation, while the authored box continues
+                // centering the whole visible block. `1lh` tracks fluid type;
+                // connected geometry supplies the live breakpoint height.
+                return typography + "\n\(selector)[data-siteforge-node] { display:flex;flex-direction:column;justify-content:center;overflow:hidden; }"
+                    + "\n\(selector) > [data-siteforge-text] { box-sizing:border-box;width:100%;padding-inline:\(number(CanvasTextLayoutPolicy.horizontalInset))px;flex:none;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:max(1,round(down,calc(var(--sf-text-height) / 1lh),1));overflow:hidden; }"
+            }
             // CanvasTextLayout centers the whole line-fragment block in its
             // authored frame. Preserve that contract without moving canonical
             // geometry; Form controls keep their own label/input layout.
@@ -1391,7 +1493,9 @@ enum MultiPageStaticBuildPlanner {
         let pages = try document.pages.filter { $0.role != .componentDefinition }.map {
             try ComponentGraphResolver.resolvedPage($0, in: document, breakpoint: .desktop)
         }
-        guard pages.allSatisfy({ CanonicalPageFlow.unsupportedStaticContainers($0).isEmpty }) else {
+        let availablePageIDs = Set(pages.map(\.id))
+        guard pages.allSatisfy({ CanonicalPageFlow.unsupportedStaticContainers($0,
+            availablePageIDs: availablePageIDs).isEmpty }) else {
             throw MultiPageStaticBuildError.invalidDocument
         }
         let imageOutputPaths = staticImagePaths(
@@ -1431,7 +1535,7 @@ enum MultiPageStaticBuildPlanner {
             )
             staticNodes += tree.nodes
             staticTrees.append(tree)
-            let body = try SafeHTMLEmitter.emit(tree)
+            let body = try SafeHTMLEmitter.emit(tree, layoutContainers: ConnectedFluidOutputPolicy.wrapperIDs(page))
             let hasFlow = page.usesConnectedOutput
             let hasMenu = tree.nodes.contains { $0.navigation?.hamburgerEnabled == true }
             needsNavigationScript = needsNavigationScript || hasMenu
@@ -1762,6 +1866,82 @@ struct StaticBuildCompilation: Equatable, Sendable {
     }
 }
 
+/// Findings belong to one attempt, not to the retained last successful plan.
+/// This receipt is editor state only; equality includes the complete finding,
+/// not merely a repeatable diagnostic code or an arbitrary caller's node ID.
+struct StaticBuildFindingReceipt: Equatable, Sendable {
+    let id: UUID
+    let documentID: DocumentID
+    let revision: UInt64
+    let findings: [StaticBuildFinding]
+
+    init(id: UUID = UUID(), compilation: StaticBuildCompilation) {
+        self.id = id; documentID = compilation.documentID
+        revision = compilation.revision; findings = compilation.findings
+    }
+    func contains(_ finding: StaticBuildFinding, document: CanonicalDocument) -> Bool {
+        documentID == document.id && revision == document.revision && findings.contains(finding)
+    }
+}
+
+enum StaticBuildFindingEditor: Equatable, Sendable {
+    case object, pageContents, layout, designBox
+    static func destination(for finding: StaticBuildFinding, node: DocumentNode) -> Self {
+        let isPageChrome = CanonicalPageFlow.role(node).map { $0 == .header || $0 == .footer } == true
+        return switch finding.code {
+        case "page-flow-navigation-room" where isPageChrome: .pageContents
+        case "page-flow-positioning": .layout
+        case "page-flow-navigation-clipped" where isPageChrome: .designBox
+        default: .object
+        }
+    }
+    var title: String {
+        switch self {
+        case .object: "Show Object"
+        case .pageContents: "Open Header/Footer Settings"
+        case .layout: "Open Layout"
+        case .designBox: "Open Design"
+        }
+    }
+}
+
+enum StaticBuildFindingRevealAvailability: Equatable {
+    case action(String), unavailable(String), noTarget
+}
+
+struct StaticBuildFindingTarget: Equatable, Sendable {
+    enum Failure: Error, Equatable {
+        case staleDocument, staleRevision, foreignFinding, noObject, missingObject, lockedOrHidden
+        var recovery: String {
+            switch self {
+            case .staleDocument, .staleRevision, .foreignFinding:
+                "Check the current project and revision again; these results are no longer current."
+            case .noObject:
+                "Follow the listed repair instruction; this finding has no exact object editor."
+            case .missingObject:
+                "The original object is unavailable. Restore it with Undo or check the document again."
+            case .lockedOrHidden:
+                "This object is locked or hidden at this screen size. Review its state in Layers; no value will be changed automatically."
+            }
+        }
+    }
+    let pageID: PageID
+    let nodeID: NodeID
+    let destination: StaticBuildFindingEditor
+    static func prepare(_ finding: StaticBuildFinding, receipt: StaticBuildFindingReceipt,
+                        document: CanonicalDocument, breakpoint: ResponsiveBreakpoint) throws -> Self {
+        guard receipt.documentID == document.id else { throw Failure.staleDocument }
+        guard receipt.revision == document.revision else { throw Failure.staleRevision }
+        guard receipt.findings.contains(finding) else { throw Failure.foreignFinding }
+        guard let id = finding.affectedNodeID else { throw Failure.noObject }
+        guard let page = document.pages.first(where: { $0.nodes.contains { $0.id == id } }),
+              let node = page.nodes.first(where: { $0.id == id }) else { throw Failure.missingObject }
+        guard !node.selectionBooleanProperty("locked"), page.effectiveVisibleNodeIDs(breakpoint: breakpoint).contains(id)
+            else { throw Failure.lockedOrHidden }
+        return .init(pageID: page.id, nodeID: id, destination: .destination(for: finding, node: node))
+    }
+}
+
 /// Closed static compiler entry point. It consumes one immutable document plus
 /// caller-owned resource bytes and returns an immutable plan or typed findings.
 /// It never reads paths, writes output, mutates the project, or publishes.
@@ -1809,11 +1989,23 @@ enum StaticBuildCompiler {
                          profile: profileSelection.profile, plan: nil, report: nil, findings: findings)
         }
 
+        // Compatibility policy builds identity-indexed views. Reject invalid
+        // canonical input before those dictionaries, not after output planning.
+        do { try document.validate() }
+        catch {
+            findings.append(.init(severity: .error, code: "plan-invalid",
+                requirementID: "SF-1211-004", explanation: "Canonical document validation failed before compatibility planning.",
+                repair: "Restore the last valid document or undo the invalid edit, then preflight again."))
+            return .init(documentID: document.id, revision: document.revision,
+                profile: profileSelection.profile, plan: nil, report: nil, findings: findings)
+        }
         let nodes = document.pages.flatMap { $0.canonicalDepthFirstNodes() }
-        for page in document.websitePages {
-            let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
-            for id in CanonicalPageFlow.unsupportedStaticContainers(page) {
-                guard let node = byID[id], let failure = CanonicalPageFlow.outputFailure(for: node, page: page) else { continue }
+        for original in document.websitePages {
+            let page = (try? ComponentGraphResolver.resolvedPage(original, in: document, breakpoint: .desktop)) ?? original
+            let failures = CanonicalPageFlow.outputFailures(page,
+                availablePageIDs: Set(document.websitePages.map(\.id)))
+            for id in failures.keys.sorted(by: { $0.description < $1.description }) {
+                guard let failure = failures[id] else { continue }
                 findings.append(.init(severity: .error, code: failure.code,
                     requirementID: "SF-0501-004", affectedNodeID: id,
                     explanation: failure.explanation, repair: failure.repair))
@@ -1933,11 +2125,12 @@ enum StaticBuildCompiler {
 enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity, invalidFormField, invalidControl }
 
 enum SafeHTMLEmitter {
-    static func emit(_ tree: InternalRenderTreeSnapshot) throws -> String {
+    static func emit(_ tree: InternalRenderTreeSnapshot, layoutContainers: Set<NodeID> = []) throws -> String {
         let ordered = tree.nodes.sorted { $0.paintOrder < $1.paintOrder }
         let structured = ordered.contains(where: \.usesConnectedLayout)
         guard Set(ordered.map(\.id)).count == ordered.count else { throw SafeHTMLEmissionError.invalidIdentity }
         let byID = Dictionary(uniqueKeysWithValues: ordered.map { ($0.id, $0) })
+        guard layoutContainers.isSubset(of: Set(byID.keys)) else { throw SafeHTMLEmissionError.invalidIdentity }
         let children = Dictionary(grouping: ordered.filter { $0.parentNodeID != nil }, by: { $0.parentNodeID! })
         let formIDs = Set(ordered.filter { $0.semanticElement == "form" }.map(\.id))
         let fieldsByForm = Dictionary(grouping: ordered.compactMap { node -> InternalRenderTreeNode? in
@@ -1978,7 +2171,9 @@ enum SafeHTMLEmitter {
                     .map { try render($0, nested: true, depth: depth + 1) }.joined()
                 let nav = try node.navigation.map { try navigationHTML($0, owner: node.id, role: node.pageFlowRole ?? $0.role) } ?? ""
                 let close = "</\(node.semanticElement)>"
-                if markup.hasSuffix(close) { markup = String(markup.dropLast(close.count)) + nav + content + close }
+                let body = layoutContainers.contains(node.id)
+                    ? "<div class=\"\(ConnectedFluidOutputPolicy.wrapperClass(node.id))\">\(content)</div>" : content
+                if markup.hasSuffix(close) { markup = String(markup.dropLast(close.count)) + nav + body + close }
             }
             return markup
         }
@@ -2004,9 +2199,10 @@ enum SafeHTMLEmitter {
             return "<a class=\"sf-node-\(id) sf-nav-link-\(id)\" data-siteforge-nav-link=\"\(id)\" role=\"link\" aria-disabled=\"true\" tabindex=\"0\" title=\"Missing original page\">\(label)</a>"
         }.joined()
         let name = role == .footer ? "Footer navigation" : "Header navigation"
-        let inline = "<nav aria-label=\"\(name)\" class=\"sf-nav-inline\(navigation.hamburgerEnabled ? " sf-nav-responsive" : "")\">\(links)</nav>"
+        let hasMenu = navigation.hamburgerEnabled && navigation.links.contains { $0.href != nil }
+        let inline = "<nav aria-label=\"\(name)\" class=\"sf-nav-inline\(hasMenu ? " sf-nav-responsive" : "")\">\(links)</nav>"
         let panelID = "sf-nav-panel-\(owner)"
-        let menu = navigation.hamburgerEnabled ? "<details class=\"sf-nav-menu\" data-siteforge-navigation=\"\(owner.description)\"><summary aria-label=\"\(name) menu\" aria-controls=\"\(panelID)\" aria-expanded=\"false\"><span aria-hidden=\"true\">☰</span> Menu</summary><nav id=\"\(panelID)\" aria-label=\"\(name)\">\(links)</nav></details>" : ""
+        let menu = hasMenu ? "<details class=\"sf-nav-menu\" data-siteforge-navigation=\"\(owner.description)\"><summary aria-label=\"\(name) menu\" aria-controls=\"\(panelID)\" aria-expanded=\"false\"><span aria-hidden=\"true\">☰</span> Menu</summary><nav id=\"\(panelID)\" aria-label=\"\(name)\">\(links)</nav></details>" : ""
         return "<div class=\"sf-page-navigation sf-page-navigation-\(owner)\">\(inline)\(menu)</div>"
     }
 
@@ -2037,6 +2233,9 @@ enum SafeHTMLEmitter {
         // historical content is safely omitted from static output rather than
         // becoming executable or malformed HTML.
         let content = node.textContent.flatMap(safeTextContent).map(escape) ?? ""
+        if node.isManagedChromeTitle, node.typography != nil {
+            return "<\(node.semanticElement)\(attributes)><span data-siteforge-text>\(content)</span></\(node.semanticElement)>"
+        }
         return "<\(node.semanticElement)\(attributes)>\(content)</\(node.semanticElement)>"
     }
 

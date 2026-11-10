@@ -2,6 +2,79 @@ import XCTest
 @testable import SiteForge
 
 final class CanvasRendererTests: XCTestCase {
+    // SF-LOCAL-BUILDER-016 / SF-1211-004, SF-1204-004.
+    @MainActor
+    func testBrowserRetainedArtifactCannotOpenOrExportAfterImmediateProjectReplacement() async throws {
+        let owned = try ApplicationOwnedTestFixture.create("preview-project-ownership")
+        defer { try? owned.cleanup() }
+        let document = ProjectCreation.blank()
+        var liveDocumentID = document.id, opened = 0
+        let controller = BrowserPreviewController { _ in opened += 1; return .opened }
+        defer { controller.stop() }
+        await controller.build(document: document, pageID: document.pages[0].id, package: .init(document: document),
+            isDocumentCurrent: { $0 == liveDocumentID }, isCurrent: { _, _ in true }).value
+        let original = try XCTUnwrap(controller.makeExportRequest())
+        let plan = try XCTUnwrap(controller.plan)
+        let deadline = ContinuousClock.now + .seconds(2)
+        while controller.isOpeningBrowser, ContinuousClock.now < deadline { await Task.yield() }
+        XCTAssertFalse(controller.isOpeningBrowser)
+        let priorOpens = opened
+        // Simulate the actual event-turn gap before deferred noteRevision.
+        liveDocumentID = DocumentID()
+        XCTAssertEqual(controller.plan, plan, "The old immutable artifact is retained until ordinary invalidation")
+        XCTAssertNil(controller.makeExportRequest())
+        XCTAssertNil(controller.export(to: owned.url.appendingPathComponent("wrong-project"), request: original))
+        controller.openAgain()
+        XCTAssertFalse(controller.isOpeningBrowser); XCTAssertEqual(opened, priorOpens)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: owned.url.appendingPathComponent("wrong-project").path))
+        controller.noteRevision(documentID: liveDocumentID, revision: 0)
+        XCTAssertNil(controller.plan); XCTAssertNil(controller.findingReceipt)
+    }
+
+    // SF-LOCAL-BUILDER-015 / SF-1211-004/006.
+    @MainActor
+    func testBrowserFindingReceiptIsIndependentOfRetainedSuccessfulArtifactAndExportIntent() async throws {
+        let owned = try ApplicationOwnedTestFixture.create("finding-receipt-export")
+        defer { try? owned.cleanup() }
+        let document = ProjectCreation.blank()
+        let controller = BrowserPreviewController { _ in .opened }
+        defer { controller.stop() }
+        await controller.build(document: document, pageID: document.pages[0].id,
+            package: .init(document: document), isCurrent: { _, _ in true }).value
+        let success = try XCTUnwrap(controller.findingReceipt)
+        let plan = try XCTUnwrap(controller.plan), url = try XCTUnwrap(controller.url)
+        let oldExport = try XCTUnwrap(controller.makeExportRequest())
+        XCTAssertTrue(controller.ownsCurrentFindings(success))
+        // Same canonical revision, different failed attempt: revision equality
+        // alone cannot identify either the findings or the successful artifact.
+        await controller.build(document: document, pageID: document.pages[0].id,
+            package: .init(document: ProjectCreation.blank()), isCurrent: { _, _ in true }).value
+        let failure = try XCTUnwrap(controller.findingReceipt)
+        XCTAssertNotEqual(failure.id, success.id); XCTAssertEqual(failure.revision, success.revision)
+        XCTAssertTrue(failure.findings.contains { $0.code == "resource-snapshot-invalid" })
+        XCTAssertEqual(controller.plan, plan); XCTAssertEqual(controller.url, url)
+        XCTAssertEqual(controller.revision, document.revision); XCTAssertEqual(controller.documentID, document.id)
+        XCTAssertFalse(controller.ownsCurrentFindings(success)); XCTAssertTrue(controller.ownsCurrentFindings(failure))
+        XCTAssertTrue(controller.artifactSummary.contains("Last successful website"))
+        XCTAssertTrue(controller.artifactSummary.contains("later attempt"))
+        XCTAssertTrue(controller.status.contains("Refresh")); XCTAssertFalse(controller.status.contains("Retry"))
+        let destination = owned.url.appendingPathComponent("old-intent")
+        XCTAssertNil(controller.export(to: destination, request: oldExport))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        let retainedExport = try XCTUnwrap(controller.makeExportRequest())
+        XCTAssertEqual(retainedExport.plan, plan, "Only the explicit retained successful snapshot may export")
+        let cancelled = try XCTUnwrap(controller.export(to: owned.url.appendingPathComponent("cancelled"), request: retainedExport))
+        XCTAssertTrue(controller.isExporting); XCTAssertFalse(controller.ownsCurrentFindings(failure))
+        XCTAssertNil(controller.makeExportRequest())
+        controller.cancelExport(); await cancelled.value
+        XCTAssertEqual(controller.plan, plan); XCTAssertEqual(controller.url, url)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: owned.url.appendingPathComponent("cancelled").path))
+        controller.cancel()
+        XCTAssertFalse(controller.ownsFindingAttempt(failure)); XCTAssertEqual(controller.plan, plan)
+        controller.noteRevision(documentID: DocumentID(), revision: 0)
+        XCTAssertNil(controller.findingReceipt); XCTAssertNil(controller.plan); XCTAssertNil(controller.url)
+    }
+
     // SF-1203-004/1211-004: cancellation before promotion preserves an
     // existing destination byte-for-byte and removes only our private stage.
     func testStaticWriterLiveCancellationBeforePromotionPreservesExistingOutput() async throws {
@@ -161,6 +234,29 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(String(decoding: head.bytes, as: UTF8.self).hasSuffix("\r\n\r\n"))
         XCTAssertTrue(String(decoding: head.bytes, as: UTF8.self).contains("Content-Length: \(head.body.count)"))
         XCTAssertEqual(plan.revision, 9)
+    }
+
+    // SF-1202-003/004, SF-1206-003/004: a valid named page needs no synthetic
+    // home document. HTTP preserves exact compiler bytes and missing-root truth.
+    func testBrowserPreviewNamedPageWithoutHomePreservesExactRouteAndBytes() throws {
+        let page = "<h1>Named page</h1>"
+        let plan = LocalStaticBuildPlan(revision: 13, files: [
+            .init(path: "legacy-surface.html", contents: page),
+            .init(path: "styles.css", contents: "h1 { color: black }")
+        ])
+        let content = try WebsitePreviewHTTPContent(plan: plan)
+        for path in ["/legacy-surface", "/legacy-surface.html"] {
+            let response = content.response(to: Data("GET \(path) HTTP/1.1\r\nHost: 127.0.0.1:4321\r\n\r\n".utf8), port: 4321)
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(response.type, "text/html; charset=utf-8")
+            XCTAssertEqual(response.body, Data(page.utf8))
+        }
+        XCTAssertNil(content.files["index.html"])
+        XCTAssertEqual(content.response(to: Data("GET / HTTP/1.1\r\nHost: 127.0.0.1:4321\r\n\r\n".utf8), port: 4321).status, 404)
+        XCTAssertEqual(content.files.count, plan.files.count)
+        XCTAssertThrowsError(try WebsitePreviewHTTPContent(plan: .init(revision: 13,
+            files: [.init(path: "styles.css", contents: "safe")],
+            binaryFiles: [.init(path: "fake.html", contents: Data([0]))])))
     }
 
     func testBrowserPreviewHTTPRejectsTraversalRebindingAndInvalidArtifacts() throws {
@@ -408,9 +504,9 @@ final class CanvasRendererTests: XCTestCase {
             .init(key: .init(rawValue: ResponsiveVisibilityResolver.key(.mobile)), value: .boolean(false), origin: .authored),
         ])
         let output = ResponsiveStaticCSSEmitter.emit(nodes: [node])
-        XCTAssertTrue(output.css.contains("min-width: 600px) and (max-width: 1023px)"))
+        XCTAssertTrue(output.css.contains("min-width: 600px) and (width < 1024px)"))
         XCTAssertTrue(output.css.contains("left: 48.0px;"))
-        XCTAssertTrue(output.css.contains("max-width: 599px"))
+        XCTAssertTrue(output.css.contains("width < 600px"))
         XCTAssertTrue(output.css.contains("width: 280.0px;"))
         XCTAssertTrue(output.css.contains("display: none;"))
         XCTAssertEqual(output.report.appliedRuleCount, 2)
@@ -434,7 +530,7 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(output.css.contains("left: 0.0px;"))
         XCTAssertTrue(output.css.contains("display: none;"))
         XCTAssertTrue(output.css.contains("left: 48.235px;"))
-        XCTAssertTrue(output.css.contains("@media (max-width: 599px)"))
+        XCTAssertTrue(output.css.contains("@media (width < 600px)"))
         XCTAssertTrue(output.css.contains("display: block;"))
         XCTAssertEqual(output.report.baseRuleCount, 1)
         XCTAssertEqual(output.report.breakpoints, [.tablet, .mobile])
@@ -442,6 +538,38 @@ final class CanvasRendererTests: XCTestCase {
 
     // SF-0507-003, SF-1203-003, SF-1204-003 — static text remains escaped
     // while only closed canonical typography values reach the stylesheet.
+    func testManagedTitleOverflowLeavesOrdinaryMultilineAndControlsUnchanged() throws {
+        let bodyID = NodeID(), titleID = NodeID(), rect = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: 200, height: 72))
+        let body = InternalRenderTreeNode(id: bodyID, sourceNodeID: bodyID, paintOrder: 0, frame: rect,
+            semanticElement: "p", cssSelector: CanonicalCSSRule.selector(for: bodyID), formField: nil,
+            textContent: "Body  keeps\nhard line breaks", typography: CanonicalTypography.defaultValue)
+        let title = InternalRenderTreeNode(id: titleID, sourceNodeID: titleID, paintOrder: 1, frame: rect,
+            semanticElement: "h2", cssSelector: CanonicalCSSRule.selector(for: titleID), formField: nil,
+            textContent: "Short", typography: CanonicalTypography.defaultValue, isManagedChromeTitle: true)
+        let bodyCSS = StaticTypographyOutputEmitter.emit(nodes: [body])
+        XCTAssertTrue(bodyCSS.contains("white-space: pre-wrap;"))
+        XCTAssertFalse(bodyCSS.contains("line-clamp"))
+        XCTAssertFalse(bodyCSS.contains("sf-text-height"))
+        let html = try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 4, nodes: [body, title]))
+        XCTAssertTrue(html.contains("Body  keeps\nhard line breaks</p>"))
+        XCTAssertTrue(html.contains("<span data-siteforge-text>Short</span></h2>"))
+        XCTAssertEqual(html.components(separatedBy: "data-siteforge-text").count - 1, 1)
+        XCTAssertFalse(html.contains("tabindex"))
+        XCTAssertFalse(html.contains("aria-hidden"))
+        XCTAssertEqual(CanvasTextLayoutPolicy.visibleLineCapacity(height: rect.size.height, lineHeight: 17), 4)
+        let controlID = NodeID()
+        let control = InternalRenderTreeNode(id: controlID, sourceNodeID: controlID, paintOrder: 2,
+            frame: rect, semanticElement: "a", cssSelector: CanonicalCSSRule.selector(for: controlID), formField: nil,
+            control: .init(label: "Visit", href: "/", isLink: true, opensNewContext: false, disabled: false),
+            typography: CanonicalTypography.defaultValue)
+        let controlCSS = StaticTypographyOutputEmitter.emit(nodes: [control])
+        XCTAssertTrue(controlCSS.contains(":is(a,button) { display:flex;align-items:center;"))
+        XCTAssertFalse(controlCSS.contains("line-clamp"))
+        let controlHTML = try SafeHTMLEmitter.emit(.init(documentID: DocumentID(), revision: 4, nodes: [control]))
+        XCTAssertTrue(controlHTML.contains("href=\"/\">Visit</a>"))
+        XCTAssertFalse(controlHTML.contains("data-siteforge-text"))
+    }
+
     func testStaticTypographyOutputEscapesTextAndUsesAllowlistedCanonicalValues() throws {
         let pageID = PageID(), nodeID = NodeID()
         let node = DocumentNode(id: nodeID, kind: .text, name: "Heading", parent: .page(pageID), properties: [
@@ -1777,6 +1905,107 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertNil(CanvasPreviewNavigationGeometry(frame: frame, padding: 48, rowHeight: 24, scale: .nan))
         XCTAssertNil(CanvasPreviewNavigationGeometry(frame: frame, padding: 48, rowHeight: 24, scale: 0))
         XCTAssertEqual(frame.origin, .init(x: 40, y: 120))
+    }
+
+    // SF-0701-006, SF-1202-003: full-height fitting must not turn an
+    // interactive phone page into a tiny, unhittable native-control thumbnail.
+    func testNativePreviewFitsWidthAndScrollsTallPagesWithoutChangingAuthoredBounds() throws {
+        for width in [320.0, 430, 768, 1440] {
+            let bounds = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: width, height: 900))
+            for height in [200.0, 329, 700] {
+                let layout = try XCTUnwrap(CanvasPreviewPresentationGeometry(bounds: bounds,
+                    available: .init(width: 620, height: height)))
+                XCTAssertEqual(layout.scale, min(1, 564 / width))
+                XCTAssertEqual(layout.contentSize.width, 620)
+                XCTAssertGreaterThanOrEqual(layout.contentSize.height, height)
+                XCTAssertEqual(layout.contentSize.height, max(height, 900 * layout.scale + 56))
+                if width <= 430 { XCTAssertEqual(layout.scale, 1) }
+                XCTAssertEqual(bounds.size, .init(width: width, height: 900))
+            }
+        }
+        XCTAssertNil(CanvasPreviewPresentationGeometry(bounds: Self.frame, available: .init(width: .nan, height: 329)))
+        XCTAssertNil(CanvasPreviewPresentationGeometry(bounds: Self.frame, available: .init(width: 620, height: 0)))
+    }
+
+    // SF-0701-006, SF-1202-003: native visitor navigation owns its own
+    // label and pointer surface; canvas-only proxy glyphs cannot cover it.
+    func testNativePreviewDecorationsDoNotOwnAccessibilityOverRealContent() {
+        let frame = Self.frame
+        let surface = CanvasRenderObject(id: NodeID(), frame: frame, clipRect: frame,
+            paintOrder: 0, style: .sectionSurface, isVisible: true, accessibilityLabel: "Header")
+        let page = PageID()
+        let navigation = PageNavigationSnapshot(ownerID: NodeID(), links: [
+            .init(id: NodeID(), pageID: page, label: "Home", isAvailable: true)],
+            hamburgerEnabled: true, usesHamburger: true, alignment: "start", padding: 0)
+        let menu = CanvasRenderObject(id: navigation.ownerID, frame: frame, clipRect: frame,
+            paintOrder: 1, style: .textPlaceholder, isVisible: true, accessibilityLabel: "Navigation",
+            navigation: navigation)
+        let text = CanvasRenderObject(id: NodeID(), frame: frame, clipRect: nil,
+            paintOrder: 2, style: .textPlaceholder, isVisible: true, accessibilityLabel: "Title", plainText: "Title")
+        let image = CanvasRenderObject(id: NodeID(), frame: frame, clipRect: nil,
+            paintOrder: 3, style: .imagePlaceholder, isVisible: true, accessibilityLabel: "Image", imageAssetID: AssetID())
+        let link = CanvasRenderObject(id: NodeID(), frame: frame, clipRect: nil,
+            paintOrder: 4, style: .frameSurface, isVisible: true, accessibilityLabel: "Home",
+            previewLink: .init(target: .page(page), context: .same, isMissing: false))
+        XCTAssertTrue(surface.isNativePreviewDecoration)
+        for object in [menu, text, image, link] {
+            XCTAssertFalse(object.isNativePreviewDecoration, "Real readable or actionable content retains AX semantics")
+            XCTAssertEqual(object.frame, frame)
+        }
+        XCTAssertEqual(menu.id, navigation.ownerID)
+        XCTAssertEqual(surface.clipRect, frame)
+        XCTAssertEqual(surface.frame, frame, "AX policy must not change paint, clipping, or canonical geometry")
+    }
+
+    func testNativePreviewPageChromeGroupsUseCanonicalAncestryWithoutMovingFrames() throws {
+        let headerID = NodeID(), contentID = NodeID(), navigationID = NodeID(), independentID = NodeID()
+        let header = CanvasRenderObject(id: headerID, frame: Self.frame, clipRect: nil,
+            paintOrder: 0, style: .sectionSurface, isVisible: true, accessibilityLabel: "Header", pageFlowRole: .header)
+        let content = CanvasRenderObject(id: contentID, frame: Self.frame, clipRect: Self.frame,
+            paintOrder: 1, style: .stackSurface, isVisible: true, accessibilityLabel: "Content", parentNodeID: headerID)
+        let page = PageID()
+        let navigation = PageNavigationSnapshot(ownerID: navigationID, links: [
+            .init(id: NodeID(), pageID: page, label: "Home", isAvailable: true)],
+            hamburgerEnabled: true, usesHamburger: true, alignment: "start", padding: 0)
+        let control = CanvasRenderObject(id: navigationID, frame: Self.frame, clipRect: Self.frame,
+            paintOrder: 2, style: .textPlaceholder, isVisible: true, accessibilityLabel: "Navigation",
+            navigation: navigation, parentNodeID: contentID)
+        let independent = CanvasRenderObject(id: independentID, frame: Self.frame, clipRect: nil,
+            paintOrder: 3, style: .frameSurface, isVisible: true, accessibilityLabel: "Unrelated")
+        let source = [independent, control, header, content]
+        let groups = CanvasPreviewPresentationGroup.resolve(source)
+        XCTAssertEqual(groups.map(\.id), [headerID, independentID])
+        XCTAssertEqual(groups[0].container, header)
+        XCTAssertEqual(groups[0].objects, [header, content, control])
+        XCTAssertNil(groups[1].container, "Rectangle overlap must never invent canonical ancestry")
+        XCTAssertEqual(groups[1].objects, [independent])
+        let reopened = try JSONDecoder().decode([CanvasRenderObject].self, from: JSONEncoder().encode(source))
+        XCTAssertEqual(CanvasPreviewPresentationGroup.resolve(reopened), groups)
+        XCTAssertEqual(reopened, source, "Grouping must preserve exact world geometry, IDs, clipping and properties")
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(header)) as? [String: Any])
+        old.removeValue(forKey: "parentNodeID"); old.removeValue(forKey: "pageFlowRole")
+        let legacy = try JSONDecoder().decode(CanvasRenderObject.self, from: JSONSerialization.data(withJSONObject: old))
+        XCTAssertNil(legacy.parentNodeID); XCTAssertNil(legacy.pageFlowRole)
+        XCTAssertEqual(legacy.frame, header.frame)
+    }
+
+    func testNativePreviewNavigationReplacesCanvasProxyTextButPreservesOrdinaryText() {
+        let owner = NodeID()
+        let navigation = PageNavigationSnapshot(ownerID: owner,
+            links: [.init(id: NodeID(), pageID: PageID(), label: "About", isAvailable: true)], hamburgerEnabled: true,
+            usesHamburger: true, alignment: "start", padding: 0)
+        let menu = CanvasRenderObject(id: owner, frame: Self.frame, clipRect: nil, paintOrder: 0,
+            style: .textPlaceholder, isVisible: true, accessibilityLabel: "Navigation",
+            plainText: "☰ Menu", navigation: navigation)
+        XCTAssertFalse(menu.paintsStandalonePreviewText)
+        XCTAssertEqual(menu.plainText, "☰ Menu", "The editor raster proxy is retained, not rewritten")
+        XCTAssertEqual(menu.navigation, navigation)
+        let text = CanvasRenderObject(id: NodeID(), frame: Self.frame, clipRect: nil, paintOrder: 1,
+            style: .textPlaceholder, isVisible: true, accessibilityLabel: "Text object", plainText: "Menu")
+        XCTAssertTrue(text.paintsStandalonePreviewText, "An ordinary authored word is not mistaken for navigation")
+        let empty = CanvasRenderObject(id: NodeID(), frame: Self.frame, clipRect: nil, paintOrder: 2,
+            style: .frameSurface, isVisible: true, accessibilityLabel: "Frame")
+        XCTAssertFalse(empty.paintsStandalonePreviewText)
     }
 
     // SF-1006-001/003/004/008 — Inspector-facing local validation adopts only

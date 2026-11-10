@@ -1,5 +1,332 @@
 # SiteForge Implementation Status
 
+## November 9 targeted checkpoint
+
+The completed ordinary full run passed 888 non-UI and 163 UI tests, with
+four UI failures, three owner opt-in skips, and zero unrun. The exact four
+failed UI methods passed replay on the checkpoint candidate after bounded
+test-only fixes to native menu targeting and minimum-width dragging.
+See [the failure inventory](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md)
+for the SF-0406, SF-0501, SF-0507, SF-0806, SF-0902, and SF-0905 evidence.
+The owner deferred fresh full local verification for this checkpoint;
+no requirement status is promoted by combining the two receipts.
+
+## Current closeout —2026-11-02, focused repairs pass; final gate pending
+
+All27 original failed methods now have exact passing focused receipts. Both
+native selectors pass511.484s/50.786s, including Header geometry, real pointer,
+keyboard/Escape/focus,320/430/768 and actual destinations. Final-source checks
+pass4 code plus1 UI;19 originals were visually reviewed. The repair uses true
+Header/Footer ancestry in the same Preview host and the resolved popup width;
+no canonical mutation, fake AX geometry, host or browser-output replacement.
+Bounded SF-0806-006, SF-1203-003/006, SF-1211-004 remain Partial outside this
+slice. OD-029 approval is recorded; final `./sf verify` and reviewed commit/push
+remain pending. The failed inventory and earlier pause notes below are history.
+
+Stable-source full `./sf verify` completed exit65. Repository/build pass;
+unit880 passed/6 failed, UI146 passed/21 failed/3 owner-session skips; combined
+1026 passed/27 failed/3 skipped of1056. Strict generated-browser pixel journey
+passes1011.238s and grid/artboard passes44.329s in this inventory. Native Header
+pointer remains unresolved. Component-search overflow and Where Used row
+activation now have exact passing focused receipts; other failures are
+classified in the [ordered repair receipt](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md).
+No collector is active. The original presentation comparison now passes1/1,
+972.799s, with matched viewport and all four pixel comparisons zero. Both
+storage-backed retries pass2/2,68.844s/255.725s;23 originals were reviewed.
+25/27 original failed methods now have passing focused receipts. Only the two
+native Header selectors remain paused under OD-029: AppKit reaches the visible
+control but XCTest rejects AX hittability; temporary tracing is removed.
+11GiB is available. Further native investigation needs separate authorization.
+No completion/commit/push claim. Historical notes
+below describe prior states, not current running work.
+
+### Pre-inventory receipt
+
+Owner completed Xcode setup; its readiness check and the previously blocked
+fixture now pass. Current focused output checks pass2/2 (0.116s). Shared menu
+CSS now uses intrinsic details-content grid overlap where supported, preserving
+canonical geometry/runtime and keeping the existing positioned fallback for
+older engines. Private Header/Footer originals at320/430/550 show closure,
+upward Footer placement and real About navigation; this does not replace the
+strict real-app pixel gate, which subsequently passed after a diagnostic-only
+Inspector readout repair. Native Header ordinary-pointer acceptance remains
+unresolved. Repository checks passed before these latest edits; the final
+documentation-inclusive full gate is still required. No commit/push yet.
+The following candidate/startup entries are historical, not the current state.
+
+## Popup overlay candidate —2026-11-02, not integrated
+
+Private grid-overlay refinement closes the minimal Header popup through pointer
+and Space/Escape without Header/document reflow; left panel crop returns0/6300
+changed. This is not strict full-panel acceptance. Real Header/Footer fixture
+source compiled but executed0 tests: sampled XCTest IDE-session preparation wait,
+then scoped cancellation/termination, exit143. Footer, exclusivity, destinations
+and320/430/wider proof remain pending; shared production CSS/runtime unchanged.
+Eight originals reviewed; exact receipt retained. No new passing test total,
+full verification or Git action. Historical strict failures remain authoritative.
+
+## Minimal menu reproduction —2026-11-02, diagnostic only
+
+One new exact compiler-fixture regression passes1/1,0.034s; recorded separately
+from historical43-code/7-of8-native evidence. Six native browser cases narrow
+the unresolved residue to generated absolute-popup presentation: stock controls
+close visibly, while generated unchanged/readout/stable-absolute cases do not.
+Static positioning closes but changes popup layout and is not a product fix.
+No production rewrite or UI-test startup retry. Eighteen valid originals reviewed;
+strict failures remain. See the source-first reproduction section in the current
+012–016 focused evidence. Full verification remains required/deferred.
+
+## Same-artifact presentation comparison —2026-11-02, unresolved
+
+Ordinary Safari and RDM were independently inspected on the same cached private
+artifact at an actual548×516 CSS viewport, explicit main-page Inspector context,
+with no reload or production mutation. Both still show menu panels after trusted
+Escape despite closed DOM/AX state. A later RDM capture322s after closure retains
+the residue. This rules out an RDM-only explanation, not a specific compositor or
+capture cause. No safe production correction is established; stop new speculative
+experiments and retain the strict failed pixel gate. The compact comparison UI
+method compiles, but two launch attempts executed zero tests (automation-mode
+initialization timeout). Native observations are not XCTest passes. Detailed
+context, original-image names, metrics and cleanup are in
+[the comparison receipt](evidence/SF-LOCAL-BUILDER-012-016-FOCUSED-ACCEPTANCE.md#same-artifact-native-safari-presentation-comparison--2026-11-02).
+No runner remains active. Full verification is required but deferred; no Git,
+install, owner data or coordinator files changed. Primary native7/8 and distinct
+passing code43 remain unchanged. Earlier receipts below are historical.
+
+## Newer013 browser correlation — Partial,2026-11-02
+
+FINAL: the new actual-pixel gate fails1/1,106.962s in
+`focused-8bc86f35-54f4-494c-985e-15d9244794b0`:1855/33600 former-panel
+pixels differ after Escape (allowed33), while DOM/focus/hit checks pass. A unique
+visible fixture prefix rules out an older Home document; the exact recording
+frame shows the same residue. Earlier assertion-only passes below are NOT the
+current method's acceptance. No active run; no accepted visual fix. Preserve
+this failure and the pixel gate. See the focused receipt's Final pixel gate
+section for original filenames, interrupted scaling attempt and next bounded
+same-artifact/non-RDM investigation. No full gate/Git/install was run.
+
+Actual shared runtime HTTP delivery, trusted Escape, DOM closure/expanded=false,
+focus restoration and rendered-frame timing are proven by focused tests.
+Visual closure remains failed even with screen capture before Inspector.
+Rejected explicit closed CSS is removed; no speculative production runtime fix.
+New root/nested HTTP regression passes; accumulated distinct code43/native7of8.
+Exact receipts and original images: current012–016 focused evidence. Full
+verification remains mandatory/deferred, not passed.
+
+## 012–016 focused acceptance — IN PROGRESS
+
+2026-11-02 boundary update: Header ordinary XCUI click remains failed; Footer
+ordinary click, keyboard/focus and About navigation work independently. Native
+hit/coordinate observations agree, public remote hit query unavailable-25211;
+no further production rewrite retained. Current-control regression1/1 and
+independent measured-Safari companion1/1 pass, final test compilation succeeds.
+Browser CSS320/430/768 and menu navigation are observed, but after-Escape panels
+remain painted in originals despite focus assertions. Closure/complete visual
+acceptance remains open. Exact results, all rejected experiments and nine image
+names are in the focused receipt.42 code/7 of8 primary native baseline unchanged.
+No full gate or delivery; all modules remain Partial. Earlier receipts follow.
+
+Original final direct-neighbor check passes3/3, including real Save/reopen and015
+repair after modal dismissal; seven originals inspected. The subsequently approved
+AppKit Preview-host experiment did not improve actual013 and has been removed,
+including its two dependent diagnostic tests. Cleanup incremental compile and
+the existing modal regression pass1/1,0.640s. Original41 code/7 of8 native
+evidence remains baseline, not acceptance of the retired host. No active run.
+That diagnostic subsequently completed: no Safari action fires, correct Down
+reaches a focus proxy without native activation. One native popup/cell corrects
+focus and truthful activation metadata; actual Header keyboard/Escape passes,
+while initial pointer hittability still fails. Final new-control/modal code
+checks2/2, current distinct code42. No active run or full013 acceptance.
+
+Scoped owner approval now permits exact tests/builds and actual visual review,
+not full verification/Git/install/new features. Build-for-testing passed after
+explicit CGFloat infinity in one test. Initial36 methods31 pass/five fail;
+targeted five-method rerun passes5/5 after concrete fixture/one-ULP corrections.
+Initial distinct code evidence36/36 (30 new+six neighbors),0 skips. Four extra
+direct Preview/Settings regressions pass in3+1 runs. A new window-local modal
+accessibility/action regression passes, bringing the historical baseline to41.
+The new native-control method brings current distinct code evidence to42,0 skips.
+Retired private-control diagnostic probes are historical; real menu
+slot/owner geometry is now asserted in the strict native journey.
+First native
+attempt timed out on new macOS Enable UI Automation authentication before any
+UI method executed; the later owner-present continuation initialized without a
+new request. All eight distinct native methods executed: four direct neighbors
+plus012 formatting,014 Inspector and015 repair pass; only013 native menu interaction remains under repair.
+014's compact caption correction passes401.678s and nine originals were inspected. Current
+originals are retained and being inspected, not yet package visual acceptance. Exact result/log paths and remaining
+cases: [focused receipt](evidence/SF-LOCAL-BUILDER-012-016-FOCUSED-ACCEPTANCE.md).
+Modules stay Partial; no DONE/full-gate/installed delivery claim.
+
+## SF-LOCAL-BUILDER-016 — source integration closed, NOT verified
+
+Legacy Design draft ownership now preserves dirty strings and rejects stale/IME
+input rather than resetting unrelated fields; valid Save/Preview preflight uses
+the existing registry before snapshot, clean-only repair stays noncommitting.
+Shadow tuples reject discarded/extra malformed parts. Retained Preview artifact
+actions use live project identity; native Check Website reopens active-write
+status without cancellation. Equivalent box edits acknowledge no-change without
+history rather than leaving a valid field dirty. Seven code methods and one
+refined015 native journey are UNRUN. No build/check/visual/verify. Actual fixes exercise bounded
+SF-0702-003/004, SF-0202-003, SF-0302-004, SF-1203-004, SF-1204-004 and
+SF-1211-004/006; broader inspected workflow requirements remain Partial.
+016 IN PROGRESS. [One current acceptance matrix and source receipt](evidence/SF-LOCAL-BUILDER-016-SOURCE-INTEGRATION-CLOSEOUT.md).
+Remaining checkpoint work is acceptance-only; no017 or automatic execution.
+Silent build dismissal records Cancelled, and completed/cancelled writes clear
+the running-only Wait message; the same UNRUN regression covers these transitions.
+
+## SF-LOCAL-BUILDER-015 — output repair source, NOT verified
+
+Independent finding receipts and shared guarded existing-editor navigation now
+serve Preview and Check Website. Exact canonical target/context/clean-editor
+validation precedes page/original entry; live renderer/selection adoption precedes
+panel closure and focus/scroll restoration. Retained successful output remains
+distinct from newer failed findings, with explicit Refresh and immutable Export.
+Five code methods and one native journey are UNRUN. No compile/check/visual/gate.
+Bounded SF-0202-003, SF-0203-006, SF-0701-002/003/006,
+SF-1202/1203/1204-003/004/006 and SF-1211-004/006 stay Partial;015 IN PROGRESS.
+[Source evidence and limitations](evidence/SF-LOCAL-BUILDER-015-PREVIEW-REPAIR-WORKFLOW.md).
+
+## SF-LOCAL-BUILDER-014 — stable Inspector source, NOT verified
+
+Measured current labels/font inform pane allocation within existing maxima and
+500-point canvas budget; actual tab geometry still decides complete-row versus
+accessible overflow. Enlarged text gets sufficient row height. Shared leading
+cards, label-based adaptive fields and wrapping actions refine the selection
+header, Header/Footer, Text and Component Content/recovery without new canonical
+state or commit semantics. Four code methods and one native journey added UNRUN;
+one existing overflow test refined UNRUN. No build/check/visual/verify result.
+Bounded SF-0201-009, SF-0202-003, SF-0203-006, SF-0701-002/003/006 stay Partial.
+014 IN PROGRESS; [source matrix/evidence](evidence/SF-LOCAL-BUILDER-014-STABLE-INSPECTOR-LAYOUT.md).
+
+## SF-LOCAL-BUILDER-013 — narrow chrome source, NOT verified
+
+Eligible automatic Header/Footer rows reserve the existing 90-point Menu budget
+before default title shrink in shared final geometry and continuous connected
+CSS. Custom/authored intent is preserved with existing-Inspector repair guidance.
+Menus require usable visible destinations. Nine code methods and one native/
+Safari journey are UNRUN. No build/check/visual/full verification exists.
+[013 source receipt](evidence/SF-LOCAL-BUILDER-013-NARROW-CHROME-LAYOUT.md)
+names requirements/limits. Modules stay Partial;013 IN PROGRESS; execution paused.
+The2026-11-01 source continuation aligns width reservation/preflight with real
+destination availability across native and output snapshots. Empty navigation
+reserves no slot; unavailable links keep disabled intent. Two source-only user
+path/language reviews are complete; same9+1 tests remain UNRUN. No current
+compilation or visual result exists, including Footer/compact browser acceptance.
+
+## SF-LOCAL-BUILDER-012 — source package, NOT verified
+
+Four source passes implement direct common formatting access, a visible Assets
+import action, shared plain-language sizing/spacing/scaling/screen-size and
+source labels, searchable aliases, matching site-settings entry names and visible
+app-versus-website preference scope. Existing commands, IDs, keys, serialized
+values, transaction gates and window geometry are retained. Two model methods
+and one native journey were initially added UNRUN. The continuation adds three
+more code methods (total5+1, all UNRUN), clarifies component original/copy/reset
+and missing-data recovery, fallback-only contents, reusable color/opacity samples,
+and responsive count/reset/conversion scope. Original editing is directly
+available from Content without a second editor. No compilation, checks, visual review or
+verification followed the owner execution pause. Supporting SF-0202-003,
+SF-0203-006, SF-0206-002, SF-0701-002, SF-0702-003, SF-0703-003 and SF-0704-003
+remain Partial;012 remains IN PROGRESS. [Source evidence and deferred acceptance](evidence/SF-LOCAL-BUILDER-012-USABILITY-AND-LANGUAGE.md).
+Supporting SF-0901-003, SF-0902-003, SF-0903-003, SF-0905-004, SF-0510-003 and
+SF-0308-004 remain Partial; OD-018/019 are not resolved by wording changes.
+The earlier title receipt below is frozen and does not validate these edits.
+
+## Frozen title-overflow focused correction; later012 source is unverified
+
+Six affected code methods and one new matched native/Safari journey pass. Final
+run `focused-4cb5a055-d0fc-4c60-b300-8c405153fef0`3/3; UI205.263s. All15
+originals inspected at measured1440/430/320CSS widths,scale1. Managed title now
+uses a derived complete-line limit with full semantic text and stable identity;
+no clipped second title line. General navigation/older-browser/custom fluid-type
+parity remains deferred. Earlier receipts below are historical, not current012
+proof. Owner pauses all further execution for the usability/language source pass.
+
+## Historical bounded focused acceptance — 007–011, before012
+
+Owner authorized exact new/minimally affected tests only, superseding the
+historical execution holds below. Current source builds; all 56 new code methods
+pass in the final 70/70 focused group, including all14 existing regressions.
+Native automation now works: all eight distinct focused native journeys pass.
+Three scoped compositor and three HTTP boundary methods pass. All retained
+workflow originals were inspected, including Safari/export cancellation/reopen.
+These earlier runs exposed Safari's long fixed-height title mismatch. The frozen
+targeted receipt above resolves that measured path; broader parity stays deferred.
+No full verification, completion, commit or push is claimed.
+All five workflows and normative modules remain IN PROGRESS /
+Partial. [Manifest and results](evidence/SF-LOCAL-BUILDER-007-011-FOCUSED-ACCEPTANCE.md).
+
+## Current source workflow — connected fluid output
+
+SF-LOCAL-BUILDER-011 is IMPLEMENTED IN SOURCE — ACCEPTANCE DEFERRED; OWNER TEST
+APPROVAL REQUIRED. Bounded SF-0604-003/004/005/006/008; supporting
+SF-0501-003/004, SF-0502-003, SF-0503-003, SF-0505-003,
+SF-1202-003/004/008, SF-1204-003/004/008, SF-1206-003/004 and
+SF-1211-003/004/008 remain Partial. Shared canonical scalar/cascade/container
+policy feeds browser flow in the existing compiler; supported Header/body/Footer
+and nested layout no longer need fluid intent stripped to pass preflight.
+Unrepresented sizing/containing combinations retain precise blocking findings.
+Eleven code methods and one native journey are UNRUN; no build/test/check/visual
+acceptance. [011 receipt](evidence/SF-LOCAL-BUILDER-011-CONNECTED-FLUID-OUTPUT.md).
+Execution/commit/push/install hold remains; mandatory verification and native/
+matching-width Safari review are deferred, not waived. Preserve007–010 receipts.
+
+## Preserved010 source workflow — independent Header/Footer reuse
+
+SF-LOCAL-BUILDER-010 is IMPLEMENTED IN SOURCE — ACCEPTANCE DEFERRED; OWNER TEST
+APPROVAL REQUIRED. Bounded SF-0303-002/003/004/005/006,
+SF-0304-002/003/004/005/006, SF-0308-002/003/004/005/006/008 and
+SF-0806-002/003/004/005/006 remain Partial. Native Page/Header/Footer action and
+target sheet reuse shared page-duplication cloning and one command batch, with
+off-main same-project dependency validation, existing-role skips, cancellation,
+identity guards, exact history and adopted target navigation. No replace/merge,
+live linking, schema or owner-project mutation. Eleven code methods and two UI
+journeys are UNRUN; no new compile/test/visual result is claimed.
+[010 source receipt](evidence/SF-LOCAL-BUILDER-010-PAGE-CHROME-REUSE.md).
+Execution/commit/push/install hold remains; future verification is deferred, not
+waived. Preserve007/008/009 incomplete acceptance and the baseline distinction.
+
+## Preserved009 source workflow — formatting reuse
+
+SF-LOCAL-BUILDER-009 is IN PROGRESS, implemented in source but NOT built/tested
+or visually accepted. Bounded SF-0702-002/003/004/005/006/008,
+SF-0703-002/003/004/005/006/008 and SF-0308-002/003/004/005/006/008 remain Partial.
+Native Edit/Inspector actions transfer common canonical Text Style or Appearance
+through one existing atomic registry batch, preserving target geometry/content
+and reference intent. Same-project/base Default state only; no primary borrowing
+or computed-value flattening. Fifteen code methods plus one UI journey are UNRUN.
+[009 source receipt](evidence/SF-LOCAL-BUILDER-009-FORMATTING-REUSE.md).
+Owner hold still prohibits execution/commit/push/install. Mandatory verification
+and normal/compact original-resolution visual acceptance are deferred, not waived.
+
+## Preserved008 source workflow — responsive layout review
+
+SF-LOCAL-BUILDER-008 is IMPLEMENTED IN SOURCE — ACCEPTANCE DEFERRED; OWNER TEST
+APPROVAL REQUIRED. Bounded SF-0606-002/003/004/006/007/008, SF-0602-002/003/004/006,
+SF-0402-002/003/006 and SF-0701-003/006. Actor-backed shared-snapshot findings,
+bounded/cancellable presentation and exact node/width navigation into existing
+Layout controls have ten new model/integration methods plus one native journey,
+all UNRUN. No canonical audit/suppression scope (SF-0606-001/005) is claimed.
+[008 source receipt](evidence/SF-LOCAL-BUILDER-008-RESPONSIVE-LAYOUT-REVIEW.md).
+Renewed owner hold prohibits every build/test/check/UI/verification action;
+mandatory future ./sf verify and original-resolution visual acceptance are deferred,
+not waived. No commit/push/install. Modules remain Partial.
+
+## Prerequisite007 — partial historical execution, not accepted
+
+SF-LOCAL-BUILDER-007 is IN PROGRESS. Its build succeeded during the prior approval.
+Historical focused3133a465 ran9:3 passed/6 failed; fixture rerun d3dafe44 ran6:
+4 passed/2 failed. Latest fixture initialization changes are unverified source.
+Native width entry, shared actual-width resolution, identity-gated asynchronous
+comparison and native Preview propagation have nine new model/integration and
+one UI acceptance method (UI UNRUN). Requirements SF-0602-002/003/004/006/008,
+SF-0601-003/006, SF-0604-003/006 and supporting SF-0401-003/006 remain Partial.
+[Source receipt and future acceptance](evidence/SF-LOCAL-BUILDER-007-CUSTOM-RESPONSIVE-WIDTH.md).
+Owner testing/check/build/UI/commit/push hold applies to this workflow; mandatory
+./sf verify is deferred, not waived. The verified checkpoint below is baseline
+ba342938 and must not be attributed to the changed source.
+
 ## Verified bounded source-batch checkpoint — 2026-10-28
 
 Source batches01–10 and the separate Page Background prerequisite pass final

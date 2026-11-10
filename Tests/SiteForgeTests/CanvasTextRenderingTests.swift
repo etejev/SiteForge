@@ -1,10 +1,171 @@
 import AppKit
 import ImageIO
 import XCTest
+import SwiftUI
 @testable import SiteForge
 
 @MainActor
 final class CanvasTextRenderingTests: XCTestCase {
+
+    // SF-0806-006, SF-1203-006: exercise the real SwiftUI/AppKit sizing
+    // boundary at Header's 24-point row, not only a standalone 32-point popup.
+    func testNativePreviewMenuFitsActualHeaderAndFooterHostingBounds() async throws {
+        let page = PageID()
+        var navigation = PageNavigationSnapshot(ownerID: NodeID(), links: [
+            .init(id: NodeID(), pageID: page, label: "Home", isAvailable: true)],
+            hamburgerEnabled: true, usesHamburger: true, alignment: "start", padding: 0,
+            currentPageID: page)
+        for height in [24.0, 32.0] {
+            for width in [90.0, 110.0, 160.0] {
+            navigation.rowHeight = height
+            let host = NSHostingView(rootView: NativePageNavigationPreview(navigation: navigation, availableWidth: width, onFollow: { _ in })
+                .frame(width: width, height: height))
+            let window = NSWindow(contentRect: .init(x: 100, y: 100, width: width, height: height),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.orderOut(nil); window.close() }
+            window.contentView = host
+            window.orderFront(nil)
+            await Task.yield()
+            host.layoutSubtreeIfNeeded()
+            @MainActor func popup(_ view: NSView) -> NativePreviewNavigationButton? {
+                if let button = view as? NativePreviewNavigationButton { return button }
+                return view.subviews.lazy.compactMap(popup).first
+            }
+            let button = try XCTUnwrap(popup(host))
+            let presented = host.convert(button.bounds, from: button)
+            let receipt = XCTAttachment(string: "row=\(height);host=\(host.bounds);control=\(presented);alignmentInsets=\(button.alignmentRectInsets);visible=\(button.visibleRect)")
+            receipt.name = "SF-NARROW real representable control layout"; receipt.lifetime = .keepAlways; add(receipt)
+            let tolerance = 1 / (window.backingScaleFactor)
+            XCTAssertTrue(host.bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(presented),
+                "The real native popup must fit its Header/Footer allocation without clipped interactive bounds")
+            XCTAssertEqual(presented.width, width, accuracy: tolerance)
+            XCTAssertEqual(presented.midX, host.bounds.midX, accuracy: tolerance,
+                "The popup must not be capped/right-shifted inside a wider resolved navigation frame")
+            XCTAssertEqual(presented.midY, host.bounds.midY, accuracy: tolerance)
+            }
+        }
+    }
+
+    // SF-0806-006, SF-1203-003/006: focus belongs to the real popup, not a
+    // separate ring proxy. Native item dispatch retains immutable identities.
+    func testNativePreviewNavigationOwnsFirstResponderAndRejectsStaleMenuItems() throws {
+        let parent = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 800, height: 600),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        for window in [parent, sheet] { window.isReleasedWhenClosed = false; window.animationBehavior = .none }
+        defer { parent.endSheet(sheet); sheet.orderOut(nil); sheet.close(); parent.close() }
+        let home = PageID(), about = PageID(), missing = PageID(), owner = NodeID()
+        var snapshot = PageNavigationSnapshot(ownerID: owner, links: [
+            .init(id: NodeID(), pageID: home, label: "Home", isAvailable: true),
+            .init(id: NodeID(), pageID: about, label: "About", isAvailable: true),
+            .init(id: NodeID(), pageID: missing, label: "Missing", isAvailable: false)],
+            hamburgerEnabled: true, usesHamburger: true, alignment: "start", padding: 0,
+            currentPageID: home)
+        let button = NativePreviewNavigationButton(frame: NSRect(x: 30, y: 180, width: 90, height: 32), pullsDown: true)
+        var followed: [CanvasPreviewLink] = []
+        button.configure(snapshot) { followed.append($0) }
+        sheet.contentView?.addSubview(button)
+        parent.makeKeyAndOrderFront(nil)
+        parent.beginSheet(sheet, completionHandler: { _ in })
+        XCTAssertTrue(button.acceptsFirstResponder)
+        XCTAssertTrue(button.canBecomeKeyView)
+        XCTAssertTrue(sheet.makeFirstResponder(button))
+        XCTAssertTrue(sheet.firstResponder === button)
+        let accessible = try XCTUnwrap(button.cell)
+        XCTAssertEqual(accessible.accessibilityRole(), .menuButton)
+        XCTAssertEqual(accessible.accessibilityIdentifier(), "preview.navigation.menu.\(owner)")
+        XCTAssertEqual(accessible.accessibilityLabel(), "Page navigation menu")
+        XCTAssertTrue(accessible.accessibilityFrame().contains(accessible.accessibilityActivationPoint()),
+            "The native pointer activation point must lie inside its actual control frame")
+        let center = sheet.convertPoint(toScreen: button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil))
+        XCTAssertTrue(button.accessibilityHitTest(center) as AnyObject? === accessible)
+        let originalPoint = accessible.accessibilityActivationPoint()
+        button.setFrameOrigin(NSPoint(x: button.frame.minX + 20, y: button.frame.minY + 10))
+        XCTAssertEqual(accessible.accessibilityActivationPoint(), NSPoint(x: originalPoint.x + 20, y: originalPoint.y + 10))
+        XCTAssertTrue(accessible.accessibilityFrame().contains(accessible.accessibilityActivationPoint()))
+        let initial = try XCTUnwrap(button.menu)
+        XCTAssertEqual(initial.items.map(\.title), ["Menu", "Home", "About", "Missing"])
+        XCTAssertEqual(initial.item(at: 1)?.state, .on)
+        XCTAssertFalse(try XCTUnwrap(initial.item(at: 3)).isEnabled)
+        initial.performActionForItem(at: 2)
+        XCTAssertEqual(followed.map(\.target), [.page(about)])
+        initial.performActionForItem(at: 3)
+        XCTAssertEqual(followed.count, 1)
+        snapshot.currentPageID = about
+        button.configure(snapshot) { followed.append($0) }
+        initial.performActionForItem(at: 2)
+        XCTAssertEqual(followed.count, 1, "A retained item from an old menu cannot navigate a replacement snapshot")
+        let current = try XCTUnwrap(button.menu)
+        XCTAssertEqual(current.item(at: 2)?.state, .on)
+        button.menuWillOpen(current)
+        snapshot.currentPageID = home
+        button.configure(snapshot) { followed.append($0) }
+        XCTAssertTrue(button.menu === current, "An open native menu is not rebuilt during tracking")
+        current.performActionForItem(at: 1)
+        XCTAssertEqual(followed.count, 1, "A superseded tracking snapshot cannot dispatch")
+        button.menuDidClose(current)
+        let replacement = try XCTUnwrap(button.menu)
+        XCTAssertFalse(replacement === current)
+        XCTAssertEqual(replacement.item(at: 1)?.state, .on)
+        button.detach()
+        replacement.performActionForItem(at: 1)
+        XCTAssertEqual(followed.count, 1)
+        XCTAssertFalse(button.acceptsFirstResponder)
+        XCTAssertFalse(button.canBecomeKeyView)
+    }
+
+    // SF-0407-003: retained canvas actions cannot bypass document modality.
+    func testNativeCanvasAccessibilityModalOwnershipRejectsRetainedActionsAndRestoresAfterDismissal() async throws {
+        let parent = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 500, height: 400),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let other = NSWindow(contentRect: NSRect(x: 650, y: 100, width: 300, height: 300),
+                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 250, height: 150),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        for window in [parent, other, sheet] {
+            window.isReleasedWhenClosed = false
+            window.animationBehavior = .none
+        }
+        defer {
+            if parent.attachedSheet != nil { parent.endSheet(sheet) }
+            sheet.orderOut(nil)
+            sheet.close(); other.close(); parent.close()
+        }
+        let canvas = NativeCanvasViewportView(frame: parent.contentView!.bounds)
+        let otherCanvas = NativeCanvasViewportView(frame: other.contentView!.bounds)
+        parent.contentView = canvas
+        other.contentView = otherCanvas
+        var insertionCount = 0
+        canvas.onInsertFrame = { insertionCount += 1; return true }
+        parent.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(canvas.isAccessibilityElement())
+        let originalChildCount = canvas.accessibilityChildren()?.count
+        let retainedAction = try XCTUnwrap(canvas.accessibilityCustomActions()?.first {
+            $0.name == "Insert Frame at Center"
+        })
+        parent.beginSheet(sheet, completionHandler: { _ in })
+        XCTAssertNotNil(parent.attachedSheet)
+        XCTAssertFalse(canvas.isAccessibilityElement())
+        XCTAssertEqual(canvas.accessibilityChildren()?.count, 0)
+        XCTAssertEqual(canvas.accessibilityCustomActions()?.count, 0)
+        let canvasCenter = parent.convertPoint(toScreen: NSPoint(x: 250, y: 200))
+        XCTAssertNil(canvas.accessibilityHitTest(canvasCenter))
+        XCTAssertFalse(try XCTUnwrap(retainedAction.handler)())
+        XCTAssertEqual(insertionCount, 0)
+        XCTAssertTrue(otherCanvas.isAccessibilityElement())
+        XCTAssertFalse(otherCanvas.accessibilityCustomActions()?.isEmpty ?? true)
+        parent.endSheet(sheet)
+        sheet.orderOut(nil)
+        for _ in 0..<100 where parent.attachedSheet != nil { await Task.yield() }
+        XCTAssertNil(parent.attachedSheet)
+        XCTAssertTrue(canvas.isAccessibilityElement())
+        XCTAssertEqual(canvas.accessibilityChildren()?.count, originalChildCount)
+        XCTAssertTrue(try XCTUnwrap(retainedAction.handler)())
+        XCTAssertEqual(insertionCount, 1)
+    }
+
     // SF-0508-003/006, SF-0407-003: a structural page background is real
     // authored paint without becoming an authored object, hit target or ghost.
     func testStructuralPageBackgroundPaintsExactPixelsWithoutCanvasObject() async throws {
@@ -585,6 +746,83 @@ final class CanvasTextRenderingTests: XCTestCase {
         XCTAssertTrue(frameLabelPixels.isEmpty, "Editor names must not alter authored surface bytes")
     }
 
+    // SF-0401-003/004, SF-0407-003: editor validation/header resizing must
+    // retain the same native painted rect as selection without authored edits.
+    func testNativeViewportResizePreservesReprojectedRasterAndTextCoordinates() throws {
+        let view = NativeCanvasViewportView(frame: .init(x: 0, y: 0, width: 700, height: 500))
+        let initial = try CanvasViewportState(viewportSize: .init(width: 700, height: 500))
+        view.viewportState = initial
+        let object = CanvasRenderObject(id: NodeID(),
+            frame: .init(origin: .init(x: 80, y: 60), size: .init(width: 240, height: 160)),
+            clipRect: nil, paintOrder: 0, style: .frameSurface, isVisible: true,
+            accessibilityLabel: "Authored Frame", fillRGBA: [0.6, 0.2, 0.8, 1])
+        let identity = CanvasRenderRequestIdentity(documentID: DocumentID(), revision: 1,
+            sceneID: initial.sceneID, sceneGeneration: 1, viewportGeneration: 1, scale: initial.pixelRatio)
+        let plan = try CanvasRendererCore().prepare(scene: .init(identity: identity, surfaceID: .init(), objects: [object]),
+            overlays: .init(identity: identity, overlays: []), viewport: initial)
+        view.renderPlan = plan
+        let rasterPoint = try initial.transform.worldToViewport(object.frame.origin)
+        for zoom in [0.25, 0.85, 1.0, 8.0] {
+            view.viewportState = try CanvasViewportState(sceneID: initial.sceneID,
+                worldOrigin: .init(x: -40, y: 25), viewportSize: initial.viewportSize,
+                contentBounds: initial.contentBounds, zoom: .init(zoom), pixelRatio: initial.pixelRatio)
+            for size in [NSSize(width: 700, height: 480), .init(width: 680, height: 480), .init(width: 700, height: 500)] {
+                view.setFrameSize(size)
+                let expected = try view.viewportState.transform.worldToViewport(object.frame.origin)
+                for name in ["renderer.authored-content", "renderer.authored-text"] {
+                    let container = try XCTUnwrap(view.layer?.sublayers?.first { $0.name == name })
+                    let actual = container.convert(.init(x: rasterPoint.x, y: rasterPoint.y), to: view.layer)
+                    XCTAssertEqual(actual.x, expected.x, accuracy: 0.000001, name)
+                    XCTAssertEqual(actual.y, expected.y, accuracy: 0.000001, name)
+                }
+            }
+        }
+    }
+
+    // SF-0401-003/004: the artboard mask belongs to the container's local
+    // coordinates even while old valid raster is reprojected during pan/zoom.
+    func testNativeViewportArtboardMaskSharesLiveViewportDuringReprojection() throws {
+        let view = NativeCanvasViewportView(frame: .init(x: 0, y: 0, width: 700, height: 500))
+        view.setFrameSize(view.bounds.size)
+        let initial = try CanvasViewportState(viewportSize: .init(width: 700, height: 500),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 430, height: 900)))
+        view.viewportState = initial
+        let object = CanvasRenderObject(id: NodeID(),
+            frame: .init(origin: .init(x: 400, y: 60), size: .init(width: 240, height: 160)),
+            clipRect: nil, paintOrder: 0, style: .frameSurface, isVisible: true, accessibilityLabel: "Partial Frame")
+        let identity = CanvasRenderRequestIdentity(documentID: DocumentID(), revision: 1,
+            sceneID: initial.sceneID, sceneGeneration: 1, viewportGeneration: 1, scale: initial.pixelRatio)
+        view.renderPlan = try CanvasRendererCore().prepare(scene: .init(identity: identity, surfaceID: .init(), objects: [object]),
+            overlays: .init(identity: identity, overlays: []), viewport: initial)
+        func assertClip(_ expected: CGRect) throws {
+            for name in ["renderer.authored-content", "renderer.authored-text"] {
+                let container = try XCTUnwrap(view.layer?.sublayers?.first { $0.name == name })
+                let mask = try XCTUnwrap(container.mask as? CAShapeLayer)
+                let path = try XCTUnwrap(mask.path)
+                let actual = container.convert(path.boundingBoxOfPath, to: view.layer)
+                XCTAssertEqual(actual.minX, expected.minX, accuracy: 0.000001, name)
+                XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.000001, name)
+                XCTAssertEqual(actual.width, expected.width, accuracy: 0.000001, name)
+                XCTAssertEqual(actual.height, expected.height, accuracy: 0.000001, name)
+            }
+        }
+        for zoom in [0.25, 0.85, 1.0, 8.0] {
+            for pan in [WorldPoint(x: -40, y: 25), .init(x: 200, y: -30)] {
+                view.viewportState = try CanvasViewportState(sceneID: initial.sceneID, worldOrigin: pan,
+                    viewportSize: initial.viewportSize, contentBounds: initial.contentBounds,
+                    zoom: .init(zoom), pixelRatio: initial.pixelRatio)
+                let origin = try view.viewportState.transform.worldToViewport(initial.contentBounds.origin)
+                let expected = CGRect(x: origin.x, y: origin.y,
+                    width: 430 * zoom, height: 900 * zoom)
+                try assertClip(expected)
+                view.renderPlan = try CanvasRendererCore().prepare(
+                    scene: .init(identity: identity, surfaceID: .init(), objects: [object]),
+                    overlays: .init(identity: identity, overlays: []), viewport: view.viewportState)
+                try assertClip(expected)
+            }
+        }
+    }
+
     func testNativeViewportRetainsWorldAlignedRasterDuringZoomAndClearsAtArtboardChange() throws {
         let view = NativeCanvasViewportView(frame: .init(x: 0, y: 0, width: 700, height: 500))
         view.setFrameSize(view.bounds.size)
@@ -712,6 +950,37 @@ final class CanvasTextRenderingTests: XCTestCase {
                 }
             }
         }
+    }
+
+    // SF-0507-003/004/006: this is the actual authored CATextLayer path.
+    func testManagedTitleNativeLineCapacityAndInsetsShareResolvedTypography() throws {
+        let text = "Connected Fluid Browser Receipt"
+        for zoom in [0.25, 1.0, 8.0] {
+            for height in [24.0, 72] {
+                let rect = CGRect(x: 30, y: 50, width: 200 * zoom, height: height * zoom)
+                let typography = CanvasTypography(authoredFamily: "System", resolvedFamily: "System",
+                    weight: "regular", size: 14, lineHeight: 17, tracking: 0,
+                    alignment: .leading, usesFallback: false)
+                let layout = CanvasTextLayout(viewportObjectRect: rect, zoom: zoom, text: text, typography: typography)
+                XCTAssertEqual(layout.visibleLineCapacity, height == 24 ? 1 : 4)
+                XCTAssertEqual(layout.textContainerInset.width, CanvasTextLayoutPolicy.horizontalInset * zoom, accuracy: 0.000_001)
+                for scale in [1.0, 2] {
+                    let object = CanvasRenderObject(id: NodeID(), frame: .init(origin: .init(x: 0, y: 0),
+                        size: .init(width: 200, height: height)), clipRect: nil, paintOrder: 0,
+                        style: .textPlaceholder, isVisible: true, accessibilityLabel: text,
+                        plainText: text, typography: typography)
+                    let layer = try XCTUnwrap(CanvasAuthoredTextLayerFactory.makeLayer(for: object,
+                        viewportObjectRect: rect, zoom: zoom, contentsScale: scale))
+                    XCTAssertTrue(layer.isWrapped)
+                    XCTAssertEqual(layer.truncationMode, .end)
+                    XCTAssertEqual(layer.frame, layout.glyphBounds)
+                    XCTAssertEqual((layer.string as? NSAttributedString)?.string, text)
+                    XCTAssertTrue(layout.isInsideObjectRect)
+                }
+            }
+        }
+        XCTAssertEqual(CanvasTextLayoutPolicy.visibleLineCapacity(height: .nan, lineHeight: 17), 0)
+        XCTAssertEqual(CanvasTextLayoutPolicy.visibleLineCapacity(height: 24, lineHeight: 0), 0)
     }
 
     func testCanonicalTypographySharesRendererAndInlineMetricsAcrossZoomAndAlignment() throws {

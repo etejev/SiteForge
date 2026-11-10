@@ -89,7 +89,7 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertTrue(state.revealComponentPropertySource(instanceID: instance.id, property: .text(binding.id), expectedContext: sourceContext))
         XCTAssertEqual(boundaries, 1)
         try await awaitComponentSelection(state, page: definition.id, ids: [text.id])
-        XCTAssertEqual(state.componentReturnActionTitle, "Return to Instance")
+        XCTAssertEqual(state.componentReturnActionTitle, "Back to this copy")
         XCTAssertEqual(state.inspectorTab, .content)
         state.exitComponentDefinition()
         XCTAssertEqual(boundaries, 2)
@@ -880,6 +880,55 @@ final class CommandKernelTests: XCTestCase {
         let original = try CanonicalComponentOverrides.resolve(instance: document.websitePages[0].nodes[1], document: document)
         let resolved = try CanonicalComponentOverrides.resolve(instance: session.document.websitePages[0].nodes[1], document: session.document)
         XCTAssertEqual(resolved, original)
+    }
+
+    // SF-LOCAL-BUILDER-012 continuation; execution is recorded in its focused receipt.
+    func testPlainComponentDiscoveryFindsCopyOriginalAndDefaultContentsWithoutMutation() throws {
+        let document = try organizedComponentFixture()
+        let entries = CanonicalComponentOrganization.entries(in: document.componentDefinitions[0])
+        let first = try XCTUnwrap(entries.first)
+        let custom: Set<ComponentOverridePropertyIdentity> = [first.id]
+        for query in ["change this copy", "custom value", "authored override"] {
+            XCTAssertEqual(ComponentPropertyDiscovery.project(entries, query: query, authored: custom, conflicts: []).entries.map(\.id), [first.id])
+        }
+        XCTAssertEqual(ComponentPropertyDiscovery.project(entries, query: "uses component default", authored: custom, conflicts: []).entries.map(\.id), entries.dropFirst().map(\.id))
+        XCTAssertEqual(ComponentPropertyDiscovery.project(entries, query: "default contents", authored: [], conflicts: []).entries.map(\.id), entries.filter { $0.id.organizationKind == "slot" }.map(\.id))
+        XCTAssertEqual(ComponentPropertyDiscovery.project(entries, query: "fallback", authored: [], conflicts: []).entries.map(\.id), entries.filter { $0.id.organizationKind == "slot" }.map(\.id))
+        XCTAssertEqual(ComponentPropertyDiscovery.project(entries, query: "needs attention", authored: custom, conflicts: custom, conflictsOnly: true).entries.map(\.id), [first.id])
+        XCTAssertTrue(ComponentPropertyDiscovery.project(entries, query: "private-custom-content", authored: custom, conflicts: custom).entries.isEmpty)
+        XCTAssertEqual(CanonicalComponentOrganization.entries(in: document.componentDefinitions[0]), entries)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(document)), document)
+    }
+
+    func testPlainRecoveryRemovalPreservesConfirmationScopeIdentityAndExactUndo() throws {
+        let (session, instanceID) = try retainedComponentConflictSession()
+        let before = session.document
+        let pageID = before.websitePages[0].id
+        let instance = try XCTUnwrap(before.websitePages[0].nodes.first { $0.id == instanceID })
+        let findings = try CanonicalComponentOverrides.conflicts(instance: instance, document: before)
+        let finding = try XCTUnwrap(findings.first)
+        let historyCount = session.historySnapshot().undoEntries.count
+        XCTAssertEqual(findings.count, 5)
+        XCTAssertEqual(AuthoringLanguage.componentResetTitle(count: findings.count), "Reset copy changes (5)")
+        XCTAssertThrowsError(try textCommand(.resetOverrideConflicts(instanceID: instanceID,
+            expectedPropertyIDs: [finding.authoredPropertyID], confirmed: false), document: before, pageID: pageID, selected: instanceID))
+        XCTAssertEqual(session.document, before)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, historyCount)
+        try session.execute(textCommand(.resetOverrideConflicts(instanceID: instanceID,
+            expectedPropertyIDs: [finding.authoredPropertyID], confirmed: true), document: before, pageID: pageID, selected: instanceID).command)
+        let after = session.document
+        let changed = try XCTUnwrap(after.websitePages[0].nodes.first { $0.id == instanceID })
+        XCTAssertEqual(changed.id, instance.id)
+        XCTAssertEqual(CanonicalComponentReference.definitionID(for: changed), CanonicalComponentReference.definitionID(for: instance))
+        XCTAssertEqual(changed.properties, instance.properties.filter { $0.id != finding.authoredPropertyID })
+        XCTAssertEqual(after.componentDefinitions, before.componentDefinitions)
+        XCTAssertEqual(try CanonicalComponentOverrides.conflicts(instance: changed, document: after).count, 4)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, historyCount + 1)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, before.pages)
+        try session.redo()
+        XCTAssertEqual(session.document.pages, after.pages)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
     }
 
     func testComponentPropertyDiscoveryAllTypesGroupedOrderAndValuePrivacy() throws {
@@ -2345,7 +2394,7 @@ final class CommandKernelTests: XCTestCase {
         let stylesheet = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
         XCTAssertTrue(stylesheet.contains(CanonicalCSSRule.selector(for: nodeID)))
         XCTAssertTrue(stylesheet.contains("left: 32.0px;"))
-        XCTAssertTrue(stylesheet.contains("@media (max-width: 599px)"))
+        XCTAssertTrue(stylesheet.contains("@media (width < 600px)"))
         XCTAssertTrue(stylesheet.contains("width: 200.0px;"))
         XCTAssertEqual(plan.files.last?.path, "manifest.txt")
     }
@@ -2386,7 +2435,7 @@ final class CommandKernelTests: XCTestCase {
         let stylesheet = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
         XCTAssertTrue(stylesheet.contains(CanonicalCSSRule.selector(for: nodeID)))
         XCTAssertTrue(stylesheet.contains("width: 320.0px;"))
-        XCTAssertTrue(stylesheet.contains("@media (max-width: 599px)"))
+        XCTAssertTrue(stylesheet.contains("@media (width < 600px)"))
         XCTAssertTrue(stylesheet.contains("width: 200.0px;"))
         XCTAssertTrue(stylesheet.contains("display: none;"))
         XCTAssertTrue(stylesheet.contains("object-fit: contain;"))

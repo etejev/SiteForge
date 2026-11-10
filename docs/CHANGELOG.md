@@ -1,5 +1,383 @@
 # SiteForge Development Changelog
 
+## November 9 — targeted closeout checkpoint
+
+- UI acceptance now resolves the live Selection menu action after verifying
+  foreground ownership and selected identity. The compact Inspector journey
+  drives the actual resize edge past the existing minimum and asserts the
+  native clamp without widening its width tolerance.
+- All four failures from the completed ordinary full run passed exact replay.
+  The URL and component journeys passed unchanged. No fresh full local gate
+  was run after the fixes; this is a targeted checkpoint, not full acceptance.
+
+## Pending closeout —2026-11-02
+
+- Native Preview Header/Footer containers now own their actual child views
+  according to canonical ancestry, instead of exposing overlapping background
+  AX leaves. Ordinary pointer, keyboard, Escape/focus and real destinations pass
+  both exact journeys511.484s/50.786s. Popups fill their resolved navigation
+  allocation, fixing the430-point10-point center drift without moving authored
+  geometry. Final-source checks pass4 code plus1 UI;19 originals were reviewed.
+  No host replacement, browser/compiler change or fake accessibility target.
+  All27 original failures have focused passing receipts; full closeout is pending.
+
+- Browser comparison retains a genuinely all-closed pixel baseline separately
+  from the deliberate Header-to-Footer exclusivity handoff. The original full
+  selector passes972.799s with all four pixel comparisons zero. A bounded public
+  snapshot transfers exact receipt chunks without repeated AX traversals.
+  Storage-backed Aurora and Related Page retries pass2/2;23 originals across
+  these three journeys were visually reviewed. Two native Header failures remain
+  paused under OD-029; no complete milestone or replacement full gate is claimed.
+- Stable-source full verification completed with1026 passed,27 failed,3 explicit
+  owner-session skips; repository/build passed. Strict browser pixel journey
+  passes in the inventory; native Header pointer and remaining failures in the
+  [classified repair inventory](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md)
+  still block completion. No commit/push or release claim.
+- Component search/filter controls now use the shared inset Inspector section;
+  both exact overflow journeys pass. Where Used activates across its bounded
+  visible row, closes Details and selects the original linked instance
+  (SF-0901-006); exact replay passes1/1,33.692s. No document mutation shortcut.
+- Generated narrow menus use intrinsic details-content overlap on supporting
+  browsers, preserving page flow, canonical alignment and upward Footer
+  placement; the shared navigation runtime is unchanged. Two focused compiler
+  checks pass. Full native/browser visual acceptance remains in progress.
+- Strict Safari diagnostics transfer encoded bounded messages to avoid native
+  Inspector AX string truncation/link splitting; all DOM, focus and exact-pixel
+  assertions remain required. No release/completion claim is made.
+
+## Popup overlay candidate —2026-11-02, not integrated
+
+Private grid-overlay refinement closes the minimal Header popup through pointer
+and Space/Escape without Header/document reflow; left panel crop returns0/6300
+changed. This is not strict full-panel acceptance. Real Header/Footer fixture
+source compiled but executed0 tests: sampled XCTest IDE-session preparation wait,
+then scoped cancellation/termination, exit143. Footer, exclusivity, destinations
+and320/430/wider proof remain pending; shared production CSS/runtime unchanged.
+Eight originals reviewed; exact receipt retained. No new passing test total,
+full verification or Git action. Historical strict failures remain authoritative.
+
+## Minimal menu reproduction —2026-11-02, diagnostic only
+
+One new exact compiler-fixture regression passes1/1,0.034s; recorded separately
+from historical43-code/7-of8-native evidence. Six native browser cases narrow
+the unresolved residue to generated absolute-popup presentation: stock controls
+close visibly, while generated unchanged/readout/stable-absolute cases do not.
+Static positioning closes but changes popup layout and is not a product fix.
+No production rewrite or UI-test startup retry. Eighteen valid originals reviewed;
+strict failures remain. See the source-first reproduction section in the current
+012–016 focused evidence. Full verification remains required/deferred.
+
+## Same-artifact presentation comparison —2026-11-02, unresolved
+
+Ordinary Safari and RDM were independently inspected on the same cached private
+artifact at an actual548×516 CSS viewport, explicit main-page Inspector context,
+with no reload or production mutation. Both still show menu panels after trusted
+Escape despite closed DOM/AX state. A later RDM capture322s after closure retains
+the residue. This rules out an RDM-only explanation, not a specific compositor or
+capture cause. No safe production correction is established; stop new speculative
+experiments and retain the strict failed pixel gate. The compact comparison UI
+method compiles, but two launch attempts executed zero tests (automation-mode
+initialization timeout). Native observations are not XCTest passes. Detailed
+context, original-image names, metrics and cleanup are in
+[the comparison receipt](evidence/SF-LOCAL-BUILDER-012-016-FOCUSED-ACCEPTANCE.md#same-artifact-native-safari-presentation-comparison--2026-11-02).
+No runner remains active. Full verification is required but deferred; no Git,
+install, owner data or coordinator files changed. Primary native7/8 and distinct
+passing code43 remain unchanged. Earlier receipts below are historical.
+
+## Website Escape diagnostic coverage — Partial,2026-11-02
+
+FINAL: the new actual-pixel gate fails1/1,106.962s in
+`focused-8bc86f35-54f4-494c-985e-15d9244794b0`:1855/33600 former-panel
+pixels differ after Escape (allowed33), while DOM/focus/hit checks pass. A unique
+visible fixture prefix rules out an older Home document; the exact recording
+frame shows the same residue. Earlier assertion-only passes below are NOT the
+current method's acceptance. No active run; no accepted visual fix. Preserve
+this failure and the pixel gate. See the focused receipt's Final pixel gate
+section for original filenames, interrupted scaling attempt and next bounded
+same-artifact/non-RDM investigation. No full gate/Git/install was run.
+
+- Added root/nested runtime-reference and real Preview HTTP-byte regression.
+- Added passive actual-browser event/DOM/frame correlation and screen-before-
+  Inspector capture. Real Escape closes DOM and restores focus; screenshots
+  still show panels, so no visually fixed menu is claimed.
+- Removed an explicit closed-CSS experiment after visual review disproved its
+  effectiveness. Preserved production runtime and strict native013 assertions.
+
+## 013 bounded pointer/browser observations — Partial,2026-11-02
+
+- Added short public-control diagnostic companions without weakening strict013.
+  Ordinary Header XCUI click still fails; independent Footer pointer, keyboard,
+  Escape/focus and About navigation work. Native hits/coordinate conversion agree;
+  public remote AX hit discovery is unavailable. No further control/host rewrite
+  retained; temporary logging and unsuccessful bezel experiment removed.
+- Corrected Safari Width typing to use its actual unique label/title rather than
+  an empty identifier. Exact measured CSS width now drives one bounded rounding
+  correction instead of a universal+1. Independent320/430/768 browser journey
+  passes1/1; current-control regression1/1 and final test compilation pass.
+- Original-resolution review still finds panels painted after Escape despite
+  passing focus assertions, and long titles ellipsize. These remain explicit
+  visual/behavioral gaps, not a completed013 or general-usability claim.
+
+## 013 native control focus correction — Partial, acceptance pending
+
+- Correlated tracing rules out a native key invoking Safari: the correct Down
+  reaches the active Preview sheet, but its SwiftUI focus proxy does not open
+  the menu. The earlier Safari image was a post-teardown frame returned by
+  unlimited video extraction tolerance. Temporary observation is removed.
+- Native content navigation now uses one genuine popup/menu with native first
+  responder and actual cell accessibility metadata. Existing immutable actions,
+  document-modal host and browser/compiler/export paths remain unchanged.
+  Stale/unavailable/tracking-replaced items and teardown are neutral; the live
+  activation point follows actual screen geometry without fake role/window/frame.
+- Actual Header Down opening and Escape/focus now pass. Initial pointer readiness
+  still fails, so013, Footer/destination and measured-Safari acceptance remain
+  incomplete. Final affected code checks2/2; current distinct code42, native7/8
+  baseline. No full gate, delivery, Git operation or new feature.
+
+## 013 bounded Preview-host experiment — rejected and removed
+
+- The owner-approved AppKit-owned native Preview host passed two isolated
+  event/lifecycle diagnostics but did not improve the real content Menu's
+  hittability or Down Arrow activation. Removed only that experimental
+  presenter/controller and its two dependent tests; restored preceding SwiftUI
+  document-modal hosting and retained independently valid modal canvas handling.
+- Archived exact experimental source/tests and all failure evidence outside the
+  repository. Incremental cleanup compilation plus the existing modal
+  accessibility regression passes1/1,0.640s. No unchanged long UI retry/full gate.
+- Recording review finds SiteForge Preview focused before the failing key and
+  Safari foreground afterward, before the test's Safari branch. A single
+  foreground/key-dispatch trace is recommended, NOT started. No root cause,
+  complete013 acceptance, new architecture, delivery or Git operation is claimed.
+
+## 012–016 bounded acceptance corrections — IN PROGRESS
+
+- Native Preview fits resolved page width and scrolls tall pages instead of
+  shrinking real navigation controls into full-page thumbnails.
+- Adaptive viewport controls reserve the existing compact-control height so
+  Inspector focus does not shift the canvas. Preview navigation replaces its
+  canvas-only proxy text, and repair controls forward keyboard activation to
+  their existing action. Native Settings queries accept the exact system title
+  spellings without changing production command availability.
+- Canvas accessibility children, direct hits and retained actions respect its
+  own window's attached sheet, restoring after dismissal without blocking other
+  windows. Its exact regression passes; this does not establish Preview menu
+  pointer acceptance.
+- Distinct targeted code evidence41 methods passes across corrected runs;
+  seven of eight native journeys pass.013 remains under correction
+  with failures and original-resolution evidence retained. No full verification,
+  completion, installation, commit or push is claimed.
+
+## 2026-11-01 —012–016 bounded acceptance started
+
+- Build-for-testing now passes after making the new invalid-size fixture's
+  infinity explicitly CGFloat. Exact36 code methods initially31 pass/five fail;
+  only the failed five reran and pass5/5. Corrected Header-specific CSS assertions
+  that matched an independent Footer, initialized two real viewport fixtures,
+  and bounded arithmetic comparison to one floating-point ULP—not visual slack.
+- Extended the existing013 journey with native/measured-Safari Footer checks and
+  existing014 journey with actual1280/wider-window states. Original reference
+  renders01/05/12 were located externally and inspected. Native execution is
+  blocked: one exact attempt timed out on fresh macOS authentication before any
+  UI method. Run ended, no retry; eight native methods remain unexecuted. No
+  runtime original/visual/full acceptance claimed.
+
+## 2026-11-01 —016 source integration closeout, acceptance deferred
+
+- Legacy Design color/box drafts now retain captured context across display
+  refreshes; successful commits acknowledge only their own field. Clean defaults
+  do not become drafts. Save/Preview preflight can commit valid owned input before
+  snapshot; clean-only navigation never commits. Stale/invalid/IME input remains
+  visible, with Escape recovery and truthful color draft accessibility values.
+- Shadow tuple parsing no longer discards invalid/empty/extra components.
+  Equivalent box-style commits acknowledge no-change without new history or a
+  permanently dirty valid field.
+- Preview's retained artifact checks live project identity at Open/Export/build
+  boundaries without requiring a newer revision or changing snapshot bytes.
+  Check Website exposes active local-write status instead of restarting it.
+  Silent dismissal no longer leaves a taskless Writing phase; completed/cancelled
+  writes clear obsolete Wait guidance.
+- Seven new code methods and one refined existing native journey are UNRUN. One
+  current handoff/matrix replaces competing current summaries while preserving
+  historical receipts. No build, tests, visuals, verification, commit or delivery.
+
+## 2026-11-01 —015 Preview/Check Website repair, source only
+
+- Shared findings show severity, explanation, repair and one safe existing-editor
+  action. Exact attempt/context/target and clean drafts are checked before
+  navigation; panels close only after live selection/renderer adoption.
+- Preview distinguishes latest findings from last successful output. Refresh is
+  explicit and Export retains its exact successful snapshot. Long findings
+  scroll independently of footer actions; editor section/focus restoration is
+  identity-guarded. No automatic content repair or new output capability.
+- Five new code methods and one native journey are UNRUN. No compiled, visual or
+  full-gate acceptance;015 remains IN PROGRESS. Existing work preserved.
+
+## 2026-11-01 —014 stable Inspector, source only
+
+- Shared measured tab demand respects existing pane/canvas budgets; actual pane
+  geometry retains full labels or explicit native overflow. Scaled text gets
+  adequate strip height, without a second row or smaller type.
+- Leading full-width Inspector cards and label-based adaptive fields/actions
+  refine the selected-object header, Header/Footer, Text appearance/typography
+  and component copy/recovery surfaces. Commands, drafts, IDs and data unchanged.
+- Four code tests and one future native journey added; one overflow regression
+  refined. All UNRUN. Source review only, no build/visual/full acceptance.
+
+## 2026-11-01 —013 source consistency and usability review
+
+- Shared native/output allocation and preflight now use actual destination
+  availability, matching Menu visibility. Empty links reserve no navigation slot;
+  unavailable links preserve disabled intent without a phantom Menu budget.
+- Existing Header/Footer controls explain empty/missing pages and constrained
+  custom rows in plain language. Authored values/IDs and title line policy remain.
+- Refined the existing nine code methods and one future native/Safari journey;
+  all UNRUN. Both source usability passes finished; acceptance remains deferred.
+
+## 2026-10-30 —013 narrow chrome, source only
+
+- Eligible automatic Header/Footer phone rows reserve Menu space before default
+  title shrink in shared native geometry and continuous connected CSS.
+- Custom/authored constraints and hamburger-off remain; existing settings explain
+  insufficient room. Hidden/missing links cannot create an empty decorative menu.
+- Nine code methods and one native/Safari journey added, all UNRUN. No build,
+  checks, visual acceptance or verification under the execution pause.
+
+## 2026-10-30 —012 usability and language, source only
+
+- Continuation clarifies original components versus linked/independent copies,
+  scoped counted reset, missing-data/custom-value recovery and default contents.
+  Edit original component is directly available in the shared Design/Content
+  Inspector; exact-copy return and all command/confirmation guards are retained.
+- Reusable-style creation names its solid-color/opacity sample instead of
+  implying full appearance transfer. Comparison counts name objects with custom
+  values and explain zero; reset/conversion help identifies removed values and
+  inheritance. Applied edits no longer announce themselves as saved.
+- Three further code methods plus native journey/locator refinements are UNRUN:
+  total012 source coverage5 code +1 native. No new execution or visual claims.
+
+- Reuse Formatting is directly available in the selected-object Inspector header;
+  the same guarded commands and mixed/skipped feedback are preserved.
+- Assets shows Import Images as a named action rather than an icon alone.
+- Layout uses Inner spacing, Space between items, Exact size, Fill available
+  space, Fit content and Smooth scaling; search keeps technical aliases.
+  Responsive and component source labels identify which value wins.
+- Site & Page Settings entry names agree; Settings headers visibly separate
+  app-local preferences from saved website content. Check Website and local
+  Preview copy preserve unsupported-output and no-publication boundaries.
+- Initial four source passes reviewed. Two model tests and one native journey added
+  UNRUN; no later build, check, test, screenshot or full gate is claimed.
+
+## 2026-10-30 — Targeted managed-title output correction
+
+- Header/Footer titles retain their semantic node, full accessible text and
+  editable identity while a neutral render-only text box applies a complete-line
+  limit from resolved height/current line height and the native horizontal inset.
+  Long fixed-height titles show ellipsis rather than a clipped second line in
+  the measured current Safari path. Ordinary multiline body/control paths stay
+  unchanged; hidden titles remain hidden. Six code methods and one focused
+  matched-width UI journey pass;15 originals inspected. Broader parity/full gate
+  remain deferred. This receipt does not verify subsequent012 usability source.
+
+## 2026-10-30 — Bounded native acceptance corrections (in progress)
+
+- Custom-width input no longer mistakes AppKit's committed formatted echo for
+  a new draft. Comparison and chrome-copy sheets expose their real children
+  and named status/source values to accessibility.
+- Native raster/text layers retain shared geometry when canvas validation
+  resizes the viewport; artboard masks convert once during reprojection and
+  fresh-plan adoption. Three scoped regressions pass and corrected originals
+  were inspected. All eight focused native journeys pass.
+- Preview now accepts valid named HTML pages without requiring a synthetic home
+  route; exact bytes, missing-root404 and HTTP security boundaries are tested3/3.
+  Real Safari/export cancellation/save/reopen passes. Browser fixed-height title
+  overflow still differs from native truncation and remains explicit follow-up.
+  No broad gate, commit or workflow completion is claimed.
+
+## 2026-10-29 — Focused acceptance corrections (in progress)
+
+- Text activation now establishes nested selection scope before creating the
+  inline draft; selection cannot immediately end a newly started editor.
+  Inspection-width changes reject retained IME composition even when the native
+  responder has changed. Existing duplicate-draft and new IME regressions pass.
+- Corrected invalid test fixture ownership/deletion, breakpoint requests and
+  output-layer expectations without relaxing canonical validation or persistence
+  assertions. All 56 new code methods pass; native/visual acceptance is pending.
+- Consolidated duplicate no-change handling while preserving established status
+  wording. [Focused receipt](evidence/SF-LOCAL-BUILDER-007-011-FOCUSED-ACCEPTANCE.md).
+
+## 2026-10-29 — Connected fluid website output (source only)
+
+- Replaced the blanket connected-fluid export blocker with a closed adapter in
+  the existing compiler: real clamp-driven dimensions/spacing, semantic flow,
+  typed Stack/Grid policy, neutral padding wrappers and retained override/
+  managed-geometry precedence. Fixed/nonconnected paths remain unchanged.
+- Added conservative, node-specific blockers for unrepresented intrinsic,
+  containing, Grid compression and coupling cases. Existing positioning/root/
+  clipped-menu/dependency safety remains; no page is silently omitted.
+- Added eleven code methods and one ordinary native Safari/export-cancel/reopen
+  journey as UNRUN source. No execution or visual certification under the hold.
+  [Evidence](evidence/SF-LOCAL-BUILDER-011-CONNECTED-FLUID-OUTPUT.md).
+
+## 2026-10-29 — Independent Header/Footer reuse (source only)
+
+- Added native Copy Header/Footer to Pages action and compact target sheet with
+  explicit unchecked choices, existing-role status/counts and independent-copy
+  explanation. Completed copies remain ordinary editable Header/Footer content.
+- Shared page-duplication remapping now prepares fresh owned graph/layer IDs for
+  one atomic add-missing transaction, retaining same-project references, body/
+  route/metadata identity and responsive/fluid intent. Existing chrome is always
+  kept; no Merge/Replace or global live linking. Background dependency checks,
+  stale/draft/IME/cancel guards and renderer-adoption feedback protect the action.
+- Added eleven code methods and two native journey sources, all UNRUN. Owner
+  execution hold remains; no runtime or visual acceptance is claimed.
+  [Evidence](evidence/SF-LOCAL-BUILDER-010-PAGE-CHROME-REUSE.md).
+
+## 2026-10-29 — Formatting reuse (source only)
+
+- Added compact native Edit/Inspector Copy/Paste Text Style and Appearance
+  actions using a strict private canonical envelope and the existing atomic
+  Design registry/history path. Preserve geometry/content, omitted/defaulted/
+  authored values, token/style references and target-owned layer identities.
+- Added common-bundle/mixed-source feedback, explicit incompatible subsets,
+  bounded background image-resource validation, stale/cancel/draft guards and
+  renderer-adoption completion status. Normal text shortcuts are unchanged.
+- Added fifteen code methods and one native journey, all UNRUN. Same-project,
+  base Default-state scope only. No build/check/test/visual execution under the
+  owner hold; mandatory acceptance remains deferred.
+  [Evidence](evidence/SF-LOCAL-BUILDER-009-FORMATTING-REUSE.md).
+
+## 2026-10-29 — Responsive layout review (source only)
+
+- Extended the existing Compare interface with typed horizontal boundary Review
+  suggestions from shared scene geometry, exact width/clip measurements and
+  winning sizing provenance. Hidden/structural chrome and overflow-visible
+  parent boundaries are excluded; deliberate intent is not diagnosed as an error.
+- Added native Review element, refresh/cancel/progress/empty/error guidance and
+  identity-gated exact-width selection/Inspector navigation. Ordinary existing
+  controls remain the only correction path; derived reviews do not enter history
+  or package state. Presentation is capped with an explicit total, never false green.
+- Added ten model/integration and one real-control UI journey as UNRUN source.
+  No build/test/check/visual execution under the renewed owner hold; mandatory
+  later acceptance is deferred. [Evidence](evidence/SF-LOCAL-BUILDER-008-RESPONSIVE-LAYOUT-REVIEW.md).
+- Reconciled007's real partial receipts: built, initial3/9 passed; fixture rerun
+  4/6 passed with two failed methods. Missing defaults and owned recovery paths
+  were corrected; latest viewport initialization fixes remain unverified.
+
+## 2026-10-28 — Custom responsive inspection width (initial source receipt)
+
+- Added native scene-local CSS Width entry with Return/valid blur commit,
+  Escape restore and bounded invalid/stale/IME feedback. Presets remain exact
+  reference actions; effective scope follows the existing half-open ranges.
+- Routed actual width through responsive layout, Inspector, insertion and native
+  Preview; comparison now prepares three references plus a distinct current sample
+  asynchronously with identity/cancellation guards. Canonical geometry/history
+  and package data do not store inspection width.
+- Shared exact half-open static media conditions remove fractional boundary gaps.
+- Nine model/integration tests and one native UI journey added as UNRUN source.
+  Subsequent historical build/partial test execution is reconciled above; no
+  current acceptance or app/browser/visual result is claimed.
+  [Evidence/limitations](evidence/SF-LOCAL-BUILDER-007-CUSTOM-RESPONSIVE-WIDTH.md).
+
 ## 2026-10-28 — Verified local authoring/preview checkpoint
 
 - Final ./sf verify passed:785 unit/integration +151 UI =936 passes,0 failures,

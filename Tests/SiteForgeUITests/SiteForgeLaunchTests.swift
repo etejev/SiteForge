@@ -48,6 +48,195 @@ private enum PointerWindowPlacement {
 
 @MainActor
 final class SiteForgeLaunchTests: XCTestCase {
+    // SF-LOCAL-BUILDER-008; SF-0606-002/003/004/006/008,
+    // SF-0602-002/003/004/006, SF-0402-002/003/006, SF-0701-003/006.
+    // SOURCE ONLY. Later acceptance must inspect every retained original.
+    func testResponsiveLayoutReviewJumpsToExactElementAndRefreshesAfterFixJourney() throws {
+        let application = launchWorkspace()
+        XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
+        application.buttons["canvas.empty.insert.frame"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        selectNavigatorTab("Layers", identifier: "layers", in: application)
+        let row = application.buttons.matching(NSPredicate(format:
+            "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 3)); XCTAssertTrue(row.isSelected)
+        let nodeID = row.identifier.replacingOccurrences(of: "navigator.layer.", with: "")
+        selectInspectorTab("Layout", identifier: "layout", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.layout.x"], with: "400", in: application)
+        attachWindowScreenshot(application, named: "SF-REVIEW Desktop fixed authored Frame")
+        let width = application.textFields["canvas.viewport.width"]
+        replaceText(in: width, with: "430", application: application)
+        width.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.width", containing: "430"))
+        let findingPrefix = "responsive.finding." + nodeID + ".430.0.true."
+        func revealCurrentSample() -> XCUIElement {
+            XCTAssertTrue(waitForLiveValue(in: application, identifier: "responsive.compare.status", containing: "horizontal boundary reviews"))
+            let scroll = application.scrollViews["responsive.compare.results"]
+            var card = application.descendants(matching: .any)["responsive.compare.card.current"]
+            for _ in 0..<10 where !card.exists || !card.isHittable {
+                scroll.scroll(byDeltaX: 0, deltaY: -180)
+                card = application.descendants(matching: .any)["responsive.compare.card.current"]
+            }
+            XCTAssertTrue(card.exists)
+            return card
+        }
+        func openComparisonAndFindCurrentReview() -> XCUIElement {
+            application.buttons["canvas.viewport.compare"].click()
+            XCTAssertTrue(application.descendants(matching: .any)["responsive.compare.sheet"].waitForExistence(timeout: 3))
+            XCTAssertTrue(waitForValue(revealCurrentSample(), containing: "430"))
+            let scroll = application.scrollViews["responsive.compare.results"]
+            var button = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", findingPrefix)).firstMatch
+            for _ in 0..<10 where !button.exists || !button.isHittable {
+                scroll.scroll(byDeltaX: 0, deltaY: -180)
+                button = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", findingPrefix)).firstMatch
+            }
+            XCTAssertTrue(waitForHittable(button, in: application))
+            return button
+        }
+        let review = openComparisonAndFindCurrentReview()
+        XCTAssertTrue(review.isEnabled)
+        XCTAssertTrue(review.label.contains("Frame") && review.label.contains("430"))
+        attachWindowScreenshot(application, named: "SF-REVIEW custom Mobile measured boundary")
+        review.click()
+        XCTAssertTrue(waitForNonexistence(application.descendants(matching: .any)["responsive.compare.sheet"]))
+        XCTAssertTrue(application.buttons["navigator.layer." + nodeID].isSelected)
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.width", containing: "430"))
+        XCTAssertTrue(waitForLiveSemanticText(in: application, identifier: "inspector.layout.responsiveReview", containing: "430"))
+        let x = application.textFields["inspector.layout.x"]
+        XCTAssertTrue(x.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForValue(x, containing: "400"))
+        attachWindowScreenshot(application, named: "SF-REVIEW exact node Layout and winning width source")
+        replaceStructuralLayoutField(x, with: "20", in: application)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Set here · Mobile"))
+        application.buttons["canvas.viewport.compare"].click()
+        let current = revealCurrentSample()
+        XCTAssertTrue(waitForValue(current, containing: "430"))
+        XCTAssertTrue(waitForValue(current, containing: "0 horizontal boundary reviews"))
+        XCTAssertFalse(application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", findingPrefix)).firstMatch.exists)
+        attachWindowScreenshot(application, named: "SF-REVIEW atomic Mobile correction refreshed")
+        application.buttons["responsive.compare.done"].click()
+        application.menuBars.menuBarItems["Edit"].click(); application.menuItems["Undo"].click()
+        let restored = openComparisonAndFindCurrentReview()
+        XCTAssertTrue(restored.exists)
+        attachWindowScreenshot(application, named: "SF-REVIEW Undo restores measured review")
+        application.buttons["responsive.compare.done"].click()
+        application.menuBars.menuBarItems["Edit"].click(); application.menuItems["Redo"].click()
+        application.buttons["canvas.viewport.compare"].click()
+        XCTAssertTrue(waitForValue(revealCurrentSample(), containing: "0 horizontal boundary reviews"))
+        attachWindowScreenshot(application, named: "SF-REVIEW Redo preserves corrected geometry")
+        application.buttons["responsive.compare.done"].click()
+        XCTAssertTrue(application.buttons["navigator.layer." + nodeID].isSelected)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+    }
+
+    // SF-LOCAL-BUILDER-007; SF-0602-002/003/004/006/008,
+    // SF-0601-003/006, SF-0604-003/006, SF-0401-003/006.
+    // SOURCE ONLY: not executed or visually accepted during the owner hold.
+    func testCustomResponsiveViewportWidthEntryComparisonAndCancellationJourney() throws {
+        let application = launchWorkspace()
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        assertNormalWindowPolicy(in: application)
+        let widthID = "canvas.viewport.width"
+        func committedWidth(_ text: String) -> Bool {
+            let formatter = NumberFormatter()
+            formatter.locale = .current; formatter.numberStyle = .decimal
+            let expected = formatter.number(from: text)?.doubleValue
+            let predicate = NSPredicate { _, _ in
+                let live = application.textFields[widthID]
+                guard live.exists, let value = live.value as? String,
+                      !value.contains("uncommitted draft"),
+                      let first = value.split(separator: ";").first,
+                      let number = formatter.number(from: String(first)) else { return false }
+                return number.doubleValue == expected
+            }
+            return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 3) == .completed
+        }
+        func enterWidth(_ text: String) {
+            let field = application.textFields[widthID]
+            XCTAssertTrue(waitForHittable(field, in: application))
+            replaceText(in: field, with: text, application: application)
+            XCTAssertTrue(waitForKeyboardFocus(application.textFields[widthID], in: application))
+            application.textFields[widthID].typeKey(.return, modifierFlags: [])
+        }
+        enterWidth("430")
+        XCTAssertTrue(committedWidth("430"))
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.preset", containing: "Mobile"))
+        application.buttons["canvas.empty.insert.frame"].click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        selectNavigatorTab("Layers", identifier: "layers", in: application)
+        let row = application.buttons.matching(NSPredicate(format:
+            "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Frame")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 3)); XCTAssertTrue(row.isSelected)
+        let nodeID = row.identifier.replacingOccurrences(of: "navigator.layer.", with: "")
+        XCTAssertTrue(application.descendants(matching: .any)["canvas.object." + nodeID].exists)
+        attachWindowScreenshot(application, named: "SF-WIDTH custom 430 Mobile insertion")
+
+        for (width, breakpoint) in [("599", "Mobile"), ("600", "Tablet"),
+                                    ("900", "Tablet"), ("1023", "Tablet"), ("1024", "Desktop")] {
+            enterWidth(width)
+            XCTAssertTrue(committedWidth(width), "Require committed numeric width, independent of locale grouping")
+            XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.preset", containing: breakpoint))
+            XCTAssertTrue(application.buttons["navigator.layer." + nodeID].isSelected)
+        }
+        attachWindowScreenshot(application, named: "SF-WIDTH exact 1024 Desktop boundary")
+
+        // Genuine native blur commits; Compare is reached by normal traversal.
+        replaceText(in: application.textFields[widthID], with: "900", application: application)
+        application.textFields[widthID].typeKey(.tab, modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.viewport.compare"], in: application))
+        XCTAssertTrue(committedWidth("900"))
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.preset", containing: "Tablet"))
+        attachWindowScreenshot(application, named: "SF-WIDTH custom 900 Tablet focus loss")
+
+        replaceText(in: application.textFields[widthID], with: "430", application: application)
+        application.textFields[widthID].typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(committedWidth("900"))
+        enterWidth("invalid")
+        XCTAssertTrue(application.descendants(matching: .any)["canvas.viewport.width.validation"].waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.preset", containing: "Tablet"))
+        XCTAssertTrue(application.buttons["navigator.layer." + nodeID].isSelected)
+        attachWindowScreenshot(application, named: "SF-WIDTH invalid draft preserves Tablet")
+        application.textFields[widthID].typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(committedWidth("900"))
+
+        application.buttons["canvas.viewport.compare"].click()
+        let sheet = application.descendants(matching: .any)["responsive.compare.sheet"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-WIDTH comparison opened current context")
+        for reference in ["desktop", "tablet", "mobile"] {
+            XCTAssertTrue(revealResponsiveComparisonControl("responsive.compare.card." + reference,
+                in: application, scrollDelta: reference == "desktop" ? 180 : -180).exists)
+        }
+        _ = revealResponsiveComparisonControl("responsive.compare.card.current", in: application)
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "responsive.compare.card.current", containing: "900"))
+        attachWindowScreenshot(application, named: "SF-WIDTH current sample with preset references")
+        _ = revealResponsiveComparisonControl("responsive.compare.review.desktop", in: application, scrollDelta: 180)
+        application.buttons["responsive.compare.review.desktop"].click()
+        _ = revealResponsiveComparisonControl("responsive.compare.card.current", in: application)
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "responsive.compare.card.current", containing: "1440"))
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForNonexistence(sheet))
+        XCTAssertTrue(committedWidth("1440"))
+        XCTAssertTrue(application.buttons["navigator.layer." + nodeID].isSelected)
+        XCTAssertTrue(application.descendants(matching: .any)["canvas.object." + nodeID].exists)
+        attachWindowScreenshot(application, named: "SF-WIDTH exact Desktop reference preserves identity")
+    }
+
+    private func revealResponsiveComparisonControl(_ identifier: String, in application: XCUIApplication,
+                                                  scrollDelta: CGFloat = -180) -> XCUIElement {
+        let adopted = waitForLiveValue(in: application, identifier: "responsive.compare.status", containing: "horizontal boundary reviews")
+        if !adopted { attachReadinessDiagnostics(for: application) }
+        XCTAssertTrue(adopted)
+        let scroll = application.scrollViews["responsive.compare.results"]
+        var element = application.descendants(matching: .any)[identifier].firstMatch
+        for _ in 0..<12 where !element.exists || !element.isHittable {
+            scroll.scroll(byDeltaX: 0, deltaY: scrollDelta)
+            element = application.descendants(matching: .any)[identifier].firstMatch
+        }
+        XCTAssertTrue(element.exists && element.isHittable, "Comparison control must be genuinely revealed before interaction")
+        return element
+    }
+
     // Opt-in owner authoring audit: attach to the already-open independent
     // project, never launch/terminate the ordinary app or generate project data.
     // SF-0508-002/006. Not part of the unattended fixture-driven suite.
@@ -147,7 +336,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     // dismissal, not an appearance error or an empty history transaction.
     func testSiteSettingsUnchangedApplyClosesWithoutHistoryJourney() throws {
         let application = launchWorkspace()
-        componentMenu("File", "Site Settings…", in: application)
+        componentMenu("File", "Site & Page Settings…", in: application)
         XCTAssertTrue(application.buttons["siteSettings.apply"].waitForExistence(timeout: 5))
         application.buttons["siteSettings.apply"].click()
         XCTAssertTrue(application.buttons["siteSettings.apply"].waitForNonExistence(timeout: 5))
@@ -156,7 +345,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.menuBars.menuBarItems["Edit"].click()
         XCTAssertFalse(application.menuItems["Undo"].isEnabled)
         application.typeKey(.escape, modifierFlags: [])
-        componentMenu("File", "Site Settings…", in: application)
+        componentMenu("File", "Site & Page Settings…", in: application)
         XCTAssertEqual(application.textFields["siteSettings.siteName"].value as? String, "")
         attachWindowScreenshot(application, named: "Workflow unchanged Site Settings remains truthful")
         application.typeKey(.return, modifierFlags: [])
@@ -353,7 +542,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             if !heading { token("Muted Lavender", color: "#D4C6E8FF") }
             bind(heading ? "Warm White" : "Muted Lavender", target: "Text Foreground")
             selectInspectorTab("Layout", identifier: "layout", in: application)
-            sizing("width", "Fill parent"); sizing("height", "Hug content")
+            sizing("width", "Fill available space"); sizing("height", "Fit content")
         }
         func editorialColumn(_ sectionID: String, expectedStacks: Int) throws -> String {
             let stacks = application.buttons.matching(NSPredicate(format:
@@ -365,7 +554,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             let removeFill = application.buttons["inspector.design.fillRemove"]
             if removeFill.exists && removeFill.isEnabled { revealStructuralLayoutControl(removeFill, in: application).click() }
             selectInspectorTab("Layout", identifier: "layout", in: application)
-            sizing("width", "Fill parent"); sizing("height", "Hug content")
+            sizing("width", "Fill available space"); sizing("height", "Fit content")
             replaceStructuralLayoutField(application.textFields["inspector.layout.container.padding"], with: "0", in: application)
             replaceStructuralLayoutField(application.textFields["inspector.layout.container.gap"], with: "24", in: application)
             bound("maxWidth", "720")
@@ -387,7 +576,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             selectLayers([id]); selectInspectorTab("Design", identifier: "design", in: application)
             bind("Dark Surface", target: "Fill")
             selectInspectorTab("Layout", identifier: "layout", in: application)
-            sizing("height", "Hug content")
+            sizing("height", "Fit content")
             replaceStructuralLayoutField(application.textFields["inspector.layout.container.padding"], with: "48", in: application)
             bound("minHeight", minimum)
         }
@@ -396,7 +585,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             let button = application.buttons["inspector.sizing.convertContent"]
             if button.isEnabled {
                 revealStructuralLayoutControl(button, in: application).click()
-                let confirm = application.sheets.firstMatch.buttons["Convert and Remove Dimension Overrides"].firstMatch
+                let confirm = application.sheets.firstMatch.buttons["Convert to automatic sizing"].firstMatch
                 XCTAssertTrue(confirm.waitForExistence(timeout: 3)); confirm.click()
             }
             XCTAssertTrue(waitForValue(application.popUpButtons["inspector.sizing.heightMode"], containing: "Hug"))
@@ -483,7 +672,7 @@ final class SiteForgeLaunchTests: XCTestCase {
                 selectInspectorTab("Layout", identifier: "layout", in: application)
                 if !(application.popUpButtons["inspector.sizing.heightMode"].value as? String ?? "").contains("Hug") {
                     revealStructuralLayoutControl(application.buttons["inspector.sizing.convertContent"], in: application).click()
-                    let confirm = application.sheets.firstMatch.buttons["Convert and Remove Dimension Overrides"].firstMatch
+                    let confirm = application.sheets.firstMatch.buttons["Convert to automatic sizing"].firstMatch
                     XCTAssertTrue(confirm.waitForExistence(timeout: 3)); confirm.click()
                 }
                 replaceStructuralLayoutField(application.textFields["inspector.layout.container.padding"], with: "48", in: application)
@@ -588,10 +777,23 @@ final class SiteForgeLaunchTests: XCTestCase {
         let object = canvasObject(named: "Text object", in: application)
         XCTAssertTrue(object.waitForExistence(timeout: 5))
         let identifier = object.identifier
-        componentMenu("Selection", "Edit Selected Text", in: application)
         let editor = application.textViews["canvas.text.editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitForKeyboardFocus(editor, in: application))
+        @MainActor func beginInlineEdit() {
+            if application.state != .runningForeground { application.activate() }
+            XCTAssertTrue(application.wait(for: .runningForeground, timeout: 5))
+            let selected = application.descendants(matching: .any)[identifier].firstMatch
+            XCTAssertTrue(selected.exists && selected.isSelected)
+            // Do not let XCTest discover/reopen a global menu match while
+            // AppKit is tracking the Selection menu for this window.
+            let selection = application.menuBars.menuBarItems["Selection"]
+            selection.click()
+            let action = selection.menus.firstMatch.menuItems["Edit Selected Text"]
+            XCTAssertTrue(waitForEnabled(action))
+            action.click()
+            XCTAssertTrue(editor.waitForExistence(timeout: 5))
+            XCTAssertTrue(waitForKeyboardFocus(editor, in: application))
+        }
+        beginInlineEdit()
         application.menuBars.menuBarItems["Edit"].click()
         let selectAll = application.menuItems["Select All"]
         XCTAssertTrue(selectAll.isEnabled)
@@ -603,9 +805,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let committed = application.descendants(matching: .any)[identifier].firstMatch
         XCTAssertTrue(waitForValue(committed, containing: "Text: Exact replacement"))
         XCTAssertEqual(canvasObject(named: "Text object", in: application).identifier, identifier)
-        componentMenu("Selection", "Edit Selected Text", in: application)
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitForKeyboardFocus(editor, in: application))
+        beginInlineEdit()
         editor.typeKey("a", modifierFlags: .command)
         editor.typeText("Cancelled replacement")
         XCTAssertEqual(editor.value as? String, "Cancelled replacement")
@@ -787,7 +987,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         open()
         XCTAssertTrue((reveal("siteSettings.pageIndexing").value as? String ?? "").contains("Discourage indexing"))
         reveal("siteSettings.pageReset").click()
-        XCTAssertTrue(waitForValue(application.staticTexts["siteSettings.previewSources"], containing: "inherited"))
+        XCTAssertTrue(waitForValue(application.staticTexts["siteSettings.previewSources"], containing: "Uses website default"))
         attachWindowScreenshot(application, named: "SF-SOURCE-01 inherited page reset draft")
         application.typeKey(.escape, modifierFlags: [])
         open()
@@ -818,7 +1018,7 @@ final class SiteForgeLaunchTests: XCTestCase {
     func testSiteSettingsMetadataApplyCancelAndUndoJourney() throws {
         let application = launchWorkspace()
         assertNormalWindowPolicy(in: application)
-        componentMenu("File", "Site Settings…", in: application)
+        componentMenu("File", "Site & Page Settings…", in: application)
         let name = application.textFields["siteSettings.siteName"]
         XCTAssertTrue(name.waitForExistence(timeout: 5))
         replaceText(in: revealSiteSettingsControl("siteSettings.siteName", in: application), with: "Aurora", application: application)
@@ -828,20 +1028,20 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-SITE SETTINGS project metadata draft")
         application.buttons["siteSettings.apply"].click()
         XCTAssertTrue(application.buttons["siteSettings.apply"].waitForNonExistence(timeout: 5))
-        componentMenu("File", "Site Settings…", in: application)
+        componentMenu("File", "Site & Page Settings…", in: application)
         XCTAssertEqual(application.textFields["siteSettings.siteName"].value as? String, "Aurora")
         XCTAssertEqual(application.textFields["siteSettings.pageTitle"].value as? String, "Aurora — Coastal Journal")
         replaceText(in: revealSiteSettingsControl("siteSettings.siteName", in: application), with: "Cancelled draft", application: application)
         application.typeKey(.escape, modifierFlags: [])
-        componentMenu("File", "Site Settings…", in: application)
+        componentMenu("File", "Site & Page Settings…", in: application)
         XCTAssertEqual(application.textFields["siteSettings.siteName"].value as? String, "Aurora")
         application.typeKey(.escape, modifierFlags: [])
         componentMenu("Edit", "Undo", in: application)
-        componentMenu("File", "Site Settings…", in: application)
+        componentMenu("File", "Site & Page Settings…", in: application)
         XCTAssertEqual(application.textFields["siteSettings.siteName"].value as? String, "")
         application.typeKey(.escape, modifierFlags: [])
         componentMenu("Edit", "Redo", in: application)
-        componentMenu("File", "Site Settings…", in: application)
+        componentMenu("File", "Site & Page Settings…", in: application)
         XCTAssertEqual(application.textFields["siteSettings.siteName"].value as? String, "Aurora")
         attachWindowScreenshot(application, named: "SF-SITE SETTINGS restored canonical metadata")
         application.typeKey(.escape, modifierFlags: [])
@@ -1398,7 +1598,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForKeyboardFocus(identifier: "inspector.layout.width", in: application))
         width.typeKey(.tab, modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(identifier: "inspector.layout.height", in: application))
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "defaulted"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Default · Desktop"))
         application.textFields["inspector.layout.height"].typeKey(.tab, modifierFlags: .shift)
         XCTAssertTrue(waitForKeyboardFocus(identifier: "inspector.layout.width", in: application))
         width.typeKey("a", modifierFlags: .command); width.typeText("320")
@@ -1826,7 +2026,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(widthField.waitForExistence(timeout: 5))
         XCTAssertTrue(heightField.waitForExistence(timeout: 5))
         XCTAssertEqual(xField.label, "X geometry")
-        XCTAssertTrue((xField.value as? String)?.contains("authored") == true)
+        XCTAssertTrue((xField.value as? String)?.contains("Set here · Desktop") == true)
         replaceStructuralLayoutField(xField, with: "121", in: application)
         XCTAssertTrue(waitForValueToChange(geometry, from: afterPointerResize))
         let afterNumericMove = try XCTUnwrap(geometry.value as? String)
@@ -1967,13 +2167,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         let selected = application.descendants(matching: .any)["status.selectionPath"].firstMatch.label
         let height = revealStructuralLayoutControl(application.descendants(matching: .any)["inspector.sizing.heightMode"].firstMatch, in: application)
         height.click()
-        application.menuItems["Hug content"].click()
+        application.menuItems["Fit content"].click()
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.height"], containing: "Computed by Hug"))
         XCTAssertFalse(application.textFields["inspector.layout.height"].isEnabled)
         attachWindowScreenshot(application, named: "SF-WORKFLOW Text intrinsic Hug height")
         let width = revealStructuralLayoutControl(application.descendants(matching: .any)["inspector.sizing.widthMode"].firstMatch, in: application)
         width.click()
-        application.menuItems["Fill parent"].click()
+        application.menuItems["Fill available space"].click()
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Computed by Fill"))
         XCTAssertFalse(application.textFields["inspector.layout.width"].isEnabled)
         XCTAssertEqual(application.descendants(matching: .any)["status.selectionPath"].firstMatch.label, selected)
@@ -2000,7 +2200,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         selectInspectorTab("Layout", identifier: "layout", in: application)
         let conversionID = "inspector.sizing.convertContent"
         revealComponentPointerTarget(conversionID, in: application).click()
-        let confirm = application.sheets.firstMatch.buttons["Convert and Remove Dimension Overrides"].firstMatch
+        let confirm = application.sheets.firstMatch.buttons["Convert to automatic sizing"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 3))
         application.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "240"))
@@ -2013,7 +2213,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForWorkspaceReady(application))
         replaceStructuralLayoutField(application.textFields["inspector.layout.width"], with: "180", in: application)
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "180"))
-        XCTAssertTrue(waitForValue(application.staticTexts["inspector.sizing.widthMode.source"], containing: "Effective Fixed"))
+        XCTAssertTrue(waitForValue(application.staticTexts["inspector.sizing.widthMode.source"], containing: "Exact size"))
         XCTAssertTrue(application.buttons[layer].isSelected)
         attachWindowScreenshot(application, named: "SF-LOCAL-BUILDER-003 Mobile explicit width winner")
         revealComponentPointerTarget("inspector.sizing.width.resetOverride", in: application).click()
@@ -2114,13 +2314,13 @@ final class SiteForgeLaunchTests: XCTestCase {
 
         preset.click(); application.menuItems["Tablet"].click()
         XCTAssertTrue(waitForValue(preset, containing: "Tablet"))
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Inherited from Desktop"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Uses Desktop"))
         let tabletX = application.textFields["inspector.layout.x"]
         XCTAssertTrue(tabletX.waitForExistence(timeout: 3))
         XCTAssertTrue(tabletX.isEnabled, "An inherited responsive value must remain editable when its selected node is clipped by the artboard.")
         tabletX.doubleClick()
         tabletX.typeKey("a", modifierFlags: .command); tabletX.typeText("48"); tabletX.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Authored for Tablet"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Set here · Tablet"))
         XCTAssertTrue(application.buttons["inspector.layout.resetBreakpointOverrides"].isEnabled)
         attachWindowScreenshot(application, named: "SF-AUTHORING-016 Tablet authored override")
 
@@ -2128,32 +2328,32 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValue(preset, containing: "Mobile"))
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["status.selectionPath"],
                                    containing: "1 selected; primary selection present; selection outside Mobile artboard"))
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Inherited from Desktop"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Uses Desktop"))
         let width = application.textFields["inspector.layout.width"]
         XCTAssertTrue(width.waitForExistence(timeout: 3))
         XCTAssertTrue(width.isEnabled)
         width.doubleClick()
         width.typeKey("a", modifierFlags: .command); width.typeText("320"); width.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Authored for Mobile"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Set here · Mobile"))
         let mobileX = application.textFields["inspector.layout.x"]
         XCTAssertTrue(mobileX.isEnabled)
         mobileX.doubleClick()
         mobileX.typeKey("a", modifierFlags: .command); mobileX.typeText("24"); mobileX.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Authored for Mobile"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Set here · Mobile"))
         XCTAssertFalse((application.descendants(matching: .any)["status.selectionPath"].value as? String)?
             .contains("outside Mobile artboard") == true)
         attachWindowScreenshot(application, named: "SF-AUTHORING-016 Mobile authored override")
 
         let reset = application.buttons["inspector.layout.resetBreakpointOverrides"]
         XCTAssertTrue(reset.isHittable); reset.click()
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Inherited from Desktop"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Uses Desktop"))
         XCTAssertFalse(application.buttons["inspector.layout.resetBreakpointOverrides"].isEnabled)
         attachWindowScreenshot(application, named: "SF-AUTHORING-016 Mobile reset inheritance")
 
         preset.click(); application.menuItems["Tablet"].click()
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Authored for Tablet"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Set here · Tablet"))
         application.typeKey("z", modifierFlags: .command)
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Authored for Mobile") ||
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Set here · Mobile") ||
             application.buttons["toolbar.redo"].isEnabled)
         application.typeKey("z", modifierFlags: [.command, .shift])
         XCTAssertTrue(waitForValue(preset, containing: "Tablet"))
@@ -2198,7 +2398,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let gap = application.textFields["inspector.layout.container.gap"]
         XCTAssertTrue(gap.waitForExistence(timeout: 3))
         replaceStructuralLayoutField(gap, with: "8", in: application)
-        XCTAssertTrue(waitForValue(gap, containing: "Authored for Mobile"))
+        XCTAssertTrue(waitForValue(gap, containing: "Set here · Mobile"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-018 Mobile Stack override")
 
         selectShellTab("Layers", directIdentifier: "navigator.tab.layers", overflowIdentifier: "navigator.tab.overflow", in: application)
@@ -2266,7 +2466,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let columns = application.textFields["inspector.layout.container.columns"]
         XCTAssertTrue(columns.waitForExistence(timeout: 3)); reveal(columns)
         replaceStructuralLayoutField(columns, with: "1", in: application)
-        XCTAssertTrue(waitForValue(columns, containing: "Authored for Tablet"))
+        XCTAssertTrue(waitForValue(columns, containing: "Set here · Tablet"))
         XCTAssertTrue(waitForLiveValue(
             in: application,
             identifier: "inspector.layout.container.announcement",
@@ -2291,28 +2491,27 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(xField.waitForExistence(timeout: 3))
         xField.doubleClick(); xField.typeKey("a", modifierFlags: .command)
         xField.typeText("48"); xField.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(waitForValue(xField, containing: "Authored for Tablet"))
+        XCTAssertTrue(waitForValue(xField, containing: "Set here · Tablet"))
 
         let compare = application.buttons["canvas.viewport.compare"]
         XCTAssertTrue(waitForHittable(compare, in: application)); compare.click()
         XCTAssertTrue(application.descendants(matching: .any)["responsive.compare.sheet"].waitForExistence(timeout: 3))
-        let desktop = application.descendants(matching: .any)["responsive.compare.card.desktop"]
-        let tablet = application.descendants(matching: .any)["responsive.compare.card.tablet"]
-        let mobile = application.descendants(matching: .any)["responsive.compare.card.mobile"]
-        XCTAssertTrue(desktop.exists && tablet.exists && mobile.exists)
+        let desktop = revealResponsiveComparisonControl("responsive.compare.card.desktop", in: application, scrollDelta: 180)
         XCTAssertTrue((desktop.value as? String)?.contains("Desktop base source") == true)
-        XCTAssertTrue((tablet.value as? String)?.contains("1 geometry override") == true)
+        let tablet = revealResponsiveComparisonControl("responsive.compare.card.tablet", in: application)
+        XCTAssertTrue((tablet.value as? String)?.contains("Custom size or position: 1 object") == true)
         XCTAssertTrue((tablet.value as? String)?.contains("authored geometry") == true)
+        let mobile = revealResponsiveComparisonControl("responsive.compare.card.mobile", in: application)
         XCTAssertTrue((mobile.value as? String)?.contains("inherited geometry") == true)
         attachWindowScreenshot(application, named: "SF-AUTHORING-101 responsive comparison selection")
 
-        let reviewMobile = application.buttons["responsive.compare.review.mobile"]
+        let reviewMobile = revealResponsiveComparisonControl("responsive.compare.review.mobile", in: application)
         XCTAssertTrue(waitForHittable(reviewMobile, in: application)); reviewMobile.click()
         XCTAssertTrue(waitForValue(preset, containing: "Mobile"))
         XCTAssertTrue(application.descendants(matching: .any)["responsive.compare.sheet"].exists)
         application.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForNonexistence(application.descendants(matching: .any)["responsive.compare.sheet"]))
-        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Inherited from Desktop"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.layout.x"], containing: "Uses Desktop"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-101 Mobile reviewed without authoring")
     }
 
@@ -2348,7 +2547,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealStructuralLayoutControl(application.buttons["inspector.layout.fluid.apply"], in: application).click()
         XCTAssertTrue(waitForValue(padding(), containing: "32"))
         XCTAssertFalse(application.textFields["inspector.layout.container.padding"].isEnabled)
-        XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.container.padding.source"], containing: "Fluid responsive"))
+        XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.container.padding.source"], containing: "Smooth scaling"))
         attachWindowScreenshot(application, named: "SF-SOURCE-03 connected Section fluid padding Desktop")
         revealStructuralLayoutControl(application.buttons["inspector.layout.container.padding.fluid"], in: application).click()
         XCTAssertTrue(waitForHittable(application.buttons["inspector.layout.fluid.edit"], in: application))
@@ -2364,7 +2563,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.textFields["inspector.layout.container.padding"].isEnabled)
         replaceStructuralLayoutField(padding(), with: "10", in: application)
         XCTAssertTrue(waitForValue(padding(), containing: "10"))
-        XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.container.padding.source"], containing: "Authored for Tablet"))
+        XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.container.padding.source"], containing: "Set here · Tablet"))
         attachWindowScreenshot(application, named: "SF-SOURCE-03 Section Tablet override with fluid intent retained")
         revealStructuralLayoutControl(application.buttons["inspector.layout.container.padding.reset"], in: application).click()
         XCTAssertTrue(waitForValue(padding(), containing: "16"))
@@ -2453,7 +2652,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealStructuralLayoutControl(application.buttons["inspector.layout.fluid.remove"], in: application).click()
         XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.fluid.current"], containing: "Fixed Desktop fallback"))
         componentMenu("Edit", "Undo", in: application)
-        XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.fluid.current"], containing: "Fluid responsive value"))
+        XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.fluid.current"], containing: "Smooth scaling"))
         attachWindowScreenshot(application, named: "SF-SOURCE-04 Mobile fluid intent restored by Undo")
     }
 
@@ -2487,7 +2686,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             field.click(); field.typeText(value)
         }
         revealStructuralLayoutControl(application.buttons["inspector.layout.fluid.apply"], in: application).click()
-        XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.fluid.provenance"], containing: "2 applicable"))
+        XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.fluid.provenance"], containing: "Set here · 2 compatible"))
         XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.fluid.current"], containing: "300"))
         XCTAssertTrue(application.buttons["inspector.layout.fluid.remove"].exists,
             "Equal ranges with distinct FluidValueIDs must present one common range, not spurious Mixed")
@@ -2520,7 +2719,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         }
         revealStructuralLayoutControl(application.buttons["inspector.layout.fluid.apply"], in: application).click()
         XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.fluid.announcement"],
-                                   containing: "committed"))
+                                   containing: "applied"))
         XCTAssertTrue(application.buttons["inspector.layout.fluid.remove"].exists)
         attachWindowScreenshot(application, named: "SF-AUTHORING-102 fluid width authored at Desktop")
 
@@ -2542,7 +2741,7 @@ final class SiteForgeLaunchTests: XCTestCase {
                       "Escape must cancel the draft without replacing the committed clamp")
         revealStructuralLayoutControl(application.buttons["inspector.layout.fluid.remove"], in: application).click()
         XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.fluid.announcement"],
-                                   containing: "fixed authored value restored"))
+                                   containing: "uses the base exact value"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-102 fluid width removed to fixed fallback")
     }
 
@@ -2632,6 +2831,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         // element-relative coordinates remain within the native control across
         // display placements, unlike an arbitrary screen coordinate.
         let opacityBeforeStepper = try XCTUnwrap(opacity.value as? String)
+        _ = revealStructuralLayoutControl(opacityStepper, in: application)
         XCTAssertTrue(waitForHittable(opacityStepper, in: application))
         opacityStepper.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75)).click()
         XCTAssertTrue(waitForValueToChange(opacity, from: opacityBeforeStepper))
@@ -2650,11 +2850,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         // first responder, while an invalid draft stays noncanonical and
         // reports validation rather than being coerced.
         replaceText(in: hex, with: "#203040FF", application: application)
+        _ = revealStructuralLayoutControl(opacity, in: application)
         opacity.click()
         XCTAssertTrue(waitForValue(hex, containing: "#203040FF"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-012 valid focus loss")
         let opacityBeforeInvalidFocusLoss = opacity.value as? String
         replaceText(in: hex, with: "invalid", application: application)
+        _ = revealStructuralLayoutControl(opacity, in: application)
         opacity.click()
         XCTAssertTrue(application.descendants(matching: .any)["inspector.design.validation"].waitForExistence(timeout: 3))
         XCTAssertEqual(opacity.value as? String, opacityBeforeInvalidFocusLoss)
@@ -3040,6 +3242,359 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)[objectID].exists)
     }
 
+    // SF-0702/0703/0308 — execution receipts are recorded in the closeout evidence.
+    // All mutations use shipping Inspector fields and native Edit menu actions.
+    // SF-LOCAL-BUILDER-014 / SF-0201-009, SF-0202-003, SF-0701-002/003/006.
+    // Real native controls, geometry and keyboard focus; no model mutation shortcut.
+    @MainActor
+    func testStableInspectorStripsFieldsDraftsAndComponentRecoveryAtNormalAndCompactWidthsJourney() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        let window = application.windows.firstMatch
+        @MainActor func strips() throws {
+            for (prefix, labels) in [
+                ("navigator.tab", [("pages", "Pages"), ("layers", "Layers"), ("elements", "Elements"), ("assets", "Assets"), ("components", "Components")]),
+                ("inspector.tab", [("design", "Design"), ("layout", "Layout"), ("content", "Content"), ("interactions", "Interactions"), ("accessibility", "Accessibility")]),
+            ] {
+                let bar = application.descendants(matching: .any)[prefix + ".bar"].firstMatch
+                XCTAssertTrue(bar.waitForExistence(timeout: 3))
+                let minima = labels.map { ceil(($0.1 as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width) + 8 }
+                let full = minima.reduce(0, +) + CGFloat(labels.count - 1) * 2 <= bar.frame.width - 6
+                if full {
+                    var previous: CGRect?
+                    for (index, entry) in labels.enumerated() {
+                        let button = application.buttons[prefix + "." + entry.0]
+                        XCTAssertTrue(button.exists); XCTAssertEqual(button.label, entry.1)
+                        XCTAssertTrue(bar.frame.insetBy(dx: -1, dy: -1).contains(button.frame))
+                        XCTAssertGreaterThanOrEqual(button.frame.width, minima[index] - 1)
+                        XCTAssertEqual(button.frame.height, 32, accuracy: 1)
+                        if let previous {
+                            XCTAssertEqual(button.frame.minY, previous.minY, accuracy: 1)
+                            XCTAssertGreaterThanOrEqual(button.frame.minX, previous.maxX)
+                        } else { XCTAssertEqual(button.frame.minX, bar.frame.minX + 3, accuracy: 1) }
+                        previous = button.frame
+                    }
+                    XCTAssertEqual(try XCTUnwrap(previous).maxX, bar.frame.maxX - 3, accuracy: 1)
+                    XCTAssertFalse(application.descendants(matching: .any)[prefix + ".overflow"].exists)
+                } else {
+                    let overflow = application.descendants(matching: .any)[prefix + ".overflow"].firstMatch
+                    XCTAssertTrue(overflow.isHittable)
+                    for entry in labels {
+                        selectShellTab(entry.1, directIdentifier: prefix + "." + entry.0,
+                            overflowIdentifier: prefix + ".overflow", in: application)
+                        XCTAssertTrue(application.buttons[prefix + "." + entry.0].isSelected
+                            || application.descendants(matching: .any)[prefix + ".overflow"].value as? String == entry.1)
+                    }
+                }
+            }
+        }
+        @MainActor func control(_ identifier: String) -> XCUIElement {
+            let live = revealComponentPointerTarget(identifier, in: application)
+            let inspector = application.descendants(matching: .any)["shell.inspector"].firstMatch
+            XCTAssertTrue(live.isHittable)
+            XCTAssertTrue(inspector.frame.insetBy(dx: -1, dy: -1).contains(live.frame))
+            XCTAssertGreaterThan(live.frame.width, 16); XCTAssertGreaterThan(live.frame.height, 12)
+            return live
+        }
+        @MainActor func resizeWindow(to width: CGFloat, atMinimum: Bool = false) {
+            let frame = window.frame
+            @MainActor func dragRightEdge(to targetWidth: CGFloat) {
+                let liveWindow = application.windows.firstMatch
+                let current = liveWindow.frame
+                // Resize along the straight AppKit edge, away from the
+                // rounded corner and Dock.
+                let start = liveWindow.coordinate(withNormalizedOffset: .init(dx: 1, dy: 0.5))
+                    .withOffset(.init(dx: -2, dy: 0))
+                let anchor = application.menuBars.firstMatch.coordinate(withNormalizedOffset: .zero)
+                let origin = anchor.screenPoint
+                let target = anchor.withOffset(.init(dx: current.minX + targetWidth - 2 - origin.x,
+                                                    dy: current.midY - origin.y))
+                start.click(forDuration: 0.2, thenDragTo: target)
+            }
+            // Drive past the minimum so AppKit's real size clamp, not the
+            // pointer grip's release offset, determines the compact width.
+            dragRightEdge(to: atMinimum ? width - 12 : width)
+            let intermediate = application.windows.firstMatch.frame.width
+            let edgeOffset = intermediate - width
+            // The native resize grip can finish a few points from the cursor
+            // target. Correct only a measured near miss after real movement;
+            // a missed hit or background app still fails the assertion.
+            if !atMinimum, application.state == .runningForeground, abs(intermediate - frame.width) > 2,
+               abs(edgeOffset) > 2, abs(edgeOffset) <= 6 {
+                dragRightEdge(to: width - edgeOffset)
+            }
+            let resized = NSPredicate { _, _ in
+                abs(application.windows.firstMatch.frame.width - width) <= 2
+            }
+            let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: resized, object: nil)], timeout: 4)
+            if result != .completed {
+                attachWindowScreenshot(application, named: "SF-INSPECTOR native width resize failure")
+            }
+            XCTAssertEqual(result, .completed,
+                           "Native resize to \(width); starting frame \(frame); live frame \(application.windows.firstMatch.frame); app state \(application.state.rawValue)")
+        }
+        try strips()
+        attachWindowScreenshot(application, named: "SF-INSPECTOR empty normal complete destination strips")
+        let maximizedWidth = window.frame.width
+        resizeWindow(to: 1280)
+        try strips()
+        attachWindowScreenshot(application, named: "SF-INSPECTOR normal 1280 complete destination strips")
+        resizeWindow(to: maximizedWidth)
+        try strips()
+        attachWindowScreenshot(application, named: "SF-INSPECTOR wider supported destination strips")
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        let title = control("inspector.navigation.title")
+        let titleValue = title.value as? String ?? ""
+        replaceText(in: title, with: "A readable project title with ordinary navigation", application: application)
+        _ = control("inspector.navigation.title.apply")
+        application.typeKey(.escape, modifierFlags: [])
+        let cancelledTitle = NSPredicate { _, _ in application.textFields["inspector.navigation.title"].value as? String == titleValue }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: cancelledTitle, object: nil)], timeout: 4), .completed)
+        let spacing = control("inspector.navigation.linkGap")
+        spacing.click(); XCTAssertTrue(waitForKeyboardFocus(spacing, in: application))
+        control("inspector.navigation.linkGap.cancel").click()
+        _ = control("inspector.navigation.includeAll")
+        attachWindowScreenshot(application, named: "SF-INSPECTOR Header title spacing and included pages normal")
+        componentMenu("Insert", "Insert Footer after Page Content", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        _ = control("inspector.navigation.title")
+        _ = control("inspector.navigation.linkGap")
+        _ = control("inspector.navigation.hamburger")
+        attachWindowScreenshot(application, named: "SF-INSPECTOR Footer shared content and menu framing normal")
+        application.buttons["toolbar.tool.select"].click()
+        application.descendants(matching: .any)["canvas.interaction"].firstMatch
+            .coordinate(withNormalizedOffset: .init(dx: 0.94, dy: 0.94)).click()
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        let frameID = canvasObject(named: "Frame", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        // Header/Footer titles also expose the truthful Text object role.
+        // Capture the newly selected insertion, not the first title in paint order.
+        let insertedTextQuery = application.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND identifier BEGINSWITH %@", "Text object", "canvas.object."))
+        let textAdopted = NSPredicate { _, _ in
+            insertedTextQuery.allElementsBoundByIndex.filter(\.isSelected).count == 1
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: textAdopted, object: nil)], timeout: 5), .completed)
+        let insertedTexts = insertedTextQuery.allElementsBoundByIndex.filter(\.isSelected)
+        XCTAssertEqual(insertedTexts.count, 1)
+        let textID = try XCTUnwrap(insertedTexts.first).identifier
+        selectInspectorTab("Design", identifier: "design", in: application)
+        let size = control("inspector.design.typography.size")
+        let original = size.value as? String ?? "14"
+        replaceText(in: size, with: "1e", application: application)
+        XCTAssertTrue(waitForKeyboardFocus(application.textFields["inspector.design.typography.size"], in: application))
+        resizeWindow(to: 1100, atMinimum: true)
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "inspector.design.typography.size", containing: "1e"))
+        application.textFields["inspector.design.typography.size"].click()
+        application.typeKey(.return, modifierFlags: [])
+        let invalid = control("inspector.design.validation")
+        XCTAssertFalse((invalid.value as? String ?? invalid.label).isEmpty)
+        let familyFrame = control("inspector.design.typography.family").frame
+        attachWindowScreenshot(application, named: "SF-INSPECTOR compact typography invalid draft retained")
+        application.textFields["inspector.design.typography.size"].click()
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "inspector.design.typography.size", containing: original))
+        XCTAssertEqual(control("inspector.design.typography.family").frame.minX, familyFrame.minX, accuracy: 1)
+        let width = control("inspector.design.typography.weight"), alignment = control("inspector.design.typography.alignment")
+        XCTAssertFalse(width.frame.intersects(alignment.frame))
+        _ = control("inspector.design.typography.foregroundHex")
+        _ = control("inspector.design.typography.effective")
+        _ = control("inspector.tokens.targetStatus")
+        _ = control("inspector.tokens.empty")
+        _ = control("inspector.design.opacity")
+        XCTAssertTrue(application.descendants(matching: .any)[textID].firstMatch.isSelected)
+        try strips()
+        attachWindowScreenshot(application, named: "SF-INSPECTOR compact full-width typography appearance and strips")
+        selectNavigatorTab("Layers", identifier: "layers", in: application)
+        revealComponentPointerTarget("navigator.layer." + frameID, in: application).click()
+        componentMenu("Component", "Create Component from Selection", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        control("inspector.component.edit").click()
+        selectStructuralLayer("Text", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        replaceComponentTextField("component.text.definition.name", with: "Introduction shared across this component", in: application)
+        control("component.text.definition.apply").click()
+        application.buttons["components.exit"].click()
+        selectInspectorTab("Content", identifier: "content", in: application)
+        let property = application.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "component.text.value.")).firstMatch
+        XCTAssertTrue(property.waitForExistence(timeout: 4))
+        let propertyID = property.identifier
+        replaceComponentTextField(propertyID, with: "A retained copy value long enough to wrap in compact Inspector layouts.", in: application)
+        application.textFields[propertyID].typeKey(.return, modifierFlags: [])
+        _ = control("inspector.component.edit"); _ = control("inspector.component.detach")
+        attachWindowScreenshot(application, named: "SF-INSPECTOR compact component copy controls and long value")
+        control("inspector.component.edit").click()
+        selectStructuralLayer("Text", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        control("component.text.definition.remove").click()
+        application.buttons["components.exit"].click()
+        selectInspectorTab("Content", identifier: "content", in: application)
+        _ = control("component.recovery.summary")
+        attachWindowScreenshot(application, named: "SF-INSPECTOR compact missing-property recovery is readable")
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(application.textFields[propertyID].waitForExistence(timeout: 4))
+        XCTAssertTrue(waitForValue(application.textFields[propertyID], containing: "A retained copy value"))
+    }
+
+    // SF-LOCAL-BUILDER-012 / SF-0203-006, SF-0701-002.
+    func testFormattingCommandsRemainVisibleAcrossInspectorDestinationsWithoutToolsDisclosureJourney() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        let selected = try XCTUnwrap(application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "canvas.object."))
+            .allElementsBoundByIndex.first(where: { $0.isSelected }))
+        let identity = selected.identifier
+        let bounds = selected.frame
+        let openingCanvasFrame = liveCanvas(in: application).frame
+        let openingCanvasValue = String(describing: liveCanvas(in: application).value ?? "")
+        let initialLiveBounds = application.descendants(matching: .any)[identity].firstMatch.frame
+        let openingGeometry = XCTAttachment(string: "snapshot-object=\(bounds)\nlive-object=\(initialLiveBounds)\ncanvas=\(openingCanvasFrame)\nviewport=\(openingCanvasValue)\nwindow=\(application.windows.firstMatch.frame)")
+        openingGeometry.name = "SF-USABILITY opening snapshot versus live geometry"
+        openingGeometry.lifetime = .keepAlways; add(openingGeometry)
+        for (title, identifier) in [("Design", "design"), ("Layout", "layout"),
+                                    ("Content", "content"), ("Interactions", "interactions"),
+                                    ("Accessibility", "accessibility")] {
+            selectInspectorTab(title, identifier: identifier, in: application)
+            // Do not open Inspector Tools: common commands must be directly
+            // exposed by the real selected-object header in every destination.
+            let menu = application.descendants(matching: .any)["inspector.formatting.menu"].firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 3))
+            XCTAssertTrue(menu.isEnabled)
+            XCTAssertTrue(menu.isHittable)
+            XCTAssertTrue(application.scrollViews["inspector.selection.scroll"].frame.contains(menu.frame))
+            XCTAssertTrue(application.descendants(matching: .any)[identity].firstMatch.isSelected)
+            if application.descendants(matching: .any)[identity].firstMatch.frame != bounds {
+                let diagnostic = XCTAttachment(string: "tab=\(identifier)\nopening-object=\(bounds)\ncurrent-object=\(application.descendants(matching: .any)[identity].firstMatch.frame)\nopening-canvas=\(openingCanvasFrame)\ncurrent-canvas=\(liveCanvas(in: application).frame)\nopening-viewport=\(openingCanvasValue)\ncurrent-viewport=\(String(describing: liveCanvas(in: application).value ?? ""))\nwindow=\(application.windows.firstMatch.frame)")
+                diagnostic.name = "SF-USABILITY exact viewport and object geometry boundary"
+                diagnostic.lifetime = .keepAlways; add(diagnostic)
+                attachWindowScreenshot(application, named: "SF-USABILITY geometry mismatch before assertion")
+            }
+            XCTAssertEqual(application.descendants(matching: .any)[identity].firstMatch.frame, bounds)
+        }
+        let menu = application.descendants(matching: .any)["inspector.formatting.menu"].firstMatch
+        menu.click()
+        XCTAssertTrue(application.menuItems["formatting.copy.appearance"].isEnabled)
+        XCTAssertFalse(application.menuItems["formatting.copy.textStyle"].isEnabled)
+        application.menuItems["formatting.copy.appearance"].click()
+        attachWindowScreenshot(application, named: "SF-USABILITY direct formatting in selected-object header")
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "inspector.formatting.status", containing: "Copied base Appearance"))
+        componentMenu("File", "Site & Page Settings…", in: application)
+        XCTAssertTrue(application.buttons["siteSettings.apply"].waitForExistence(timeout: 3))
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(application.buttons["siteSettings.apply"].waitForNonExistence(timeout: 3))
+        XCTAssertTrue(application.descendants(matching: .any)[identity].firstMatch.isSelected)
+        application.menuBars.menuBarItems["Edit"].click()
+        XCTAssertTrue(application.menuItems["Undo"].isEnabled, "Copy, tab navigation and cancelled settings must preserve insertion history")
+        application.typeKey(.escape, modifierFlags: [])
+        componentMenu("Component", "Create Component from Selection", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        let editOriginal = revealComponentPointerTarget("inspector.component.edit", in: application)
+        XCTAssertEqual(editOriginal.label, "Edit original component")
+        XCTAssertTrue(editOriginal.isEnabled && editOriginal.isHittable)
+        editOriginal.click()
+        let back = application.buttons["components.exit"]
+        XCTAssertTrue(back.waitForExistence(timeout: 3))
+        XCTAssertEqual(back.label, "Back to this copy")
+        back.click()
+        // AppKit click completion does not await the newly prepared page scene.
+        let returnedSelection = NSPredicate { _, _ in
+            let object = application.descendants(matching: .any)[identity].firstMatch
+            return object.exists && object.isSelected
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [
+            XCTNSPredicateExpectation(predicate: returnedSelection, object: application)
+        ], timeout: 5), .completed,
+                      "Original editing must return to the exact copy, not a same-named replacement")
+        XCTAssertEqual(application.descendants(matching: .any)[identity].firstMatch.frame, bounds)
+        attachWindowScreenshot(application, named: "SF-USABILITY exact component copy after original return")
+    }
+
+    func testFormattingReuseNativeAppearanceTextStyleAndAtomicUndoJourney() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        @MainActor func field(_ identifier: String, _ value: String) {
+            replaceStructuralLayoutField(application.textFields[identifier], with: value, in: application)
+        }
+        @MainActor func formatting(_ title: String) {
+            application.menuBars.menuBarItems["Edit"].click()
+            let enabled = NSPredicate { _, _ in
+                let item = application.menuItems[title].firstMatch
+                return item.exists && item.isEnabled
+            }
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: enabled, object: nil)], timeout: 5), .completed)
+            application.menuItems[title].firstMatch.click()
+        }
+        @MainActor func status(_ text: String) {
+            let live = revealComponentPointerTarget("inspector.formatting.status", in: application)
+            XCTAssertTrue(waitForValue(live, containing: text))
+        }
+        @MainActor func exactField(_ identifier: String, _ value: String?) {
+            let adopted = NSPredicate { _, _ in application.textFields[identifier].value as? String == value }
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: adopted, object: nil)], timeout: 5), .completed)
+        }
+        @MainActor func clearSelection() {
+            application.buttons["toolbar.tool.select"].click()
+            application.descendants(matching: .any)["canvas.interaction"].firstMatch
+                .coordinate(withNormalizedOffset: .init(dx: 0.92, dy: 0.92)).click()
+            XCTAssertTrue(waitForValue(application.descendants(matching: .any)["status.selectionPath"], containing: "0 selected"))
+        }
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
+        selectInspectorTab("Design", identifier: "design", in: application)
+        attachWindowScreenshot(application, named: "SF-FORMATTING default target family")
+        field("inspector.design.fillHex", "#24486CFF")
+        field("inspector.design.opacity", "60")
+        attachWindowScreenshot(application, named: "SF-FORMATTING authored appearance source")
+        formatting("Copy Appearance"); status("Copied base Appearance")
+        clearSelection()
+        componentMenu("Insert", "Insert Frame at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
+        selectInspectorTab("Design", identifier: "design", in: application)
+        let originalFill = application.textFields["inspector.design.fillHex"].value as? String
+        let originalOpacity = application.textFields["inspector.design.opacity"].value as? String
+        let selectedObject = try XCTUnwrap(application.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "canvas.object."))
+            .allElementsBoundByIndex.first(where: { $0.isSelected }))
+        let identity = selectedObject.identifier, bounds = selectedObject.frame
+        formatting("Paste Appearance"); status("Pasted base Appearance")
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: "#24486C"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.opacity"], containing: "60"))
+        XCTAssertEqual(application.descendants(matching: .any)[identity].firstMatch.frame, bounds)
+        XCTAssertTrue(application.descendants(matching: .any)[identity].firstMatch.isSelected)
+        attachWindowScreenshot(application, named: "SF-FORMATTING appearance pasted geometry retained")
+        componentMenu("Edit", "Undo", in: application)
+        exactField("inspector.design.fillHex", originalFill)
+        exactField("inspector.design.opacity", originalOpacity)
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: "#24486C"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.opacity"], containing: "60"))
+        attachWindowScreenshot(application, named: "SF-FORMATTING one undo redo appearance")
+        formatting("Paste Appearance"); status("No Undo entry was added")
+
+        clearSelection()
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
+        selectInspectorTab("Design", identifier: "design", in: application)
+        field("inspector.design.typography.size", "22")
+        field("inspector.design.typography.lineHeight", "30")
+        formatting("Copy Text Style"); status("Copied base Text Style")
+        clearSelection()
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 4", timeout: 5))
+        selectInspectorTab("Design", identifier: "design", in: application)
+        formatting("Paste Text Style"); status("Pasted base Text Style")
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.typography.size"], containing: "22"))
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.typography.lineHeight"], containing: "30"))
+        attachWindowScreenshot(application, named: "SF-FORMATTING text style target")
+        // Ordinary control cancellation remains native, not a formatting paste.
+        replaceStructuralLayoutField(application.textFields["inspector.design.typography.size"], with: "invalid", in: application, endKey: .escape)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.typography.size"], containing: "22"))
+        attachWindowScreenshot(application, named: "SF-FORMATTING invalid draft escape retained")
+    }
+
     func testDesignInspectorTypographyInlineUndoRedoAccessibilityJourney() throws {
         let fixture = legacyFixtureURL(named: "schema-v4-legacy-surface")
         let project = fixtureRoot.appendingPathComponent("typography-native-save.siteforge")
@@ -3054,9 +3609,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let inspector = application.scrollViews["inspector.selection.scroll"]
         XCTAssertTrue(inspector.waitForExistence(timeout: 5))
         func reveal(_ identifier: String) -> XCUIElement {
-            let element = application.descendants(matching: .any)[identifier]
-            for _ in 0..<14 where !element.isHittable { inspector.scroll(byDeltaX: 0, deltaY: -120) }
-            return element
+            revealStructuralLayoutControl(application.descendants(matching: .any)[identifier], in: application)
         }
         let family = reveal("inspector.design.typography.family")
         let size = reveal("inspector.design.typography.size")
@@ -3161,6 +3714,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let addSolid = application.buttons["inspector.design.layers.addSolid"]
         let addGradient = application.buttons["inspector.design.layers.addGradient"]
         XCTAssertTrue(layerList.waitForExistence(timeout: 5))
+        _ = revealStructuralLayoutControl(addGradient, in: application)
         XCTAssertTrue(addSolid.isHittable && addGradient.isHittable)
         addGradient.click()
         let angle = application.descendants(matching: .any)
@@ -3168,7 +3722,9 @@ final class SiteForgeLaunchTests: XCTestCase {
             .firstMatch
         XCTAssertTrue(angle.waitForExistence(timeout: 5))
         XCTAssertEqual(angle.label, "Linear gradient angle")
-        angle.click(); angle.typeKey("a", modifierFlags: .command); angle.typeText("90"); angle.typeKey(.return, modifierFlags: [])
+        replaceText(in: angle, with: "90", application: application)
+        angle.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(angle, containing: "90"))
 
         let gradientPrefix = angle.identifier.replacingOccurrences(of: ".angle", with: "")
         let stopColorWells = application.colorWells.matching(NSPredicate(
@@ -3179,18 +3735,8 @@ final class SiteForgeLaunchTests: XCTestCase {
         let inspectorScroll = application.descendants(matching: .any)["inspector.selection.scroll"]
         XCTAssertTrue(inspectorScroll.waitForExistence(timeout: 3))
         func reveal(_ element: XCUIElement) -> Bool {
-            for _ in 0..<8 where !element.isHittable {
-                let controlFrame = element.frame
-                let viewportFrame = inspectorScroll.frame
-                if controlFrame.maxY > viewportFrame.maxY {
-                    inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
-                } else if controlFrame.minY < viewportFrame.minY {
-                    inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
-                } else {
-                    break
-                }
-            }
-            return waitForHittable(element, in: application)
+            let live = revealStructuralLayoutControl(element, in: application)
+            return live.exists && live.isEnabled && live.isHittable
         }
         // A normal-height hosted display truthfully requires scrolling the
         // Design Inspector once a gradient exposes both stop editors. Prove
@@ -3224,20 +3770,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(reveal(enabled))
         enabled.click()
         let deleteIdentifier = angle.identifier.replacingOccurrences(of: ".angle", with: ".delete")
-        for _ in 0..<8 {
-            let liveDelete = application.buttons[deleteIdentifier]
-            if liveDelete.isHittable { break }
-            let controlFrame = liveDelete.frame
-            let viewportFrame = inspectorScroll.frame
-            if controlFrame.maxY > viewportFrame.maxY {
-                inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
-            } else if controlFrame.minY < viewportFrame.minY {
-                inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
-            } else {
-                break
-            }
-        }
-        let delete = application.buttons[deleteIdentifier]
+        let delete = revealStructuralLayoutControl(application.buttons[deleteIdentifier], in: application)
         XCTAssertTrue(delete.exists && waitForHittable(delete, in: application))
         delete.click()
         XCTAssertTrue(waitForNonexistence(angle, timeout: 3))
@@ -4109,7 +4642,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         // real Image child and verify the linked instance receives the native
         // media picker without serializing a path or test-only mutation.
         componentMenu("Component", "Create Component from Selection", in: application)
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
         revealComponentPointerTarget("navigator.tab.assets", in: application).click()
         let reusableAsset = application.descendants(matching: .any).matching(NSPredicate(
@@ -4863,8 +5396,17 @@ final class SiteForgeLaunchTests: XCTestCase {
             format: "identifier BEGINSWITH %@", "components.usage."
         )).firstMatch
         XCTAssertTrue(waitForHittable(usage, in: application)); usage.click()
+        XCTAssertTrue(waitForNonexistence(application.descendants(matching: .any)["components.dependencies"]),
+                      "Opening a usage must dismiss Component Details before adopting its selection")
         XCTAssertTrue(application.buttons["navigator.tab.layers"].waitForExistence(timeout: 3))
-        XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, selectedObject)
+        let selectedNodeID = selectedObject.replacingOccurrences(of: "canvas.object.", with: "")
+        let adopted = NSPredicate { _, _ in
+            application.descendants(matching: .any)[selectedObject].firstMatch.exists
+                && application.buttons["navigator.layer." + selectedNodeID].isSelected
+        }
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: adopted, object: application)], timeout: 5) == .completed,
+                      "Where Used must adopt and select the original instance, not a same-named object")
+        XCTAssertEqual(application.descendants(matching: .any).matching(identifier: selectedObject).count, 1)
         XCTAssertTrue(waitForLabel(
             application.descendants(matching: .any)["status.selectionPath"],
             containing: "Frame"
@@ -5220,9 +5762,20 @@ final class SiteForgeLaunchTests: XCTestCase {
         application: XCUIApplication
     ) {
         let identifier = field.identifier
-        let liveField = field.elementType == .textView
+        if application.state != .runningForeground { application.activate() }
+        var liveField = field.elementType == .textView
             ? application.textViews[identifier]
             : application.textFields[identifier]
+        if identifier.hasPrefix("inspector.") {
+            let scroll = application.scrollViews["inspector.selection.scroll"]
+            if scroll.exists, scroll.descendants(matching: .any).matching(identifier: identifier).firstMatch.exists {
+                // AXHittable alone can be true below the native scroll clip.
+                // Reveal at use time: prior edits can move/replace the field.
+                _ = revealStructuralLayoutControl(liveField, in: application)
+                liveField = field.elementType == .textView
+                    ? application.textViews[identifier] : application.textFields[identifier]
+            }
+        }
         if !hasKeyboardFocus(liveField) {
             XCTAssertTrue(waitForHittable(liveField, in: application))
             liveField.click()
@@ -5635,6 +6188,22 @@ final class SiteForgeLaunchTests: XCTestCase {
         return url
     }
 
+    private func navigateReviewSavePanel(to directory: URL, in application: XCUIApplication) {
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory)
+                      && isDirectory.boolValue, "The intended Save folder must exist")
+        application.typeKey("g", modifierFlags: [.command, .shift])
+        let folder = application.textFields["PathTextField"]
+        XCTAssertTrue(folder.waitForExistence(timeout: 5))
+        // Specify a directory, not a last-component completion candidate.
+        let path = directory.path.hasSuffix("/") ? directory.path : directory.path + "/"
+        replaceText(in: folder, with: path, application: application)
+        XCTAssertTrue(folder.value as? String == path, "Go to Folder must contain the exact intended path")
+        folder.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForNonexistence(application.textFields["PathTextField"]),
+                      "Native Go to Folder must resolve the requested directory")
+    }
+
     private func openProjectThroughNativePanel(_ url: URL, in application: XCUIApplication) {
         componentMenu("File", "Open…", in: application)
         XCTAssertTrue(waitForNativeOpenPanel(in: application))
@@ -5953,7 +6522,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + firstID, in: application).click()
         componentMenu("Component", "Create Component from Selection", in: application)
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
         let textRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
         XCTAssertTrue(textRow.waitForExistence(timeout: 3))
@@ -5988,7 +6557,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-AUTHORING-024 independent instance override")
         revealComponentPointerTarget("navigator.layer." + firstID, in: application).click()
         XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Shared"))
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         XCTAssertTrue(textRow.waitForExistence(timeout: 3))
         revealComponentPointerTarget(textRow.identifier, in: application).click()
         replaceComponentTextField("component.text.definition.default", with: "Revised", in: application)
@@ -6047,7 +6616,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
         componentMenu("Component", "Create Component from Selection", in: application)
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         let linkRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Link")).firstMatch
         XCTAssertTrue(linkRow.waitForExistence(timeout: 5))
         revealComponentPointerTarget(linkRow.identifier, in: application).click()
@@ -6066,7 +6635,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.menuItems["External HTTP(S)"].click()
         replaceComponentTextField(urlID, with: "https://example.com/component-action", in: application)
         application.textFields[urlID].typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Authored"))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Set here · this instance"))
         XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-117 authored external action")
         replaceComponentTextField(urlID, with: "javascript:invalid", in: application)
@@ -6076,11 +6645,11 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.textFields[urlID].typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
         componentMenu("Edit", "Undo", in: application)
-        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Inherited"))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Uses component default"))
         componentMenu("Edit", "Redo", in: application)
         XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
         revealComponentPointerTarget("component.action.reset." + propertyID, in: application).click()
-        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Inherited"))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Uses component default"))
         componentMenu("Edit", "Undo", in: application)
         XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-117 exact reset undo and cancelled draft")
@@ -6092,7 +6661,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
         revealComponentPointerTarget("inspector.tab.content", in: application).click()
         XCTAssertTrue(waitForValue(application.textFields[urlID], containing: "https://example.com/component-action"))
-        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Authored"))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.action.provenance." + propertyID], containing: "Set here · this instance"))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, "canvas.object." + instanceID)
         attachWindowScreenshot(application, named: "SF-AUTHORING-117 reopened action and stable instance")
     }
@@ -6167,7 +6736,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + frameID, in: application).click()
         componentMenu("Component", "Create Component from Selection", in: application)
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         let textRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
         XCTAssertTrue(textRow.waitForExistence(timeout: 5)); revealComponentPointerTarget(textRow.identifier, in: application).click()
         revealComponentPointerTarget("inspector.tab.content", in: application).click()
@@ -6186,7 +6755,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.textFields["component.discovery.search"].typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForValue(application.staticTexts["component.discovery.count"], containing: "1 matching"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-123 component discovery restored and keyboard traversal")
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         revealComponentPointerTarget("components.exit", in: application).click()
         XCTAssertEqual(application.textFields["component.discovery.search"].value as? String, "")
         XCTAssertTrue(waitForValue(application.staticTexts["component.discovery.count"], containing: "1 matching"))
@@ -6204,7 +6773,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
         componentMenu("Component", "Create Component from Selection", in: application)
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         let textRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
         XCTAssertTrue(textRow.waitForExistence(timeout: 5)); revealComponentPointerTarget(textRow.identifier, in: application).click()
         revealComponentPointerTarget("inspector.tab.content", in: application).click()
@@ -6259,7 +6828,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
         componentMenu("Component", "Create Component from Selection", in: application)
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         let textRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
         XCTAssertTrue(textRow.waitForExistence(timeout: 5)); let sourceID = textRow.identifier
         revealComponentPointerTarget(sourceID, in: application).click()
@@ -6274,18 +6843,18 @@ final class SiteForgeLaunchTests: XCTestCase {
         replaceComponentTextField(valueID, with: "Retained title", in: application)
         application.textFields[valueID].typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForComponentRenderedText("Retained title", in: application))
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         revealComponentPointerTarget(sourceID, in: application).click()
         revealComponentPointerTarget("component.text.definition.remove", in: application).click()
         revealComponentPointerTarget("components.exit", in: application).click()
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 custom value needs attention"))
         let resetID = "component.recovery.reset.text:" + bindingID
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.value.text:" + bindingID], containing: "Retained title"))
         revealComponentPointerTarget(resetID, in: application).click()
         assertComponentRecoveryConfirmation(in: application)
         application.typeKey(.escape, modifierFlags: [])
-        XCTAssertTrue(waitForNonexistence(application.staticTexts["Reset retained overrides?"]))
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        XCTAssertTrue(waitForNonexistence(application.staticTexts["Remove affected custom values?"]))
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 custom value needs attention"))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, "canvas.object." + instanceID)
         attachWindowScreenshot(application, named: "SF-AUTHORING-120 retained conflict and cancelled reset")
         revealComponentPointerTarget("component.recovery.definition.reveal", in: application).click()
@@ -6296,22 +6865,22 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertFalse(application.descendants(matching: .any)["component.recovery.summary"].exists)
         attachWindowScreenshot(application, named: "SF-AUTHORING-120 original binding restored with stable override")
         componentMenu("Edit", "Redo", in: application)
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 custom value needs attention"))
         saveDocumentIfModified(in: application); terminateAndWait(application)
         application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("override-conflict-recovery"))
         XCTAssertTrue(waitForWorkspaceReady(application))
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
         revealComponentPointerTarget("inspector.tab.content", in: application).click()
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 custom value needs attention"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-120 reopened retained authored intent")
         revealComponentPointerTarget("component.recovery.resetAll", in: application).click()
         let confirmation = assertComponentRecoveryConfirmation(in: application)
         confirmation.buttons["component.recovery.confirm"].click()
         XCTAssertTrue(waitForNonexistence(application.descendants(matching: .any)["component.recovery.summary"]))
-        XCTAssertTrue(waitForValue(application.staticTexts["component.organization.status"], containing: "Reset 1"))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.organization.status"], containing: "Removed 1 affected custom value"))
         componentMenu("Edit", "Undo", in: application)
-        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 retained"))
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["component.recovery.summary"], containing: "1 custom value needs attention"))
         componentMenu("Edit", "Redo", in: application)
         XCTAssertTrue(waitForNonexistence(application.descendants(matching: .any)["component.recovery.summary"]))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, "canvas.object." + instanceID)
@@ -6325,7 +6894,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         // container classification or a merely present background reset button.
         let sheet = application.sheets.containing(.button, identifier: "component.recovery.confirm").firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 3), application.debugDescription)
-        XCTAssertTrue(sheet.staticTexts["Reset retained overrides?"].exists, application.debugDescription)
+        XCTAssertTrue(sheet.staticTexts["Remove affected custom values?"].exists, application.debugDescription)
         for identifier in ["component.recovery.confirm", "component.recovery.cancel"] {
             let actions = sheet.buttons.matching(identifier: identifier)
             XCTAssertEqual(actions.count, 1, "Confirmation must expose one unambiguous on-screen action")
@@ -6613,6 +7182,126 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     // SF-SOURCE-BATCH-20261027-02 — new source only; not run under owner hold.
     @MainActor
+    // SF-LOCAL-BUILDER-010: ordinary page/chrome controls.
+    func testCopyHeaderFooterToPagesIndependentAtomicUndoAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("chrome-reuse-native.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        let sourceHeader = canvasObject(named: "Header", in: application).identifier
+        selectInspectorTab("Content", identifier: "content", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: "Studio Header", in: application)
+        XCTAssertTrue(waitForComponentRenderedText("Studio Header", in: application))
+        componentMenu("Insert", "Insert Section in Flow", in: application)
+        componentMenu("Insert", "Insert Footer after Page Content", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: "Studio Footer", in: application)
+        XCTAssertTrue(waitForComponentRenderedText("Studio Footer", in: application))
+        attachWindowScreenshot(application, named: "SF-CHROME source editable Header body Footer")
+        for (name, route) in [("Contact", "/contact"), ("Journal", "/journal")] {
+            componentMenu("Page", "New Page…", in: application)
+            XCTAssertTrue(application.textFields["page.editor.name"].waitForExistence(timeout: 5))
+            replaceText(in: application.textFields["page.editor.name"], with: name, application: application)
+            replaceText(in: application.textFields["page.editor.route"], with: route, application: application)
+            XCTAssertEqual((application.checkBoxes["page.editor.copyCurrent"].value as? NSNumber)?.intValue, 0)
+            application.buttons["page.editor.apply"].click()
+            XCTAssertTrue(waitForNonexistence(application.textFields["page.editor.name"]))
+        }
+        pageRow(named: "Legacy Surface", in: application).click()
+        XCTAssertTrue(waitForComponentRenderedText("Studio Header", in: application))
+        XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, sourceHeader)
+        componentMenu("Page", "Copy Header/Footer to Pages…", in: application)
+        let sheet = application.sheets.firstMatch
+        let copyPresented = application.buttons["page.chrome.copy.commit"].waitForExistence(timeout: 5)
+        if !copyPresented { attachReadinessDiagnostics(for: application) }
+        XCTAssertTrue(copyPresented)
+        XCTAssertFalse(application.buttons["page.chrome.copy.commit"].isEnabled)
+        for name in ["Contact", "Journal"] {
+            let target = sheet.checkBoxes.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "page.chrome.copy.target.", name)).firstMatch
+            XCTAssertTrue(target.exists && target.isEnabled)
+            XCTAssertEqual((target.value as? NSNumber)?.intValue, 0)
+            target.click()
+        }
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["page.chrome.copy.summary"], containing: "4 missing roles"))
+        attachWindowScreenshot(application, named: "SF-CHROME normal native sheet explicit targets")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForNonexistence(application.buttons["page.chrome.copy.commit"]))
+        pageRow(named: "Contact", in: application).click()
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+        pageRow(named: "Legacy Surface", in: application).click()
+        componentMenu("Page", "Copy Header/Footer to Pages…", in: application)
+        for name in ["Contact", "Journal"] {
+            application.sheets.firstMatch.checkBoxes.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "page.chrome.copy.target.", name)).firstMatch.click()
+        }
+        application.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["page.chrome.copy.status"], containing: "Copied 4 Header/Footer roles to 2 pages"))
+        attachWindowScreenshot(application, named: "SF-CHROME adopted atomic copy summary")
+        application.descendants(matching: .any)["page.chrome.copy.openTarget"].firstMatch.click()
+        application.menuItems["Contact"].click()
+        XCTAssertTrue(waitForComponentRenderedText("Studio Header", in: application))
+        XCTAssertTrue(waitForComponentRenderedText("Studio Footer", in: application))
+        let copiedHeader = canvasObject(named: "Header", in: application).identifier
+        let copiedFooter = canvasObject(named: "Footer", in: application).identifier
+        XCTAssertNotEqual(copiedHeader, sourceHeader)
+        attachWindowScreenshot(application, named: "SF-CHROME target editable copies")
+        componentMenu("Edit", "Undo", in: application)
+        XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 0", timeout: 5))
+        componentMenu("Edit", "Redo", in: application)
+        XCTAssertTrue(waitForComponentRenderedText("Studio Header", in: application))
+        XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, copiedHeader)
+        XCTAssertEqual(canvasObject(named: "Footer", in: application).identifier, copiedFooter)
+        attachWindowScreenshot(application, named: "SF-CHROME one undo redo exact identities")
+        selectNavigatorTab("Layers", identifier: "layers", in: application)
+        application.descendants(matching: .any)[copiedHeader.replacingOccurrences(of: "canvas.object.", with: "navigator.layer.")].firstMatch.click()
+        selectInspectorTab("Content", identifier: "content", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: "Local Contact", in: application)
+        XCTAssertTrue(waitForComponentRenderedText("Local Contact", in: application))
+        XCTAssertTrue(revealComponentPointerTarget("inspector.navigation.includeAll", in: application).isEnabled)
+        attachWindowScreenshot(application, named: "SF-CHROME target ordinary title and navigation controls")
+        selectNavigatorTab("Pages", identifier: "pages", in: application)
+        pageRow(named: "Legacy Surface", in: application).click()
+        XCTAssertTrue(waitForComponentRenderedText("Studio Header", in: application))
+        componentMenu("Page", "Copy Header/Footer to Pages…", in: application)
+        for name in ["Contact", "Journal"] {
+            application.sheets.firstMatch.checkBoxes.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "page.chrome.copy.target.", name)).firstMatch.click()
+        }
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["page.chrome.copy.summary"], containing: "0 missing roles"))
+        XCTAssertFalse(application.buttons["page.chrome.copy.commit"].isEnabled)
+        attachWindowScreenshot(application, named: "SF-CHROME existing roles explicitly kept")
+        application.buttons["page.chrome.copy.cancel"].click()
+        saveDocumentIfModified(in: application); terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("chrome-reopen-recovery", isDirectory: true))
+        XCTAssertTrue(waitForWorkspaceReady(application))
+        pageRow(named: "Contact", in: application).click()
+        XCTAssertTrue(waitForComponentRenderedText("Local Contact", in: application))
+        XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, copiedHeader)
+        XCTAssertEqual(canvasObject(named: "Footer", in: application).identifier, copiedFooter)
+        attachWindowScreenshot(application, named: "SF-CHROME saved reopened independent target")
+    }
+
+    func testCopyHeaderFooterSheetAtPracticalMinimumKeepsMissingRolesTruthful() throws {
+        let application = launchScenario("workspace", extraArguments: [
+            "-SiteForgeWindowSize", "minimum", "-SiteForgeUITestWindowAlignment", TestWindowAlignment.right.rawValue])
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        let header = canvasObject(named: "Header", in: application).identifier
+        selectInspectorTab("Content", identifier: "content", in: application)
+        let action = revealComponentPointerTarget("page.chrome.copy.context", in: application)
+        XCTAssertTrue(action.isHittable && action.isEnabled); action.click()
+        let source = application.descendants(matching: .any)["page.chrome.copy.source"].firstMatch
+        let sourcePresented = source.waitForExistence(timeout: 5)
+        if !sourcePresented { attachReadinessDiagnostics(for: application) }
+        XCTAssertTrue(sourcePresented)
+        XCTAssertFalse(application.checkBoxes["page.chrome.copy.role.footer"].isEnabled)
+        XCTAssertTrue(application.checkBoxes["page.chrome.copy.role.header"].isEnabled)
+        XCTAssertFalse(application.buttons["page.chrome.copy.commit"].isEnabled)
+        assertElement(application.buttons["page.chrome.copy.cancel"], isContainedIn: application.windows.firstMatch)
+        assertElement(application.buttons["page.chrome.copy.commit"], isContainedIn: application.windows.firstMatch)
+        attachWindowScreenshot(application, named: "SF-CHROME practical minimum native copy sheet")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForNonexistence(application.buttons["page.chrome.copy.commit"]))
+        XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, header)
+    }
+
     func testHeaderFooterInlineGapResponsiveResetAndDraftCancellationJourney() throws {
         let application = launchWorkspace()
         assertNormalWindowPolicy(in: application)
@@ -6780,7 +7469,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
         componentMenu("Component", "Create Component from Selection", in: application)
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         let stack = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Stack")).firstMatch
         XCTAssertTrue(stack.waitForExistence(timeout: 5))
         revealComponentPointerTarget(stack.identifier, in: application).click()
@@ -6796,7 +7485,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let edit = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "component.slot.editFallback.")).firstMatch
         XCTAssertTrue(edit.waitForExistence(timeout: 5))
         let slotID = edit.identifier.replacingOccurrences(of: "component.slot.editFallback.", with: "")
-        XCTAssertTrue(waitForValue(application.staticTexts["component.slot.provenance." + slotID], containing: "Inherited"))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.slot.provenance." + slotID], containing: "Contents from original"))
         XCTAssertTrue(application.staticTexts["component.slot.supply.unavailable"].exists)
         XCTAssertFalse(application.buttons["component.slot.supply"].exists, "No fake supplied-content mutation route is exposed")
         revealComponentPointerTarget(edit.identifier, in: application).click()
@@ -6823,7 +7512,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + instanceID, in: application).click()
         revealComponentPointerTarget("inspector.tab.content", in: application).click()
-        XCTAssertTrue(waitForValue(application.staticTexts["component.slot.provenance." + slotID], containing: "Inherited"))
+        XCTAssertTrue(waitForValue(application.staticTexts["component.slot.provenance." + slotID], containing: "Contents from original"))
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 3", timeout: 5))
         attachWindowScreenshot(application, named: "SF-AUTHORING-118 reopened fallback slot")
     }
@@ -6842,7 +7531,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + frameID, in: application).click()
         componentMenu("Component", "Create Component from Selection", in: application)
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         let textRow = application.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
         XCTAssertTrue(textRow.waitForExistence(timeout: 3))
@@ -6934,7 +7623,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         revealComponentPointerTarget("components.create", in: application).click()
         replaceComponentTextField("components.create.name", with: "Source workflow card", in: application)
         application.buttons["components.create.apply"].click()
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
         selectNavigatorTab("Layers", identifier: "layers", in: application)
         let text = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
@@ -6964,7 +7653,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let before = application.descendants(matching: .any)[instanceID].firstMatch.frame
         revealComponentPointerTarget("component.property.source.text:" + propertyID, in: application).click()
         XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
-        XCTAssertEqual(application.buttons["components.exit"].label, "Return to Instance")
+        XCTAssertEqual(application.buttons["components.exit"].label, "Back to this copy")
         XCTAssertTrue(application.buttons[sourceLayerID].isSelected)
         XCTAssertTrue(application.textFields["component.text.definition.default"].waitForExistence(timeout: 3))
         replaceStructuralLayoutField(application.textFields["component.text.definition.default"], with: "Updated shared source", in: application)
@@ -7009,9 +7698,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.buttons["inspector.tab.design"].isSelected)
         XCTAssertTrue(application.staticTexts["inspector.component.provenance"].waitForExistence(timeout: 5))
         attachWindowScreenshot(application, named: "SF-LOCAL-BUILDER-002 named component and empty exposed properties")
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
-        XCTAssertEqual(application.buttons["components.exit"].label, "Return to Instance")
+        XCTAssertEqual(application.buttons["components.exit"].label, "Back to this copy")
         selectNavigatorTab("Layers", identifier: "layers", in: application)
         let text = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Text")).firstMatch
         XCTAssertTrue(text.waitForExistence(timeout: 3))
@@ -7039,7 +7728,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValue(application.textFields[fieldID], containing: "Blur committed"))
         XCTAssertFalse(waitForComponentRenderedText("Discard this draft", in: application, timeout: 0))
         attachWindowScreenshot(application, named: "SF-LOCAL-BUILDER-002 Design override focus-loss and Escape")
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         revealComponentPointerTarget("components.exit", in: application).click()
         revealComponentPointerTarget("inspector.tab.design", in: application).click()
         XCTAssertTrue(application.buttons["inspector.tab.design"].isSelected)
@@ -7101,7 +7790,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         let secondID = canvasObject(named: "Frame", in: application).identifier
         XCTAssertNotEqual(secondID, originalID)
-        componentMenu("Component", "Edit Definition", in: application)
+        componentMenu("Component", "Edit original component", in: application)
         XCTAssertTrue(application.buttons["components.exit"].waitForExistence(timeout: 3))
         revealComponentPointerTarget("components.exit", in: application)
         XCTAssertTrue(waitForHittable(application.buttons["components.exit"], in: application))
@@ -7111,7 +7800,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 2", timeout: 5))
         XCTAssertEqual(canvasObject(named: "Frame", in: application).identifier, secondID)
         attachWindowScreenshot(application, named: "SF-AUTHORING-022 propagated second instance")
-        componentMenu("Component", "Detach Instance", in: application)
+        componentMenu("Component", "Make independent", in: application)
         XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: "#994422FF"))
         application.typeKey("z", modifierFlags: .command)
         application.typeKey("z", modifierFlags: [.command, .shift])
@@ -7133,12 +7822,29 @@ final class SiteForgeLaunchTests: XCTestCase {
     // Instance methods preserve MainActor isolation under the hosted Swift
     // compiler; nested helpers must not capture the non-Sendable XCTestCase.
     private func componentMenu(_ menu: String, _ action: String, in application: XCUIApplication) {
+        // Activation during AppKit menu tracking dismisses the pending menu.
+        // Establish foreground ownership before opening its real menu bar.
+        if application.state != .runningForeground { application.activate() }
         if menu == "Edit", action == "Undo" || action == "Redo" {
             focusDocumentCommands(in: application)
         }
         application.menuBars.menuBarItems[menu].click()
-        XCTAssertTrue(waitForEnabled(application.menuItems[action]))
-        application.menuItems[action].click()
+        // Commands' native NSMenuItem bridge exposes title rather than the
+        // SwiftUI identifier, and AppKit may normalize its ellipsis. Match the
+        // two exact semantic spellings; never accept a different command.
+        let settings = action == "Site & Page Settings…" ? application.menuBars.menuBarItems[menu].menus.firstMatch.menuItems.matching(NSPredicate(
+            format: "title == %@ OR title == %@ OR label == %@ OR label == %@",
+            action, "Site & Page Settings...", action, "Site & Page Settings...")) : nil
+        let item = settings?.firstMatch ?? application.menuItems[action]
+        let enabled = waitForEnabled(item)
+        if !enabled, settings != nil {
+            let receipt = XCTAttachment(string: application.debugDescription)
+            receipt.name = "SF-USABILITY live native Settings command hierarchy"
+            receipt.lifetime = .keepAlways; add(receipt)
+        }
+        XCTAssertTrue(enabled)
+        if let settings { XCTAssertEqual(settings.count, 1) }
+        item.click()
     }
 
     /// Document-history assertions must not ask the still-focused native field
@@ -7295,6 +8001,7 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     @discardableResult
     private func revealComponentPointerTarget(_ identifier: String, in application: XCUIApplication) -> XCUIElement {
+        if application.state != .runningForeground { application.activate() }
         if !application.descendants(matching: .any).matching(identifier: identifier).firstMatch.exists {
             let disclosureID = identifier.hasPrefix("inspector.workflow.") ? "inspector.workflow.disclosure" :
                 identifier.hasPrefix("component.") ? "component.definition.properties" : ""
@@ -7329,7 +8036,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             application.state == .runningForeground
                 && application.descendants(matching: .any).matching(identifier: identifier).firstMatch.isEnabled
         }, object: application)], timeout: 3) == .completed else {
-            XCTFail("The app must be active and the live pointer control enabled: \(application.debugDescription)")
+            XCTFail("The app must be active and the live pointer control enabled: state=\(application.state.rawValue); target=\(identifier); enabled=\(query.isEnabled); hittable=\(query.isHittable); frame=\(query.frame)\n\(application.debugDescription)")
             return query
         }
         // AppKit can accept a constrained title-bar drag while clamping the
@@ -7803,7 +8510,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForLiveValue(
             in: application,
             identifier: "inspector.layout.container.announcement",
-            containing: "Padding committed",
+            containing: "Inner spacing committed",
             timeout: 3
         ))
         let sectionChildAfter = canvasObject(named: "Frame", in: application).frame
@@ -8239,6 +8946,1095 @@ final class SiteForgeLaunchTests: XCTestCase {
     // SF-1201-001/002/003/004/006, SF-1202-001/003/006 — Preview owns a
     // deliberate immutable authored snapshot and contains no editor canvas.
     @MainActor
+    // SF-LOCAL-BUILDER-011 — Safari, panels and screenshots below are
+    // future acceptance source, never permission to execute under the hold.
+    func testConnectedFluidPreflightSafariExportCancelAndReopenJourney() throws {
+        let project = fixtureRoot.appendingPathComponent("connected-fluid-native.siteforge")
+        var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
+        XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: "Connected Fluid Browser Receipt", in: application)
+        componentMenu("Insert", "Insert Section in Flow", in: application)
+        let sectionID = canvasObject(named: "Section", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Stack at Center", in: application)
+        let stackID = canvasObject(named: "Stack", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        componentMenu("Insert", "Insert Footer after Page Content", in: application)
+        @MainActor func selectLayer(_ id: String) {
+            selectNavigatorTab("Layers", identifier: "layers", in: application)
+            let row = application.descendants(matching: .any)["navigator.layer." + id].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 5)); row.click()
+            selectInspectorTab("Layout", identifier: "layout", in: application)
+        }
+        @MainActor func authorFluid(_ field: String, values: [String]) {
+            revealComponentPointerTarget("inspector.layout.fluid.target", in: application).click()
+            let title: String = switch field {
+            case "padding": "Inner spacing"
+            case "gap": "Space between items"
+            default: field.capitalized
+            }
+            application.menuItems[title].click()
+            revealComponentPointerTarget("inspector.layout.fluid.enable", in: application).click()
+            for (identifier, text) in zip(["minimum", "preferred", "maximum"], values) {
+                let control = revealStructuralLayoutControl(application.textFields["inspector.layout.fluid." + identifier], in: application)
+                replaceText(in: control, with: text, application: application)
+            }
+            revealComponentPointerTarget("inspector.layout.fluid.apply", in: application).click()
+            XCTAssertTrue(waitForValue(application.staticTexts["inspector.layout.fluid.announcement"], containing: "applied"))
+        }
+        selectLayer(sectionID); authorFluid("padding", values: ["8", "16", "24"])
+        selectLayer(stackID); authorFluid("gap", values: ["8", "16", "24"])
+        attachWindowScreenshot(application, named: "SF-FLUID-OUTPUT Desktop connected authoring")
+        replaceText(in: application.textFields["canvas.viewport.width"], with: "430", application: application)
+        application.textFields["canvas.viewport.width"].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.width", containing: "430"))
+        attachWindowScreenshot(application, named: "SF-FLUID-OUTPUT custom 430 native intent")
+        componentMenu("Build", "Build Diagnostics…", in: application)
+        XCTAssertTrue(application.buttons["build.preflight"].waitForExistence(timeout: 5))
+        application.buttons["build.preflight"].click()
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let live = application.buttons["build.write"]
+            return live.exists && live.isEnabled
+        }, object: nil)], timeout: 10), .completed)
+        attachWindowScreenshot(application, named: "SF-FLUID-OUTPUT current revision preflight exportable")
+        application.buttons["Done"].firstMatch.click()
+        componentMenu("Preview", "Preview Website in Safari", in: application)
+        // Selectable native text may expose AXTextArea rather than AXStaticText.
+        // Require the same real address and URL, not one incidental AX role.
+        let address = application.descendants(matching: .any)["preview.website.url"].firstMatch
+        let previewReady = address.waitForExistence(timeout: 10)
+        if !previewReady {
+            attachReadinessDiagnostics(for: application)
+            let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screen.name = "SF-FLUID-OUTPUT preview startup failure screen"
+            screen.lifetime = .keepAlways; add(screen)
+        }
+        XCTAssertTrue(previewReady)
+        let previewURL = try XCTUnwrap(URL(string: (address.value as? String) ?? address.label))
+        XCTAssertEqual(previewURL.scheme, "http"); XCTAssertEqual(previewURL.host, "127.0.0.1")
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.Safari")
+        XCTAssertTrue(safari.webViews.staticTexts["Connected Fluid Browser Receipt"].firstMatch.waitForExistence(timeout: 10))
+        let browser = XCTAttachment(screenshot: safari.windows.firstMatch.screenshot())
+        browser.name = "SF-FLUID-OUTPUT Safari view \(Int(safari.webViews.firstMatch.frame.width)) points — CSS viewport and zoom review required"
+        browser.lifetime = .keepAlways; add(browser)
+        safari.typeKey("w", modifierFlags: .command); application.activate()
+        application.buttons["preview.website.export"].click()
+        let cancel = application.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); XCTAssertTrue(cancel.isHittable); cancel.click()
+        XCTAssertTrue(application.staticTexts["preview.website.url"].exists)
+        XCTAssertTrue(application.buttons["preview.website.export"].isEnabled)
+        attachWindowScreenshot(application, named: "SF-FLUID-OUTPUT native export chooser cancelled")
+        application.buttons["Stop"].click(); application.buttons["preview.website.done"].click()
+        saveDocumentIfModified(in: application); terminateAndWait(application)
+        application = launchExistingIntegrationProject(project, recoveryDirectory: fixtureRoot.appendingPathComponent("connected-fluid-reopen", isDirectory: true))
+        XCTAssertTrue(waitForWorkspaceReady(application)); selectLayer(stackID)
+        revealComponentPointerTarget("inspector.layout.container.gap.fluid", in: application).click()
+        revealComponentPointerTarget("inspector.layout.fluid.target", in: application).click()
+        application.menuItems["Space between items"].click()
+        XCTAssertTrue(revealComponentPointerTarget("inspector.layout.fluid.edit", in: application).isEnabled)
+        attachWindowScreenshot(application, named: "SF-FLUID-OUTPUT reopened retained fluid intent")
+    }
+
+    // SF-0806-006, SF-1203-003/006, SF-1211-004. Diagnostic companion only:
+    // ordinary pointer behavior is observed independently of computed readiness.
+    // The strict narrow-chrome acceptance journey below remains unchanged.
+    @MainActor
+    func testNativePreviewHeaderPublicPointerBoundaryProbe() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Page", "New Page…", in: application)
+        XCTAssertTrue(application.textFields["page.editor.name"].waitForExistence(timeout: 3))
+        replaceText(in: application.textFields["page.editor.name"], with: "About", application: application)
+        application.buttons["page.editor.apply"].click()
+        selectNavigatorTab("Pages", identifier: "pages", in: application)
+        pageRow(named: "Home", in: application).click()
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        let headerID = canvasObject(named: "Header", in: application).identifier
+            .replacingOccurrences(of: "canvas.object.", with: "")
+        componentMenu("Insert", "Insert Footer after Page Content", in: application)
+        let footerID = canvasObject(named: "Footer", in: application).identifier
+            .replacingOccurrences(of: "canvas.object.", with: "")
+        replaceText(in: application.textFields["canvas.viewport.width"], with: "320", application: application)
+        application.textFields["canvas.viewport.width"].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.width", containing: "320"))
+        application.buttons["canvas.zoom.reset"].click()
+        componentMenu("Preview", "Canvas Device Preview", in: application)
+
+        @MainActor func menu(_ owner: String) -> XCUIElement {
+            application.sheets.firstMatch.descendants(matching: .menuButton)["preview.navigation.menu." + owner].firstMatch
+        }
+        @MainActor func receipt(_ phase: String) {
+            let live = menu(headerID)
+            let done = application.buttons["preview.done"]
+            var lines = ["phase=\(phase)",
+                "header count=\(application.sheets.firstMatch.descendants(matching: .menuButton).matching(identifier: live.identifier).count); frame=\(live.frame); enabled=\(live.isEnabled); hittable=\(live.isHittable); focus=\(hasKeyboardFocus(live))",
+                "done frame=\(done.frame); enabled=\(done.isEnabled); hittable=\(done.isHittable)"]
+            // XCTest's existing native observation is sufficient here. Do not
+            // repeat direct system-wide AX access previously denied by macOS.
+            lines.append(application.debugDescription)
+            lines.append(launchLifecycleDiagnostics(for: application))
+            let attachment = XCTAttachment(string: lines.joined(separator: "\n"))
+            attachment.name = "SF-NARROW public pointer boundary \(phase)"
+            attachment.lifetime = .keepAlways; add(attachment)
+            attachWindowScreenshot(application, named: "SF-NARROW pointer probe \(phase)")
+        }
+        XCTAssertTrue(menu(headerID).waitForExistence(timeout: 5))
+        receipt("before ordinary Header click")
+        // Deliberately no isHittable guard or coordinate fallback. This is the
+        // real current element's ordinary pointer operation, not acceptance
+        // of the separately failing strict readiness requirement.
+        menu(headerID).click()
+        XCTAssertTrue(application.menuItems["About"].waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-NARROW pointer probe Header opened")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(menu(headerID), in: application))
+        receipt("Header Escape focus")
+        XCTAssertTrue(menu(footerID).exists)
+        menu(footerID).click()
+        XCTAssertTrue(application.menuItems["About"].waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-NARROW pointer probe Footer opened")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(menu(footerID), in: application))
+        menu(footerID).click(); application.menuItems["About"].click()
+        XCTAssertTrue(waitForValue(application.descendants(matching: .any)["preview.page"], containing: "About"))
+        attachWindowScreenshot(application, named: "SF-NARROW pointer probe actual Footer About destination")
+        application.buttons["preview.done"].click()
+    }
+
+    // SF-0806-006, SF-1203-003/006, SF-1211-004. Independent diagnostic
+    // observations: a Footer pointer failure is retained, not allowed to
+    // conceal the separate keyboard and generated-browser-output outcomes.
+    @MainActor
+    func testNarrowChromeFooterAndMeasuredSafariBoundaryCompanion() throws {
+        try runNarrowChromeBoundaryCompanion(includeNativeFooter: true)
+    }
+
+    @MainActor
+    func testMeasuredSafariNarrowChromeBoundaryCompanion() throws {
+        try runNarrowChromeBoundaryCompanion(includeNativeFooter: false)
+    }
+
+    @MainActor
+    func testGeneratedWebsiteMenuEscapeStateAndPaintJourney() throws {
+        try runNarrowChromeBoundaryCompanion(includeNativeFooter: false, widths: [320, 430, 768], observeClosure: true)
+    }
+
+    @MainActor
+    func testGeneratedWebsiteMenuEscapePresentationContextComparison() throws {
+        try runNarrowChromeBoundaryCompanion(includeNativeFooter: false, widths: [560], observeClosure: true, comparePresentation: true)
+    }
+
+    @MainActor
+    private func runNarrowChromeBoundaryCompanion(includeNativeFooter: Bool, widths: [Int] = [320, 430, 768], observeClosure: Bool = false, comparePresentation: Bool = false) throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Page", "New Page…", in: application)
+        XCTAssertTrue(application.textFields["page.editor.name"].waitForExistence(timeout: 3))
+        replaceText(in: application.textFields["page.editor.name"], with: "About", application: application)
+        application.buttons["page.editor.apply"].click()
+        selectNavigatorTab("Pages", identifier: "pages", in: application)
+        pageRow(named: "Home", in: application).click()
+        // Keep a visible document identity even when the long title ellipsizes.
+        // This distinguishes this fixture from retained tabs of older runs.
+        let receiptIdentity = observeClosure ? String(UUID().uuidString.prefix(6)) : "Narrow"
+        let headerTitle = "\(receiptIdentity) Header Pointer Receipt"
+        let footerTitle = "\(receiptIdentity) Footer Pointer Receipt"
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: headerTitle, in: application)
+        componentMenu("Insert", "Insert Footer after Page Content", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: footerTitle, in: application)
+        selectNavigatorTab("Layers", identifier: "layers", in: application)
+        let footerRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Footer")).firstMatch
+        XCTAssertTrue(footerRow.waitForExistence(timeout: 3))
+        let footerID = footerRow.identifier.replacingOccurrences(of: "navigator.layer.", with: "")
+        replaceText(in: application.textFields["canvas.viewport.width"], with: "320", application: application)
+        application.textFields["canvas.viewport.width"].typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.width", containing: "320"))
+        application.buttons["canvas.zoom.reset"].click()
+        if includeNativeFooter {
+        componentMenu("Preview", "Canvas Device Preview", in: application)
+        @MainActor func footerMenu() -> XCUIElement {
+            application.sheets.firstMatch.descendants(matching: .menuButton)["preview.navigation.menu." + footerID].firstMatch
+        }
+        XCTAssertTrue(footerMenu().waitForExistence(timeout: 5))
+        let before = XCTAttachment(string: application.debugDescription)
+        before.name = "SF-NARROW independent Footer before ordinary click"; before.lifetime = .keepAlways; add(before)
+        attachWindowScreenshot(application, named: "SF-NARROW independent Footer before pointer")
+        // Only this companion continues to collect independent failures. No
+        // expected-failure waiver and no fallback pointer coordinates/actions.
+        continueAfterFailure = true
+        footerMenu().click()
+        let pointerOpened = application.menuItems["About"].waitForExistence(timeout: 3)
+        XCTAssertTrue(pointerOpened, "The ordinary Footer click must open its native menu")
+        if pointerOpened {
+            attachWindowScreenshot(application, named: "SF-NARROW independent Footer pointer opened")
+            application.typeKey(.escape, modifierFlags: [])
+            XCTAssertTrue(waitForKeyboardFocus(footerMenu(), in: application))
+        }
+        for _ in 0..<16 {
+            if hasKeyboardFocus(footerMenu()) { break }
+            application.typeKey(.tab, modifierFlags: [])
+        }
+        XCTAssertTrue(waitForKeyboardFocus(footerMenu(), in: application))
+        application.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(application.menuItems["About"].waitForExistence(timeout: 3))
+        attachWindowScreenshot(application, named: "SF-NARROW independent Footer keyboard opened")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(footerMenu(), in: application))
+        application.typeKey(.downArrow, modifierFlags: [])
+        let reopened = application.menuItems["About"].waitForExistence(timeout: 3)
+        XCTAssertTrue(reopened)
+        if reopened {
+            application.menuItems["About"].click()
+            XCTAssertTrue(waitForValue(application.descendants(matching: .any)["preview.page"], containing: "About"))
+            attachWindowScreenshot(application, named: "SF-NARROW independent Footer actual About destination")
+        }
+        application.buttons["preview.done"].click()
+        continueAfterFailure = false
+        }
+
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.Safari")
+        let observationKey = "__sfEscapeReceipt" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        var presentation = "responsive"
+        var pixelFailures: [String] = []
+        var artifactIdentity: String?
+        var runtimeHash: String?
+        @MainActor func measured(_ role: String, phase: String = "geometry", arm: Bool = false) throws -> [String: Any] {
+            let marker = "SF_CHROME_" + UUID().uuidString.replacingOccurrences(of: "-", with: "") + " "
+            let prompt = safari.textViews["Console prompt"].firstMatch
+            if !comparePresentation || !prompt.exists { safari.typeKey("c", modifierFlags: [.command, .option]) }
+            XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+            prompt.coordinate(withNormalizedOffset: .init(dx: 0.03, dy: 0.5)).click()
+            // Existing authorized, read-only DOM inspection. This neither
+            // modifies the website nor substitutes for a real menu click.
+            let observation = observeClosure ? """
+            function state(){return {time:performance.now(),wall:Date.now(),focus:document.activeElement&&{tag:document.activeElement.tagName,label:document.activeElement.getAttribute('aria-label')},hasFocus:document.hasFocus(),menus:Array.from(document.querySelectorAll('details[data-siteforge-navigation]')).map(function(d){var s=d.querySelector('summary'),p=d.querySelector('nav'),b=p.getBoundingClientRect(),c=getComputedStyle(p);return {owner:d.getAttribute('data-siteforge-navigation'),open:d.open,expanded:s.getAttribute('aria-expanded'),summaryFocused:s===document.activeElement,panel:{x:b.x,y:b.y,width:b.width,height:b.height,rects:p.getClientRects().length,display:c.display,visibility:c.visibility,paintEligible:p.checkVisibility({contentVisibilityAuto:true})}}})};}
+            var key='\(observationKey)',trace=window[key];
+            if(\(arm) && !trace){trace={events:[],toggles:[],afterFrames:null,controller:new AbortController()};window[key]=trace;window.addEventListener('keydown',function(e){if(e.key!=='Escape')return;trace.events.push({key:e.key,trusted:e.isTrusted,target:e.target.tagName,before:state()});requestAnimationFrame(function(){requestAnimationFrame(function(){trace.afterFrames={defaultPrevented:e.defaultPrevented,state:state()};});});},{capture:true,passive:true,signal:trace.controller.signal});document.addEventListener('toggle',function(e){if(!(e.target instanceof HTMLDetailsElement))return;requestAnimationFrame(function(){requestAnimationFrame(function(){trace.toggles.push(state());});});},{capture:true,passive:true,signal:trace.controller.signal});}
+            await new Promise(function(resolve){requestAnimationFrame(function(){requestAnimationFrame(resolve);});});
+            result.phase='\(phase)';result.dom=state();result.eventTrace=trace?{events:trace.events,toggles:trace.toggles,afterFrames:trace.afterFrames}:null;
+            result.context={url:document.URL,name:window.name,isTop:window===top,frameCount:frames.length,frameElement:frameElement&&{tag:frameElement.tagName,id:frameElement.id},timeOrigin:performance.timeOrigin,visibility:document.visibilityState,ready:document.readyState,scrollX:scrollX,scrollY:scrollY,outerWidth:outerWidth,outerHeight:outerHeight,devicePixelRatio:devicePixelRatio,viewport:{width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,offsetLeft:visualViewport.offsetLeft,offsetTop:visualViewport.offsetTop}};
+            result.navigation=Array.from(document.querySelectorAll('nav')).map(function(n){var b=n.getBoundingClientRect(),c=getComputedStyle(n);return {id:n.id,classes:n.className,owner:n.closest('[data-siteforge-node]')?.getAttribute('data-siteforge-node'),x:b.x,y:b.y,width:b.width,height:b.height,display:c.display,visible:n.checkVisibility({contentVisibilityAuto:true}),links:Array.from(n.querySelectorAll('a')).map(function(a){return {text:a.textContent,visible:a.checkVisibility({contentVisibilityAuto:true})};})};});
+            if(trace&&trace.events.length){result.formerPanelHits=trace.events.at(-1).before.menus.filter(function(m){return m.open;}).map(function(m){var p=m.panel;return {owner:m.owner,x:p.x+p.width/2,y:p.y+p.height/2,elements:document.elementsFromPoint(p.x+p.width/2,p.y+p.height/2).map(function(e){return {tag:e.tagName,id:e.id,classes:e.className};})};});}
+            var script=document.querySelector('script[src$="siteforge-navigation.js"]');result.script={element:!!script,url:script&&new URL(script.src).pathname,resources:performance.getEntriesByType('resource').filter(function(e){return e.name.endsWith('/siteforge-navigation.js');}).map(function(e){return {path:new URL(e.name).pathname,duration:e.duration,transfer:e.transferSize};})};
+            if(script){var response=await fetch(script.src,{cache:'no-store'}),bytes=await response.arrayBuffer();result.script.status=response.status;result.script.mime=response.headers.get('content-type');result.script.bytes=bytes.byteLength;result.script.text=new TextDecoder().decode(bytes);result.script.sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(function(v){return v.toString(16).padStart(2,'0');}).join('');}
+            if('\(phase)'==='after closed screenshot'&&trace){trace.controller.abort();delete window[key];}
+            """ : ""
+            // The optional passive observer records genuine key dispatch and
+            // two rendered frames. It never closes, clicks or focuses content.
+            // Web Inspector truncates long logged strings in its AX value.
+            // Transfer the complete read-only result in bounded messages;
+            // retaining every byte keeps the strict DOM/pixel proof intact.
+            let script = "(async function(){var h=document.querySelector('\(role)[data-siteforge-node]'),q=h&&h.querySelector('[data-siteforge-text]'),t=q&&q.parentElement,n=h&&h.querySelector('.sf-page-navigation'),s=n&&n.querySelector('summary');function r(e){if(!e)return null;var b=e.getBoundingClientRect();return {x:b.x,y:b.y,right:b.right,width:b.width,height:b.height}}var result={width:innerWidth,scale:visualViewport.scale,host:location.host,path:location.pathname,title:t&&t.textContent,titleRect:r(t),navRect:r(n),menuRect:r(s),links:h?Array.from(h.querySelectorAll('a[href]')).map(function(a){return {label:a.textContent,path:new URL(a.getAttribute('href'),location.href).pathname}}):[]};\(observation)var payload=btoa(Array.from(new TextEncoder().encode(JSON.stringify(result)),function(b){return String.fromCharCode(b);}).join('')),parts=Math.ceil(payload.length/384);console.log('\(marker)COUNT:'+parts+':'+payload.length);for(var i=0;i<parts;i++)console.log('\(marker)PART'+i+':'+payload.slice(i*384,(i+1)*384));}())"
+            let board = NSPasteboard.general
+            let saved = (board.pasteboardItems ?? []).map { item in item.types.compactMap { type in item.data(forType: type).map { (type, $0) } } }
+            do {
+                defer {
+                    board.clearContents()
+                    board.writeObjects(saved.map { values in let item = NSPasteboardItem(); for (type, data) in values { item.setData(data, forType: type) }; return item })
+                }
+                board.clearContents(); board.setString(script, forType: .string)
+                prompt.typeKey("v", modifierFlags: .command); prompt.typeKey(.return, modifierFlags: [])
+            }
+            @MainActor func message(_ suffix: String) throws -> String {
+                let prefix = marker + suffix
+                let live = safari.descendants(matching: .any).matching(NSPredicate(
+                    format: "label BEGINSWITH %@ OR value BEGINSWITH %@", prefix, prefix)).firstMatch
+                XCTAssertTrue(live.waitForExistence(timeout: 5), "Missing complete Inspector diagnostic message")
+                let text = (live.value as? String) ?? live.label
+                let range = try XCTUnwrap(text.range(of: prefix))
+                return String(text[range.upperBound...])
+            }
+            let dimensions = try message("COUNT:").split(separator: ":", omittingEmptySubsequences: false)
+            XCTAssertEqual(dimensions.count, 2)
+            let count = try XCTUnwrap(dimensions.first.flatMap { Int($0) })
+            let encodedLength = try XCTUnwrap(dimensions.last.flatMap { Int($0) })
+            guard (1...131_072).contains(encodedLength), count == (encodedLength + 383) / 384 else {
+                XCTFail("Bound the complete observational receipt without truncation")
+                throw NSError(domain: "SiteForgeInspectorReceipt", code: 1)
+            }
+            let lastPrefix = marker + "PART\(count - 1):"
+            let last = safari.descendants(matching: .any).matching(NSPredicate(
+                format: "label BEGINSWITH %@ OR value BEGINSWITH %@", lastPrefix, lastPrefix)).firstMatch
+            XCTAssertTrue(last.waitForExistence(timeout: 5), "Inspector must expose the complete receipt")
+            // Read one immutable public snapshot after the final chunk exists.
+            // Reading each chunk's exists/value separately repeatedly traversed
+            // the growing Inspector tree and made a diagnostic take an hour.
+            // Leave room for the marker inside snapshot attribute limits.
+            // Keep every byte and reject absent/conflicting chunks, not breadth.
+            var pending: [any XCUIElementSnapshot] = [try safari.snapshot()]
+            var chunks: [Int: String] = [:]
+            var visited = 0
+            let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+            while let node = pending.popLast() {
+                visited += 1
+                guard visited <= 50_000 else { throw NSError(domain: "SiteForgeInspectorReceipt", code: 2) }
+                pending.append(contentsOf: node.children)
+                for candidate in [node.value as? String, node.label].compactMap({ $0 }) {
+                    guard candidate.hasPrefix(marker + "PART") else { continue }
+                    let body = candidate.dropFirst((marker + "PART").count)
+                    let fields = body.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+                    guard fields.count == 2, let index = Int(fields[0]), (0..<count).contains(index),
+                          !fields[1].isEmpty, fields[1].count <= 384,
+                          fields[1].allSatisfy({ alphabet.contains($0) }) else { continue }
+                    let chunk = String(fields[1])
+                    if let previous = chunks[index] { XCTAssertEqual(previous, chunk, "Conflicting diagnostic chunk") }
+                    chunks[index] = chunk
+                }
+            }
+            let text = try (0..<count).map { index in
+                let chunk = try XCTUnwrap(chunks[index], "Missing complete Inspector diagnostic chunk \(index)")
+                XCTAssertEqual(chunk.count, min(384, encodedLength - index * 384), "Truncated diagnostic chunk")
+                return chunk
+            }.joined()
+            XCTAssertEqual(text.count, encodedLength, "Every diagnostic byte must survive the public snapshot")
+            let attachment = XCTAttachment(string: text); attachment.name = "SF-NARROW \(presentation) measured \(role) \(phase)"; attachment.lifetime = .keepAlways; add(attachment)
+            let payload = try XCTUnwrap(Data(base64Encoded: text), "Inspector must expose every diagnostic byte")
+            let values = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            if comparePresentation {
+                let identity = try XCTUnwrap(values["host"] as? String) + (try XCTUnwrap(values["path"] as? String))
+                let script = try XCTUnwrap(values["script"] as? [String: Any])
+                let hash = try XCTUnwrap(script["sha256"] as? String)
+                if arm {
+                    // Safari need not expose a context selector for the
+                    // current page. Prove the evaluated context itself, not
+                    // a version-specific selector caption or cached proxy.
+                    XCTAssertEqual(identity, try XCTUnwrap(artifactIdentity))
+                    XCTAssertEqual(hash, try XCTUnwrap(runtimeHash))
+                    XCTAssertEqual(values["title"] as? String, role == "header" ? headerTitle : footerTitle)
+                    XCTAssertNotNil(values["menuRect"] as? [String: Double])
+                }
+                let receipt = XCTAttachment(string: "window=\(safari.windows.firstMatch.identifier);frame=\(safari.windows.firstMatch.frame);prompt=\(prompt.frame);evaluatedDocument=\(identity);runtime=\(hash)")
+                receipt.name = "SF-CONTEXT \(presentation) live public target \(role) \(phase)"; receipt.lifetime = .keepAlways; add(receipt)
+            } else { safari.typeKey("i", modifierFlags: [.command, .option]) }
+            return values
+        }
+        @MainActor func responsiveMode(_ enabled: Bool) {
+            safari.menuBars.menuBarItems["Develop"].click()
+            let item = safari.menuItems[enabled ? "Enter Responsive Design Mode" : "Exit Responsive Design Mode"]
+            if item.exists { item.click() } else { safari.typeKey(.escape, modifierFlags: []) }
+        }
+        for requestedWidth in widths {
+            var width = requestedWidth
+            var commonHeight: Int?
+            application.activate()
+            selectNavigatorTab("Pages", identifier: "pages", in: application)
+            pageRow(named: "Home", in: application).click()
+            componentMenu("Preview", "Preview Website in Safari", in: application)
+            XCTAssertTrue(safari.webViews.staticTexts[headerTitle].firstMatch.waitForExistence(timeout: 10))
+            safari.typeKey("0", modifierFlags: .command)
+            for mode in (comparePresentation ? ["ordinary", "responsive"] : ["responsive"]) {
+            presentation = mode
+            var allClosedBaseline: XCUIScreenshot?
+            var baselineWindowFrame: CGRect?
+            responsiveMode(mode == "responsive")
+            if mode == "ordinary" {
+                var actual = try measured("header", phase: "ordinary viewport observation")
+                var cssWidth = try XCTUnwrap(actual["width"] as? Int)
+                // Use real tab-local native zoom, not an unproven window
+                // resize or a mislabeled nominal RDM width. Match both CSS
+                // dimensions so RDM need not shrink its presentation to fit.
+                for step in 0..<6 where cssWidth >= 600 {
+                    safari.menuBars.menuBarItems["View"].click()
+                    safari.menuItems["Zoom In"].click()
+                    actual = try measured("header", phase: "ordinary native zoom \(step + 1)")
+                    cssWidth = try XCTUnwrap(actual["width"] as? Int)
+                }
+                XCTAssertTrue((320..<600).contains(cssWidth), "Record Safari's real limit; do not relabel a non-hamburger viewport")
+                width = cssWidth
+                let context = try XCTUnwrap(actual["context"] as? [String: Any])
+                let viewport = try XCTUnwrap(context["viewport"] as? [String: Any])
+                commonHeight = Int(try XCTUnwrap(viewport["height"] as? Double))
+            } else {
+            if comparePresentation {
+                // The Console prompt can consume Command-0, leaving the
+                // ordinary tab's page zoom active inside responsive mode.
+                // Route through the visible browser menu before requesting
+                // dimensions; measured CSS width/height remain exact checks.
+                safari.menuBars.menuBarItems["View"].click()
+                let actualSize = safari.menuItems["Actual Size"]
+                XCTAssertTrue(actualSize.exists)
+                if actualSize.isEnabled { actualSize.click() }
+                else { safari.typeKey(.escape, modifierFlags: []) }
+            }
+            let browserWidth = safari.textFields.matching(NSPredicate(format: "label == %@ OR title == %@", "Width", "Width")).firstMatch
+            XCTAssertTrue(browserWidth.waitForExistence(timeout: 5))
+            if let commonHeight {
+                let height = safari.textFields.matching(NSPredicate(format: "label == %@ OR title == %@", "Height", "Height")).firstMatch
+                XCTAssertTrue(height.waitForExistence(timeout: 5))
+                height.click(); height.typeKey("a", modifierFlags: .command)
+                height.typeText(String(commonHeight)); height.typeKey(.return, modifierFlags: [])
+            }
+            replaceSafariResponsiveWidth(with: width, in: safari)
+            }
+            var header = try measured("header")
+            // RDM can round its scaled CSS width by one pixel. Use one
+            // measured correction through the real field, never a universal
+            // +1 heuristic or an assertion accepting the wrong viewport.
+            if mode == "responsive", let actual = header["width"] as? Int, abs(actual - width) == 1 {
+                replaceSafariResponsiveWidth(with: width + (width - actual), in: safari)
+                header = try measured("header")
+            }
+            let footer = try measured("footer")
+            if comparePresentation {
+                let context = try XCTUnwrap(header["context"] as? [String: Any])
+                let viewport = try XCTUnwrap(context["viewport"] as? [String: Any])
+                XCTAssertEqual(Int(try XCTUnwrap(viewport["height"] as? Double)), commonHeight)
+                let identity = try XCTUnwrap(header["host"] as? String) + (try XCTUnwrap(header["path"] as? String))
+                let script = try XCTUnwrap(header["script"] as? [String: Any])
+                let hash = try XCTUnwrap(script["sha256"] as? String)
+                if let artifactIdentity { XCTAssertEqual(identity, artifactIdentity) } else { artifactIdentity = identity }
+                if let runtimeHash { XCTAssertEqual(hash, runtimeHash) } else { runtimeHash = hash }
+            }
+            for (role, context, title) in [("Header", header, headerTitle), ("Footer", footer, footerTitle)] {
+                XCTAssertEqual(context["width"] as? Int, width)
+                XCTAssertEqual(context["scale"] as? Double, 1)
+                XCTAssertEqual(context["title"] as? String, title)
+                if width < 600 {
+                    let t = try XCTUnwrap(context["titleRect"] as? [String: Double])
+                    let n = try XCTUnwrap(context["navRect"] as? [String: Double])
+                    XCTAssertGreaterThanOrEqual(try XCTUnwrap(n["width"]), 89)
+                    XCTAssertLessThanOrEqual(try XCTUnwrap(t["right"]), try XCTUnwrap(n["x"]) + 1)
+                    let menu = safari.descendants(matching: .any).matching(NSPredicate(format: "label == %@", role + " navigation menu")).firstMatch
+                    if observeClosure {
+                        let beforeState = try measured(role.lowercased(), phase: "before opening", arm: true)
+                        let dom = try XCTUnwrap(beforeState["dom"] as? [String: Any])
+                        let menus = try XCTUnwrap(dom["menus"] as? [[String: Any]])
+                        if role == "Header" {
+                            XCTAssertTrue(menus.allSatisfy { ($0["open"] as? Bool) == false })
+                        } else {
+                            // Header was deliberately reopened to challenge
+                            // exclusive menu ownership. Its painted panel is
+                            // not an all-closed pixel baseline for Footer.
+                            XCTAssertEqual(menus.filter { ($0["open"] as? Bool) == true }.count, 1)
+                        }
+                    }
+                    let summaryFrame = observeClosure ? menu.frame : .zero
+                    let beforeOpening = observeClosure ? XCUIScreen.main.screenshot() : nil
+                    if observeClosure, role == "Header" {
+                        allClosedBaseline = beforeOpening
+                        baselineWindowFrame = safari.windows.firstMatch.frame
+                    }
+                    if let beforeOpening {
+                        let attachment = XCTAttachment(screenshot: beforeOpening)
+                        attachment.name = "SF-NARROW \(presentation) live screen \(role) baseline before opening \(width)"
+                        attachment.lifetime = .keepAlways
+                        add(attachment)
+                    }
+                    XCTAssertTrue(menu.isHittable); menu.click()
+                    if observeClosure {
+                        attachScreenshot(named: "SF-NARROW \(presentation) live screen \(role) open \(width)")
+                    } else {
+                        attachWindowScreenshot(safari, named: "SF-NARROW independent Safari \(role) open \(width)")
+                    }
+                    safari.typeKey(.escape, modifierFlags: [])
+                    // WebKit disclosure controls need not have AX identifiers.
+                    // Require focus on this exact named disclosure, not on any
+                    // Safari element that happens to share an empty identifier.
+                    let menuLabel = role + " navigation menu"
+                    let focusedMenu = safari.disclosureTriangles.matching(NSPredicate(
+                        format: "label == %@ AND hasKeyboardFocus == true", menuLabel)).firstMatch
+                    let restoredMenuFocus = focusedMenu.waitForExistence(timeout: 5)
+                    if !restoredMenuFocus {
+                        attachFocusDiagnostics(expected: menuLabel, application: safari)
+                    }
+                    XCTAssertTrue(restoredMenuFocus, "Escape must restore focus to \(menuLabel)")
+                    if observeClosure {
+                        // Resolve label and collapsed value in one native
+                        // snapshot. Separate exists/value round trips can
+                        // overrun this same bounded deadline even when AX
+                        // already exposes zero after the real Escape.
+                        let collapsed = safari.descendants(matching: .any).matching(NSPredicate(
+                            format: "label == %@ AND (value == 0 OR value == %@)",
+                            role + " navigation menu", "0")).firstMatch
+                        let collapsedInAccessibility = collapsed.waitForExistence(timeout: 3)
+                        if !collapsedInAccessibility {
+                            let live = safari.descendants(matching: .any).matching(NSPredicate(
+                                format: "label == %@", role + " navigation menu")).firstMatch
+                            let exists = live.exists
+                            let value = exists ? String(describing: live.value) : "missing"
+                            let frame = exists ? String(describing: live.frame) : "missing"
+                            let diagnostics = XCTAttachment(string:
+                                "presentation=\(presentation);role=\(role);appState=\(safari.state.rawValue);exists=\(exists);value=\(value);frame=\(frame)")
+                            diagnostics.name = "SF-CONTEXT menu collapse accessibility failure"
+                            diagnostics.lifetime = .keepAlways; add(diagnostics)
+                            attachScreenshot(named: "SF-CONTEXT menu collapse failure before Inspector")
+                            // Observe the same public artifact after the real
+                            // Escape; never close it through JavaScript or
+                            // accept DOM state in place of the AX assertion.
+                            _ = try measured(role.lowercased(), phase: "collapse accessibility failure")
+                        }
+                        XCTAssertTrue(collapsedInAccessibility)
+                        // Preserve the actual screen before Inspector or a
+                        // window-specific capture can perturb the RDM surface.
+                        let closedCapture = XCUIScreen.main.screenshot()
+                        let closedAttachment = XCTAttachment(screenshot: closedCapture)
+                        closedAttachment.name = "SF-NARROW \(presentation) live screen \(role) closed before Inspector \(width)"
+                        closedAttachment.lifetime = .keepAlways
+                        add(closedAttachment)
+                        let capturedAt = Date().timeIntervalSince1970 * 1_000
+                        let closed = try measured(role.lowercased(), phase: "after application Escape and rendered frames")
+                        let dom = try XCTUnwrap(closed["dom"] as? [String: Any])
+                        let menus = try XCTUnwrap(dom["menus"] as? [[String: Any]])
+                        let trace = try XCTUnwrap(closed["eventTrace"] as? [String: Any])
+                        let events = try XCTUnwrap(trace["events"] as? [[String: Any]])
+                        let event = try XCTUnwrap(events.last)
+                        XCTAssertEqual(event["trusted"] as? Bool, true)
+                        XCTAssertEqual(event["target"] as? String, "SUMMARY")
+                        let frames = try XCTUnwrap(trace["afterFrames"] as? [String: Any])
+                        XCTAssertEqual(frames["defaultPrevented"] as? Bool, true)
+                        let frameState = try XCTUnwrap(frames["state"] as? [String: Any])
+                        XCTAssertEqual(frameState["hasFocus"] as? Bool, true)
+                        XCTAssertLessThanOrEqual(try XCTUnwrap(frameState["wall"] as? Double), capturedAt)
+                        let framedMenus = try XCTUnwrap(frameState["menus"] as? [[String: Any]])
+                        XCTAssertEqual(framedMenus.filter { ($0["summaryFocused"] as? Bool) == true }.count, 1)
+                        XCTAssertTrue(menus.allSatisfy { ($0["open"] as? Bool) == false && ($0["expanded"] as? String) == "false" }, "Escape must close the actual DOM menus, not merely leave a focused summary")
+                        XCTAssertTrue(menus.allSatisfy { ($0["panel"] as? [String: Any])?["paintEligible"] as? Bool == false })
+                        let navigation = try XCTUnwrap(closed["navigation"] as? [[String: Any]])
+                        XCTAssertTrue(navigation.allSatisfy { ($0["visible"] as? Bool) == false }, "Neither inline nor popup links may remain visible after Escape at a narrow width")
+                        let hitSamples = try XCTUnwrap(closed["formerPanelHits"] as? [[String: Any]])
+                        XCTAssertFalse(hitSamples.isEmpty)
+                        for sample in hitSamples {
+                            let elements = try XCTUnwrap(sample["elements"] as? [[String: Any]])
+                            XCTAssertFalse(elements.contains { ["A", "NAV"].contains($0["tag"] as? String ?? "") }, "Closed panel must no longer own its former hit target")
+                        }
+                        let afterCapture = try measured(role.lowercased(), phase: "after closed screenshot")
+                        let capturedDOM = try XCTUnwrap(afterCapture["dom"] as? [String: Any])
+                        let capturedMenus = try XCTUnwrap(capturedDOM["menus"] as? [[String: Any]])
+                        XCTAssertTrue(capturedMenus.allSatisfy { ($0["open"] as? Bool) == false })
+                        if !comparePresentation {
+                            safari.typeKey(.tab, modifierFlags: [])
+                            attachScreenshot(named: "SF-NARROW live screen \(role) closed after genuine Tab \(width)")
+                        }
+                        XCTAssertEqual(safari.windows.firstMatch.frame, try XCTUnwrap(baselineWindowFrame))
+                        let before = try XCTUnwrap(allClosedBaseline)
+                        let baseline = try XCTUnwrap(NSBitmapImageRep(data: before.pngRepresentation))
+                        let painted = try XCTUnwrap(NSBitmapImageRep(data: closedCapture.pngRepresentation))
+                        let summary = try XCTUnwrap(context["menuRect"] as? [String: Double])
+                        let beforeState = try XCTUnwrap(event["before"] as? [String: Any])
+                        let beforeMenus = try XCTUnwrap(beforeState["menus"] as? [[String: Any]])
+                        let openedMenu = try XCTUnwrap(beforeMenus.first { $0["open"] as? Bool == true })
+                        let panel = try XCTUnwrap(openedMenu["panel"] as? [String: Any])
+                        let factor = summaryFrame.width / CGFloat(try XCTUnwrap(summary["width"]))
+                        // Screenshot NSImage.size is physical pixels on this
+                        // runtime; AX frames are points on the primary screen.
+                        let screen = try XCTUnwrap(NSScreen.screens.first)
+                        XCTAssertEqual(screen.frame.origin, .zero)
+                        let scale = CGFloat(painted.pixelsWide) / screen.frame.width
+                        XCTAssertEqual(CGFloat(painted.pixelsHigh) / screen.frame.height, scale, accuracy: 0.001)
+                        let panelRect = CGRect(
+                            x: summaryFrame.minX + CGFloat(try XCTUnwrap(panel["x"] as? Double) - XCTUnwrap(summary["x"])) * factor,
+                            y: summaryFrame.minY + CGFloat(try XCTUnwrap(panel["y"] as? Double) - XCTUnwrap(summary["y"])) * factor,
+                            width: CGFloat(try XCTUnwrap(panel["width"] as? Double)) * factor,
+                            height: CGFloat(try XCTUnwrap(panel["height"] as? Double)) * factor).insetBy(dx: 8 * factor, dy: 8 * factor)
+                        var changed = 0, sampled = 0
+                        for y in max(0, Int(panelRect.minY * scale))..<min(painted.pixelsHigh, Int(panelRect.maxY * scale)) {
+                            for x in max(0, Int(panelRect.minX * scale))..<min(painted.pixelsWide, Int(panelRect.maxX * scale)) {
+                                let old = try XCTUnwrap(baseline.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                                let new = try XCTUnwrap(painted.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                                sampled += 1
+                                if max(abs(old.redComponent - new.redComponent), abs(old.greenComponent - new.greenComponent), abs(old.blueComponent - new.blueComponent)) > 0.08 { changed += 1 }
+                            }
+                        }
+                        XCTAssertGreaterThan(sampled, 100)
+                        let pixelReceipt = "\(presentation) \(role) CSS\(width): changed=\(changed)/\(sampled);allowed=\(max(4, sampled / 1_000));rect=\(panelRect);AXsummary=\(summaryFrame);DOMsummary=\(summary);backing=\(scale)"
+                        let receipt = XCTAttachment(string: pixelReceipt)
+                        receipt.name = "SF-CONTEXT \(presentation) \(role) exact pixel comparison"; receipt.lifetime = .keepAlways; add(receipt)
+                        if comparePresentation {
+                            // Observe both modes before failing their shared
+                            // strict pixel gate; never accept stale pixels.
+                            if changed > max(4, sampled / 1_000) { pixelFailures.append(pixelReceipt) }
+                        } else {
+                            XCTAssertLessThanOrEqual(changed, max(4, sampled / 1_000), "Escape must restore the former panel's actual pixels, not merely close its DOM; \(pixelReceipt)")
+                        }
+                        if role == "Header" {
+                            // Reopen through the actual summary. The following
+                            // Footer click must close this Header, not orphan it.
+                            menu.click()
+                            XCTAssertTrue(safari.webViews.links["About"].firstMatch.waitForExistence(timeout: 3))
+                        }
+                    }
+                }
+            }
+            attachWindowScreenshot(safari, named: "SF-NARROW \(presentation) independent Safari measured \(width)")
+            if width < 600 && !comparePresentation {
+                let destination = try XCTUnwrap((header["links"] as? [[String: String]])?.first { $0["label"] == "About" }?["path"])
+                let menu = safari.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Header navigation menu")).firstMatch
+                menu.click(); let about = safari.webViews.links["About"].firstMatch
+                XCTAssertTrue(about.isHittable); about.click()
+                let followed = try measured("header")
+                XCTAssertEqual(followed["path"] as? String, destination)
+                XCTAssertEqual(followed["host"] as? String, header["host"] as? String)
+                attachWindowScreenshot(safari, named: "SF-NARROW independent Safari actual About \(width)")
+            }
+            }
+            if comparePresentation {
+                if safari.textViews["Console prompt"].firstMatch.exists { safari.typeKey("i", modifierFlags: [.command, .option]) }
+                safari.typeKey("0", modifierFlags: .command)
+            }
+            safari.typeKey("w", modifierFlags: .command)
+            application.activate(); application.buttons["Stop"].click(); application.buttons["preview.website.done"].click()
+        }
+        XCTAssertTrue(pixelFailures.isEmpty, "Escape must restore actual pixels in every observed presentation: \(pixelFailures.joined(separator: "; "))")
+    }
+
+    @MainActor
+    private func replaceSafariResponsiveWidth(with width: Int, in safari: XCUIApplication) {
+        let fields = safari.textFields.matching(NSPredicate(format: "label == %@ OR title == %@", "Width", "Width"))
+        XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(fields.count, 1)
+        let field = fields.firstMatch
+        XCTAssertTrue(field.isEnabled && field.isHittable)
+        field.click()
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hasKeyboardFocus == true"), object: fields.firstMatch)], timeout: 3) == .completed)
+        fields.firstMatch.typeKey("a", modifierFlags: .command)
+        fields.firstMatch.typeText(String(width))
+        fields.firstMatch.typeKey(.return, modifierFlags: [])
+        fields.firstMatch.typeKey(.tab, modifierFlags: [])
+    }
+
+    // SF-0507-003/006, SF-0604-003/006, SF-1202-003/004, SF-1204-003/004.
+    // Read-only Web Inspector evaluation measures the actual CSS viewport;
+    // neither outer-window pixels nor editor zoom stand in for browser width.
+    @MainActor
+    // SF-LOCAL-BUILDER-013 — strict native Header pointer and geometry acceptance.
+    // Independent companions do not waive this path.
+    func testAutomaticNarrowChromeNativeAndMeasuredSafariMenuJourney() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Page", "New Page…", in: application)
+        XCTAssertTrue(application.textFields["page.editor.name"].waitForExistence(timeout: 3))
+        replaceText(in: application.textFields["page.editor.name"], with: "About", application: application)
+        application.buttons["page.editor.apply"].click()
+        selectNavigatorTab("Pages", identifier: "pages", in: application)
+        let home = pageRow(named: "Home", in: application)
+        XCTAssertTrue(home.waitForExistence(timeout: 3)); home.click()
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        let headerID = canvasObject(named: "Header", in: application).identifier.replacingOccurrences(of: "canvas.object.", with: "")
+        let title = "Phone Header Layout Receipt"
+        selectInspectorTab("Content", identifier: "content", in: application)
+        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: title, in: application)
+        componentMenu("Insert", "Insert Footer after Page Content", in: application)
+        let footerTitle = "Phone Footer Layout Receipt"
+        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: footerTitle, in: application)
+        selectNavigatorTab("Layers", identifier: "layers", in: application)
+        let footer = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Footer")).firstMatch
+        XCTAssertTrue(footer.waitForExistence(timeout: 3))
+        let footerID = footer.identifier.replacingOccurrences(of: "navigator.layer.", with: "")
+        let titleRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Site title")).firstMatch
+        XCTAssertTrue(titleRow.waitForExistence(timeout: 3))
+        let titleID = titleRow.identifier.replacingOccurrences(of: "navigator.layer.", with: "")
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.Safari")
+
+        @MainActor func measuredContext(role: String = "header") throws -> [String: Any] {
+            let marker = "SF_CHROME_" + UUID().uuidString.replacingOccurrences(of: "-", with: "") + " "
+            safari.typeKey("c", modifierFlags: [.command, .option])
+            let prompt = safari.textViews["Console prompt"].firstMatch
+            XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+            prompt.coordinate(withNormalizedOffset: .init(dx: 0.03, dy: 0.5)).click()
+            // Read-only DOM geometry in the real visible Web Inspector. No page
+            // state, styles, window size or navigation is changed by this code.
+            let script = "(function(){var h=document.querySelector('\(role)[data-siteforge-node]'),q=h&&h.querySelector('[data-siteforge-text]'),t=q&&q.parentElement,n=h&&h.querySelector('.sf-page-navigation'),s=n&&n.querySelector('summary');function r(e){if(!e)return null;var b=e.getBoundingClientRect();return {x:b.x,right:b.right,width:b.width,height:b.height}}console.log('\(marker)'+JSON.stringify({width:innerWidth,scale:visualViewport.scale,host:location.host,path:location.pathname,title:t&&t.textContent,id:t&&t.getAttribute('data-siteforge-node'),titleRect:r(t),navRect:r(n),menuRect:r(s),links:h?Array.from(h.querySelectorAll('a[href]')).map(function(a){return {label:a.textContent,path:new URL(a.getAttribute('href'),location.href).pathname}}):[]}))}())"
+            let board = NSPasteboard.general
+            let saved = (board.pasteboardItems ?? []).map { item in item.types.compactMap { type in item.data(forType: type).map { (type, $0) } } }
+            do {
+                defer {
+                    board.clearContents()
+                    board.writeObjects(saved.map { values in let item = NSPasteboardItem(); for (type, data) in values { item.setData(data, forType: type) }; return item })
+                }
+                board.clearContents(); board.setString(script, forType: .string)
+                prompt.typeKey("v", modifierFlags: .command); prompt.typeKey(.return, modifierFlags: [])
+            }
+            let readout = safari.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", marker + "{", marker + "{")).firstMatch
+            XCTAssertTrue(readout.waitForExistence(timeout: 5))
+            let text = (readout.value as? String) ?? readout.label
+            let attachment = XCTAttachment(string: text); attachment.name = "SF-NARROW measured CSS context"; attachment.lifetime = .keepAlways; add(attachment)
+            let start = try XCTUnwrap(text.range(of: "{"))
+            let values = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text[start.lowerBound...].utf8)) as? [String: Any])
+            safari.typeKey("i", modifierFlags: [.command, .option])
+            return values
+        }
+
+        @MainActor func nativeMenu(_ owner: String) -> XCUIElement {
+            application.sheets.firstMatch.descendants(matching: .menuButton)["preview.navigation.menu." + owner].firstMatch
+        }
+        @MainActor func nativeMenuReady(_ owner: String) -> Bool {
+            let ready = NSPredicate { _, _ in
+                let live = nativeMenu(owner)
+                return live.exists && live.isEnabled && live.isHittable
+            }
+            return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 5) == .completed
+        }
+        for width in [320, 430, 768] {
+            application.activate()
+            selectStructuralLayer("Header", in: application)
+            replaceText(in: application.textFields["canvas.viewport.width"], with: String(width), application: application)
+            application.textFields["canvas.viewport.width"].typeKey(.return, modifierFlags: [])
+            XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.width", containing: String(width)))
+            application.buttons["canvas.zoom.reset"].click()
+            XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, "canvas.object." + headerID)
+            attachWindowScreenshot(application, named: "SF-NARROW native automatic Header Footer \(width)")
+            if width < 600 {
+                let authoredHeader = canvasObject(named: "Header", in: application).frame
+                let authoredNavigation = application.descendants(matching: .any).matching(NSPredicate(
+                    format: "identifier BEGINSWITH %@ AND label == %@", "canvas.object.", "Navigation"))
+                    .allElementsBoundByIndex.filter { authoredHeader.contains($0.frame) }
+                XCTAssertEqual(authoredNavigation.count, 1)
+                let navigationFrame = try XCTUnwrap(authoredNavigation.first).frame
+                componentMenu("Preview", "Canvas Device Preview", in: application)
+                var menu = nativeMenu(headerID)
+                XCTAssertTrue(menu.waitForExistence(timeout: 5))
+                XCTAssertEqual(application.sheets.firstMatch.descendants(matching: .menuButton)
+                    .matching(identifier: "preview.navigation.menu." + headerID).count, 1)
+                let headers = application.sheets.firstMatch.descendants(matching: .any)
+                    .matching(NSPredicate(format: "label == %@", "Header"))
+                XCTAssertEqual(headers.count, 1)
+                let previewHeader = headers.firstMatch.frame
+                let pixel = 1 / (NSScreen.main?.backingScaleFactor ?? 1)
+                XCTAssertEqual(previewHeader.width, authoredHeader.width, accuracy: pixel)
+                XCTAssertEqual(previewHeader.height, authoredHeader.height, accuracy: pixel)
+                XCTAssertEqual(menu.frame.midX, previewHeader.minX + navigationFrame.midX - authoredHeader.minX, accuracy: pixel)
+                XCTAssertEqual(menu.frame.midY, previewHeader.minY + navigationFrame.midY - authoredHeader.minY, accuracy: pixel)
+                XCTAssertTrue(waitForValue(application.descendants(matching: .any)["preview.page"], containing: "Home"))
+                let initiallyHittable = nativeMenuReady(headerID)
+                // Exercise the genuine native keyboard path before the pointer
+                // path; focus must belong to this sheet's live menu, not the
+                // underlying editor's still-retained first responder.
+                for _ in 0..<16 {
+                    if hasKeyboardFocus(nativeMenu(headerID)) { break }
+                    application.typeKey(.tab, modifierFlags: [])
+                }
+                XCTAssertTrue(waitForKeyboardFocus(nativeMenu(headerID), in: application))
+                let peers = XCTAttachment(string: "menuHittable=\(nativeMenu(headerID).isHittable); doneHittable=\(application.buttons["preview.done"].isHittable); pagePickerHittable=\(application.descendants(matching: .any)["preview.page"].isHittable)")
+                peers.name = "SF-NARROW native sheet peer hit readiness"
+                peers.lifetime = .keepAlways; add(peers)
+                application.typeKey(.downArrow, modifierFlags: [])
+                XCTAssertTrue(application.menuItems["About"].waitForExistence(timeout: 3))
+                application.typeKey(.escape, modifierFlags: [])
+                XCTAssertTrue(waitForKeyboardFocus(nativeMenu(headerID), in: application))
+                XCTAssertTrue(initiallyHittable, "The real control must be hittable before keyboard interaction too")
+                let menuIsHittable = nativeMenuReady(headerID)
+                menu = nativeMenu(headerID)
+                if !menuIsHittable {
+                    attachReadinessDiagnostics(for: application)
+                    let done = application.buttons["preview.done"]
+                    let pagePicker = application.descendants(matching: .any)["preview.page"]
+                    let diagnostic = XCTAttachment(string: "menu=\(menu.frame); enabled=\(menu.isEnabled); hittable=\(menu.isHittable)\ndone=\(done.frame); enabled=\(done.isEnabled); hittable=\(done.isHittable)\npagePicker=\(pagePicker.frame); enabled=\(pagePicker.isEnabled); hittable=\(pagePicker.isHittable)\npreview=\(application.descendants(matching: .any)["preview.canvas"].frame)\n\(application.debugDescription)")
+                    diagnostic.name = "SF-NARROW real native menu geometry and hierarchy"
+                    diagnostic.lifetime = .keepAlways; add(diagnostic)
+                    attachWindowScreenshot(application, named: "SF-NARROW native menu unavailable before pointer action")
+                }
+                XCTAssertTrue(menuIsHittable)
+                assertElement(menu, isContainedIn: application.descendants(matching: .any)["preview.canvas"])
+                menu.click(); application.typeKey(.escape, modifierFlags: [])
+                XCTAssertTrue(waitForKeyboardFocus(menu, in: application))
+                attachWindowScreenshot(application, named: "SF-NARROW native menu Escape restored focus \(width)")
+                XCTAssertTrue(nativeMenuReady(footerID))
+                let footerMenu = nativeMenu(footerID)
+                assertElement(footerMenu, isContainedIn: application.descendants(matching: .any)["preview.canvas"])
+                footerMenu.click(); application.typeKey(.escape, modifierFlags: [])
+                XCTAssertTrue(waitForKeyboardFocus(footerMenu, in: application))
+                attachWindowScreenshot(application, named: "SF-NARROW native Footer menu and Escape focus \(width)")
+                menu.click(); application.menuItems["About"].click()
+                XCTAssertTrue(waitForValue(application.descendants(matching: .any)["preview.page"], containing: "About"))
+                application.buttons["preview.done"].click()
+                XCTAssertTrue(application.buttons["navigator.layer." + headerID].isSelected)
+            }
+            componentMenu("Preview", "Preview Website in Safari", in: application)
+            XCTAssertTrue(safari.webViews.staticTexts[title].firstMatch.waitForExistence(timeout: 10))
+            safari.typeKey("0", modifierFlags: .command)
+            safari.menuBars.menuBarItems["Develop"].click()
+            let responsive = safari.menuItems["Enter Responsive Design Mode"]
+            if responsive.exists { responsive.click() } else { safari.typeKey(.escape, modifierFlags: []) }
+            let browserWidth = safari.textFields.matching(NSPredicate(format: "label == %@ OR title == %@", "Width", "Width")).firstMatch
+            XCTAssertTrue(browserWidth.waitForExistence(timeout: 5))
+            replaceSafariResponsiveWidth(with: width, in: safari)
+            var context = try measuredContext()
+            if let actual = context["width"] as? Int, abs(actual - width) == 1 {
+                replaceSafariResponsiveWidth(with: width + (width - actual), in: safari)
+                context = try measuredContext()
+            }
+            XCTAssertEqual(context["width"] as? Int, width, "Use measured innerWidth, never the RDM border-inclusive field")
+            XCTAssertEqual(context["scale"] as? Double, 1)
+            XCTAssertEqual(context["title"] as? String, title)
+            XCTAssertEqual(context["id"] as? String, titleID)
+            let footerContext = try measuredContext(role: "footer")
+            XCTAssertEqual(footerContext["width"] as? Int, width)
+            XCTAssertEqual(footerContext["scale"] as? Double, 1)
+            XCTAssertEqual(footerContext["title"] as? String, footerTitle)
+            if width < 600 {
+                let ft = try XCTUnwrap(footerContext["titleRect"] as? [String: Double])
+                let fn = try XCTUnwrap(footerContext["navRect"] as? [String: Double])
+                XCTAssertGreaterThanOrEqual(try XCTUnwrap(fn["width"]), 89)
+                XCTAssertLessThanOrEqual(try XCTUnwrap(ft["right"]), try XCTUnwrap(fn["x"]) + 1)
+                let footerMenu = safari.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Footer navigation menu")).firstMatch
+                XCTAssertTrue(footerMenu.isHittable); footerMenu.click(); safari.typeKey(.escape, modifierFlags: [])
+                XCTAssertTrue(waitForKeyboardFocus(footerMenu, in: safari))
+                attachWindowScreenshot(safari, named: "SF-NARROW Safari measured Footer menu and title \(width)")
+                let t = try XCTUnwrap(context["titleRect"] as? [String: Double])
+                let n = try XCTUnwrap(context["navRect"] as? [String: Double])
+                let m = try XCTUnwrap(context["menuRect"] as? [String: Double])
+                XCTAssertGreaterThanOrEqual(try XCTUnwrap(n["width"]), 89)
+                XCTAssertLessThanOrEqual(try XCTUnwrap(t["right"]), try XCTUnwrap(n["x"]) + 1)
+                XCTAssertGreaterThanOrEqual(try XCTUnwrap(m["x"]), try XCTUnwrap(n["x"]) - 1)
+                XCTAssertLessThanOrEqual(try XCTUnwrap(m["right"]), try XCTUnwrap(n["right"]) + 1)
+                let menu = safari.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Header navigation menu")).firstMatch
+                XCTAssertTrue(menu.isHittable); menu.click(); safari.typeKey(.escape, modifierFlags: [])
+                XCTAssertTrue(waitForKeyboardFocus(menu, in: safari))
+                attachWindowScreenshot(safari, named: "SF-NARROW Safari measured menu and full title \(width)")
+                let destination = try XCTUnwrap((context["links"] as? [[String: String]])?.first { $0["label"] == "About" }?["path"])
+                menu.click(); let about = safari.webViews.links["About"].firstMatch
+                XCTAssertTrue(about.isHittable); about.click()
+                XCTAssertTrue(safari.webViews.staticTexts[title].firstMatch.waitForNonExistence(timeout: 5))
+                let followed = try measuredContext()
+                XCTAssertEqual(followed["path"] as? String, destination)
+                XCTAssertEqual(followed["host"] as? String, context["host"] as? String)
+                attachWindowScreenshot(safari, named: "SF-NARROW Safari actual About navigation \(width)")
+            } else {
+                attachWindowScreenshot(safari, named: "SF-NARROW Safari larger inline navigation \(width)")
+            }
+            // Close only the tab opened by this isolated local Preview and
+            // verified above by its unique title / followed same-host route.
+            safari.typeKey("w", modifierFlags: .command)
+            application.activate(); application.buttons["Stop"].click(); application.buttons["preview.website.done"].click()
+            XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, "canvas.object." + headerID)
+            XCTAssertTrue(application.buttons["navigator.layer." + footerID].exists)
+        }
+    }
+
+    func testManagedChromeTitleMatchedSafariWidthsAndOverflowJourney() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        let longTitle = "Connected Fluid Browser Receipt"
+        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: longTitle, in: application)
+        componentMenu("Insert", "Insert Section in Flow", in: application)
+        componentMenu("Insert", "Insert Text at Center", in: application)
+        selectInspectorTab("Layout", identifier: "layout", in: application)
+        for (field, value) in [("x", "20"), ("y", "20"), ("width", "160"), ("height", "60")] {
+            replaceStructuralLayoutField(application.textFields["inspector.layout." + field], with: value, in: application)
+        }
+        componentMenu("Selection", "Edit Selected Text", in: application)
+        let editor = application.textViews["canvas.text.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        replaceText(in: editor, with: "Body first line\nBody second line", application: application)
+        editor.typeKey(.return, modifierFlags: .command)
+        XCTAssertTrue(waitForNonexistence(editor))
+        componentMenu("Insert", "Insert Footer after Page Content", in: application)
+        selectStructuralLayer("Header", in: application)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.Safari")
+        for (width, title, visible, name) in [(1440, longTitle, true, "long"),
+                (430, longTitle, true, "long"), (320, longTitle, true, "long"),
+                (430, "Short Title", true, "short"), (430, "Short Title", false, "hidden")] {
+            if title != longTitle && visible {
+                replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: title, in: application)
+            }
+            if !visible { application.checkBoxes["inspector.navigation.title.visible"].click() }
+            replaceText(in: application.textFields["canvas.viewport.width"], with: String(width), application: application)
+            application.textFields["canvas.viewport.width"].typeKey(.return, modifierFlags: [])
+            XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.width", containing: String(width == 1440 ? "1,440" : "\(width)")))
+            application.buttons["canvas.zoom.reset"].click()
+            XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.zoom.value", containing: "100"))
+            attachWindowScreenshot(application, named: "SF-TITLE native \(width) CSS width \(name) title at100percent")
+            componentMenu("Preview", "Preview Website in Safari", in: application)
+            XCTAssertTrue(application.staticTexts["preview.website.url"].waitForExistence(timeout: 10))
+            XCTAssertTrue(safari.webViews.firstMatch.waitForExistence(timeout: 10))
+            if visible { XCTAssertTrue(safari.webViews.staticTexts[title].firstMatch.waitForExistence(timeout: 10)) }
+            safari.typeKey("0", modifierFlags: .command)
+            safari.menuBars.menuBarItems["Develop"].click()
+            let enter = safari.menuItems["Enter Responsive Design Mode"]
+            if enter.exists { enter.click() } else { safari.typeKey(.escape, modifierFlags: []) }
+            let browserWidth = safari.textFields.matching(NSPredicate(format: "label == %@ OR title == %@", "Width", "Width")).firstMatch
+            XCTAssertTrue(browserWidth.waitForExistence(timeout: 5))
+            browserWidth.click(); browserWidth.typeKey("a", modifierFlags: .command)
+            // Request the actual CSS width. A historical universal +1
+            // compensation now creates a genuinely mismatched viewport.
+            // Evaluated innerWidth below must still equal the request exactly.
+            browserWidth.typeText(String(width)); browserWidth.typeKey(.return, modifierFlags: [])
+            XCTAssertEqual(browserWidth.value as? String, String(width))
+            browserWidth.typeKey(.tab, modifierFlags: [])
+            safari.typeKey("c", modifierFlags: [.command, .option])
+            let prompt = safari.textViews["Console prompt"].firstMatch
+            XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+            // Web Inspector exposes the real prompt but its native hit-point
+            // search fails inside the docked WebView. Click its visible leading
+            // edge, not the application's undefined bounding rectangle.
+            XCTAssertTrue(prompt.frame.minX.isFinite && prompt.frame.minY.isFinite)
+            prompt.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5)).click()
+            let marker = "SF_TITLE_CONTEXT_" + UUID().uuidString.replacingOccurrences(of: "-", with: "") + " "
+            let script = "console.log('\(marker)'+JSON.stringify({width:innerWidth,scale:visualViewport.scale,dpr:devicePixelRatio,title:Array.from(document.querySelectorAll('p[data-siteforge-node]')).filter(function(e){return e.textContent==='\(title)'}).map(function(e){var s=getComputedStyle(e),r=e.getBoundingClientRect(),t=e.querySelector('[data-siteforge-text]'),q=t&&t.getBoundingClientRect();return {id:e.getAttribute('data-siteforge-node'),tag:e.tagName,width:r.width,height:r.height,font:s.font,lineHeight:s.lineHeight,whiteSpace:s.whiteSpace,display:s.display,text:e.textContent,lines:t&&getComputedStyle(t).webkitLineClamp,textHeight:q&&q.height,centerDelta:q&&(q.y+q.height/2-r.y-r.height/2)}}),body:Array.from(document.querySelectorAll('p[data-siteforge-node]')).filter(function(e){return e.textContent.indexOf('Body first line')===0}).map(function(e){return {text:e.textContent,helpers:e.querySelectorAll('[data-siteforge-text]').length}})}))"
+            let pasteboard = NSPasteboard.general
+            let saved = (pasteboard.pasteboardItems ?? []).map { item in
+                item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+            }
+            do {
+                defer {
+                    pasteboard.clearContents()
+                    pasteboard.writeObjects(saved.map { values in
+                        let item = NSPasteboardItem(); for (type, data) in values { item.setData(data, forType: type) }; return item
+                    })
+                }
+                pasteboard.clearContents(); pasteboard.setString(script, forType: .string)
+                prompt.typeKey("v", modifierFlags: .command)
+                // Safari exposes a placeholder AXValue for this contenteditable;
+                // the actual evaluated readout below is the proof, not AXValue.
+                prompt.typeKey(.return, modifierFlags: [])
+            }
+            let readout = safari.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", marker + "{", marker + "{")).firstMatch
+            let measured = readout.waitForExistence(timeout: 5)
+            let capture = XCTAttachment(screenshot: safari.windows.firstMatch.screenshot())
+            capture.name = "SF-TITLE Safari \(width) \(name) measured console context"; capture.lifetime = .keepAlways; add(capture)
+            XCTAssertTrue(measured)
+            if measured {
+                let text = (readout.value as? String) ?? readout.label
+                let context = XCTAttachment(string: text)
+                context.name = "SF-TITLE measured CSS context \(width) \(name)"; context.lifetime = .keepAlways; add(context)
+                let json = try XCTUnwrap(text.range(of: "{"))
+                let values = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text[json.lowerBound...].utf8)) as? [String: Any])
+                XCTAssertEqual(values["width"] as? Int, width)
+                XCTAssertEqual(values["scale"] as? Double, 1)
+                let projected = try XCTUnwrap((values["title"] as? [[String: Any]])?.first)
+                XCTAssertEqual(projected["text"] as? String, title)
+                XCTAssertEqual(projected["display"] as? String, visible ? "flex" : "none")
+                if visible {
+                    XCTAssertEqual(projected["lines"] as? String, "1")
+                    XCTAssertEqual(projected["textHeight"] as? Double ?? -1, 17, accuracy: 1)
+                    XCTAssertEqual(projected["centerDelta"] as? Double ?? -10, 0, accuracy: 1)
+                }
+                let body = try XCTUnwrap((values["body"] as? [[String: Any]])?.first)
+                XCTAssertEqual(body["text"] as? String, "Body first line\nBody second line")
+                XCTAssertEqual(body["helpers"] as? Int, 0)
+            }
+            safari.typeKey("i", modifierFlags: [.command, .option])
+            let image = XCTAttachment(screenshot: safari.windows.firstMatch.screenshot())
+            image.name = "SF-TITLE Safari \(width) matched \(name) title"; image.lifetime = .keepAlways; add(image)
+            safari.typeKey("w", modifierFlags: .command)
+            application.activate()
+            application.buttons["Stop"].click(); application.buttons["preview.website.done"].click()
+        }
+    }
+
+    // SF-0202-003, SF-0701-006, SF-1202/1203/1204-003/004/006:
+    // real findings open the existing editor; navigation itself has no undo step.
+    // Execution receipts are recorded in the closeout evidence.
+    @MainActor
+    func testPreviewAndCheckWebsiteFindingRepairUsesExistingEditorJourney() throws {
+        let application = launchWorkspace()
+        assertNormalWindowPolicy(in: application)
+        componentMenu("Insert", "Insert Header at Page Top", in: application)
+        XCTAssertTrue(canvasObject(named: "Header", in: application).waitForExistence(timeout: 5))
+        let headerID = canvasObject(named: "Header", in: application).identifier
+        XCTAssertFalse(headerID.isEmpty)
+        selectInspectorTab("Content", identifier: "content", in: application)
+        let title = application.textFields["inspector.navigation.title"]
+        let websiteTitle = "Output repair " + UUID().uuidString
+        replaceText(in: title, with: websiteTitle, application: application)
+        title.typeKey(.return, modifierFlags: [])
+        selectInspectorTab("Design", identifier: "design", in: application)
+
+        // 016 integration: invalid Design input blocks commit-capable Preview
+        // without being reset by a display refresh or silently entering history.
+        let fillDraft = revealComponentPointerTarget("inspector.design.fillHex", in: application)
+        let originalFill = try XCTUnwrap(fillDraft.value as? String)
+        replaceText(in: fillDraft, with: "#GG", application: application)
+        componentMenu("Preview", "Preview Website in Safari", in: application)
+        XCTAssertTrue(application.staticTexts["workspace.editBoundary.status"].waitForExistence(timeout: 3))
+        XCTAssertFalse(application.descendants(matching: .any)["preview.website"].exists)
+        XCTAssertTrue(waitForValue(application.textFields["inspector.design.fillHex"], containing: "#GG"))
+        attachWindowScreenshot(application, named: "SF-OUTPUT-REPAIR invalid draft retained before Preview")
+        application.textFields["inspector.design.fillHex"].click()
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let live = application.textFields["inspector.design.fillHex"]
+            return live.exists && (live.value as? String) == originalFill
+        }, object: nil)], timeout: 3), .completed)
+
+        @MainActor func clipControl() -> XCUIElement {
+            revealComponentPointerTarget("inspector.design.clipContent", in: application)
+        }
+        @MainActor func clipIsOn() -> Bool {
+            let live = application.descendants(matching: .any)["inspector.design.clipContent"].firstMatch
+            return (live.value as? NSNumber)?.boolValue == true || (live.value as? String) == "1"
+        }
+        @MainActor func waitForClip(_ expected: Bool) -> Bool {
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let live = application.descendants(matching: .any)["inspector.design.clipContent"].firstMatch
+                return live.exists && clipIsOn() == expected
+            }, object: nil)], timeout: 5) == .completed
+        }
+        @MainActor func repairButton(_ prefix: String) -> XCUIElement {
+            application.buttons.matching(NSPredicate(format:
+                "identifier BEGINSWITH %@ AND identifier CONTAINS %@",
+                prefix + ".reveal.", "page-flow-navigation-clipped")).firstMatch
+        }
+        @MainActor func assertEditorAdopted() {
+            XCTAssertTrue(application.staticTexts["inspector.outputRepair.status"].waitForExistence(timeout: 5))
+            XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, headerID)
+            XCTAssertTrue(waitForLabel(application.descendants(matching: .any)["status.selectionPath"], containing: "Header"))
+            XCTAssertTrue(waitForValue(application.descendants(matching: .any)["status.selectionPath"], containing: "1 selected"))
+            XCTAssertTrue(clipControl().isEnabled)
+        }
+
+        XCTAssertFalse(clipIsOn())
+        clipControl().click()
+        XCTAssertTrue(waitForClip(true))
+        componentMenu("Preview", "Preview Website in Safari", in: application)
+        let previewRepair = repairButton("preview.website.finding")
+        XCTAssertTrue(previewRepair.waitForExistence(timeout: 10))
+        XCTAssertEqual(previewRepair.label, "Open Design")
+        XCTAssertFalse(application.buttons["preview.website.export"].isEnabled)
+        XCTAssertTrue(waitForLiveSemanticText(in: application, identifier: "preview.website.artifact", containing: "No successful website"))
+        attachWindowScreenshot(application, named: "SF-OUTPUT-REPAIR Preview blocked with exact repair action")
+        // Traverse actual native focus order, never invoke a model/test-only action.
+        for _ in 0..<32 {
+            if hasKeyboardFocus(repairButton("preview.website.finding")) { break }
+            application.typeKey(.tab, modifierFlags: [])
+        }
+        XCTAssertTrue(hasKeyboardFocus(repairButton("preview.website.finding")))
+        application.typeKey(" ", modifierFlags: [])
+        assertEditorAdopted()
+        attachWindowScreenshot(application, named: "SF-OUTPUT-REPAIR selected Header in existing Design editor")
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForClip(false), "Reveal must not insert a navigation transaction into undo history")
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForClip(true))
+
+        componentMenu("Build", "Check Website", in: application)
+        XCTAssertTrue(repairButton("build.finding").waitForExistence(timeout: 10))
+        attachWindowScreenshot(application, named: "SF-OUTPUT-REPAIR Check Website shares repair semantics")
+        application.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(clipIsOn(), "Cancel must not repair content")
+        componentMenu("Build", "Check Website", in: application)
+        let checkRepair = repairButton("build.finding")
+        XCTAssertTrue(waitForHittable(checkRepair, in: application))
+        checkRepair.click()
+        assertEditorAdopted()
+        clipControl().click()
+        XCTAssertTrue(waitForClip(false))
+
+        componentMenu("Preview", "Preview Website in Safari", in: application)
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.Safari")
+        XCTAssertTrue(safari.webViews.staticTexts[websiteTitle].firstMatch.waitForExistence(timeout: 10))
+        // Close only the tab proven to contain this isolated journey's title.
+        safari.typeKey("w", modifierFlags: .command)
+        application.activate()
+        attachWindowScreenshot(application, named: "SF-OUTPUT-REPAIR repaired successful output ready for explicit Refresh")
+        application.buttons["preview.website.refresh"].click()
+        XCTAssertTrue(safari.webViews.staticTexts[websiteTitle].firstMatch.waitForExistence(timeout: 10))
+        safari.typeKey("w", modifierFlags: .command)
+        application.activate()
+        XCTAssertTrue(application.buttons["preview.website.export"].isEnabled)
+        application.buttons["Stop"].click()
+        application.buttons["preview.website.done"].click()
+        XCTAssertEqual(canvasObject(named: "Header", in: application).identifier, headerID)
+    }
+
     func testBrowserPreviewCommittedHeaderRefreshAndStopJourney() throws {
         let application = launchWorkspace()
         assertNormalWindowPolicy(in: application)
@@ -8481,6 +10277,8 @@ final class SiteForgeLaunchTests: XCTestCase {
             in: application
         ))
         application.typeKey("\t", modifierFlags: [])
+        XCTAssertTrue(waitForKeyboardFocus(application.textFields["canvas.viewport.width"], in: application))
+        application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(application.buttons["canvas.viewport.compare"], in: application))
         application.typeKey("\t", modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(
@@ -8522,6 +10320,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             application.buttons["canvas.zoom.out"],
             application.checkBoxes["canvas.grid.toggle"],
             application.buttons["canvas.viewport.compare"],
+            application.textFields["canvas.viewport.width"],
             application.descendants(matching: .any)["canvas.viewport.preset"],
             pageRow(named: "Not Found", in: application),
             pageRow(named: "Home", in: application),
@@ -8923,7 +10722,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-WORKFLOW Aurora fixed content before opt-in")
         let conversion = revealStructuralLayoutControl(application.buttons["inspector.sizing.convertContent"], in: application)
         conversion.click()
-        let confirm = application.sheets.firstMatch.buttons["Convert and Remove Dimension Overrides"].firstMatch
+        let confirm = application.sheets.firstMatch.buttons["Convert to automatic sizing"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 3))
         application.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.height"], containing: "800"))
@@ -8981,11 +10780,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let filename = application.textFields["saveAsNameTextField"]
         XCTAssertTrue(filename.waitForExistence(timeout: 5))
         replaceText(in: filename, with: destination.deletingPathExtension().lastPathComponent, application: application)
-        application.typeKey("g", modifierFlags: [.command, .shift])
-        let folder = application.textFields["PathTextField"]
-        XCTAssertTrue(folder.waitForExistence(timeout: 5))
-        replaceText(in: folder, with: destination.deletingLastPathComponent().path, application: application)
-        folder.typeKey(.return, modifierFlags: [])
+        navigateReviewSavePanel(to: destination.deletingLastPathComponent(), in: application)
         let save = application.buttons["OKButton"]
         XCTAssertTrue(waitForHittable(save, in: application)); save.click()
         XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 5))
@@ -9045,11 +10840,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let exportName = application.textFields["saveAsNameTextField"]
         XCTAssertTrue(exportName.waitForExistence(timeout: 5))
         replaceText(in: exportName, with: exported.lastPathComponent, application: application)
-        application.typeKey("g", modifierFlags: [.command, .shift])
-        let exportFolder = application.textFields["PathTextField"]
-        XCTAssertTrue(exportFolder.waitForExistence(timeout: 5))
-        replaceText(in: exportFolder, with: exported.deletingLastPathComponent().path, application: application)
-        exportFolder.typeKey(.return, modifierFlags: [])
+        navigateReviewSavePanel(to: exported.deletingLastPathComponent(), in: application)
         let exportSave = application.windows["save-panel"].buttons["OKButton"]
         XCTAssertTrue(waitForHittable(exportSave, in: application)); exportSave.click()
         XCTAssertTrue(waitForLiveValue(in: application, identifier: "preview.website.status", containing: "Exported"))

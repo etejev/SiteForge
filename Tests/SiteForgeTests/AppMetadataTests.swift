@@ -3,6 +3,69 @@ import XCTest
 @testable import SiteForge
 
 final class AppMetadataTests: XCTestCase {
+    // SF-LOCAL-BUILDER-012 / SF-0203-006, SF-0701-002, SF-0702-003.
+    // Execution evidence belongs to the bounded 012–016 acceptance receipt.
+    func testPlainAuthoringVocabularyPreservesCanonicalKeysAndSizingValues() {
+        XCTAssertEqual(ContainerLayoutField.padding.title, "Inner spacing")
+        XCTAssertEqual(ContainerLayoutField.padding.propertyKey, "layout.padding")
+        XCTAssertEqual(ContainerLayoutField.gap.title, "Space between items")
+        XCTAssertEqual(ContainerLayoutField.gap.propertyKey, "layout.gap")
+        XCTAssertEqual(FluidValueTarget.padding.title, ContainerLayoutField.padding.title)
+        XCTAssertEqual(FluidValueTarget.gap.title, ContainerLayoutField.gap.title)
+        XCTAssertEqual(FluidValueTarget.gap.rawValue, "gap")
+        XCTAssertEqual(AuthoringLanguage.sizing(.fixed), "Exact size")
+        XCTAssertEqual(AuthoringLanguage.sizing(.fill), "Fill available space")
+        XCTAssertEqual(AuthoringLanguage.sizing(.hug), "Fit content")
+        XCTAssertEqual(CanonicalSizingMode.allCases.map(\.rawValue), ["fixed", "fill", "hug"])
+        XCTAssertEqual(ResponsiveGeometrySource.baseDesktop.label, "Uses Desktop")
+        XCTAssertEqual(ResponsiveGeometrySource.override(.mobile).label, "Set here · Mobile")
+        XCTAssertEqual(ResponsiveGeometrySource.fluid.label, "Smooth scaling")
+        XCTAssertEqual(AuthoringLanguage.componentSource(isOverride: false), "Uses component default")
+        XCTAssertEqual(AuthoringLanguage.componentSource(isOverride: true), "Set here · this instance")
+    }
+
+    func testPlainInspectorDiscoveryRetainsTechnicalSearchAliasesAndMixedScope() {
+        for query in ["inner spacing", "space between items", "screen size", "smooth scaling",
+                      "exact size", "fit content", "fill available space", "padding", "gap", "breakpoint", "fluid", "hug", "fixed"] {
+            XCTAssertEqual(InspectorSectionDiscovery.sections(matching: query, pinned: []), [.layout], query)
+        }
+        XCTAssertEqual(InspectorSectionDiscovery.sections(matching: "screen size", pinned: [.design]), [.layout])
+        XCTAssertEqual(WebsiteMetadataSource.authored.presentation, "Set here · this page")
+        XCTAssertEqual(WebsiteMetadataSource.inherited.presentation, "Uses website default")
+        XCTAssertEqual(WebsiteMetadataSource.defaulted.presentation, "Default · page name")
+        XCTAssertEqual(WebsiteMetadataSource.omitted.presentation, "Not set")
+        XCTAssertEqual(WebsiteMetadataSource.authored.rawValue, "authored")
+        XCTAssertEqual(WebsiteMetadataSource.inherited.rawValue, "inherited")
+    }
+
+    // SF-0901-003/0902-003/0903-003/0905-004, SF-0510-003. UNRUN.
+    func testPlainComponentRecoveryStyleSampleAndReviewCountsNameTheirLimits() {
+        XCTAssertEqual(AuthoringLanguage.editOriginalComponent, "Edit original component")
+        XCTAssertEqual(AuthoringLanguage.backToCopy, "Back to this copy")
+        XCTAssertEqual(AuthoringLanguage.componentResetTitle(count: 5), "Reset copy changes (5)")
+        XCTAssertEqual(AuthoringLanguage.componentResetTitle(count: 2, visibilityOnly: true), "Reset visibility changes (2)")
+        XCTAssertEqual(AuthoringLanguage.componentRecoverySummary(count: 1), "1 custom value needs attention")
+        XCTAssertEqual(AuthoringLanguage.componentRecoverySummary(count: 5), "5 custom values need attention")
+        XCTAssertEqual(AuthoringLanguage.componentRecoverySummary(count: 0, originalAvailable: false), "Original component unavailable")
+        XCTAssertEqual(AuthoringLanguage.removeCustomValuesTitle(count: 1), "Remove 1 custom value")
+        XCTAssertTrue(AuthoringLanguage.removeCustomValueHelp.contains("missing original data is not restored"))
+        XCTAssertTrue(AuthoringLanguage.componentRelationshipHelp.contains("independent copy does not stay linked"))
+        XCTAssertTrue(AuthoringLanguage.colorOpacitySampleHelp.contains("solid color and opacity"))
+        XCTAssertTrue(AuthoringLanguage.colorOpacitySampleHelp.contains("does not copy gradients, tokens"))
+        XCTAssertEqual(AuthoringLanguage.reviewCustomizationCount(0, name: "Custom layout"), "Custom layout: 0 objects")
+        XCTAssertEqual(AuthoringLanguage.reviewCustomizationCount(1, name: "Custom visibility"), "Custom visibility: 1 object")
+        XCTAssertTrue(AuthoringLanguage.reviewCountsHelp.contains("not visual defects"))
+        XCTAssertEqual(ComponentOverrideConflict.missingDefinition.rawValue, "missing-definition")
+        XCTAssertEqual(ComponentOverrideConflict.missingProperty.rawValue, "missing-property")
+        XCTAssertEqual(ComponentOverrideConflict.missingActionDestination.rawValue, "missing-action-destination")
+        XCTAssertEqual(AuthoringLanguage.componentValueName(kind: "media"), "Image")
+        XCTAssertEqual(AuthoringLanguage.componentValueName(kind: "slot"), "Default contents")
+        XCTAssertEqual(ComponentDependencySnapshot.Issue.missingDefinition.rawValue, "Missing component definition")
+        XCTAssertEqual(ComponentDependencySnapshot.Issue.missingDefinition.presentation, "Original component unavailable")
+        XCTAssertTrue(ComponentOverrideConflict.missingDefinition.explanation.contains("does not restore"))
+        XCTAssertTrue(ComponentOverrideConflict.missingActionDestination.explanation.contains("deleted destination is not restored"))
+    }
+
     func testSidebarSegmentsFillBothPaneWidthsWithoutClippingSelectedLabels() {
         for labels in [[42.0, 44, 64, 48, 90], [50.0, 50, 62, 86, 98]] {
             for scale in [1.0, 1.5, 2.0] {
@@ -124,7 +187,7 @@ final class AppMetadataTests: XCTestCase {
         let order = ShellFocusTraversal.order(pageIDs: [first, second])
         XCTAssertEqual(order, [
             .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents, .navigatorPage(first),
-            .navigatorPage(second), .viewportPreset, .viewportCompare, .viewportGrid,
+            .navigatorPage(second), .viewportPreset, .viewportWidth, .viewportCompare, .viewportGrid,
             .viewportZoomOut, .viewportZoomIn,
             .viewportReset, .viewportFitCanvas, .viewportFit, .viewportCanvas,
             .inspectorDesign, .inspectorLayout, .inspectorContent, .inspectorInteractions, .inspectorAccessibility,
@@ -312,11 +375,11 @@ final class AppMetadataTests: XCTestCase {
                 pageIDs: [home, notFound],
                 context: context
             ),
-            .route(.viewportCompare)
+            .route(.viewportWidth)
         )
         XCTAssertEqual(
             WorkspaceTabRoutingPolicy.decision(
-                from: .viewportCompare,
+                from: .viewportWidth,
                 direction: .reverse,
                 pageIDs: [home, notFound],
                 context: context

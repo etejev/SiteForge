@@ -1,5 +1,313 @@
 # Open Decisions
 
+## OD-030 — Complete macOS UI automation authorization
+
+Status: exact ordinary-identity image replay passed. The later full run
+finished with four UI failures and no authorization interruption. All four
+passed exact replay. The owner deferred a fresh full local gate for the
+targeted checkpoint only; ordinary future verification policy is unchanged.
+Affected: SF-LOCAL-BUILDER-012–016 and the SF-1203/SF-1211 UI evidence gates.
+The November 9 ordinary full result
+`full-1fc71fc2-8ab1-41f8-96b7-9a6f53b90655.xcresult` ended after the UI
+helper lost the app connection and the replacement runner reported
+LocalAuthentication -2 (“Authentication canceled”). 888 non-UI and 69 UI
+tests passed; the rest of the suite did not run.
+
+Recommended: keep the desktop available for one exact image-journey replay
+and complete any “XCTest — Enable UI Automation” request in the macOS
+dialog. Alternatively, the owner can run the same checkout in their
+normally authorized Xcode session and provide its result. The first option
+allows continued verification here; the second avoids another interrupted
+desktop run. Neither option changes permissions or waives the full gate.
+Deadline: before another UI gate. Safe temporary assumption: preserve all
+work, leave the baseline uncommitted/unpushed, and do not start the pending
+language/Inspector/Header resize slice.
+
+November 9 update: the desktop was available and the single exact image
+retry started without a new authorization prompt. It passed 1/1 in 171.265s
+in `focused-b77eedd4-0bee-4158-be31-a164894899e4.xcresult` on the unchanged
+ordinary source. One stable-source full gate follows this successful
+boundary check. Do not repeat unchanged attempts if authorization is
+canceled again.
+
+## OD-029 — Scope of further native Preview hit-path diagnosis
+
+Status: Approved bounded repair passes focused acceptance; final closeout pending — 2026-11-02
+
+The coordinating chat asked: “Approve a focused investigation and repair of
+that control’s accessibility behavior—without replacing the Preview host—so
+it can proceed to final verification, commit and push?” The owner answered
+“next”. This supersedes the earlier pause within the existing Preview host and
+control architecture. It authorizes demonstrated local AX ownership/activation
+repairs, focused regressions, final verification and the reviewed ordinary
+checkpoint commit/push. It does not authorize host replacement, fake AX targets,
+privacy/service changes or weakened pointer assertions. Earlier diagnostic and
+restriction details below are historical; broader architectural changes still
+require a separate decision.
+
+Outcome: canonical Header/Footer ancestry now owns the existing native child
+views inside the same Preview sheet; decorative AX leaves no longer overlap
+their controls. The popup fills its resolved allocation rather than a90-point
+cap. Both exact native selectors pass511.484s/50.786s; final-source focused
+checks pass4 code plus1 UI. See the current full-inventory evidence's “Native
+page-chrome ownership repair” section. Temporary tracing and ineffective cell,
+bezel and metadata experiments are removed. No additional native approval is
+currently needed; final verification/commit/push are still pending.
+
+### Historical diagnostic and superseded pause
+
+- Needed by: the native Header pointer portion of the current012–016 closeout.
+- Evidence: the completed full inventory reproduces both Header Menu pointer
+  failures. The strict browser pixel journey passes; real-host geometry alone
+  does not explain or waive native hittability. Earlier owner direction stops
+  further speculative native host/control/AX experiments.
+  The authorized probe `focused-ab1d6dc5-21dc-4cf3-84a9-2998b669372a`
+  fails1/1,45.577s: AppKit's actual content-view hit test at Header's center
+  returns the genuine NativePreviewNavigationButton. Its90×24 bounds are fully
+  visible, enabled, alpha1, in the key sheet of the active app; the ancestors
+  do not hide the center. XCTest still rejects the real92×26 AX menu as not
+  hittable. This disproves a center-hit obstruction at the sampled boundary,
+  but does not prove the remaining AX ownership/activation cause. Temporary
+  read-only instrumentation was removed. Retained receipt:
+  `FA597AB6-EDAB-4E46-87BB-86ADC4FB7CBC.txt`, temporary review directory
+  `siteforge-native-authorized-hit-path-review-20261102`.
+- Remaining owner choice: explicitly authorize a separate bounded investigation
+  of the native popup cell's AX ownership/activation boundary in the existing
+  Preview, or retain the investigation pause and incomplete checkpoint. The
+  one permitted AppKit center-hit diagnostic is complete and is not permission
+  for another probe or production change. Recommended default is a separately
+  scoped AX investigation, preserving the host/window/control architecture,
+  canonical state and strict ordinary-pointer assertions. No privacy/service
+  changes, fake AX ownership or replacement host.
+- Alternatives: retain the native investigation pause, leaving this checkpoint
+  incomplete; or separately approve a broader architectural proposal only after
+  reviewing actual diagnostic evidence. Waiving pointer acceptance is not
+  recommended and is not assumed.
+- Tradeoff: a bounded trace may identify the first real interaction divergence;
+  another unproven presentation replacement would repeat rejected experiments.
+- Affected requirements: SF-0806-006, SF-1203-003/006, SF-1211-004.
+- Deadline: before new native hit-path instrumentation or a green closeout/Git
+  claim. Other proven product/harness repairs continue independently.
+- Safe temporary assumption: preserve both failing tests and current native
+  architecture. The owner's “yes” authorizes only the proposed read-only
+  hit-path diagnostic, not host/control replacement or speculative experiments.
+
+## OD-028 — Complete Xcode's required system components
+
+Status: Resolved by owner — 2026-11-02
+
+Owner confirmed installation. `xcodebuild -checkFirstLaunchStatus` now exits0;
+the exact previously blocked fixture executes and passes1/1 in0.057s.
+No agent installation, authentication or security-setting change was performed.
+
+- Needed by: the owner-authorized SF-LOCAL-BUILDER-012–016 full closeout.
+- Evidence: Xcode's native dialog states “Install Required System-wide
+  components must be installed to use Xcode,” with Quit and Install actions.
+  The focused test host was sampled waiting in
+  `XCTestDriver._prepareTestConfigurationAndIDESession`; no test method began.
+  Repository checks independently passed. This does not prove the dialog is
+  the sole cause of all previous initialization failures.
+- Recommended default: owner completes the visible Xcode Install action and
+  any macOS authentication in the system dialog, then confirms Xcode is ready.
+- Alternative: defer testing/commit/push and retain the current source/evidence.
+- Tradeoff: installation changes shared developer components and may require
+  administrator authentication; deferral leaves required acceptance unresolved.
+- Affected requirements: SF-0806-006, SF-1203-003/006, SF-1211-004 and the
+  supporting bounded local-builder acceptance. No requirement is waived.
+- Deadline: before another focused test launch or the final verification gate.
+- Safe temporary assumption: do not install components, change developer tools,
+  privacy settings or services programmatically. Preserve all source and data.
+
+
+## Newer013 browser evidence — no architecture/security decision justified
+
+FINAL: the new actual-pixel gate fails1/1,106.962s in
+`focused-8bc86f35-54f4-494c-985e-15d9244794b0`:1855/33600 former-panel
+pixels differ after Escape (allowed33), while DOM/focus/hit checks pass. A unique
+visible fixture prefix rules out an older Home document; the exact recording
+frame shows the same residue. Earlier assertion-only passes below are NOT the
+current method's acceptance. No active run; no accepted visual fix. Preserve
+this failure and the pixel gate. See the focused receipt's Final pixel gate
+section for original filenames, interrupted scaling attempt and next bounded
+same-artifact/non-RDM investigation. No full gate/Git/install was run.
+
+Actual shared JavaScript delivery and Escape closure/focus are correct in
+the measured DOM. Closed panels still appear in original screen captures before
+Inspector at320/430. Neither script omission nor Inspector capture ordering is
+proven causal; explicit closed CSS was ineffective and removed. No new host,
+security/privacy change, output-runtime replacement or requirement waiver is
+approved. Preserve visual acceptance as pending; see latest focused receipt.
+
+## 2026-11-02 — bounded013 pointer closeout; no new architecture decision made
+
+The short public-control probe confirms ordinary Header XCUI click fails, not
+merely its readiness Boolean. Independent Footer pointer/keyboard/About works.
+Native local/window/app hit targets and coordinate conversion are correct;
+public remote discovery returns-25211. A borderless-bezel hypothesis did not
+improve native geometry and was removed before app acceptance. No production
+cause/framework defect or permission change is inferred. Existing focus repair
+and original sheet remain. No new host/control architecture is justified.
+
+Independent Safari CSS320/430/768 journey passes its current assertions after
+fixing empty-identifier Width querying and nonconstant RDM rounding. Visual
+review still shows painted panels after Escape; focus checks are insufficient
+closure proof. Safe next bounded diagnostic: observe details.open/aria-expanded
+and script load across Escape, and compare remote Header/Footer hit identity
+only if an already-authorized client permits. Not started. Do not request broad
+privacy access, waive tests or repeat unchanged long013. Full visual acceptance
+remains open. See the current focused receipt for exact results/images; preceding
+decisions/experiments below are historical, not requests to replay them.
+
+## 2026-11-01 — Native Preview host boundary, owner decision before architectural replacement
+
+### Current correlated diagnostic result — no Safari misdispatch demonstrated
+
+The authorized trace completed in `focused-5f33968e-2339-4a19-82c1-95896482aba8`.
+Down125 reaches the correct active SiteForge sheet before/after dispatch, with
+Function only (8388608), physical flags0, first responder KeyViewProxy. No
+native-follow/browser-request/browser-opener action executes before failure.
+The apparent Safari transition below was an extraction error: default unlimited
+video tolerance returned actual78.208s for requested75s, after t77.74 termination.
+Zero-tolerance actual74.542s still shows SiteForge Preview. No authentication,
+screen lock, user interference or framework fault is inferred.
+
+Bounded correction stays within restored hosting: one genuine native popup owns
+first responder and labels its real accessible cell, without a SwiftUI focus
+proxy or synthetic role/window. The real app now opens Home/About with Down and
+restores focus after Escape, but initially failed the strict hittability check.
+A further exact regression proves the native cell's default activation point
+outside its actual frame; a live screen-point implementation passes, including
+layout movement. Final affected code checks pass2/2. Strict013 still fails
+initial pointer hittability84.206s after successful keyboard opening/Escape.
+This is a remaining distinct AX hit-test boundary, not an accepted/faked result
+or proven framework fault. No further architecture experiment was started;
+no new host/browser/command/persistence change. Temporary trace removed, no active
+run. Detailed results/current42-code versus original41 baseline are in the receipt.
+
+Current narrow continuation: owner approved the ONE recommended redacted
+foreground/key-dispatch diagnostic and a repair only at its demonstrated boundary.
+It does not reopen the rejected host experiment or authorize further architecture.
+No runner active at start; exact result/outcome will be recorded in the receipt.
+
+**Current outcome: approved experiment rejected and removed.** The two isolated
+native event/lifecycle diagnostics passed after fixture corrections, but exact013
+`focused-9073df19-a811-4a41-a928-39031ca5dcf0` failed78.950s at Down Arrow
+opening About. Before that key, peer diagnostics still showed content Menu
+hittable=false, standard Done/page picker=true. This host did not improve the
+actual failed boundary. Its presenter/controller and two dependent tests are
+archived outside the repository and removed from shipping targets. Original
+SwiftUI document-modal hosting is restored; independently valid canvas modal
+exclusion remains. Cleanup incremental compilation and its exact regression
+pass1/1 (`focused-2d577279-bfbb-4918-b48e-71c3eb12a6bf`,0.640s).
+No run remains active. Historical isolated passes are not current coverage.
+
+One recommended next diagnostic, NOT started: in the restored architecture,
+capture redacted frontmost-application identity, NSApp activation, key/main/sheet
+ownership, first-responder class and key modifiers immediately before/after the
+first native opening key. The retained recording shows SiteForge/its focused
+Preview at72s, then Safari foreground at75s after the74.26s Down event, without
+reaching the test's Safari branch. This is an observed focus/dispatch transition,
+not proof of its cause or of a framework defect. Correlate that one event before
+another product change. No assertion waiver, coordinate bypass, privacy change
+or broader architecture is approved.013 remains unaccepted; full gate deferred.
+
+The following approval/plan is historical and was fully exercised, not a request
+to repeat the removed host experiment.
+
+Owner approved the bounded experiment through the coordinating chat's explicit
+proposal and “next” reply. This supersedes only the approval wait below, not the
+recorded failure evidence or the no-full-gate/Git/install boundary.
+Falsifiable plan: replace only the native Preview SwiftUI sheet presenter with
+an originating-window-owned AppKit sheet controller; retain the existing observed
+Preview view/snapshots/actions. Guard state/document/window replacement and
+teardown, use native sheet/key-view/accessibility behavior, and prove actual
+ownership, dismissal/restoration and stale-host neutrality in focused AppKit
+tests. Then run the unchanged strict013 app journey; only if improved retain
+the correction and check named Save/repair neighbors and originals. If not
+improved, remove the ineffective host experiment, retain evidence, stop rather
+than broadening document/browser architecture or waiving activation assertions.
+
+Affected: bounded SF-0806-006, SF-1203-003/006, SF-1211-004 and ADR-0020.
+013 remains unaccepted, not an authentication or inferred screen-lock issue.
+Live Header/menu rectangles agree within one device pixel and Tab focus appears,
+but the content Menu is not hittable while the same sheet's Done and page Menu
+are hittable. Space and Down Arrow do not open the focused content Menu in the
+exact journey. Removing its focus wrapper instead makes it unreachable by Tab.
+Native layout placement without offset/scale effects preserves geometry but
+does not fix activation; that experiment was removed. Window-local canvas modal
+exclusion passes independently but does not fix this menu. The earlier genuine
+center-pointer diagnostic opened Home/About; it is not an accepted test bypass.
+These observations identify the failing hosting/activation boundary, not a
+proven Apple framework root cause. Exact results and retained originals are in
+[the focused receipt](evidence/SF-LOCAL-BUILDER-012-016-FOCUSED-ACCEPTANCE.md).
+
+Recommended next architectural experiment: approve a bounded AppKit-owned native
+Preview host/controller, preserving immutable snapshots, existing navigation
+actions, document modality and root-window lifecycle. This changes the approved
+SwiftUI sheet hosting boundary across Preview keyboard, accessibility and focus
+restoration, and requires owner approval before implementation. It is not a
+promise that changing hosts fixes the underlying issue.
+Alternative: preserve the current architecture and leave013 acceptance pending
+while obtaining an independent framework reproduction. Tradeoff: no broader host
+change, but native/Safari acceptance remains incomplete. Waiving hittability,
+faking AX window ownership, coordinate-only automation or changing privacy
+settings is not proposed.
+Decision deadline: before replacing the Preview host or advancing beyond this
+acceptance slice. Safe temporary assumption: retain all valid dirty work and
+passing evidence; no017, broad gate, Git/install/signing or owner-data changes;
+keep modules Partial and items IN PROGRESS.
+
+## 2026-11-01 focused012–016 native authentication handoff
+
+Resolved for the owner-present controlled continuation: native XCTest initialized
+without a new request and all eight exact methods executed. Four direct neighbors
+pass; editable-scope failures in the four new journeys are being corrected with
+retained evidence. No new authentication or owner decision is pending. The
+receipt below remains historical evidence, not current execution state.
+
+External acceptance boundary, not a new product/architecture decision. Scoped
+build-for-testing passed;36 distinct code methods have passing evidence after
+targeted corrections. Exact012 UI attempt
+`focused-0a74e582-05f4-455d-813b-6e5bdbb5eddf` executed zero UI methods: current
+coreauthd requested XCTest Enable UI Automation16:38:12; initialization timed
+out16:39:12, xcodebuild exited65 at16:39:18. Owner notified once during the run;
+it has ended, no runner/duplicate/retry remains. Result/log retained in the
+[focused receipt](evidence/SF-LOCAL-BUILDER-012-016-FOCUSED-ACCEPTANCE.md).
+Recommended default: owner present for one fresh exact012 native attempt and
+handles any new authentication only inside macOS using Touch ID/Use Password.
+Alternative: retain this tree and defer native/visual acceptance. Tradeoff:
+neither changes code acceptance; no runtime usability/parity proof exists until
+native acceptance runs. Affected bounded SF-0203-006, SF-0701-006, SF-0806-006,
+SF-1203-006, SF-1211-006. Deadline: before another native attempt, not a full gate.
+Safe assumption: no unchanged retry loop, inferred lock state, privacy/security
+change, credential disclosure, owner-data edits, Git/install or017. Eight planned
+native methods remain unexecuted, not skipped/passed. Full verification remains
+mandatory/deferred and is not authorized by this focused handoff.
+
+## 2026-10-30 native readiness update
+
+The historical authentication handoff below is resolved for the current focused
+runs: XCTest executes native journeys. All eight distinct focused journeys pass.
+Named-page Preview startup was corrected in the HTTP adapter. Safari header-title
+overflow parity remains recorded visual follow-up, not a new owner decision or
+evidence of a locked screen. No privacy/settings change is requested.
+
+## Current focused native handoff — 007–011, 2026-10-29
+
+Focused code acceptance passes70/70. The first exact native width journey did not
+execute: current coreauthd requested XCTest Enable UI Automation18:03:28-0400;
+runner initialization timed out18:04:28. Result `focused-3ffd3675-fe21-4621-b103-99688380ec8e`.
+Owner was notified during the single active attempt. Recommended default: owner
+present for one fresh exact-selector attempt and completes authentication only
+in macOS. Alternative: preserve the current uncommitted tree and defer native
+acceptance. Tradeoff: no visual/native proof until authentication succeeds.
+Affected SF-0602-006, SF-0606-006 and subsequent007–011 native acceptance. Deadline:
+before another native attempt, not before further read-only review. Safe temporary
+assumption: no unchanged retry, privacy/settings change, credential disclosure,
+owner data mutation, commit or push. No new product/architecture decision needed.
+Full verification remains deferred, not waived. Earlier handoff results below
+are historical and do not resolve this fresh authentication request.
+
 ## Current execution handoff — native XCTest authentication,2026-10-28
 
 RESOLVED for this attempt: owner completed authentication; focused07cad6e0

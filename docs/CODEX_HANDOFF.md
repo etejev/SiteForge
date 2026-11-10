@@ -1,6 +1,687 @@
 # Codex Continuation Handoff
 
-## Authoritative local acceptance checkpoint — 2026-10-28
+## Current closeout — targeted replay only
+
+The exact ordinary-identity image journey passed 1/1, 171.265s, exit 0,
+in `focused-b77eedd4-0bee-4158-be31-a164894899e4.xcresult`. No source
+changes or owner data access. The interrupted prior full run reached
+70 of 170 UI methods; see the closeout manifest for the two error records
+and 100 not run. These are separate receipts, not a stitched green gate.
+
+The subsequent ordinary `./sf verify` finished with exit 65: repository
+checks and build passed; 888 non-UI and 163 UI passed, four UI failed,
+three owner opt-in UI skipped, and zero were unrun. Receipt:
+`full-51ae6ac8-6773-45a1-bb4c-c4155c54bbb3.xcresult`; source/test/tool diff
+SHA-256 `1527320483e7ea4238936cd91ad33ce9ec5fb4072b698c62e82e1fde66467ef0`.
+See the [failure inventory](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md)
+for the exact failures and the separate 4/4 passing replay receipt,
+`focused-04cbf0e7-7f8f-45e4-bbe6-67a166e4b739.xcresult`. The owner authorized
+the reviewed checkpoint commit and normal push after that replay; a fresh
+local full run is deferred for this checkpoint only. This is not full
+milestone acceptance. Keep the separate usability/Header resize follow-up
+pending for a fresh explicit request. Previous live-run statements below
+are historical.
+
+## Current baseline gate — November 9, ordinary replay
+
+The isolated full gate completed, exit 65, in
+`full-4837c421-2ddf-4de8-8b69-cdf658b13731.xcresult`: 888 non-UI passed,
+162 UI passed, five UI failed, and three owner opt-in UI journeys skipped.
+The repaired component return, Safari focus, and Aurora Save As/export/reopen
+all passed inside that run. Settings failure diagnostics show the isolated app
+in the background with an enabled but unhittable control; the retained screen
+shows another foreground application. No app-wide disabled-state defect was
+established. The Inspector resize timeout remains a separate native pointer
+boundary to compare.
+
+After confirming the installed app was no longer running, replayed only the
+five exact failures under the ordinary test identity, without changing source.
+Result `focused-19b144c7-fee7-4172-bb42-29004ec242cd.xcresult` and temporary
+log `siteforge-closeout-ordinary-five-20261109.log`: the first four passed
+unchanged. The fifth reproduced the resize timeout only on the compact
+transition with a live draft. A straight-edge diagnostic produced actual
+movement to 1284 rather than 1280 points while foregrounded. One correction
+for a measured near miss now retains the native drag and two-point width
+assertion. The complete Inspector journey passed 1/1, 418.426s, in
+`focused-55ca5461-61f5-49bc-8694-80ca2acbb6c2.xcresult`.
+Reviewed original 1280, compact draft, and recovery screenshots in
+`siteforge-inspector-edge-review-20261109`.
+
+The final ordinary-identity `./sf verify` exited 65. Log:
+`siteforge-closeout-final-ordinary-20261109.log`. Source/test/tool diff hash
+`1527320483e7ea4238936cd91ad33ce9ec5fb4072b698c62e82e1fde66467ef0`.
+Result: `full-1fc71fc2-8ab1-41f8-96b7-9a6f53b90655.xcresult`.
+Repository checks, build, 888 non-UI and 69 UI tests passed. The image
+journey lost XCTest's application connection; the replacement runner
+reported macOS authentication canceled (LocalAuthentication -2) before
+executing a method. The bundle has 957 passes, two failure records and no
+skips reached. No source drift. See OD-030: resolve interactive automation
+authorization before a bounded exact replay and a new gate. Do not loop
+unchanged verification. No commit, push, or next-slice implementation.
+Earlier live-run statements below are historical.
+
+## Current closeout — 2026-11-09
+
+The November 2 authoritative run exited 65. Its completed result reported
+984 passes (888 non-UI, 96 UI), two failed UI methods and one replacement
+runner initialization error (“Timed out while enabling automation mode”).
+It did not reach the remaining UI methods. The run is no longer active.
+
+The focused follow-up preserves exact component NodeID/geometry while waiting
+for scene adoption, and requires Safari focus on the exact named disclosure
+instead of matching an empty identifier. Both failed selectors and the
+component return-context regression passed (3/3, zero skips) in
+`focused-b78ee9c0-bef4-4b3e-b46f-6aebf2ce9e7b.xcresult`. The Safari method
+passed in 183.745s. Key original screenshots were reviewed.
+
+The November 9 ordinary-identity `./sf verify` is no longer active.
+Temporary log: `siteforge-closeout-authoritative-20261109.log`.
+Result: `full-eff79e59-3f89-42a0-b478-91c75ffe8cab.xcresult`.
+Repository checks, build and 888 non-UI tests passed. The Aurora copy
+journey refused to run while the installed SiteForge app was open. We
+interrupted only the owned xcodebuild (exit 75) rather than continuing an
+invalid gate; the installed app remains open and untouched. No green full
+result is claimed. The same Aurora selector is now replaying with the existing
+OwnerTesting bundle identity and separate build directory in
+`focused-a8c88e22-3ef8-44a1-9fa7-5cc3d62e9134.xcresult`.
+That first replay reached Save As but left the native Go to Folder panel
+open. After explicitly entering the exact directory path with a trailing
+separator and requiring chooser dismissal, the same isolated selector
+passed in 158.051s (`focused-e3dfceeb-f55c-40c0-b587-b3f38054e89a.xcresult`),
+including native export cancellation/retry and reopen.
+
+One isolated `./sf verify` is now running with the existing
+`app.siteforge.SiteForge.OwnerTesting` build identity in its separate build
+directory. Temporary log: `siteforge-closeout-isolated-authoritative-20261109.log`.
+Result: `full-4837c421-2ddf-4de8-8b69-cdf658b13731.xcresult`. All 888
+non-UI tests passed. The live log records Settings appearance, Settings group,
+minimum-window Pages list, and Aurora packaged-sample pointer failures.
+The Settings window is present but XCTest marks the app/window disabled;
+the Aurora pointer diagnostic reports the app in the background. Cause
+is not established. The corrected Aurora copy/export/reopen journey passed
+in this collection. Wait for the completed bundle before comparing exact
+failed selectors under the ordinary identity. No source edit during collection.
+Do not duplicate it or change source/tests/tools. The ordinary installed
+app, its projects and recovery data remain untouched.
+Source/test/tool diff SHA-256:
+`f64786aa78f3549a180718f279e73cd38352b287ee42602228e23a005dc94a09`.
+The earlier fingerprint above describes the ordinary interrupted run.
+The isolated run's source/test/tool diff SHA-256 is
+`a76acc4f0394cfba2844d5ebfab535411d733b723b796d920727166d76db2681`.
+No milestone completion,
+commit or push is claimed. The live-run notes below are historical.
+
+## CURRENT EXECUTION — focused repairs after full inventory,2026-11-02
+
+LIVE AUTHORITATIVE COLLECTION: the existing `./sf verify` is still running;
+do not start another. Result `full-96d605e0-a34f-49f2-8fbb-165472e79ab7.xcresult`,
+temporary log `siteforge-native-closeout-authoritative-20261102.log`. All888
+non-UI tests pass; the repaired native/Safari journey passes523.336s in this
+full run. Later UI methods are progressing. No final total or green gate is
+claimed. Source/test/tool hash remains
+`5456f330b7d0fc9dc6a0bc04e7f592a314b50d31480728798fade13b1d00150d`.
+Keep source/tests/tools frozen until this collector exits and its authoritative
+result is read. This live entry supersedes the preparatory “Next” below.
+
+The running collector has now exposed one failure at line3464 of
+`testFormattingCommandsRemainVisibleAcrossInspectorDestinationsWithoutToolsDisclosureJourney`:
+the immediate selection assertion after Back to this copy. Source creation
+preserves NodeID; return selection is applied during asynchronous scene adoption.
+Verify the completed diagnostics before accepting a live identity/adoption wait
+as the correction. No production/test edit has been made during collection.
+The final gate is not green. Do not duplicate or abort the healthy collector.
+
+A second failure is recorded at line9373 in
+`testNarrowChromeFooterAndMeasuredSafariBoundaryCompanion` (506.892s): Safari
+Header post-Escape focus at430 points. `waitForKeyboardFocus(element:)` drops
+the element's role/label and searches only its empty Safari identifier. That
+cannot identify the intended menu. Inspect its retained hierarchy, preserve the
+focus requirement and use the exact live control rather than accepting any
+empty-identifier focus. Source/tests remain frozen until collection completes.
+
+LATEST: all27 original failed methods now have exact passing focused receipts.
+OD-029 approval was recorded and the native ownership repair is implemented in
+the existing host: canonical Header/Footer containers own the real child views,
+paint-only surfaces do not intercept their AX hits, and the popup uses its full
+resolved navigation width. Both exact native selectors pass511.484s/50.786s in
+`focused-fa393b1a-3abd-4b9c-a4f6-8735da2e759a`; final-source checks pass4 code
+plus1 UI in `focused-b335f521-719a-40c4-9624-4d4f90f439f5`. All19 originals
+were inspected. No temporary production trace or speculative override remains.
+Next: stable-source authoritative `./sf verify`, exact result reconciliation,
+reviewed scoped commit and ordinary origin/main push, then hosted check review.
+Do not start a duplicate collector, new feature, install/signing step or cleanup.
+Preserve coordinator/audit/archive and owner projects/recovery/results. The
+following outcomes are chronological history, superseded by this entry.
+
+Current outcome: no collector is active. The original full browser comparison
+passes1/1,972.799s, with all four pixel comparisons zero and14 originals reviewed.
+The storage-backed Aurora and Related Page retries pass2/2,68.844s/255.725s;
+all9 originals were reviewed. Available storage remains11GiB. Thus25 of the27
+original failed methods now have exact passing focused receipts. Only the two
+native Header selectors in the evidence's current table remain paused under
+OD-029. Its single read-only diagnostic is exhausted; further native AX
+ownership/activation investigation needs separate owner authorization. No final
+green verification, commit or push is claimed. The execution narrative below is
+historical and superseded by this outcome and the current evidence table.
+
+The successful original browser replay follows one automation initialization
+failure (zero methods) and one snapshot-attribute truncation failure. The concrete
+384-byte chunk correction preserves the131072-byte receipt bound and validates
+every byte. No contract breadth or pixel tolerance was reduced. The evidence's
+two-row current table is authoritative; historical failures are retained there.
+
+The authorized native diagnostic has completed:
+1 failed/0 passed,45.577s, `focused-ab1d6dc5-21dc-4cf3-84a9-2998b669372a`.
+The genuine Header popup wins AppKit's center hit-test and is fully visible;
+XCTest still rejects its AX target. Temporary tracing is removed. OD-029's
+one diagnostic is exhausted; no speculative native redesign is authorized.
+The concrete browser baseline correction passed exact replay. The prior
+Footer comparison sampled a deliberately open Header panel as its baseline;
+the correction preserves the all-closed screen and exact pixel/exclusivity gates.
+The old2.7GiB reading is superseded; preserve projects/recovery/results.
+The detailed execution receipts below are chronological history, not active jobs.
+
+Post-inventory repairs: six exact non-UI methods pass6/6,0.754s,
+`focused-424870fc-a2fa-4d63-8866-3b5793396d3b`; nine exact UI methods pass9/9,
+1091.696s, `focused-eaa7db05-6e41-4e36-8787-f658fa357a0a`. Component discovery
+now uses the standard inset Inspector section; both overflow journeys pass.
+Approved vocabulary/route-context/CSS-cascade expectations retain their exact
+semantic/history checks. The eight-method interaction/browser replay completed
+exit65,6 passed/2 failed in `focused-caa2847f-a5bf-4baa-a4ec-17175a357d57`.
+Matched Safari title widths now pass288.171s. Where Used subsequently passes1/1,
+33.692s in `focused-deb18385-1436-48b8-b993-1717fa8a025f`: the real bounded row
+label now has a rectangular content shape; the test requires sheet dismissal
+and exact original instance/selected Layers identity. No model workaround.
+The presentation-context replay failed1/1,693.752s before reaching its zoom reset:
+fresh collapse AX lookup failed after Header Escape. Result
+`focused-07aec268-1069-4ffd-b49c-974450386bed`; screenshots show real ordinary
+Header open, but no post-Escape visual/DOM receipt was reached. No paint-cause
+claim. That diagnostic replay failed1/1,923.108s, but proves the trusted Escape
+reached SUMMARY, closed the real DOM, and exposed AX value0. The retained closed
+screen has no popup. Serial exists/value queries exceed the same3-second deadline.
+The combined snapshot replay completed1 failed/0 passed,3139.734s,
+`focused-e48d5a1f-8893-4d03-8d35-7f4e6577e42a`. All four AX collapse checks and
+matched548×516 viewport pass. Ordinary Footer's baseline includes the intentionally
+reopened Header panel, so it differs from the correctly all-closed final screen;
+use the same presentation's all-closed baseline without dropping exclusivity.
+Completed authorized temporary read-only native hit-path probe, log
+`siteforge-native-authorized-hit-path-20261102.log`; do not duplicate or edit
+source/tests during collection. One initial diagnostic attempt was stopped
+early (exit75) to guard absent-element reads; it is not acceptance.
+Prior receipts show ordinary175% page zoom
+persisting into RDM (requested548×516, evaluated313×294). Replay resets zoom
+through the actual View menu, retaining exact dimension/pixel assertions.
+
+Two external runner terminations have OS reason0xbaddd15c; both exact-PID OS
+logs explicitly name CacheDeleteAppContainerCaches. Storage is about5–6GiB free. Owner asked to
+free space while focused work continues; no cache/evidence cleanup or service
+changes. Native Header remains failed. Earlier prohibition on further native
+host/control/AX experiments is preserved. The owner's “yes” authorizes the single
+read-only actual-hit-path diagnostic in OD-029, after the active browser run ends.
+No host replacement is authorized or planned.
+
+The single stable-source `./sf verify` completed, exit65: repository/build pass;
+unit880/886 pass (6 failed), UI146/170 pass (21 failed,3 owner-session skips).
+Combined1026 passed/27 failed/3 skipped. No source/test changes occurred during
+collection. Authoritative result `full-1c824ea6-059e-4c75-9e65-18fc5d8f9378`;
+log `siteforge-full-inventory-20261102.log`. That full collector is finished.
+See [the complete ordered A/B/C inventory](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md)
+before repairs. Two missing console outcomes are signal-killed runners, not
+passes. Strict browser pixel journey passes1011.238s in this inventory, and
+final grid/artboard passes44.329s. Native Header pointer still fails; component
+search has reproduced horizontal overflow. No further speculative host/control/
+AX experiments. Fix proven product/test boundaries with exact focused replays,
+then final green verification and reviewed commit/push. Ignored audit/archive
+and coordinator materials remain preserved/excluded. No Git write occurred.
+
+The launch note below and subsequent sections are historical receipts.
+
+### Full inventory launch receipt
+
+Preserved main at ba34293 plus accumulated dirty work; owner authorizes reviewed
+commit/current-main push only after required gates are green. Browser correction
+is integrated in `ConnectedPageOutput.menuCSS`, with no runtime/document change:
+intrinsic details-content grid overlap and canonical panel alignment, legacy
+positioning only under feature detection. Focused compiler checks pass2/2.
+Strict `testGeneratedWebsiteMenuEscapeStateAndPaintJourney` passes1/1,822.330s,
+`focused-01d348fd-ecd6-45e0-a32f-8e6b3474ba13`: Header/Footer320/430 each return
+0/33600 changed pixels (allowed33), wider768/destination checks pass. Nine key
+originals inspected in temporary `siteforge-overlay-browser-passing-20261102`;
+open/closed panels and focus are visually correct, titles truthfully ellipsize.
+
+Native Header ordinary click STILL FAILS. Real-host geometry regression passes
+(0.036s), but pointer probe fails45.617s in `focused-5f879618-5042-485f-b2bf-4820fe2d6a5e`.
+Removing intermediate row clipping also fails the pointer probe in
+`focused-c546046d-8ce0-4a4a-a4fd-de7c483d64e6`; that ineffective production
+experiment is removed. Do not claim the26/24-point discrepancy proves the cause.
+No further speculative native host/control/AX experiments are authorized.
+
+Next/active job: one stable-source `./sf verify` full failure inventory, log
+`siteforge-full-inventory-20261102.log`. Do not start an overlapping collector
+or edit source/tests while it runs. Preserve actual failed statuses; classify
+all inventory failures before focused repairs and the final authoritative gate.
+Earlier notes below are historical. Ignored audit/archive and coordinator
+materials remain excluded/preserved. No commit/push has occurred.
+
+
+## Post-setup continuation —2026-11-02, acceptance still in progress
+
+Owner installed Xcode's components. Readiness exits0; the exact fixture passed
+1/1,0.057s in `siteforge-post-setup-menu-fixture-20261102.xcresult`.
+Shared output now uses intrinsic details-content grid overlap when supported,
+with canonical start/center/end alignment and old positioning only as a detected
+fallback. Runtime/document unchanged. Production fixture plus overlay checks
+passed2/2,0.116s (`focused-f5d15c97-bf06-4f7f-9513-9cf65080cfab`).
+Private real Header/Footer at320/430/550 closes visually; Footer opens upward,
+Space reopens, About navigates correctly. Matched-pointer Header430 interior
+returns0/33600 changed, Footer3200/33600, Footer43013/33600 (allowed33).
+Initial unmatched-pointer Header crops exceed tolerance and remain diagnostic,
+not passing evidence. Full strict native/browser acceptance is still required.
+First strict browser replay failed before pixels because Inspector AX truncated
+its long JSON string (`focused-278198d9-ba1e-4f09-b9e8-ea341f299e20`,86.051s).
+Helper now transfers complete bounded console chunks; a changed-helper run is
+underway. Do not duplicate it. No full gate, commit or push yet.
+The independent local audit/artwork archive remains ignored and excluded.
+
+
+## Current full-closeout boundary —2026-11-02
+
+Owner authorized testing and a reviewed current-branch push, but acceptance is
+not green. Repository checks passed, exit0. The single serial focused
+`InsertionModelTests/testManagedHeaderFooterMenuReproductionUsesRealRoutesAndUnchangedRuntime`
+attempt launched its host but executed no test method. Sampled main thread:
+`XCTestDriver._prepareTestConfigurationAndIDESession` → `XCTFuture` → `XCTWaiter`.
+Native Xcode displays “Install Required System-wide components” (Quit/Install).
+See OD-028: owner completes visible setup/authentication; no toolchain/service
+or privacy changes by the agent. Do not assume this proves every prior failure.
+The exact xcodebuild PID85433 was interrupted then terminated, exit143; its
+host85775 exited. No duplicate test, full verification, commit or push.
+Retained temporary evidence basenames:
+`siteforge-full-closeout-fixture-20261102.log`,
+`siteforge-full-closeout-fixture-20261102.xcresult`,
+`siteforge-full-closeout-host-sample-20261102.txt`, and
+`siteforge-full-closeout-repository-20261102.log`.
+After owner setup, resume the exact fixture, private Footer/full-panel/width
+proof, strict native pointer correction and only then the full closeout gates.
+All preceding popup failures remain unresolved; excluded owner/coordinator
+files and the two ahead commits are preserved, not yet cleared for publication.
+
+
+## Targeted overlay candidate —2026-11-02, incomplete/external runner boundary
+
+No production CSS/runtime change. One private grid/details-content candidate
+and its scoped-margin refinement visibly close the minimal Header popup with
+pointer and Space/Escape, retaining Header/page bounds. Refined open/closed
+summary Y delta0.438CSSpx; left former-panel crop open1081/6300, closed0/6300.
+Eight new originals inspected. NOT full-panel, Footer,320/430/wider or013 proof.
+New exact `InsertionModelTests/testManagedHeaderFooterMenuReproductionUsesRealRoutesAndUnchangedRuntime`
+compiled but executed0: sampled test host waits in XCTestDriver's IDE-session
+preparation, no method entered. Result `focused-04359f9f-d785-44fa-9dea-d2448e410b55`;
+interrupt left xcodebuild stuck with SchemeActionResultOperation warning, then
+only its verified PID83875 terminated (exit143); host84055 already exited.
+No retry of unchanged initialization. Log `siteforge-menu-overlay-fixture.log`,
+sample `siteforge-menu-overlay-host-sample.txt`. Candidate and full-observer
+assets preserved privately in the same reproduction directory/README below.
+No active run/server/new tab. Strict failures and43-code/7of8-native historical
+scope plus the preceding separate1/1 diagnostic remain unchanged.
+Next bounded work requires the exact fixture method to execute, then Footer,
+exclusivity, destinations, measured-width and strict-pixel proof BEFORE shared
+output integration. Do not claim that preliminary candidate is a shipped fix.
+
+## Minimal reproduction closeout —2026-11-02, acceptance unresolved
+
+Source audit found live `result.dom=state()` and separate cached event history;
+no proven crop/query cause. New exact
+`InsertionModelTests/testMinimalManagedMenuCompilerReproductionPreservesRuntimeAndDocument`
+passes1/1,0.034s, result `focused-f7087ab2-0fab-41d4-9b02-3bb5b8a1a716`.
+Private real-compiler one-Header/one-link artifact and unchanged runtime retained
+under temporary `SiteForgeMenuReproduction-41F1A718-E32B-48C3-8474-9E630892498A`.
+Uninstrumented generated case still shows panel after real Escape with AX off.
+Generated observational variant displays live closed/expanded=false/focused=true,
+trusted Escape and one menu in the same screenshot that still shows its panel;
+adding the readout did not fix it. Stock plain and observed controls close
+visibly. Changing only generated popup position:absolute to static also closes
+visibly, but alters popup placement and is NOT an acceptable product fix.
+Keeping position:absolute unconditional still leaves residue. Thus absolute
+popup rendering is a proven relevant condition, not yet a safe production fix
+or a specific WebKit/capture root cause. No more experiments in this task.
+All18 valid originals reviewed (one additional failed-navigation capture is
+preserved/excluded); readout reports actual547×515, nominal RDM548×516 at100%.
+The private artifact README contains the six-case matrix, exact differences,
+portable reproduction, screenshots and cleanup. New diagnostic tab closed,
+server stopped, original320×820 failure tab preserved. No process left active.
+No production correction, new UI-test launch or broad verification. Historical
+43-code/7-of8-native scope unchanged; new diagnostic code pass is separate.
+
+## Same-artifact presentation comparison —2026-11-02, unresolved
+
+Ordinary Safari and RDM were independently inspected on the same cached private
+artifact at an actual548×516 CSS viewport, explicit main-page Inspector context,
+with no reload or production mutation. Both still show menu panels after trusted
+Escape despite closed DOM/AX state. A later RDM capture322s after closure retains
+the residue. This rules out an RDM-only explanation, not a specific compositor or
+capture cause. No safe production correction is established; stop new speculative
+experiments and retain the strict failed pixel gate. The compact comparison UI
+method compiles, but two launch attempts executed zero tests (automation-mode
+initialization timeout). Native observations are not XCTest passes. Detailed
+context, original-image names, metrics and cleanup are in
+[the comparison receipt](evidence/SF-LOCAL-BUILDER-012-016-FOCUSED-ACCEPTANCE.md#same-artifact-native-safari-presentation-comparison--2026-11-02).
+No runner remains active. Full verification is required but deferred; no Git,
+install, owner data or coordinator files changed. Primary native7/8 and distinct
+passing code43 remain unchanged. Earlier receipts below are historical.
+
+## Newer Escape correlation receipt —2026-11-02
+
+FINAL: the new actual-pixel gate fails1/1,106.962s in
+`focused-8bc86f35-54f4-494c-985e-15d9244794b0`:1855/33600 former-panel
+pixels differ after Escape (allowed33), while DOM/focus/hit checks pass. A unique
+visible fixture prefix rules out an older Home document; the exact recording
+frame shows the same residue. Earlier assertion-only passes below are NOT the
+current method's acceptance. No active run; no accepted visual fix. Preserve
+this failure and the pixel gate. See the focused receipt's Final pixel gate
+section for original filenames, interrupted scaling attempt and next bounded
+same-artifact/non-RDM investigation. No full gate/Git/install was run.
+
+Actual runtime delivery/execution and trusted Escape closure/focus are proven;
+visual closure is NOT. Screen-before-Inspector comparison passes1/1,243.967s
+at320/430/768, but all four original closed-state images still paint panels.
+Explicit closed CSS did not fix it and is removed. No runtime/CSP/host fix is
+retained. See the newest section of the focused acceptance receipt for exact
+results, hashes, filenames and rejected experiments. New root/nested HTTP unit
+passes; distinct code evidence43, primary native7/8 unchanged. Do not replay
+native Header, denied AX discovery, full gate, Git/install or owner data.
+The following paragraphs are older receipts, not newer conclusions.
+
+## Current focused acceptance authority —012–016
+
+### Latest bounded pointer/browser closeout —2026-11-02
+
+No run active. No production control/host rewrite retained in this continuation.
+Header ordinary XCUIElement.click fails (two short46s probes), not just its
+readiness Boolean. Footer ordinary click, Down/Escape/focus and About navigation
+work independently. Native control/window/app hit results and native↔XCUI
+coordinates agree; external public hit API returns-25211. A borderless-fit
+hypothesis failed its exact unit check and was removed with its diagnostic test.
+All temporary native observation is removed; working focus/modal fixes remain.
+
+Current native-control regression passes1/1,0.628s. Browser-only companion
+`testMeasuredSafariNarrowChromeBoundaryCompanion` passes1/1,167.058s in
+focused-f763b692-92bb-4b29-8840-4ade17445037. It measures actual CSS320/430/768,
+real Header/Footer clicks/focus and narrow About destinations. Real Safari Width
+uses a unique label/title (no identifier) and one measured one-pixel correction,
+not universal+1. Strict013 shares that query correction; all native behavioral
+assertions remain intact, with no long013 rerun. Final build-for-testing passes.
+
+NOT visually accepted: after-Escape screenshots still paint menu panels despite
+passing focus checks. Do not claim closure or infer JavaScript/paint cause.
+All nine final originals were inspected; names/results are in the current receipt.
+Long titles ellipsize. No universal/full-title/larger-text usability claim.
+Primary native7/8 and current distinct passing code42 unchanged; three extra
+diagnostic UI methods are separate (only browser-only method has a whole-method
+pass). No full gate, Git/install, owner data or coordinator files touched.
+
+Smallest next bounded task, not automatically authorized: correlate actual
+details.open/aria-expanded/script-load state around Escape; obtain remote Header
+versus Footer AX hit identity only through an already-authorized public client.
+No privacy change, new host/control rewrite or unchanged long retry is justified.
+The paragraphs below are preceding receipts and do not negate this newer result.
+
+No run remains active. Preserve all dirty work and owner/coordinator data. No
+full suite, ./sf verify, Git/install/signing, new host or017 is authorized.
+
+The approved AppKit Preview-host experiment failed actual013 and is removed,
+including its two retired diagnostic tests. Original SwiftUI document-modal
+hosting remains. Its archival passes do not increase current product coverage.
+
+The subsequent ONE correlated dispatch trace is complete and all temporary
+observation removed. Down reaches the correct active Preview sheet with Function
+only, but the SwiftUI KeyViewProxy does not open the Menu. No native-follow or
+browser opener action fires. The earlier apparent Safari transition was an
+imprecise video frame from after teardown, not the key activating Safari.
+
+Retained bounded correction: one genuine NSPopUpButton/NSMenu owns native first
+responder and labels its actual accessible cell, with a live screen-coordinate
+activation point. No role/frame/window spoof, global interceptor, key forwarding,
+canonical model or Safari/compiler/export change. Real Header Down opening and
+Escape focus now pass. Initial pointer hittability STILL FAILS; strict assertions
+are preserved. Footer activation/destinations and measured-Safari tail remain
+unreached;013 is NOT accepted.
+
+Final exact control/modal checks pass2/2 in
+focused-1008cad5-c590-46de-a56f-82fa6a7204b6; one new current code method brings
+distinct passing code evidence42 versus the original41 baseline, not a42-test
+run. Historical native baseline remains7/8. Latest exact013 result
+focused-a8ed2b38-bbec-4b0b-a0a2-f950b5f943a0 fails84.206s at initial hittability.
+Named originals/recordings, exact methods, all failures and corrected frame times
+are in [the current receipt](evidence/SF-LOCAL-BUILDER-012-016-FOCUSED-ACCEPTANCE.md).
+
+Do not replay authentication prompts, revive the rejected host, run unchanged
+long tests or waive pointer readiness. No framework fault, lock, privacy issue or
+user interference is inferred. All modules/items stay Partial/IN PROGRESS.
+Full verification and installed delivery remain mandatory but deferred/not
+authorized. Actual larger-text runtime review remains unperformed.
+
+## Historical source-only boundary —007–016 local-usability closeout
+
+016 source integration and independent re-walk are finished; acceptance remains
+deferred. Read the [single current acceptance matrix and exact source fixes](evidence/SF-LOCAL-BUILDER-016-SOURCE-INTEGRATION-CLOSEOUT.md)
+and first queue entry. Legacy Design strings now retain captured draft ownership,
+clean-only navigation never commits, and Save/Preview preflight submits valid
+owned input before snapshot. Retained Preview artifacts check live project
+identity at action boundaries; Check Website preserves an active local write.
+Seven new code methods and one refined existing015 native journey are UNRUN.
+All later012–016 source totals30 new code/four distinct native journeys UNRUN.
+
+Remaining checkpoint work is acceptance-only, not017 or an unresolved product
+decision. Ready to REQUEST separately bounded acceptance authorization; do not
+execute it automatically or replay historical authentication requests. No tests,
+build/parser/lint/check/verify, collectors, app/browser/UI/screenshots/performance,
+commit/push/GitHub/install/sign/release/schedule, owner project/resource/recovery
+or coordinator-ledger changes. Full verification stays mandatory before DONE.
+Modules stay Partial;007–016 IN PROGRESS. Preserve all dirty work, owner Aurora
+gradient/site/resources and frozen evidence; OD-018/019 remain unchanged.
+
+Everything below is historical context, not current execution authority.
+Old “current”, “next”, running/pending and authorization statements describe
+their dated boundary only; the summary above and016 matrix take precedence.
+No execution or new authentication request was initiated by016.
+
+## Historical —015 repair workflow SOURCE ONLY
+
+Read [015 evidence](evidence/SF-LOCAL-BUILDER-015-PREVIEW-REPAIR-WORKFLOW.md)
+and first queue entry. Source implementation/second review finished. Preview and
+Check Website share exact receipt/context/clean-editor target navigation and
+existing page/original/Layers adoption, with actual editor focus/scroll request.
+Findings and last successful artifact have separate identities; Export guards
+remain immutable and Refresh explicit. Five new code methods and one native
+journey are UNRUN. No compile/test/check/visual/verify receipt. Keep015 IN PROGRESS,
+modules Partial. No execution/apps/browsers/screenshots, commit/push/install/sign,
+owner project/recovery changes, coordinator edits or016. Prior007–014 and frozen
+acceptance remain preserved, not proof for015. No current runner/authentication
+request. Next bounded work is same-scope acceptance only when separately approved;
+do not replay historical prompts or automatically start it.
+
+## Historical —014 stable Inspector SOURCE ONLY
+
+Read [014 source evidence](evidence/SF-LOCAL-BUILDER-014-STABLE-INSPECTOR-LAYOUT.md)
+and first queue entry. Source implementation/second usability review finished.
+Measured labels and font height, bounded pane allocation, shared section framing
+and identity-stable adaptive fields/actions refine the selection header and three
+representative surfaces. Four code methods and one native journey plus one
+affected existing test are UNRUN. No build/check/visual/verify acceptance.014
+stays IN PROGRESS and modules Partial. No execution, apps/browsers, commit/push,
+install/sign/release/schedule, owner project/recovery edits or015. Preserve all
+007–013 work, frozen receipt, coordinator files and OD-018/019. No pending runner
+or authentication request. Next recommendation is a final same-scope compact/
+scaled-control review, not a new feature or authorization to execute acceptance.
+
+## Historical —013 narrow chrome SOURCE ONLY
+
+Read [013 source receipt](evidence/SF-LOCAL-BUILDER-013-NARROW-CHROME-LAYOUT.md)
+and first queue entry. Shared final allocation/static/fluid CSS reserve Menu
+space before default title shrink. Custom intent and command/data ownership
+remain; bounded guidance and availability-aware menus avoid fabricated usability.
+Nine code methods and one native/Safari journey are UNRUN.013 IN PROGRESS, modules
+Partial. No tests/builds/checks/app/browser/UI/verify/commit/push/install/sign,
+owner-data mutation or next dispatch.012 and the frozen title receipt below are
+preserved, not evidence for013. No new runner/authentication request is pending.
+2026-11-01 continuation finished source consistency and both usability passes.
+Actual destination availability now drives width reservation/preflight as well
+as Menu display; empty links have no slot and broken links retain disabled intent.
+Same9+1 tests refined, UNRUN. Source implementation is finished;013 is not DONE.
+Deferred acceptance includes compile/focused results, Footer/compact/native/
+measured-browser originals and final verification. Do not start014 or execution.
+
+## Historical —012 usability/language SOURCE ONLY
+
+Targeted title repair finished: six exact code methods pass, matched native/
+Safari journey passes205.263s; final `focused-4cb5a055-d0fc-4c60-b300-8c405153fef0`
+passes3/3. All15 originals inspected; actual CSS1440/430/320,scale1. Read frozen
+focused receipt for paths and precise remaining navigation/browser limitations.
+No runner remains. Earlier70/70 and eight native receipts remain historical
+acceptance, not proof of later source edits. Four source passes under
+SF-LOCAL-BUILDER-012 are implemented and source-reviewed: fewer steps, plain
+language, shared hierarchy and a full source re-walk. Read
+[012 source evidence](evidence/SF-LOCAL-BUILDER-012-USABILITY-AND-LANGUAGE.md).
+Five new code methods and one native journey are UNRUN. Source changes include
+direct formatting commands, visible asset import, shared labels/search aliases,
+matching site-settings entry names and explicit Settings scope. The completed
+source continuation clarifies component original/copy/reset counts and recovery,
+fallback-only default contents, reusable solid-color/opacity samples and
+responsive review/reset/conversion. Direct original editing now works from
+Content using the existing command and ID; original/copy return is guarded.
+Read both wording and surface-coverage tables. No build or
+visual acceptance exists for this package. Keep012 IN PROGRESS. ALL execution
+remains paused: no tests/builds/checks/lints/collectors/
+readiness/UI/app/browser/performance/verify or automatic final cycle. No commit,
+push, installation, signing, owner project/recovery change or next dispatch.
+Do not automatically start later acceptance or replay old authentication requests.
+
+## Historical authority — bounded 007–011 focused acceptance, before012
+
+Owner approved compilation and exact new/minimally affected tests, targeted
+repairs and original-resolution visual inspection. This supersedes the source-only
+execution holds preserved below, not their historical results. Read the
+[exact manifest and current results](evidence/SF-LOCAL-BUILDER-007-011-FOCUSED-ACCEPTANCE.md).
+No broad/whole-target testing, ./sf verify, commit, push, installation, signing,
+owner package/recovery mutation or next workflow. Keep all five IN PROGRESS;
+full verification remains deferred. Do not replay old authentication requests.
+
+Latest focused code group is green70/70 (56 new+14 affected existing), result
+`focused-e9ba0e1d-6657-444c-9e5b-4ebd7d85d2c7`. Current2026-10-30 native runs
+initialize: all eight distinct journeys pass, three compositor and three HTTP
+regressions pass, and all corresponding originals were inspected. Final result
+`focused-daa8beb2-fec8-4330-a774-06f19775eaee` passes4/4; no runner remains.
+Named-page Preview is fixed. These earlier runs exposed the title mismatch later
+resolved for the measured current-Safari path in the frozen receipt above.
+Broader browser parity and full verification remain deferred, not waived.
+Do not rerun unchanged focused groups or dispatch another workflow.
+The following authentication handoff is historical, not a fresh blocker.
+Native `focused-3ffd3675-fe21-4621-b103-99688380ec8e` passed the isolated
+no-change code regression but executed zero UI methods: new coreauthd XCTest
+Enable UI Automation request18:03:28-0400 timed out18:04:28. Owner was notified
+during that run. No screenshots/visual acceptance. Do not retry unchanged or
+infer a locked screen. Historical next step, now superseded by the012 hold:
+authentication: exact `SiteForgeUITests/SiteForgeLaunchTests/testCustomResponsiveViewportWidthEntryComparisonAndCancellationJourney`,
+then the remaining manifest native journeys serially. No broad gate/commit/push.
+
+## Historical authority — SF-LOCAL-BUILDER-011 connected fluid output, source only
+
+No tests/builds/checks/lints/scripts/collectors/readiness/UI/app/browser/
+performance/verify, commit/push/install/sign/release/schedule or next prompt.
+Do not request lifting the hold. Workflow011 is not an execution checkpoint.
+
+Read [011 source receipt](evidence/SF-LOCAL-BUILDER-011-CONNECTED-FLUID-OUTPUT.md).
+Existing compiler/allowlisted scalar/container policy now owns the supported
+fluid connected CSS/semantic-layout path; precise unsupported combinations
+remain blocked before any complete plan. Eleven code methods and one native
+journey are UNRUN, not compile/browser/visual evidence. Keep011 IN PROGRESS.
+Future focused execution, normal/compact originals and measured-width Safari
+review plus mandatory ./sf verify are deferred, not waived.
+Preserve007 partial failures/latest unverified fixtures;00810+1,00915+1 and01011+2
+UNRUN receipts; historical936 passes accept only ba342938. Owner revision245,
+native gradient/resources/recovery, ordinary installed app, OD-018/019 and all
+coordinator/artwork/evidence files remain unchanged. No cleanup or next dispatch.
+
+## Preserved010 context — page-chrome reuse, source only
+
+No builds/tests/checks/lints/scripts/collectors/readiness/UI/app/browser/
+performance/verify, commit/push/install/sign/release/schedule or automatic next
+prompt. Do not request lifting the hold. 010 is a local workflow ID, not the
+historical ten-prompt execution boundary. Source edits/read-only inspection only.
+
+One native Page/Header/Footer action now prepares independent add-missing copies
+through the shared page clone, existing resource validation and one central batch.
+Existing roles/inbound references remain intact; no replacement/merge or global
+linked-chrome model. Eleven code methods and two native journeys are UNRUN.
+Read [010 source receipt](evidence/SF-LOCAL-BUILDER-010-PAGE-CHROME-REUSE.md) for
+exact selectors and deferred acceptance. Keep010 IN PROGRESS. Future compile,
+focused model/native/normal-compact visual and Safari review plus mandatory
+./sf verify remain required, not waived. No current success receipt exists.
+Preserve007's failed partial results/latest unverified fixtures,008's10+1 and
+009's15+1 UNRUN source, owner revision245/resources/recovery/gradient, normal
+installed app, OD-018/019 and coordinator/artwork files. No cleanup authorized.
+
+## Preserved009 context — formatting reuse, source only
+
+The renewed no-execution hold remains. Do not build, test, check/lint, launch
+apps/browsers/UI, verify, commit, push, install, sign, schedule or dispatch another
+workflow. Source edits/read-only inspection only; do not ask to lift the hold.
+
+009 source uses one closed canonical family envelope, background existing-resource
+validation, central Design property-batch preparation and native Edit/Inspector
+actions. Fifteen code methods and one real-control journey are UNRUN. Read the
+[009 receipt](evidence/SF-LOCAL-BUILDER-009-FORMATTING-REUSE.md) for exact symbols,
+reference/no-op/identity semantics and deferred live/visual acceptance. Keep009
+IN PROGRESS. Prior007 partial failures and008 source-only evidence remain valid
+context; ba342938 owns only the historical baseline. Preserve all dirty work,
+owner revision245/resources/recovery, OD-018/019 and excluded owner-local files.
+
+## Preserved008 context — renewed source-only hold
+
+Owner direction2026-10-29 supersedes the prior direct testing approval: keep
+NO TESTING. No builds/tests/checks/lints/collectors/readiness/UI/app/browser
+acceptance/verify, commit/push/install/sign/schedule. Do not ask to lift this hold
+or dispatch another prompt. Source edits and read-only inspection only.
+
+008 extends007's existing actor-backed comparison with measured horizontal
+Review suggestions and exact-node/width navigation into ordinary Layout controls.
+Read [008 source evidence](evidence/SF-LOCAL-BUILDER-008-RESPONSIVE-LAYOUT-REVIEW.md).
+Ten new model/integration methods and one native journey are UNRUN. No canonical
+audit store/suppression, schema, auto-fix or second responsive engine is added.
+SF-0606 remains Partial;001/005 persistence/suppression scope is not completed.
+
+007 really WAS built. Historical3133a465:9 methods,3 passed/6 failed; after
+structural/owned-path corrections d3dafe44:6 methods,4 passed/2 failed (viewport
+initialization then dependent assertions). Latest source adds real viewport
+resize before the two text/selection fixtures. No rerun is authorized. Artifacts
+remain retained, no runner is active; do not claim nine UNRUN or current passes.
+007's UI source remains unexecuted. Prior fully accepted ba342938 still owns
+the936-pass baseline only. Preserve all dirty work and owner artifacts.
+
+## Preserved007 source workflow context — not acceptance
+
+Preserve the uncommitted custom-responsive-width implementation and all owner
+artifacts. The preceding accepted batch is committed locally at ba342938; its
+test results are baseline only. No process is running for this source workflow.
+
+Read [current source receipt](evidence/SF-LOCAL-BUILDER-007-CUSTOM-RESPONSIVE-WIDTH.md)
+and the first queue item. Width lives only in CanvasViewportState bounds;
+presets/ranges and existing cascade are reused, not replaced. Actual width feeds
+Inspector/layout/insertion/native Preview; four-sample comparison is asynchronous
+and guarded against stale scope/generation. Nine model/integration tests and one
+real-control UI journey have the partial execution described above. Modules stay
+Partial;007/008 stay IN PROGRESS pending separately approved acceptance.
+
+Current hold: no tests/builds/check scripts/lints/collectors/verify, UI automation,
+app/browser acceptance, commit/push/GitHub/install/sign/schedule/new workflow.
+Only source edits/read-only review are authorized. Future owner-approved compile,
+focused acceptance, original-resolution normal/compact visual review and mandatory
+./sf verify remain required. Do not replay historical authentication requests.
+Preserve Aurora/Dark Flow revision245/resources/recovery/gradient, OD-018/019 and
+the three excluded owner-local files. No next feature or new prompt is authorized.
+
+## Historical local acceptance checkpoint — 2026-10-28
 
 Final ./sf verify exits0 on the reviewed source batch:939 total,936 passes,
 0 failures,3 intentional owner-session skips;785 non-UI and151 UI passes.
@@ -79,7 +760,7 @@ Read evidence/SF-SOURCE-BATCH-20261027-10-INTEGRATION.md for exact artifacts.
 Next: owner-present isolated native readiness, then changed-state UI/visual
 acceptance, one coherent final full gate, review and local commit only if green.
 
-## Current — SF-LOCAL-BUILDER-006 Aurora Dark Flow
+## Historical — SF-LOCAL-BUILDER-006 Aurora Dark Flow
 
 Development-only continuation implemented Page Background discoverability in
 source (not built/tested). Read evidence/SF-LOCAL-BUILDER-006-PAGE-BACKGROUND.md:
@@ -779,7 +1460,7 @@ retained Apple diagnostics. No production/test changes, tests, reinstall,
 commit or push for this follow-up. Documentation-only edits await owner review;
 no owner action is required. Do not reopen accepted repairs based on count alone.
 
-## Final authoritative checkpoint — 2026-10-15
+## Historical final checkpoint — 2026-10-15
 
 SF-PRODUCT-UI-010 bounded correction is accepted: final `./sf verify` exit 0,
 636 model/integration +119 UI =755 tests, zero failures/skips, all repository
@@ -841,7 +1522,7 @@ The installed bundle precedes these last interaction corrections; refresh only
 after their acceptance. Original owner recovery remains preserved.
 All older active/completed language below is historical, superseded here.
 
-## Authoritative installed acceptance — 2026-10-15
+## Historical installed acceptance — 2026-10-15
 
 Latest focused repair: nested connected-layout acceptance passes 1/1 (105.140
 seconds), four captures reviewed. Its old single-node Header/Footer counts now
@@ -1286,7 +1967,7 @@ surface migration. Prompt 10 must perform the complete original-resolution
 launch/editor/Settings/light-dark/accessibility visual matrix; no concept or
 diagnostic reference media belongs in the repository.
 
-## Authoritative checkpoint — 2026-10-07
+## Historical checkpoint — 2026-10-07
 
 The bounded batch `SF-AUTHORING-075`–`105` (excluding `SF-AUTHORING-106`),
 `SF-AUTHORING-107`, and `SF-PRODUCT-UI-005/006` is integrated. The
@@ -1706,7 +2387,7 @@ before claiming that particular surface. See
 passed SF-AUTHORING-063 full gate merely for this add-on, and do not commit or
 push this owner-review tree.
 
-## Execution policy — reset 2026-09-27
+## Historical execution policy — reset 2026-09-27
 
 Use the specification, editable publication copy, ADRs, OPEN_DECISIONS,
 IMPLEMENTATION_STATUS, CODEX_QUEUE, and AGENTS.md as the authority hierarchy.

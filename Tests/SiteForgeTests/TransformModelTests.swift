@@ -1,10 +1,490 @@
 import Darwin
+import AppKit
 import Combine
 import XCTest
 @testable import SiteForge
 
 @MainActor
 final class TransformModelTests: XCTestCase {
+    // SF-LOCAL-BUILDER-016 / SF-0702-003, SF-0302-004.
+    func testLegacyDesignTextDraftCleanDefaultsMixedAndDisplayRefreshDoNotBlockNavigation() {
+        let context = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank())).responsiveInspectorEditContext
+        for text in ["", "#F0F0F0FF", "1.0", "0, 8, 18, 0"] {
+            var draft = InspectorTextDraftState(text: text, committed: text, context: context)
+            XCTAssertFalse(draft.isDirty); XCTAssertFalse(draft.isConflicted)
+            let next = ResponsiveInspectorEditContext(scope: context.scope, revision: context.revision + 1)
+            draft.adopt(committed: "", context: next)
+            XCTAssertEqual(draft.text, ""); XCTAssertEqual(draft.context, next)
+            XCTAssertFalse(draft.isDirty); XCTAssertFalse(draft.isConflicted)
+            draft.adopt(committed: "2.0", context: next)
+            XCTAssertEqual(draft.text, "2.0"); XCTAssertFalse(draft.isDirty)
+        }
+    }
+
+    func testLegacyDesignTextDraftRetainsInvalidInputAndRejectsEveryChangedOwnershipBoundary() {
+        let original = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank())).responsiveInspectorEditContext
+        let scope = original.scope
+        let scopes: [LayoutInspectorDraftScope] = [
+            .init(documentID: DocumentID(), pageID: scope.pageID, sceneID: scope.sceneID, orderedNodeIDs: scope.orderedNodeIDs, breakpoint: scope.breakpoint, viewportWidth: scope.viewportWidth),
+            .init(documentID: scope.documentID, pageID: PageID(), sceneID: scope.sceneID, orderedNodeIDs: scope.orderedNodeIDs, breakpoint: scope.breakpoint, viewportWidth: scope.viewportWidth),
+            .init(documentID: scope.documentID, pageID: scope.pageID, sceneID: CanvasViewportSceneID(), orderedNodeIDs: scope.orderedNodeIDs, breakpoint: scope.breakpoint, viewportWidth: scope.viewportWidth),
+            .init(documentID: scope.documentID, pageID: scope.pageID, sceneID: scope.sceneID, orderedNodeIDs: [NodeID()], breakpoint: scope.breakpoint, viewportWidth: scope.viewportWidth),
+            .init(documentID: scope.documentID, pageID: scope.pageID, sceneID: scope.sceneID, orderedNodeIDs: scope.orderedNodeIDs, breakpoint: .mobile, viewportWidth: 390),
+            .init(documentID: scope.documentID, pageID: scope.pageID, sceneID: scope.sceneID, orderedNodeIDs: scope.orderedNodeIDs, breakpoint: scope.breakpoint, viewportWidth: 430)
+        ]
+        let contexts = scopes.map { ResponsiveInspectorEditContext(scope: $0, revision: original.revision) }
+            + [.init(scope: scope, revision: original.revision + 1)]
+        for text in ["#GG", "1e", "", "0, , 3, 4"] {
+            for next in contexts {
+                var draft = InspectorTextDraftState(text: text, committed: "12.0", context: original)
+                draft.adopt(committed: "12.0", context: original)
+                XCTAssertEqual(draft.text, text); XCTAssertTrue(draft.canCommit(in: original))
+                draft.adopt(committed: "24.0", context: next)
+                XCTAssertEqual(draft.text, text); XCTAssertTrue(draft.isConflicted)
+                XCTAssertFalse(draft.canCommit(in: next)); XCTAssertFalse(draft.canCommit(in: original))
+            }
+        }
+    }
+
+    func testLegacyDesignTextDraftAcknowledgementNeverDiscardsAnotherFieldAndEscapeReloads() {
+        let context = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank())).responsiveInspectorEditContext
+        var drafts = ["fill": InspectorTextDraftState(text: "#123456FF", committed: "#FFFFFFFF", context: context),
+                      "radius": InspectorTextDraftState(text: "1e", committed: "8.0", context: context)]
+        drafts["fill"] = nil // only a successfully committed field is acknowledged
+        let updated = ResponsiveInspectorEditContext(scope: context.scope, revision: context.revision + 1)
+        drafts["radius"]?.adopt(committed: "8.0", context: updated)
+        XCTAssertEqual(drafts["radius"]?.text, "1e"); XCTAssertTrue(drafts["radius"]?.isConflicted == true)
+        drafts.removeAll() // Escape removes scene-local drafts, never canonical properties
+        let clean = InspectorTextDraftState(text: "8.0", committed: "8.0", context: updated)
+        XCTAssertFalse(clean.isDirty); XCTAssertFalse(clean.isConflicted)
+    }
+
+    func testShadowInspectorDraftRejectsEmptyExtraMalformedAndNonfiniteComponentsWithoutCoercion() {
+        let color = CanonicalSolidColor(red: 0, green: 0, blue: 0, alpha: 0.25)
+        XCTAssertEqual(ShadowInspectorDraftParser.parse(" 2, -4, 18, 0 ", color: color),
+            CanonicalShadow(color: color, offsetX: 2, offsetY: -4, blur: 18, spread: 0))
+        for text in ["", "1,2,3", "1,,2,3,4", "1,2,x,3,4", "1,2,3,4,", "nan,2,3,4", "1,inf,3,4", "1,2,-3,4", "1,2,3,1001"] {
+            XCTAssertNil(ShadowInspectorDraftParser.parse(text, color: color), text)
+        }
+    }
+
+    // SF-LOCAL-BUILDER-009 / SF-0702/0703/0308. New source only, UNRUN.
+    private struct FormattingFixture {
+        var document: CanonicalDocument
+        let text: NodeID, targetText: NodeID, frame: NodeID, targetFrame: NodeID
+        let scene = CanvasViewportSceneID()
+    }
+    private func formattingFixture() throws -> FormattingFixture {
+        var document = ProjectCreation.blank()
+        let root = document.pages[0].rootNodeIDs[0]
+        func node(_ kind: NodeKind, _ name: String, _ x: Double, _ y: Double, _ extras: [NodeProperty]) -> DocumentNode {
+            .init(kind: kind, name: name, parent: .node(root), properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(x)),
+                .init(key: .init(rawValue: "layout.y"), value: .number(y)),
+                .init(key: .init(rawValue: "layout.width"), value: .number(240)),
+                .init(key: .init(rawValue: "layout.height"), value: .number(kind == .text ? 80 : 160))] + extras)
+        }
+        let typography: [(String, PropertyValue)] = [("family", .string("Menlo")), ("weight", .string("semibold")),
+            ("size", .number(22)), ("lineHeight", .number(30)), ("tracking", .number(1.25)), ("alignment", .string("center"))]
+        var text = node(.text, "Source text", 20, 20, typography.map { .init(key: .init(rawValue: CanonicalTypography.namespace + $0.0), value: $0.1) }
+            + [.init(key: .init(rawValue: "content.text"), value: .string("Source stays unchanged"))])
+        text.properties += zip(CanonicalTextForeground.channels, [0.2, 0.4, 0.6, 1.0]).map {
+            .init(key: .init(rawValue: CanonicalTextForeground.prefix + $0.0), value: .number($0.1)) }
+        let targetText = node(.text, "Target text", 300, 20, [.init(key: .init(rawValue: "content.text"), value: .string("Target content retained"))])
+        let layers: [CanonicalFillLayer] = [.solid(color: .init(red: 0.1, green: 0.2, blue: 0.3, alpha: 1)),
+            .linearGradient(angleDegrees: 45, stops: [
+                .init(id: .init(), position: 0, color: .init(red: 1, green: 0, blue: 0, alpha: 1)),
+                .init(id: .init(), position: 1, color: .init(red: 0, green: 0, blue: 1, alpha: 0.5))])]
+        var frame = node(.frame, "Source appearance", 20, 180, CanonicalFillLayerCodec.propertyValues(for: layers).map {
+            .init(key: .init(rawValue: $0.key), value: $0.value) })
+        frame.properties += [("style.opacity", PropertyValue.number(0.6)), ("style.box.v1.border.width", .number(2)),
+            ("style.box.v1.border.style", .string("dashed")), ("style.box.v1.radius.uniform", .number(12)),
+            ("style.box.v1.shadow.offsetX", .number(2)), ("style.box.v1.shadow.offsetY", .number(3)),
+            ("style.box.v1.shadow.blur", .number(6)), ("style.box.v1.shadow.spread", .number(0)),
+            ("style.box.v1.shadow.enabled", .boolean(false)), ("style.box.v1.padding.uniform", .number(18)),
+            ("style.box.v1.clip.content", .boolean(true))].map { .init(key: .init(rawValue: $0.0), value: $0.1) }
+        for prefix in ["style.box.v1.border.color.", "style.box.v1.shadow.color."] {
+            frame.properties += zip(CanonicalTextForeground.channels, [0.1, 0.2, 0.3, 0.8]).map {
+                .init(key: .init(rawValue: prefix + $0.0), value: .number($0.1)) }
+        }
+        let targetFrame = node(.frame, "Target appearance", 300, 180, [
+            .init(key: .init(rawValue: "style.fill"), value: .string("surface"), origin: .defaulted),
+            .init(key: .init(rawValue: "style.box.v1.padding.uniform"), value: .number(9)),
+            .init(key: .init(rawValue: ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)), value: .number(150))])
+        document.pages[0].nodes[0].childIDs = [text.id, targetText.id, frame.id, targetFrame.id]
+        document.pages[0].nodes += [text, targetText, frame, targetFrame]
+        try document.validate()
+        return .init(document: document, text: text.id, targetText: targetText.id, frame: frame.id, targetFrame: targetFrame.id)
+    }
+    private func formattingPaste(_ transfer: FormattingTransfer, fixture: FormattingFixture, document: CanonicalDocument,
+                                 ids: [NodeID], cancelled: Bool = false) throws -> PreparedDesignInspectorEdit {
+        let page = document.pages[0]
+        return try DesignInspectorCommandRegistry().prepare(FormattingPasteCommand(
+            identity: .init(documentID: document.id, pageID: page.id, revision: document.revision,
+                sceneID: fixture.scene, rendererGeneration: document.revision), orderedNodeIDs: ids, transfer: transfer, cancelled: cancelled),
+            in: document, context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)), isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+    }
+    private func copyFormatting(_ family: FormattingFamily, fixture: FormattingFixture, source: NodeID) throws -> FormattingTransfer {
+        try FormattingTransfer.capture(family: family, document: fixture.document, pageID: fixture.document.pages[0].id, orderedNodeIDs: [source])
+    }
+
+    func testFormattingTextBundlePreservesRawTypographyForegroundAndFluidIntent() throws {
+        var fixture = try formattingFixture()
+        let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.text })
+        fixture.document.pages[0].nodes[index].properties += [
+            .init(key: .init(rawValue: CanonicalFluidValueCodec.key(.fontSize)), value: .string(try CanonicalFluidValueCodec.encode(.init(minimum: 16, preferred: 22, maximum: 28), target: .fontSize)))]
+        let before = try DocumentSerializer.encode(fixture.document)
+        let transfer = try copyFormatting(.textStyle, fixture: fixture, source: fixture.text)
+        XCTAssertEqual(try FormattingTransfer.decode(transfer.encoded()), transfer)
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(formattingPaste(transfer, fixture: fixture, document: session.document, ids: [fixture.targetText]).documentCommand)
+        let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.targetText })
+        XCTAssertEqual(CanonicalTypography.resolved(for: node)?.family, "Menlo")
+        XCTAssertEqual(CanonicalTypography.resolved(for: node)?.tracking, 1.25)
+        XCTAssertNotNil(CanonicalFluidValueCodec.value(for: .fontSize, node: node))
+        XCTAssertEqual(CanonicalTextForeground.literal(for: node)?.blue, 0.6)
+        XCTAssertEqual(node.insertionStringProperty("content.text"), "Target content retained")
+        XCTAssertEqual(try DocumentSerializer.encode(fixture.document), before)
+    }
+
+    func testFormattingAppearanceTransfersCompleteLayersEffectsAndKeepsTargetGeometry() throws {
+        let fixture = try formattingFixture()
+        let target = DocumentSession(document: fixture.document)
+        let before = try XCTUnwrap(target.document.pages[0].nodes.first { $0.id == fixture.targetFrame })
+        let transfer = try copyFormatting(.appearance, fixture: fixture, source: fixture.frame)
+        try target.execute(formattingPaste(transfer, fixture: fixture, document: target.document, ids: [fixture.targetFrame]).documentCommand)
+        let after = try XCTUnwrap(target.document.pages[0].nodes.first { $0.id == fixture.targetFrame })
+        XCTAssertEqual(after.id, before.id); XCTAssertEqual(after.parent, before.parent)
+        XCTAssertEqual(after.insertionGeometry, before.insertionGeometry)
+        XCTAssertEqual(after.insertionProperty("style.box.v1.padding.uniform"), before.insertionProperty("style.box.v1.padding.uniform"))
+        XCTAssertEqual(after.insertionProperty(ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)), before.insertionProperty(ResponsiveGeometryResolver.key(.width, breakpoint: .mobile)))
+        XCTAssertEqual(DesignInspectorCommandRegistry.resolvedLayers(for: after).count, 2)
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: after)?.cornerRadius, 12)
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: after)?.shadowEnabled, false)
+        XCTAssertEqual(after.insertionNumberProperty("style.opacity"), 0.6)
+        XCTAssertNil(after.insertionProperty("style.fill"), "Paste never revives the retired legacy solid fields")
+    }
+
+    func testFormattingCodecRejectsUnknownDuplicateOversizedNestedAndInvalidValues() throws {
+        let fixture = try formattingFixture()
+        let transfer = try copyFormatting(.textStyle, fixture: fixture, source: fixture.text)
+        let data = try transfer.encoded(), text = try XCTUnwrap(String(data: data, encoding: .utf8))
+        for malformed in ["{}", text.replacingOccurrences(of: "\"version\":1", with: "\"version\":2"),
+                          text.replacingOccurrences(of: "\"version\":1", with: "\"version\":1,\"version\":1"),
+                          text.replacingOccurrences(of: "\"version\":1", with: "\"extra\":0,\"version\":1"),
+                          String(repeating: "[", count: 17) + "0" + String(repeating: "]", count: 17)] {
+            XCTAssertThrowsError(try FormattingTransfer.decode(Data(malformed.utf8)))
+        }
+        XCTAssertThrowsError(try FormattingTransfer.decode(Data(repeating: 32, count: FormattingTransfer.maximumBytes + 1)))
+        for property in [FormattingProperty(key: "layout.x", value: .number(42), origin: .authored),
+                         .init(key: CanonicalTypography.namespace + "size", value: .number(.nan), origin: .authored),
+                         .init(key: CanonicalTypography.namespace + "weight", value: .string("invented"), origin: .authored)] {
+            let invalid = FormattingTransfer(family: .textStyle, sourceDocumentID: fixture.document.id,
+                sourcePageID: fixture.document.pages[0].id, sourceRevision: 0, properties: [property])
+            XCTAssertThrowsError(try invalid.encoded())
+        }
+    }
+
+    func testFormattingCommonSourceDoesNotBorrowMixedPrimaryOrLayerIDs() throws {
+        var fixture = try formattingFixture()
+        let sourceIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.text })
+        let targetIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.targetText })
+        fixture.document.pages[0].nodes[targetIndex].properties += fixture.document.pages[0].nodes[sourceIndex].properties
+            .filter { FormattingFamily.textStyle.owns($0.key.rawValue) }.map { .init(key: $0.key, value: $0.value, origin: $0.origin) }
+        XCTAssertNoThrow(try FormattingTransfer.capture(family: .textStyle, document: fixture.document,
+            pageID: fixture.document.pages[0].id, orderedNodeIDs: [fixture.text, fixture.targetText]))
+        let size = try XCTUnwrap(fixture.document.pages[0].nodes[targetIndex].properties.firstIndex { $0.key.rawValue == CanonicalTypography.namespace + "size" })
+        fixture.document.pages[0].nodes[targetIndex].properties[size].value = .number(20)
+        XCTAssertThrowsError(try FormattingTransfer.capture(family: .textStyle, document: fixture.document,
+            pageID: fixture.document.pages[0].id, orderedNodeIDs: [fixture.text, fixture.targetText])) { XCTAssertEqual($0 as? FormattingTransferError, .mixedSource) }
+        XCTAssertThrowsError(try FormattingTransfer.capture(family: .textStyle, document: fixture.document,
+            pageID: fixture.document.pages[0].id, orderedNodeIDs: [fixture.text, fixture.frame]))
+    }
+
+    func testFormattingPasteReportsApplicableSubsetAndSkipsLockedAndIncompatible() throws {
+        var fixture = try formattingFixture()
+        let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.text })
+        fixture.document.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: "locked"), value: .boolean(true)))
+        let transfer = try copyFormatting(.textStyle, fixture: fixture, source: fixture.text)
+        let session = DocumentSession(document: fixture.document)
+        let prepared = try formattingPaste(transfer, fixture: fixture, document: session.document,
+            ids: [fixture.targetText, fixture.frame, fixture.text])
+        XCTAssertEqual(prepared.applicableNodeIDs, [fixture.targetText])
+        XCTAssertEqual(prepared.skippedNodeIDs, [fixture.frame, fixture.text])
+        XCTAssertTrue(prepared.skippedReasons[fixture.text]?.contains("Unlock") == true)
+        try session.execute(prepared.documentCommand)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == fixture.frame }, fixture.document.pages[0].nodes.first { $0.id == fixture.frame })
+        XCTAssertThrowsError(try formattingPaste(transfer, fixture: fixture, document: session.document, ids: [fixture.frame]))
+    }
+
+    func testFormattingMultipleTargetsKeepIndependentLayerIDsAndOneHistoryEntry() throws {
+        var fixture = try formattingFixture()
+        let originalTarget = try XCTUnwrap(fixture.document.pages[0].nodes.first { $0.id == fixture.targetFrame })
+        let second = DocumentNode(kind: .frame, name: "Second target", parent: originalTarget.parent,
+            properties: originalTarget.properties.map { .init(key: $0.key, value: $0.value, origin: $0.origin) })
+        fixture.document.pages[0].nodes[0].childIDs.append(second.id)
+        fixture.document.pages[0].nodes.append(second)
+        try fixture.document.validate()
+        let transfer = try copyFormatting(.appearance, fixture: fixture, source: fixture.frame)
+        let session = DocumentSession(document: fixture.document), before = session.document.pages
+        let prepared = try formattingPaste(transfer, fixture: fixture, document: session.document, ids: [fixture.targetFrame, second.id])
+        XCTAssertEqual(prepared.applicableNodeIDs, [fixture.targetFrame, second.id])
+        XCTAssertTrue(prepared.skippedNodeIDs.isEmpty)
+        try session.execute(prepared.documentCommand)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        let first = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.targetFrame })
+        let last = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == second.id })
+        XCTAssertNotEqual(first.insertionStringProperty(CanonicalFillLayerCodec.orderKey), last.insertionStringProperty(CanonicalFillLayerCodec.orderKey))
+        XCTAssertEqual(try FormattingTransfer.normalizedIntent(for: first, family: .appearance),
+            try FormattingTransfer.normalizedIntent(for: last, family: .appearance))
+        XCTAssertNoThrow(try FormattingTransfer.capture(family: .appearance, document: session.document,
+            pageID: session.document.pages[0].id, orderedNodeIDs: [fixture.frame, fixture.targetFrame, second.id]))
+        let after = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+    }
+
+    func testFormattingPasteAtomicInverseUndoRedoBranchAndRepeatedNoOp() throws {
+        let fixture = try formattingFixture(), session = DocumentSession(document: fixture.document)
+        let transfer = try copyFormatting(.appearance, fixture: fixture, source: fixture.frame)
+        let before = session.document.pages
+        let prepared = try formattingPaste(transfer, fixture: fixture, document: session.document, ids: [fixture.targetFrame])
+        XCTAssertThrowsError(try session.execute(prepared.documentCommand, cancellation: .init(isCancelled: { true })))
+        XCTAssertEqual(session.document.pages, before); XCTAssertTrue(session.historySnapshot().undoEntries.isEmpty)
+        try session.execute(prepared.documentCommand)
+        let pasted = session.document.pages
+        XCTAssertThrowsError(try formattingPaste(transfer, fixture: fixture, document: session.document, ids: [fixture.targetFrame])) { XCTAssertEqual($0 as? FormattingTransferError, .noChanges) }
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, pasted)
+        try session.undo()
+        let target = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.targetFrame })
+        try session.execute(.setProperty(.init(pageID: session.document.pages[0].id, nodeID: target.id,
+            property: .init(key: .init(rawValue: "style.opacity"), value: .number(0.4)))))
+        XCTAssertTrue(session.historySnapshot().redoEntries.isEmpty)
+    }
+
+    func testFormattingPasteRejectsStaleCancelledMissingAndMalformedAtomically() throws {
+        let fixture = try formattingFixture(), page = fixture.document.pages[0]
+        let transfer = try copyFormatting(.textStyle, fixture: fixture, source: fixture.text)
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: 0,
+            selectedNodeIDs: [fixture.targetText], availableNodeIDs: Set(page.nodes.map(\.id)), isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let identities: [DesignInspectorOperationIdentity] = [
+            .init(documentID: DocumentID(), pageID: page.id, revision: 0, sceneID: fixture.scene, rendererGeneration: 0),
+            .init(documentID: fixture.document.id, pageID: PageID(), revision: 0, sceneID: fixture.scene, rendererGeneration: 0),
+            .init(documentID: fixture.document.id, pageID: page.id, revision: 1, sceneID: fixture.scene, rendererGeneration: 0),
+            .init(documentID: fixture.document.id, pageID: page.id, revision: 0, sceneID: .init(), rendererGeneration: 0),
+            .init(documentID: fixture.document.id, pageID: page.id, revision: 0, sceneID: fixture.scene, rendererGeneration: 1)]
+        for identity in identities {
+            XCTAssertThrowsError(try DesignInspectorCommandRegistry().prepare(FormattingPasteCommand(identity: identity,
+                orderedNodeIDs: [fixture.targetText], transfer: transfer, cancelled: false), in: fixture.document, context: context))
+        }
+        XCTAssertThrowsError(try formattingPaste(transfer, fixture: fixture, document: fixture.document, ids: [fixture.targetText], cancelled: true))
+        XCTAssertThrowsError(try formattingPaste(transfer, fixture: fixture, document: fixture.document, ids: [NodeID()]))
+        XCTAssertThrowsError(try formattingPaste(transfer, fixture: fixture, document: fixture.document, ids: [fixture.targetText, fixture.targetText]))
+        XCTAssertEqual(fixture.document.revision, 0)
+    }
+
+    func testFormattingReferencesStayLinkedAndForeignOrMissingDependenciesReject() throws {
+        var fixture = try formattingFixture()
+        let token = LocalColorToken(name: "Ink", color: .init(red: 0.8, green: 0.1, blue: 0.2, alpha: 1))
+        fixture.document.colorTokens = [token]
+        let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.text })
+        fixture.document.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: LocalColorTokenBinding.key(for: .textForeground)), value: .string(token.id.description)))
+        let transfer = try copyFormatting(.textStyle, fixture: fixture, source: fixture.text)
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(formattingPaste(transfer, fixture: fixture, document: session.document, ids: [fixture.targetText]).documentCommand)
+        let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.targetText })
+        XCTAssertEqual(LocalColorTokenBinding.id(for: node, target: .textForeground), token.id)
+        let sourceFrameIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        for target in [LocalColorTarget.border, .outerShadow] {
+            fixture.document.pages[0].nodes[sourceFrameIndex].properties.append(.init(key: .init(rawValue: LocalColorTokenBinding.key(for: target)), value: .string(token.id.description)))
+        }
+        let appearance = try copyFormatting(.appearance, fixture: fixture, source: fixture.frame)
+        let appearanceSession = DocumentSession(document: fixture.document)
+        try appearanceSession.execute(formattingPaste(appearance, fixture: fixture, document: appearanceSession.document, ids: [fixture.targetFrame]).documentCommand)
+        let box = try XCTUnwrap(appearanceSession.document.pages[0].nodes.first { $0.id == fixture.targetFrame })
+        XCTAssertEqual(LocalColorTokenBinding.id(for: box, target: .border), token.id)
+        XCTAssertEqual(LocalColorTokenBinding.id(for: box, target: .outerShadow), token.id)
+        var missing = fixture.document; missing.colorTokens = []
+        XCTAssertThrowsError(try transfer.validateDependencies(in: missing))
+        XCTAssertThrowsError(try transfer.validateDependencies(in: ProjectCreation.blank())) { XCTAssertEqual($0 as? FormattingTransferError, .foreignDocument) }
+        let image = FormattingTransfer(family: .appearance, sourceDocumentID: fixture.document.id,
+            sourcePageID: fixture.document.pages[0].id, sourceRevision: 0,
+            properties: [.init(key: CanonicalImageFill.assetKey, value: .string(AssetID().description), origin: .authored)])
+        XCTAssertThrowsError(try image.validateDependencies(in: fixture.document))
+    }
+
+    func testFormattingOmittedExplicitNoneLegacyDefaultsAndNamedInheritanceRemainDistinct() throws {
+        var fixture = try formattingFixture()
+        let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        fixture.document.pages[0].nodes[index].properties.removeAll { FormattingFamily.appearance.owns($0.key.rawValue) }
+        let style = ReusableStyleID(), prefix = CanonicalReusableStyleIndex.namespace + "definition.\(style.description)."
+        fixture.document.pages[0].nodes[0].properties += [.init(key: .init(rawValue: prefix + "name"), value: .string("Linked")),
+            .init(key: .init(rawValue: prefix + "fill"), value: .string("#204060FF"))]
+        fixture.document.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(style.description)))
+        let inherited = try copyFormatting(.appearance, fixture: fixture, source: fixture.frame)
+        XCTAssertFalse(inherited.properties.contains { $0.key == CanonicalFillLayerCodec.orderKey })
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(formattingPaste(inherited, fixture: fixture, document: session.document, ids: [fixture.targetFrame]).documentCommand)
+        let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.targetFrame })
+        XCTAssertEqual(CanonicalReusableStyleIndex.appliedIDs(node), [style])
+        XCTAssertNil(node.insertionProperty(CanonicalFillLayerCodec.orderKey))
+        XCTAssertEqual(try CanonicalResolvedAppearance.resolve(node: node, index: CanonicalReusableStyleIndex(document: session.document)).fill?.hexadecimalRGBA, "#204060FF")
+        fixture.document.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: CanonicalFillLayerCodec.orderKey), value: .string("")))
+        let none = try copyFormatting(.appearance, fixture: fixture, source: fixture.frame)
+        XCTAssertNotEqual(inherited, none)
+        XCTAssertTrue(none.properties.contains { $0.key == CanonicalFillLayerCodec.orderKey && $0.value == .string("") })
+        try session.execute(formattingPaste(none, fixture: fixture, document: session.document, ids: [fixture.targetFrame]).documentCommand)
+        let noneNode = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.targetFrame })
+        XCTAssertNil(try CanonicalResolvedAppearance.resolve(node: noneNode, index: CanonicalReusableStyleIndex(document: session.document)).fill)
+        try session.undo()
+        XCTAssertNil(session.document.pages[0].nodes.first { $0.id == fixture.targetFrame }?.insertionProperty(CanonicalFillLayerCodec.orderKey))
+        let legacy = try copyFormatting(.appearance, fixture: fixture, source: fixture.targetFrame)
+        XCTAssertFalse(legacy.properties.contains { FormattingFamily.retiredFillKeys.contains($0.key) })
+        XCTAssertTrue(legacy.properties.filter { $0.key.hasPrefix(CanonicalFillLayerCodec.namespaceRoot) }.allSatisfy { $0.origin == .defaulted })
+        XCTAssertThrowsError(try formattingPaste(legacy, fixture: fixture, document: fixture.document, ids: [fixture.targetFrame])) { XCTAssertEqual($0 as? FormattingTransferError, .noChanges) }
+    }
+
+    func testFormattingImageFillValidatesExistingResourceBytesAndSkipsUnsupportedKinds() async throws {
+        var fixture = try formattingFixture()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        for y in 0..<2 { for x in 0..<2 { bitmap.setColor(.red, atX: x, y: y) } }
+        let bytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Formatting fixture", originalFilename: "formatting.png",
+            format: .png, pixelWidth: 2, pixelHeight: 2, byteCount: bytes.count, contentHash: ProjectResourceStore.digest(bytes))
+        fixture.document.imageAssets = [asset]
+        let source = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        fixture.document.pages[0].nodes[source].properties += [
+            .init(key: .init(rawValue: CanonicalImageFill.assetKey), value: .string(asset.id.description)),
+            .init(key: .init(rawValue: CanonicalImageFill.modeKey), value: .string("fill"))]
+        try fixture.document.validate()
+        let transfer = try copyFormatting(.appearance, fixture: fixture, source: fixture.frame)
+        let descriptor = ProjectResourceDescriptor(id: asset.resourceID, filename: asset.originalFilename,
+            mediaType: "image/png", byteCount: bytes.count, sha256: asset.contentHash)
+        let package = try ProjectPackage(document: fixture.document).withResource(descriptor, data: bytes)
+        let page = fixture.document.pages[0], ids = [fixture.targetFrame, fixture.targetText]
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: 0,
+            selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)), isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let identity = DesignInspectorOperationIdentity(documentID: fixture.document.id, pageID: page.id, revision: 0, sceneID: fixture.scene, rendererGeneration: 0)
+        let worker = FormattingTransferWorker()
+        let prepared = try await worker.paste(transfer.encoded(), family: .appearance, identity: identity, nodeIDs: ids,
+            document: fixture.document, context: context, package: package, breakpoint: .desktop)
+        XCTAssertEqual(prepared.applicableNodeIDs, [fixture.targetFrame]); XCTAssertEqual(prepared.skippedNodeIDs, [fixture.targetText])
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(prepared.documentCommand)
+        XCTAssertEqual(CanonicalImageFill.resolve(try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.targetFrame }))?.assetID, asset.id)
+        do {
+            _ = try await worker.paste(transfer.encoded(), family: .appearance, identity: identity, nodeIDs: ids,
+                document: fixture.document, context: context, package: .init(document: fixture.document), breakpoint: .desktop)
+            XCTFail("A reference without verified local bytes must not paste")
+        } catch let error as FormattingTransferError { XCTAssertEqual(error, .missingDependency) }
+    }
+
+    func testFormattingDoesNotTransferLayoutContentOrStateAndRollsBackInvalidBundle() throws {
+        let fixture = try formattingFixture(), session = DocumentSession(document: fixture.document)
+        let source = try copyFormatting(.appearance, fixture: fixture, source: fixture.frame)
+        XCTAssertFalse(source.properties.contains { $0.key == "style.box.v1.padding.uniform" || $0.key == "style.box.v1.clip.content" })
+        let before = session.document.pages
+        let invalid = FormattingTransfer(family: .appearance, sourceDocumentID: fixture.document.id, sourcePageID: fixture.document.pages[0].id,
+            sourceRevision: 0, properties: source.properties.filter { $0.key != "style.box.v1.radius.uniform" }
+                + [.init(key: "style.box.v1.radius.uniform", value: .number(-1), origin: .authored)])
+        XCTAssertThrowsError(try formattingPaste(invalid, fixture: fixture, document: session.document, ids: [fixture.frame, fixture.targetFrame]))
+        XCTAssertEqual(session.document.pages, before); XCTAssertTrue(session.historySnapshot().undoEntries.isEmpty)
+        try session.execute(formattingPaste(source, fixture: fixture, document: session.document, ids: [fixture.targetFrame]).documentCommand)
+        let after = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.targetFrame })
+        let old = try XCTUnwrap(before[0].nodes.first { $0.id == fixture.targetFrame })
+        XCTAssertEqual(after.properties.filter { !FormattingFamily.appearance.owns($0.key.rawValue) }, old.properties.filter { !FormattingFamily.appearance.owns($0.key.rawValue) })
+    }
+
+    func testFormattingPackageRecoveryAndSharedRendererCompilerRetainCommittedIntent() async throws {
+        let fixture = try formattingFixture(), session = DocumentSession(document: fixture.document)
+        let transfer = try copyFormatting(.textStyle, fixture: fixture, source: fixture.text)
+        try session.execute(formattingPaste(transfer, fixture: fixture, document: session.document, ids: [fixture.targetText]).documentCommand)
+        let package = ProjectPackage(document: session.document), store = ProjectPackageStore()
+        let data = try await store.encode(package), opened = try await store.decode(data)
+        XCTAssertEqual(opened.document, session.document)
+        let owned = try ApplicationOwnedTestFixture.create("formatting-recovery")
+        defer { try? owned.cleanup() }
+        let directory = owned.url.appendingPathComponent("recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(directory)
+        let recovery = DocumentLifecycleBackend.recoveryURL(for: package.projectID, in: directory)
+        try await store.write(package, to: recovery, policy: .recovery(package.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(from: recovery, expectedProjectID: package.projectID).package
+        XCTAssertEqual(recovered, package)
+        let page = session.document.pages[0], viewport = try CanvasViewportState()
+        let prepared = try await WorkspaceScenePreparationWorker().prepare(.init(document: session.document, activePageID: page.id,
+            activeContainerID: nil, viewport: viewport, surfaceID: .init(), viewportWidth: 1440))
+        let sourceObject = try XCTUnwrap(prepared.renderScene.objects.first { $0.id == fixture.text })
+        let targetObject = try XCTUnwrap(prepared.renderScene.objects.first { $0.id == fixture.targetText })
+        XCTAssertEqual(sourceObject.typography, targetObject.typography)
+        XCTAssertEqual(targetObject.frame, page.resolvedStructuralGeometry(viewportWidth: 1440)[fixture.targetText]?.frame)
+        let output = StaticBuildCompiler.compile(document: session.document, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        XCTAssertNotNil(output.plan)
+        XCTAssertTrue(output.plan?.files.contains { $0.path == "styles.css" && $0.contents.contains("Menlo") } == true)
+    }
+
+    func testFormattingComponentInstancesAreNotArbitraryPropertyTargets() throws {
+        let fixture = try formattingFixture()
+        var document = fixture.document
+        let definitionID = PageID(), rootID = NodeID(), textID = NodeID(), instanceID = NodeID()
+        // The older geometry helper deliberately uses repeatable IDs for its
+        // own fixtures. These three independent owners need fresh property IDs.
+        func geometry(_ parent: NodeID, _ x: Double, _ y: Double, _ width: Double, _ height: Double) -> [NodeProperty] {
+            makeGeometryNode(id: NodeID(), parent: parent, x: x, y: y, width: width, height: height).properties.map {
+                .init(key: $0.key, value: $0.value, origin: $0.origin)
+            }
+        }
+        let root = DocumentNode(id: rootID, kind: .frame, name: "Root", parent: .page(definitionID), childIDs: [textID],
+            properties: geometry(rootID, 0, 0, 240, 160))
+        let text = DocumentNode(id: textID, kind: .text, name: "Definition Text", parent: .node(rootID),
+            properties: geometry(rootID, 12, 12, 120, 24)
+                + [.init(key: .init(rawValue: "content.text"), value: .string("Definition content"))])
+        document.pages.append(.init(id: definitionID, name: "Definition", route: .init(rawValue: ""), role: .componentDefinition,
+            provenance: .authored, rootNodeIDs: [rootID], nodes: [root, text]))
+        let homeRoot = document.pages[0].rootNodeIDs[0]
+        document.pages[0].nodes[0].childIDs.append(instanceID)
+        document.pages[0].nodes.append(.init(id: instanceID, kind: .component, name: "Instance", parent: .node(homeRoot),
+            properties: geometry(homeRoot, 600, 20, 240, 160)
+                + [.init(key: .init(rawValue: CanonicalComponentReference.key), value: .string(definitionID.description))]))
+        try document.validate()
+        let transfer = try copyFormatting(.textStyle, fixture: fixture, source: fixture.text)
+        XCTAssertThrowsError(try formattingPaste(transfer, fixture: fixture, document: document, ids: [instanceID]))
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: definitionID, revision: document.revision, sceneID: fixture.scene, rendererGeneration: document.revision)
+        let prepared = try DesignInspectorCommandRegistry().prepare(FormattingPasteCommand(identity: identity, orderedNodeIDs: [textID], transfer: transfer, cancelled: false),
+            in: document, context: .init(activePageID: definitionID, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                selectedNodeIDs: [textID], availableNodeIDs: [textID], isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        let session = DocumentSession(document: document)
+        try session.execute(prepared.documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == instanceID }, document.pages[0].nodes.first { $0.id == instanceID })
+        XCTAssertEqual(session.document.pages.last?.nodes.first { $0.id == textID }?.insertionStringProperty("content.text"), "Definition content")
+    }
+
+    func testFormattingCopyCleanGateRejectsPendingIMEWithoutClipboardOrHistoryMutation() async throws {
+        let fixture = try formattingFixture(), state = WorkspaceShellState(documentSession: .init(document: fixture.document))
+        state.resizeViewport(to: .init(width: 1200, height: 800), pixelRatio: 2)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while state.canvasRenderPlan == nil, ContinuousClock.now < deadline { await Task.yield() }
+        XCTAssertNotNil(state.canvasRenderPlan)
+        state.selectLayer(fixture.text); await state.prepareFormattingCopies()
+        XCTAssertTrue(state.formattingCopyAvailability(.textStyle).isEnabled)
+        XCTAssertTrue(state.beginTextEditing(nodeID: fixture.text, provenance: .keyboard))
+        state.updateTextEditingDraft(text: "A", selection: .init(location: 1, length: 0), markedRange: .init(location: 0, length: 1))
+        let clipboardChange = NSPasteboard.general.changeCount, before = state.documentSession.document
+        state.copyFormatting(.textStyle)
+        XCTAssertEqual(NSPasteboard.general.changeCount, clipboardChange)
+        XCTAssertEqual(state.documentSession.document, before)
+        XCTAssertTrue(state.documentSession.historySnapshot().undoEntries.isEmpty)
+        state.cancelTextEditing()
+        try state.documentSession.establishBaseline(ProjectCreation.blank())
+        XCTAssertFalse(state.formattingCopyAvailability(.textStyle).isEnabled)
+        XCTAssertFalse(String(describing: state.lastFormattingDiagnostic).contains(fixture.document.id.description))
+    }
+
     // SF-0508-002/003, SF-0701-003 — selection routing must not guess a Root.
     func testPageBackgroundPolicyRequiresSingleStructuralWebsiteRoot() throws {
         var document = ProjectCreation.blank()
@@ -3338,7 +3818,7 @@ final class TransformModelTests: XCTestCase {
             resultRevision: nil, result: .failure, failure: .fluidValueWins)
         XCTAssertEqual(record.failureCategory, "fluid-value-wins")
         XCTAssertFalse(record.sanitizedIdentifiers.joined().contains(fixture.nodeID.description))
-        XCTAssertTrue(ContainerLayoutError.fluidValueWins.localizedDescription.contains("Fluid Value"))
+        XCTAssertTrue(ContainerLayoutError.fluidValueWins.localizedDescription.contains("Smooth scaling"))
     }
 
     // SF-0501-003, SF-0505-003/005: empty Hug containers use fluid
@@ -3955,7 +4435,7 @@ final class TransformModelTests: XCTestCase {
         XCTAssertEqual(presentation.skippedCount, 1)
         XCTAssertEqual(presentation.kind, .mixed)
         XCTAssertEqual(presentation.accessibleName, .mixed)
-        XCTAssertEqual(presentation.required, .value("Required", provenance: "Authored"))
+        XCTAssertEqual(presentation.required, .value("Required", provenance: "Set here"))
         XCTAssertTrue(presentation.configurationStatus.contains("incompatible"))
 
         let formPresentation = FormContainerAccessibilityPresentation.resolve(

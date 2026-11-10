@@ -198,6 +198,11 @@ struct SiteForgeSettingsHeader: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
                 Text(title).font(.title2.bold())
+                if !scope.isEmpty {
+                    Text(scope).font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text(detail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -205,12 +210,130 @@ struct SiteForgeSettingsHeader: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title). \(detail)")
+        .accessibilityLabel([title, scope, detail].filter { !$0.isEmpty }.joined(separator: ". "))
     }
 }
 
-/// Owner clarification keeps Inspector groups compact and distinguishable;
-/// Settings retains its separate, wider form-card role from render 12.
+/// Width-only presentation policy. It neither observes nor owns document/draft
+/// state, so pane dragging and status growth cannot reset editor identity.
+enum InspectorControlLayoutPolicy {
+    static func columnCount(width: CGFloat, minimum: CGFloat, count: Int, maximum: Int,
+                            spacing: CGFloat) -> Int {
+        guard width.isFinite, width > 0, minimum.isFinite, minimum > 0,
+              spacing.isFinite, spacing >= 0, count > 0, maximum > 0 else { return 1 }
+        let limit = min(count, maximum)
+        return (1...limit).reversed().first { CGFloat($0) * minimum + CGFloat($0 - 1) * spacing <= width } ?? 1
+    }
+
+    static func actionFrames(sizes: [CGSize], width: CGFloat, spacing: CGFloat) -> [CGRect] {
+        guard width.isFinite, width > 0, spacing.isFinite, spacing >= 0,
+              sizes.allSatisfy({ $0.width.isFinite && $0.height.isFinite && $0.width >= 0 && $0.height >= 0 }) else { return [] }
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        return sizes.map { size in
+            let itemWidth = min(width, size.width)
+            if x > 0, x + itemWidth > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            let rect = CGRect(x: x, y: y, width: itemWidth, height: size.height)
+            x += itemWidth + spacing; rowHeight = max(rowHeight, size.height)
+            return rect
+        }
+    }
+}
+
+struct InspectorActionLayout: Layout {
+    var spacing: CGFloat = SiteForgeVisualSystem.compactSpacing
+    private func frames(_ proposal: ProposedViewSize, _ subviews: Subviews) -> [CGRect] {
+        let natural = subviews.map { $0.sizeThatFits(.unspecified) }
+        let width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil }
+            ?? max(1, natural.reduce(0) { $0 + $1.width } + CGFloat(max(0, natural.count - 1)) * spacing)
+        guard width > 0 else { return [] }
+        let sizes = zip(subviews, natural).map { view, size in
+            view.sizeThatFits(.init(width: min(width, size.width), height: nil))
+        }
+        return InspectorControlLayoutPolicy.actionFrames(sizes: sizes, width: width, spacing: spacing)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rects = frames(proposal, subviews)
+        return .init(width: proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil }
+            ?? rects.map(\.maxX).max() ?? 0, height: rects.map(\.maxY).max() ?? 0)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (view, rect) in zip(subviews, frames(.init(width: bounds.width, height: nil), subviews)) {
+            view.place(at: .init(x: bounds.minX + rect.minX, y: bounds.minY + rect.minY), anchor: .topLeading,
+                proposal: .init(width: rect.width, height: rect.height))
+        }
+    }
+}
+
+struct InspectorColumnMinimumKey: LayoutValueKey {
+    static let defaultValue: CGFloat = 96
+}
+
+struct InspectorColumnsLayout: Layout {
+    var minimumColumnWidth: CGFloat = 96
+    var maximumColumns = 3
+    var spacing: CGFloat = SiteForgeVisualSystem.standardSpacing
+    private func frames(_ proposal: ProposedViewSize, _ subviews: Subviews) -> [CGRect] {
+        // Editor strings are not layout inputs. Measure label minima via the
+        // field trait, so typing a long/invalid value cannot reshuffle columns.
+        let measuredMinimum = subviews.map { $0[InspectorColumnMinimumKey.self] }.max() ?? minimumColumnWidth
+        let width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil } ?? max(minimumColumnWidth, measuredMinimum)
+        guard width > 0 else { return [] }
+        let columns = InspectorControlLayoutPolicy.columnCount(width: width,
+            minimum: max(minimumColumnWidth, measuredMinimum), count: subviews.count, maximum: maximumColumns, spacing: spacing)
+        let cellWidth = max(1, (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+        var result: [CGRect] = [], y: CGFloat = 0
+        for offset in stride(from: 0, to: subviews.count, by: columns) {
+            let end = min(offset + columns, subviews.count)
+            let sizes = (offset..<end).map { subviews[$0].sizeThatFits(.init(width: cellWidth, height: nil)) }
+            let height = sizes.map(\.height).max() ?? 0
+            for index in sizes.indices {
+                result.append(.init(x: CGFloat(index) * (cellWidth + spacing), y: y, width: cellWidth, height: sizes[index].height))
+            }
+            y += height + (end < subviews.count ? spacing : 0)
+        }
+        return result
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rects = frames(proposal, subviews)
+        return .init(width: proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil }
+            ?? rects.map(\.maxX).max() ?? 0, height: rects.map(\.maxY).max() ?? 0)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (view, rect) in zip(subviews, frames(.init(width: bounds.width, height: nil), subviews)) {
+            view.place(at: .init(x: bounds.minX + rect.minX, y: bounds.minY + rect.minY), anchor: .topLeading,
+                proposal: .init(width: rect.width, height: rect.height))
+        }
+    }
+}
+
+struct InspectorField<Content: View>: View {
+    let title: String
+    let content: Content
+    @ScaledMetric(relativeTo: .caption) private var labelSize: CGFloat = 12
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title; self.content = content()
+    }
+    var body: some View {
+        let minimum = max(96, ceil((title as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: labelSize),
+        ]).width))
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
+            Text(title).font(.system(size: labelSize)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            content.frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+            .layoutValue(key: InspectorColumnMinimumKey.self, value: minimum)
+    }
+}
+
+struct InspectorActionLabel: View {
+    let title: String
+    var body: some View {
+        Text(title).fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
+    }
+}
+
+/// Inspector cards share one compact framing; Settings keeps its separate form.
 struct SiteForgeInspectorGroupStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
@@ -221,6 +344,7 @@ struct SiteForgeInspectorGroupStyle: GroupBoxStyle {
             configuration.content
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(SiteForgeInspectorSectionSurface())
     }
 }
@@ -231,6 +355,7 @@ struct SiteForgeInspectorSectionSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(SiteForgeVisualSystem.panePadding)
         .background(SiteForgeVisualSystem.elevatedSurface.opacity(reduceTransparency ? 1 : 0.55),
                     in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius))
@@ -253,7 +378,7 @@ struct SiteForgeInspectorDisclosureStyle: DisclosureGroupStyle {
                 HStack(spacing: SiteForgeVisualSystem.compactSpacing) {
                     Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption.weight(.semibold)).frame(width: 12).accessibilityHidden(true)
-                    configuration.label
+                    configuration.label.fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                 }.contentShape(Rectangle())
             }
@@ -262,13 +387,16 @@ struct SiteForgeInspectorDisclosureStyle: DisclosureGroupStyle {
             .accessibilityHint("Show or hide this section")
             .accessibilityIdentifier(identifier)
             if configuration.isExpanded {
+                Divider().accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
                     configuration.content
                 }
                     .disclosureGroupStyle(.automatic)
-                    .modifier(SiteForgeInspectorSectionSurface())
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(SiteForgeInspectorSectionSurface())
     }
 }
 

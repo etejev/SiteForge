@@ -12,11 +12,31 @@ enum ResolvedGraphPolicy {
 enum ContainerLayoutAxis: String, CaseIterable, Sendable { case vertical, horizontal }
 enum ContainerLayoutAlignment: String, CaseIterable, Sendable { case start, center, end, stretch }
 
-enum PageFlowRole: String, Codable, CaseIterable, Sendable { case header, body, footer }
+enum PageFlowRole: String, Codable, CaseIterable, Hashable, Sendable { case header, body, footer }
+
+/// Canonical dependency discovery shared by graph transfer consumers. Values
+/// remain stable references; this helper neither loads nor imports resources.
+enum CanonicalGraphReferences {
+    static func assets(_ node: DocumentNode) -> [AssetID] {
+        [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].compactMap {
+            node.insertionStringProperty($0).flatMap(AssetID.init(uuidString:))
+        } + node.properties.compactMap { property in
+            guard CanonicalComponentMedia.overrideID(property.key.rawValue) != nil,
+                  case .string(let raw) = property.value else { return nil }
+            return AssetID(uuidString: raw)
+        }
+    }
+    static func tokens(_ node: DocumentNode) -> [ColorTokenID] {
+        LocalColorTarget.allCases.compactMap { LocalColorTokenBinding.id(for: node, target: $0) }
+    }
+}
 
 /// Header/Footer contents remain ordinary editable nodes. These references
 /// identify their roles; they do not duplicate title text, links or layout.
 enum CanonicalPageChrome {
+    /// Existing native Preview menu budget, shared with automatic row layout.
+    /// This is derived editor/output policy, never an authored dimension.
+    static let menuControlWidth = 90.0
     static let namespace = "page.chrome.v1."
     static let titleKey = namespace + "titleID"
     static let contentKey = namespace + "contentID"
@@ -77,6 +97,15 @@ enum CanonicalPageChrome {
             return reference(navigationKey, on: surface) == nil ? surface : nil
         }
         return page.nodes.first { reference(navigationKey, on: $0) == surface.id && [.header, .footer].contains(CanonicalPageFlow.role($0)) }
+    }
+    static func hasUsableNavigation(owner: DocumentNode, page: DocumentPage,
+                                    availablePageIDs: Set<PageID>, breakpoint: ResponsiveBreakpoint) -> Bool {
+        let visible = page.effectiveVisibleNodeIDs(breakpoint: breakpoint)
+        return links(owner: owner, page: page).contains { node in
+            guard visible.contains(node.id), let target = try? CanonicalLinkTarget.resolve(node),
+                  case .page(let id) = target else { return false }
+            return availablePageIDs.contains(id)
+        }
     }
     /// The collapsed menu is derived chrome for this authored navigation.
     /// Inherit only a genuinely shared link typography/color; mixed links
@@ -333,13 +362,23 @@ enum CanonicalPageFlow {
             return frame.frame.maxY + bottomPadding
         }.reduce(900, max)
     }
-    static func unsupportedStaticContainers(_ page: DocumentPage) -> [NodeID] {
+    static func unsupportedStaticContainers(_ page: DocumentPage, availablePageIDs: Set<PageID>? = nil) -> [NodeID] {
         guard page.nodes.contains(where: { role($0) != nil }) else { return [] }
         // Nested containers now have semantic ownership. Independent roots and
         // non-free positioning still need a different browser containing block.
-        return page.nodes.filter { outputFailure(for: $0, page: page) != nil }.map(\.id)
+        let failures = outputFailures(page, availablePageIDs: availablePageIDs)
+        return page.nodes.filter { failures[$0.id] != nil }.map(\.id)
     }
-    static func outputFailure(for node: DocumentNode, page: DocumentPage) -> (code: String, explanation: String, repair: String)? {
+    static func outputFailures(_ page: DocumentPage, availablePageIDs: Set<PageID>? = nil) -> [NodeID: ConnectedFluidOutputPolicy.Failure] {
+        guard page.nodes.contains(where: { role($0) != nil }) else { return [:] }
+        let fluid = ConnectedFluidOutputPolicy.failures(page)
+        return Dictionary(uniqueKeysWithValues: page.nodes.compactMap { node in
+            outputFailure(for: node, page: page, fluidFailures: fluid, availablePageIDs: availablePageIDs).map { (node.id, $0) }
+        })
+    }
+    static func outputFailure(for node: DocumentNode, page: DocumentPage,
+        fluidFailures: [NodeID: ConnectedFluidOutputPolicy.Failure]? = nil,
+        availablePageIDs: Set<PageID>? = nil) -> (code: String, explanation: String, repair: String)? {
         // Caller has already established a connected page; do not rescan the
         // complete graph for every node during large output preflight.
         if page.rootNodeIDs.count != 1, role(node) != nil {
@@ -353,10 +392,9 @@ enum CanonicalPageFlow {
                DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.clipsContent == true {
                 return ("page-flow-navigation-clipped", "Authored clipping would cut off the exported expanded navigation panel.", "Disable clipping explicitly or keep native Preview's native menu until a clipped-container browser menu is supported.")
             }
-        if [FluidValueTarget.width, .height, .padding, .gap].contains(where: { CanonicalFluidValueCodec.value(for: $0, node: node) != nil }) {
-            return ("page-flow-fluid-containing-layout", "Fluid containing geometry or spacing needs a compatible connected output adapter.", "Keep native Preview or explicitly reset the fluid binding; no sampled literal replaces it.")
-        }
-        return nil
+        if let room = CanonicalPageChrome.mobileOutputRoomFailure(owner: node, page: page,
+            availablePageIDs: availablePageIDs) { return room }
+        return (fluidFailures ?? ConnectedFluidOutputPolicy.failures(page))[node.id]
     }
     static func navigation(owner: DocumentNode, page: DocumentPage, document: CanonicalDocument,
                            breakpoint: ResponsiveBreakpoint, width: Double? = nil) -> PageNavigationSnapshot? {
@@ -378,11 +416,13 @@ enum CanonicalPageFlow {
         let enabled = settings.insertionProperty(hamburgerKey)?.value == .boolean(true)
         let isNested = settings.id != owner.id
         let inset = isNested ? 0 : padding(owner, breakpoint: breakpoint, width: width)
-        let frames = isNested ? page.resolvedStructuralGeometry(breakpoint: breakpoint, viewportWidth: width) : [:]
+        let frames = isNested ? page.resolvedStructuralGeometry(breakpoint: breakpoint, viewportWidth: width,
+            availablePageIDs: Set(document.websitePages.map(\.id))) : [:]
         let bounds = frames[owner.id]?.frame
         let height = bounds?.size.height ?? ResponsiveGeometryResolver.value(for: .height, node: owner, breakpoint: breakpoint, viewportWidth: width)?.0 ?? 120
+        let hasUsableLink = links.contains(where: \.isAvailable)
         var snapshot = PageNavigationSnapshot(ownerID: settings.id, links: links, hamburgerEnabled: enabled,
-            usesHamburger: enabled && (width.map { $0 < 600 } ?? (breakpoint == .mobile)),
+            usesHamburger: enabled && hasUsableLink && (width.map { $0 < 600 } ?? (breakpoint == .mobile)),
             alignment: CanonicalPageChrome.navigationAlignment(surface: owner, settings: settings),
             padding: inset, currentPageID: page.id, rowHeight: min(32, max(1, height - 2 * inset)))
         if let bounds {
@@ -1672,7 +1712,7 @@ enum FluidValueTarget: String, Codable, CaseIterable, Hashable, Sendable {
     var title: String {
         switch self {
         case .width: "Width"; case .height: "Height"; case .fontSize: "Font Size"
-        case .lineHeight: "Line Height"; case .padding: "Padding"; case .gap: "Gap"
+        case .lineHeight: "Line Height"; case .padding: AuthoringLanguage.innerSpacing; case .gap: AuthoringLanguage.itemSpacing
         }
     }
     var fixedPropertyKey: String {
@@ -2356,7 +2396,17 @@ struct WebsiteMetadata: Codable, Equatable, Sendable {
     }
 }
 
-enum WebsiteMetadataSource: String, Equatable, Sendable { case authored, inherited, defaulted, omitted }
+enum WebsiteMetadataSource: String, Equatable, Sendable {
+    case authored, inherited, defaulted, omitted
+    var presentation: String {
+        switch self {
+        case .authored: "Set here · this page"
+        case .inherited: "Uses website default"
+        case .defaulted: "Default · page name"
+        case .omitted: "Not set"
+        }
+    }
+}
 struct ResolvedWebsiteMetadata: Equatable, Sendable {
     let siteName: String
     let title: String
@@ -3149,10 +3199,10 @@ enum ComponentPropertyDiscovery {
                         conflicts: Set<ComponentOverridePropertyIdentity>, conflictsOnly: Bool = false) -> Result {
         let tokens = normalize(String(query.prefix(256))).split(whereSeparator: { $0.isWhitespace }).map(String.init)
         let visible = entries.filter { entry in
-            let provenance = conflicts.contains(entry.id) ? "conflict unavailable retained" :
-                authored.contains(entry.id) ? "authored override" : "inherited default definition"
+            let provenance = conflicts.contains(entry.id) ? "conflict unavailable retained custom value needs attention missing original" :
+                authored.contains(entry.id) ? "authored override set here change this copy custom value" : "inherited default definition original uses component default"
             let searchable = normalize([entry.label, entry.group ?? "ungrouped", entry.id.organizationKind,
-                                        entry.id.organizationKind == "slot" ? "fallback" : "", provenance].joined(separator: " "))
+                                        entry.id.organizationKind == "slot" ? "fallback default contents top-level items original" : "", provenance].joined(separator: " "))
             return (!conflictsOnly || conflicts.contains(entry.id)) && tokens.allSatisfy(searchable.contains)
         }
         return Result(entries: visible, total: entries.count,
@@ -3273,9 +3323,9 @@ enum ComponentOverrideConflict: String, Equatable, Sendable {
 
     var explanation: String {
         switch self {
-        case .missingDefinition: "The original component definition is unavailable. The authored override is retained."
-        case .missingProperty: "The original typed binding is unavailable. The authored override is retained."
-        case .missingActionDestination: "The authored action destination is unavailable. Its intent is retained."
+        case .missingDefinition: "The original component is unavailable. Your custom value is kept. Recover the original with Undo or the original saved project; removing this value does not restore it."
+        case .missingProperty: "The original component property is unavailable. Your custom value is kept. Recover that property with Undo or the original saved project, or remove this custom value."
+        case .missingActionDestination: "This custom destination is unavailable. Your choice is kept. Choose an available destination, or remove the custom value; a deleted destination is not restored."
         }
     }
 }

@@ -206,7 +206,7 @@ struct CanvasSettingsView: View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
             SiteForgeSettingsHeader(
                 title: "Canvas",
-                scope: "Application default · This Mac",
+                scope: AuthoringLanguage.appPreferencesScope,
                 detail: "Choose how new workspaces begin. Each open workspace keeps its own Grid state.",
                 systemImage: "square.grid.3x3"
             )
@@ -446,7 +446,7 @@ struct ApplicationSettingsGroupView: View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
             SiteForgeSettingsHeader(
                 title: "Application Defaults",
-                scope: "This Mac · Not stored in projects",
+                scope: AuthoringLanguage.appPreferencesScope,
                 detail: "Review or reset the Appearance and new-workspace Grid defaults together.",
                 systemImage: "gearshape.2"
             )

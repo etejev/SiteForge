@@ -102,6 +102,10 @@ struct FillLayerListInspectorView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Fill layers")
         .accessibilityIdentifier("inspector.design.layers")
+        .onReceive(state.editCommitRequests) { request in
+            guard request.isAccepted, request.requiresCleanEditors else { return }
+            if !angleDrafts.isEmpty || !stopDrafts.isEmpty || !validationMessages.isEmpty { request.reject() }
+        }
         .onChange(of: focusedNumericField) { previous, current in
             guard let previous, previous != current else { return }
             let documentID = state.documentSession.document.id

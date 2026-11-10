@@ -1,10 +1,1360 @@
 import Combine
+import AppKit
 import Darwin
+import CryptoKit
 import XCTest
 @testable import SiteForge
 
 @MainActor
 final class InsertionModelTests: XCTestCase {
+    // SF-LOCAL-BUILDER-016 / SF-0702-003/004.
+    func testLegacyDesignEquivalentBoxCommitIsSuccessfulAndHistoryNeutral() async throws {
+        let (session, _, _, _) = try outputRepairFixture()
+        let header = try XCTUnwrap(session.document.pages[0].nodes.first { CanonicalPageFlow.role($0) == .header })
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1100, height: 700), pixelRatio: 2)
+        await awaitOutputRepairScene(state)
+        state.selectLayer(header.id)
+        XCTAssertTrue(state.commitDesignBoxStyle(.cornerRadius(8), operation: "corner radius"))
+        await awaitOutputRepairScene(state)
+        let document = session.document, history = session.historySnapshot(), selection = state.selectionState
+        XCTAssertTrue(state.commitDesignBoxStyle(.cornerRadius(try XCTUnwrap(Double("8.0"))), operation: "corner radius"))
+        XCTAssertEqual(state.lastDesignInspectorAnnouncement, "Appearance unchanged")
+        XCTAssertEqual(session.document, document); XCTAssertEqual(session.historySnapshot(), history)
+        XCTAssertEqual(state.selectionState, selection)
+    }
+
+    // SF-LOCAL-BUILDER-016 / SF-1203-004, SF-1211-004.
+    func testCheckWebsiteEntryDoesNotCancelOrRetargetAnActiveStaticWrite() async throws {
+        let owned = try ApplicationOwnedTestFixture.create("check-while-writing")
+        defer { try? owned.cleanup() }
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let state = WorkspaceShellState(documentSession: session)
+        state.openBuildDiagnostics()
+        await awaitOutputRepair(state) { state.staticBuildPhase == .ready }
+        let compilation = try XCTUnwrap(state.staticBuildCompilation)
+        let history = session.historySnapshot(), document = session.document
+        let destination = owned.url.appendingPathComponent("website")
+        state.writeStaticBuild(to: destination, replacingExisting: false, expectedCompilation: compilation)
+        XCTAssertEqual(state.staticBuildPhase, .writing)
+        state.runStaticBuildPreflight()
+        XCTAssertEqual(state.staticBuildPhase, .writing)
+        state.openBuildDiagnostics()
+        XCTAssertEqual(state.staticBuildPhase, .writing)
+        XCTAssertEqual(state.staticBuildCompilation, compilation)
+        XCTAssertTrue(state.isBuildDiagnosticsPresented)
+        XCTAssertTrue(state.buildFindingRevealStatus.contains("Wait"))
+        await awaitOutputRepair(state) { state.staticBuildPhase != .writing }
+        XCTAssertEqual(state.staticBuildPhase, .succeeded(destination))
+        XCTAssertTrue(state.buildFindingRevealStatus.isEmpty, "Completed output must not retain a contradictory Wait message")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("index.html").path))
+        XCTAssertEqual(session.document, document); XCTAssertEqual(session.historySnapshot(), history)
+        state.runStaticBuildPreflight()
+        await awaitOutputRepair(state) { state.staticBuildPhase == .ready }
+        state.writeStaticBuild(to: owned.url.appendingPathComponent("cancelled"), replacingExisting: false)
+        state.cancelStaticBuild(silent: true)
+        XCTAssertEqual(state.staticBuildPhase, .cancelled, "Silent dismissal must not leave a taskless writing phase")
+        state.openBuildDiagnostics()
+        await awaitOutputRepair(state) { state.staticBuildPhase == .ready }
+        XCTAssertEqual(session.document, document); XCTAssertEqual(session.historySnapshot(), history)
+    }
+
+    // SF-LOCAL-BUILDER-015; execution is recorded in the bounded focused receipt.
+    private func outputRepairFixture() throws -> (DocumentSession, NodeID, PageID, NodeID) {
+        let fixture = try chromeReuseFixture(), session = DocumentSession(document: fixture.document)
+        try setConnectedFixtureProperty(DesignBoxStyleCommandRegistry.namespace + "clip.content",
+            value: .boolean(true), nodeID: fixture.header, session: session)
+        try session.execute(PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture, document: session.document,
+            roles: [.header], targets: [fixture.targets[0]]), document: session.document).command)
+        let page = try XCTUnwrap(session.document.pages.first { $0.id == fixture.targets[0] })
+        let copied = try XCTUnwrap(page.nodes.first { CanonicalPageFlow.role($0) == .header })
+        let sourcePage = session.document.pages[0]
+        let source = try XCTUnwrap(sourcePage.nodes.first { $0.id == fixture.header })
+        return (session, copied.id, page.id, try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.titleKey, on: source)))
+    }
+    private func awaitOutputRepair(_ state: WorkspaceShellState,
+                                   until ready: @MainActor () -> Bool) async {
+        let deadline = ContinuousClock.now + .seconds(4)
+        while ContinuousClock.now < deadline {
+            if ready() { return }
+            await Task.yield()
+        }
+        XCTFail("Expected receipt/scene adoption did not finish: \(state.buildFindingRevealStatus)")
+    }
+    private func openOutputRepairReceipt(_ state: WorkspaceShellState, source: StaticBuildFindingSource,
+                                        excluding oldID: UUID? = nil) async throws -> StaticBuildFindingReceipt {
+        switch source {
+        case .browserPreview: state.openBrowserPreview()
+        case .checkWebsite: state.openBuildDiagnostics(); if oldID != nil { state.runStaticBuildPreflight() }
+        }
+        await awaitOutputRepair(state) {
+            let receipt = source == .browserPreview ? state.browserPreview.findingReceipt : state.staticBuildFindingReceipt
+            return receipt != nil && receipt?.id != oldID && !state.browserPreview.isBuilding && state.staticBuildPhase != .preflighting
+        }
+        return try XCTUnwrap(source == .browserPreview ? state.browserPreview.findingReceipt : state.staticBuildFindingReceipt)
+    }
+    private func revealOutputRepair(_ state: WorkspaceShellState, finding: StaticBuildFinding,
+                                    receipt: StaticBuildFindingReceipt, source: StaticBuildFindingSource) -> Task<Void, Never>? {
+        source == .browserPreview ? state.revealBrowserBuildFinding(finding, receipt: receipt)
+            : state.revealStaticBuildFinding(finding, receipt: receipt)
+    }
+    private func awaitOutputRepairScene(_ state: WorkspaceShellState) async {
+        await awaitOutputRepair(state) {
+            guard let plan = state.canvasRenderPlan else { return false }
+            return plan.identity.documentID == state.documentSession.document.id
+                && plan.identity.revision == state.documentSession.document.revision
+                && plan.identity.viewportGeneration == state.viewportState.generation
+        }
+    }
+
+    func testOutputFindingTargetUsesExactReceiptMembershipTypedEditorsAndReadOnlyIdentity() throws {
+        let (session, target, _, _) = try outputRepairFixture()
+        let document = session.document
+        let result = connectedFluidCompilation(document), receipt = StaticBuildFindingReceipt(compilation: result)
+        let finding = try XCTUnwrap(result.findings.first { $0.affectedNodeID == target && $0.code == "page-flow-navigation-clipped" })
+        let prepared = try StaticBuildFindingTarget.prepare(finding, receipt: receipt, document: document, breakpoint: .desktop)
+        XCTAssertEqual(prepared.nodeID, target); XCTAssertEqual(prepared.destination, .designBox)
+        let bytes = try DocumentSerializer.encode(document), history = session.historySnapshot()
+        func member(_ item: StaticBuildFinding) -> StaticBuildFindingReceipt {
+            .init(compilation: .init(documentID: document.id, revision: document.revision,
+                profile: .development, plan: nil, report: nil, findings: [item]))
+        }
+        func failure(_ finding: StaticBuildFinding, _ receipt: StaticBuildFindingReceipt, _ doc: CanonicalDocument,
+                     _ expected: StaticBuildFindingTarget.Failure) {
+            XCTAssertThrowsError(try StaticBuildFindingTarget.prepare(finding, receipt: receipt, document: doc, breakpoint: .desktop)) {
+                XCTAssertEqual($0 as? StaticBuildFindingTarget.Failure, expected)
+            }
+        }
+        let foreign = StaticBuildFinding(severity: finding.severity, code: finding.code,
+            requirementID: finding.requirementID, affectedNodeID: target, explanation: "Different result body", repair: finding.repair)
+        XCTAssertEqual(foreign.id, finding.id)
+        failure(foreign, receipt, document, .foreignFinding)
+        failure(finding, receipt, ProjectCreation.blank(), .staleDocument)
+        var stale = document; stale.revision += 1
+        failure(finding, receipt, stale, .staleRevision)
+        for flag in ["locked", "hidden"] {
+            var protected = document
+            let p = try XCTUnwrap(protected.pages.firstIndex { $0.id == prepared.pageID })
+            let n = try XCTUnwrap(protected.pages[p].nodes.firstIndex { $0.id == target })
+            protected.pages[p].nodes[n].properties.removeAll { $0.key.rawValue == flag }
+            protected.pages[p].nodes[n].properties.append(.init(key: .init(rawValue: flag), value: .boolean(true), origin: .authored))
+            failure(finding, receipt, protected, .lockedOrHidden)
+        }
+        for (id, expected) in [(NodeID?.none, StaticBuildFindingTarget.Failure.noObject), (Optional(NodeID()), .missingObject)] {
+            let item = StaticBuildFinding(severity: .unsupported, code: "future-unsupported", requirementID: "SF-1211-004",
+                affectedNodeID: id, explanation: "Unsupported content", repair: "Keep the authored value.")
+            failure(item, member(item), document, expected)
+        }
+        for code in ["future-code", "page-flow-navigation-room", "page-flow-positioning"] {
+            let item = StaticBuildFinding(severity: .warning, code: code, requirementID: "SF-1204-004",
+                affectedNodeID: target, explanation: "The wording must not choose an editor", repair: "Open Design, Layout, Contents or any other words")
+            let resolved = try StaticBuildFindingTarget.prepare(item, receipt: member(item), document: document, breakpoint: .desktop)
+            XCTAssertEqual(resolved.destination, code == "page-flow-navigation-room" ? .pageContents : code == "page-flow-positioning" ? .layout : .object)
+        }
+        var withDefinition = document
+        var definition = DocumentPage.minimum(name: "Exact original", route: "", role: .componentDefinition, provenance: .authored)
+        let root = definition.rootNodeIDs[0]
+        let text = DocumentNode(kind: .text, name: "Do not guess by name", parent: .node(root), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(0)), .init(key: .init(rawValue: "layout.y"), value: .number(0)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(120)), .init(key: .init(rawValue: "layout.height"), value: .number(24)),
+            .init(key: .init(rawValue: "content.text"), value: .string("Original"))])
+        definition.nodes[0].childIDs.append(text.id); definition.nodes.append(text); withDefinition.pages.append(definition)
+        try withDefinition.validate()
+        let item = StaticBuildFinding(severity: .policyBlocked, code: "future-policy", requirementID: "SF-1211-004",
+            affectedNodeID: text.id, explanation: "Retained intent", repair: "Use the existing original editor.")
+        let original = try StaticBuildFindingTarget.prepare(item, receipt: member(item), document: withDefinition, breakpoint: .desktop)
+        XCTAssertEqual(original.pageID, definition.id); XCTAssertEqual(original.nodeID, text.id); XCTAssertEqual(original.destination, .object)
+        XCTAssertEqual(try DocumentSerializer.encode(session.document), bytes); XCTAssertEqual(session.historySnapshot(), history)
+    }
+
+    func testPreviewAndCheckWebsiteRevealExactCrossPageObjectAfterSceneAdoptionWithoutHistoryOrPackageMutation() async throws {
+        for source in [StaticBuildFindingSource.checkWebsite, .browserPreview] {
+            let (session, target, pageID, _) = try outputRepairFixture()
+            let state = WorkspaceShellState(documentSession: session)
+            defer { state.browserPreview.stop() }
+            state.resizeViewport(to: .init(width: 1100, height: 700), pixelRatio: 2)
+            await awaitOutputRepairScene(state)
+            let bytes = try DocumentSerializer.encode(session.document), history = session.historySnapshot()
+            let receipt = try await openOutputRepairReceipt(state, source: source)
+            let finding = try XCTUnwrap(receipt.findings.first { $0.affectedNodeID == target && $0.code == "page-flow-navigation-clipped" })
+            XCTAssertEqual(state.buildFindingRevealAvailability(finding, receipt: receipt, source: source), .action("Open Design"))
+            var unrelatedCommitRequests = 0
+            let monitor = state.editCommitRequests.sink { if !$0.requiresCleanEditors { unrelatedCommitRequests += 1 } }
+            let work = try XCTUnwrap(revealOutputRepair(state, finding: finding, receipt: receipt, source: source))
+            await work.value
+            await awaitOutputRepair(state) { state.hasCurrentBuildFindingEditorRequest }
+            XCTAssertEqual(state.effectiveSelectedPageID, pageID); XCTAssertEqual(state.selectionState.primaryID, target)
+            XCTAssertEqual(state.inspectorTab, .design); XCTAssertEqual(state.navigatorTab, .layers)
+            XCTAssertEqual(state.buildFindingInspectorAnchor, "inspector.design.boxStyle")
+            XCTAssertEqual(unrelatedCommitRequests, 0, "Reveal must never ask unrelated editors to commit")
+            monitor.cancel()
+            XCTAssertFalse(state.isBuildDiagnosticsPresented); XCTAssertFalse(state.isBrowserPreviewPresented)
+            XCTAssertNotNil(state.canvasRenderPlan?.authoredObjects.first { $0.id == target })
+            XCTAssertEqual(try DocumentSerializer.encode(session.document), bytes); XCTAssertEqual(session.historySnapshot(), history)
+            let store = ProjectPackageStore(), package = ProjectPackage(document: session.document)
+            let encoded = try await store.encode(package)
+            let reopened = try await store.decode(encoded)
+            XCTAssertEqual(reopened.document, session.document)
+            XCTAssertNil(state.browserPreview.plan, "This blocked fixture must not launch Safari or fabricate successful output")
+        }
+    }
+
+    func testOutputRepairRejectsOldForeignPageChangedAndProjectReplacedReceiptsWithoutPartialNavigation() async throws {
+        for source in [StaticBuildFindingSource.checkWebsite, .browserPreview] {
+            let (session, target, pageID, _) = try outputRepairFixture()
+            let state = WorkspaceShellState(documentSession: session)
+            defer { state.browserPreview.stop() }
+            state.resizeViewport(to: .init(width: 1100, height: 700), pixelRatio: 2)
+            await awaitOutputRepairScene(state)
+            let receipt = try await openOutputRepairReceipt(state, source: source)
+            let finding = try XCTUnwrap(receipt.findings.first { $0.affectedNodeID == target })
+            let origin = state.effectiveSelectedPageID, selection = state.selectionState, history = session.historySnapshot()
+            let foreign = StaticBuildFinding(severity: finding.severity, code: finding.code, requirementID: finding.requirementID,
+                affectedNodeID: target, explanation: "Not a member of this exact receipt", repair: finding.repair)
+            XCTAssertNil(revealOutputRepair(state, finding: foreign, receipt: receipt, source: source))
+            let current = try await openOutputRepairReceipt(state, source: source, excluding: receipt.id)
+            XCTAssertNotEqual(current.id, receipt.id)
+            XCTAssertNil(revealOutputRepair(state, finding: finding, receipt: receipt, source: source))
+            XCTAssertEqual(state.effectiveSelectedPageID, origin); XCTAssertEqual(state.selectionState, selection)
+            XCTAssertEqual(session.historySnapshot(), history)
+            state.selectPage(pageID); await awaitOutputRepairScene(state)
+            let changedPageSelection = state.selectionState
+            XCTAssertNil(revealOutputRepair(state, finding: finding, receipt: current, source: source))
+            XCTAssertEqual(state.effectiveSelectedPageID, pageID); XCTAssertEqual(state.selectionState, changedPageSelection)
+            var replacement = ProjectCreation.blank()
+            let root = replacement.pages[0].rootNodeIDs[0]
+            replacement.pages[0].nodes[0].childIDs = [target]
+            replacement.pages[0].nodes.append(.init(id: target, kind: .frame, name: "Same name is not identity", parent: .node(root), properties: [
+                .init(key: .init(rawValue: "layout.x"), value: .number(0)), .init(key: .init(rawValue: "layout.y"), value: .number(0)),
+                .init(key: .init(rawValue: "layout.width"), value: .number(120)), .init(key: .init(rawValue: "layout.height"), value: .number(80))]))
+            try state.documentSession.establishBaseline(replacement)
+            let replacementBytes = try DocumentSerializer.encode(session.document)
+            XCTAssertNil(revealOutputRepair(state, finding: finding, receipt: current, source: source))
+            XCTAssertEqual(try DocumentSerializer.encode(session.document), replacementBytes)
+        }
+    }
+
+    func testOutputRepairCleanEditorIMEAndCancellationGuardsNeverCommitUnrelatedDrafts() async throws {
+        for source in [StaticBuildFindingSource.checkWebsite, .browserPreview] {
+            let (session, target, _, textID) = try outputRepairFixture()
+            let state = WorkspaceShellState(documentSession: session)
+            defer { state.browserPreview.stop() }
+            state.resizeViewport(to: .init(width: 1100, height: 700), pixelRatio: 2)
+            await awaitOutputRepairScene(state)
+            let receipt = try await openOutputRepairReceipt(state, source: source)
+            let finding = try XCTUnwrap(receipt.findings.first { $0.affectedNodeID == target })
+            let before = session.document, history = session.historySnapshot(), openingPage = state.effectiveSelectedPageID
+            var commits = 0
+            let blocker = state.editCommitRequests.sink { request in
+                if request.requiresCleanEditors { request.reject() } else { commits += 1 }
+            }
+            XCTAssertNil(revealOutputRepair(state, finding: finding, receipt: receipt, source: source)); blocker.cancel()
+            XCTAssertEqual(commits, 0); XCTAssertEqual(session.document, before); XCTAssertEqual(session.historySnapshot(), history)
+            XCTAssertTrue(state.beginTextEditing(nodeID: textID, provenance: .keyboard))
+            state.updateTextEditingDraft(text: "Composing", selection: .init(location: 1, length: 0), markedRange: .init(location: 0, length: 1))
+            XCTAssertNil(revealOutputRepair(state, finding: finding, receipt: receipt, source: source))
+            XCTAssertTrue(state.textEditingSession.isActive); XCTAssertEqual(session.document, before)
+            state.cancelTextEditing(); await awaitOutputRepairScene(state)
+            let selection = state.selectionState
+            let work = try XCTUnwrap(revealOutputRepair(state, finding: finding, receipt: receipt, source: source))
+            state.cancelBuildFindingReveal(); await work.value
+            XCTAssertEqual(state.effectiveSelectedPageID, openingPage); XCTAssertEqual(state.selectionState, selection)
+            XCTAssertNil(state.buildFindingEditorRequest); XCTAssertEqual(session.document, before); XCTAssertEqual(session.historySnapshot(), history)
+            XCTAssertFalse(state.isOpeningBuildFinding)
+        }
+    }
+
+    // SF-LOCAL-BUILDER-013; execution is recorded in the bounded focused receipt.
+    private func narrowChromeNodes(_ page: DocumentPage, _ id: NodeID) throws
+        -> (owner: DocumentNode, content: DocumentNode, title: DocumentNode, navigation: DocumentNode) {
+        let owner = try XCTUnwrap(page.nodes.first { $0.id == id })
+        func role(_ key: String) throws -> DocumentNode {
+            let target = try XCTUnwrap(CanonicalPageChrome.reference(key, on: owner))
+            return try XCTUnwrap(page.nodes.first { $0.id == target })
+        }
+        return try (owner, role(CanonicalPageChrome.contentKey), role(CanonicalPageChrome.titleKey), role(CanonicalPageChrome.navigationKey))
+    }
+
+    func testAutomaticChromeMenuFirstAllocationAtPhoneFractionalAndLargerWidthsIsReadOnly() throws {
+        let (session, header, _, footer) = try connectedPageSession()
+        let before = try DocumentSerializer.encode(session.document), history = session.historySnapshot()
+        for width in [263.25, 320, 360, 390, 430, 517.5, 599.5, 600, 768, 1024, 1440] {
+            let breakpoint = ResponsiveBreakpoint.resolving(width: width)
+            let page = session.document.pages[0]
+            let frames = page.resolvedStructuralGeometry(breakpoint: breakpoint, viewportWidth: width)
+            for ownerID in [header, footer] {
+                let nodes = try narrowChromeNodes(page, ownerID)
+                let snapshot = try XCTUnwrap(CanonicalPageFlow.navigation(owner: nodes.owner, page: page,
+                    document: session.document, breakpoint: breakpoint, width: width))
+                XCTAssertEqual(snapshot.usesHamburger, width < 600)
+                if width < 600 {
+                    let row = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: nodes.owner, page: page, breakpoint: breakpoint, width: width))
+                    let content = try XCTUnwrap(frames[nodes.content.id]?.frame)
+                    let allocation = try XCTUnwrap(row.allocate(innerWidth: content.size.width - 2 * row.padding))
+                    let title = try XCTUnwrap(frames[nodes.title.id]?.frame)
+                    let navigation = try XCTUnwrap(frames[nodes.navigation.id]?.frame)
+                    XCTAssertGreaterThanOrEqual(navigation.size.width, CanonicalPageChrome.menuControlWidth)
+                    XCTAssertLessThanOrEqual(title.maxX + allocation.gap, navigation.minX + 0.000001)
+                    XCTAssertEqual(navigation.maxX, content.maxX - row.padding, accuracy: 0.000001)
+                    XCTAssertEqual(title.size.width, try XCTUnwrap(allocation.widths[nodes.title.id]), accuracy: 0.000001)
+                    XCTAssertLessThanOrEqual(title.size.width, nodes.title.insertionNumberProperty("layout.width")!)
+                    XCTAssertGreaterThanOrEqual(title.minY, content.minY)
+                    XCTAssertLessThanOrEqual(title.maxY, content.maxY)
+                } else {
+                    XCTAssertNil(CanonicalPageChrome.automaticMenuRow(owner: nodes.owner, page: page, breakpoint: breakpoint, width: width))
+                }
+            }
+        }
+        XCTAssertEqual(try DocumentSerializer.encode(session.document), before)
+        XCTAssertEqual(session.historySnapshot(), history)
+    }
+
+    func testAutomaticChromeHiddenEmptyLongAndMultilineTitleRetainsIdentityAndLinePolicy() throws {
+        let (session, header, _, _) = try connectedPageSession()
+        let original = try narrowChromeNodes(session.document.pages[0], header)
+        let widthProperty = try XCTUnwrap(original.title.insertionProperty("layout.width"))
+        for text in ["", "Site", String(repeating: "Unbroken", count: 30), "First line\nSecond line"] {
+            // Inline Text editing can author hard breaks; the dedicated
+            // single-line Header title field intentionally cannot.
+            try setConnectedFixtureProperty("content.text", value: .string(text), nodeID: original.title.id, session: session)
+            let document = session.document, page = document.pages[0]
+            let tree = try InternalDocumentRenderTreeCompiler.compile(page: page, documentID: document.id,
+                revision: document.revision, staticRoutes: [page.id: "index.html"], breakpoint: .mobile, viewportWidth: 320)
+            let title = try XCTUnwrap(tree.nodes.first { $0.id == original.title.id })
+            XCTAssertEqual(title.textContent, text)
+            XCTAssertTrue(title.isManagedChromeTitle)
+            XCTAssertEqual(title.frame, page.resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: 320)[original.title.id]?.frame)
+            XCTAssertEqual(CanvasTextLayoutPolicy.visibleLineCapacity(height: title.frame.size.height,
+                lineHeight: try XCTUnwrap(title.typography).lineHeight), 1)
+            XCTAssertEqual(page.nodes.first { $0.id == original.title.id }?.insertionProperty("layout.width"), widthProperty)
+            XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(document)), document)
+        }
+        try session.execute(pageStructureCommand(.showTitle(header, false), document: session.document, selected: header))
+        let page = session.document.pages[0], nodes = try narrowChromeNodes(page, header)
+        let row = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: nodes.owner, page: page, breakpoint: .mobile, width: 320))
+        XCTAssertNil(row.titleID)
+        let frames = page.resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: 320)
+        XCTAssertEqual(frames[nodes.navigation.id]?.size.width, frames[nodes.content.id]?.size.width)
+        XCTAssertFalse(page.effectiveVisibleNodeIDs(breakpoint: .mobile).contains(nodes.title.id))
+        XCTAssertTrue(ConnectedPageOutput.css(pages: session.document.pages).contains("\(CanonicalCSSRule.selector(for: nodes.title.id))[data-siteforge-node] { display:none; }"))
+    }
+
+    func testAutomaticChromeMenuCardinalityVisibilityAndOffPreferenceRemainTruthful() throws {
+        let (session, header, _, _) = try connectedPageSession()
+        for _ in 0..<4 {
+            try session.execute(pageStructureCommand(.addLink(owner: header, pageID: session.document.pages[0].id), document: session.document, selected: header))
+        }
+        var page = session.document.pages[0]
+        var owner = try narrowChromeNodes(page, header).owner
+        let many = try XCTUnwrap(CanonicalPageFlow.navigation(owner: owner, page: page, document: session.document, breakpoint: .mobile, width: 320))
+        XCTAssertGreaterThanOrEqual(many.links.count, 5)
+        XCTAssertEqual(many.currentPageID, page.id)
+        XCTAssertTrue(many.usesHamburger)
+        XCTAssertEqual(Set(many.links.map(\.id)).count, many.links.count)
+        try session.execute(pageStructureCommand(.hamburger(header, false), document: session.document, selected: header))
+        page = session.document.pages[0]; owner = try narrowChromeNodes(page, header).owner
+        let off = try XCTUnwrap(CanonicalPageFlow.navigation(owner: owner, page: page, document: session.document, breakpoint: .mobile, width: 320))
+        XCTAssertFalse(off.usesHamburger); XCTAssertFalse(off.hamburgerEnabled)
+        XCTAssertEqual(off.links, many.links)
+        XCTAssertNil(CanonicalPageChrome.automaticMenuRow(owner: owner, page: page, breakpoint: .mobile, width: 320))
+        for destination in session.document.websitePages where destination.role != .notFound {
+            try session.execute(pageStructureCommand(.includePage(header, destination.id, false), document: session.document, selected: header))
+        }
+        page = session.document.pages[0]; owner = try narrowChromeNodes(page, header).owner
+        XCTAssertNil(CanonicalPageFlow.navigation(owner: owner, page: page, document: session.document, breakpoint: .mobile, width: 320))
+        let emptyOff = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: owner, page: page, breakpoint: .mobile, width: 320))
+        XCTAssertEqual(emptyOff.navigationMinimum, 0)
+        XCTAssertFalse(emptyOff.reservesMenu)
+        XCTAssertFalse(emptyOff.orderedIDs.contains(emptyOff.navigationID))
+        XCTAssertEqual(CanonicalPageChrome.links(owner: owner, page: page).map(\.id), many.links.map(\.id))
+        try session.execute(pageStructureCommand(.hamburger(header, true), document: session.document, selected: header))
+        page = session.document.pages[0]; owner = try narrowChromeNodes(page, header).owner
+        let empty = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: owner, page: page,
+            breakpoint: .mobile, width: 320, availablePageIDs: Set(session.document.websitePages.map(\.id))))
+        XCTAssertFalse(empty.reservesMenu)
+        XCTAssertEqual(empty.navigationMinimum, 0)
+        XCTAssertFalse(empty.orderedIDs.contains(empty.navigationID))
+        let allocation = try XCTUnwrap(empty.allocate(innerWidth: 224))
+        XCTAssertEqual(allocation.widths[try XCTUnwrap(empty.titleID)], 200)
+        XCTAssertNil(allocation.widths[empty.navigationID])
+        let noLinksCSS = ConnectedPageOutput.automaticMenuRules(page, usesWrapper: false,
+            availablePageIDs: Set(session.document.websitePages.map(\.id))).joined(separator: "\n")
+        XCTAssertFalse(noLinksCSS.components(separatedBy: "\n").contains {
+            $0.hasPrefix(CanonicalCSSRule.selector(for: empty.navigationID) + " {") && $0.contains("flex:1 0 90.0px")
+        }, "Only the emptied Header loses its Menu budget; the fixture's independent Footer remains usable")
+        XCTAssertTrue(noLinksCSS.contains("\(CanonicalCSSRule.selector(for: empty.navigationID)) { display:none; }"))
+    }
+
+    func testAutomaticChromeMissingDestinationsDoNotCreateDecorativeMenu() throws {
+        let (session, header, _, _) = try connectedPageSession()
+        try session.execute(pageStructureCommand(.addLink(owner: header, pageID: session.document.pages[0].id),
+            document: session.document, selected: header))
+        var document = session.document
+        let nodes = try narrowChromeNodes(document.pages[0], header)
+        let ids = Set(CanonicalPageChrome.links(owner: nodes.owner, page: document.pages[0]).map(\.id))
+        for index in document.pages[0].nodes.indices where ids.contains(document.pages[0].nodes[index].id) {
+            let property = try XCTUnwrap(document.pages[0].nodes[index].properties.firstIndex { $0.key.rawValue == CanonicalLinkTarget.namespace + "pageID" })
+            document.pages[0].nodes[index].properties[property].value = .string(PageID().description)
+        }
+        let page = document.pages[0], owner = try narrowChromeNodes(page, header).owner
+        let snapshot = try XCTUnwrap(CanonicalPageFlow.navigation(owner: owner, page: page, document: document, breakpoint: .mobile, width: 320))
+        XCTAssertTrue(snapshot.hamburgerEnabled, "Authored preference must not be rewritten")
+        XCTAssertFalse(snapshot.usesHamburger)
+        XCTAssertTrue(snapshot.links.allSatisfy { !$0.isAvailable })
+        let available = Set(document.websitePages.map(\.id))
+        let brokenRow = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: owner, page: page,
+            breakpoint: .mobile, width: 320, availablePageIDs: available))
+        XCTAssertFalse(brokenRow.reservesMenu)
+        XCTAssertEqual(brokenRow.navigationMinimum, 1, "Retain unavailable link intent, not a Menu budget")
+        for fluid in [false, true] {
+            let css = ConnectedPageOutput.automaticMenuRules(page, usesWrapper: fluid,
+                availablePageIDs: available).joined(separator: "\n")
+            XCTAssertFalse(css.components(separatedBy: "\n").contains {
+                $0.hasPrefix(CanonicalCSSRule.selector(for: nodes.navigation.id) + " {") && $0.contains("flex:1 0 90.0px")
+            })
+            XCTAssertTrue(css.contains("flex:1 0 1.0px"))
+        }
+        let tree = try InternalDocumentRenderTreeCompiler.compile(page: page, documentID: document.id,
+            revision: document.revision, breakpoint: .mobile, viewportWidth: 320)
+        let html = try SafeHTMLEmitter.emit(tree)
+        XCTAssertFalse(html.contains("data-siteforge-navigation=\"\(nodes.navigation.id)\""))
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(document)), document)
+
+        // A valid but hidden link must not make the remaining broken links
+        // acquire a decorative Menu in either connected CSS adapter.
+        let validID = try XCTUnwrap(ids.sorted { $0.description < $1.description }.first)
+        let index = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == validID })
+        let targetIndex = try XCTUnwrap(document.pages[0].nodes[index].properties.firstIndex {
+            $0.key.rawValue == CanonicalLinkTarget.namespace + "pageID"
+        })
+        document.pages[0].nodes[index].properties[targetIndex].value = .string(page.id.description)
+        document.pages[0].nodes[index].properties.removeAll { $0.key.rawValue == "hidden" }
+        document.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: "hidden"),
+            value: .boolean(true), origin: .authored))
+        let mixedPage = document.pages[0]
+        XCTAssertFalse(CanonicalPageChrome.hasUsableNavigation(owner: owner, page: mixedPage,
+            availablePageIDs: Set(document.websitePages.map(\.id)), breakpoint: .mobile))
+        let mixed = try XCTUnwrap(CanonicalPageFlow.navigation(owner: owner, page: mixedPage,
+            document: document, breakpoint: .mobile, width: 320))
+        XCTAssertFalse(mixed.usesHamburger)
+        let mixedRow = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: owner, page: mixedPage,
+            breakpoint: .mobile, width: 320, availablePageIDs: available))
+        XCTAssertFalse(mixedRow.reservesMenu)
+        XCTAssertEqual(mixedRow.navigationMinimum, 1)
+        let mixedFrames = mixedPage.resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: 320,
+            availablePageIDs: available)
+        XCTAssertEqual(mixed.itemFrames.first?.width, mixedFrames[mixed.links[0].id]?.size.width)
+        for fluid in [false, true] {
+            XCTAssertFalse(ConnectedPageOutput.automaticMenuRules(mixedPage, usesWrapper: fluid,
+                availablePageIDs: available).joined(separator: "\n").components(separatedBy: "\n").contains {
+                    $0.hasPrefix(CanonicalCSSRule.selector(for: nodes.navigation.id) + " {") && $0.contains("flex:1 0 90.0px")
+                })
+        }
+        let rules = ConnectedPageOutput.navigationMenuRules(surface: nodes.navigation, settings: owner,
+            page: mixedPage, breakpoint: .mobile, availablePageIDs: Set(document.websitePages.map(\.id)))
+        XCTAssertTrue(rules.contains(".sf-page-navigation-\(nodes.navigation.id) .sf-nav-menu { display:none; }"))
+        XCTAssertNil(CanonicalPageChrome.mobileOutputRoomFailure(owner: owner, page: mixedPage,
+            availablePageIDs: available), "Do not report an absent Menu as a constrained Menu")
+        for fluid in [false, true] {
+            var outputDocument = document
+            if fluid {
+                let ownerIndex = try XCTUnwrap(outputDocument.pages[0].nodes.firstIndex { $0.id == header })
+                outputDocument.pages[0].nodes[ownerIndex].properties.append(.init(
+                    key: .init(rawValue: CanonicalFluidValueCodec.key(.height)),
+                    value: .string(try CanonicalFluidValueCodec.encode(.init(minimum: 120, preferred: 180, maximum: 240), target: .height)),
+                    origin: .authored))
+            }
+            let css = ConnectedPageOutput.css(pages: outputDocument.pages)
+            XCTAssertTrue(css.contains(".sf-page-navigation-\(nodes.navigation.id) .sf-nav-menu { display:none; }"))
+            XCTAssertFalse(css.contains("\(CanonicalCSSRule.selector(for: nodes.navigation.id)) { position:relative;left:auto;top:auto;width:90.0px;flex:1 0 90.0px"))
+        }
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(document)), document)
+    }
+
+    func testNarrowChromeCustomSizingSpacingFontsAndFluidIntentAreNeverRewritten() throws {
+        for mode in ["custom", "title-width", "font", "fluid-title"] {
+            let (session, header, _, _) = try connectedPageSession()
+            let nodes = try narrowChromeNodes(session.document.pages[0], header)
+            switch mode {
+            case "custom":
+                try session.execute(pageStructureCommand(.contentLayout(header, axis: .horizontal, gap: 80, alignment: .end), document: session.document, selected: header))
+            case "title-width":
+                try setConnectedFixtureProperty("layout.width", value: .number(250), nodeID: nodes.title.id, session: session)
+            case "font":
+                let link = try XCTUnwrap(CanonicalPageChrome.links(owner: nodes.owner, page: session.document.pages[0]).first)
+                try setConnectedFixtureProperty(CanonicalTypography.namespace + "lineHeight", value: .number(40), nodeID: link.id, session: session)
+                try setConnectedFixtureProperty(CanonicalTypography.namespace + "size", value: .number(32), nodeID: link.id, session: session)
+            default:
+                try setConnectedFixtureProperty(CanonicalFluidValueCodec.key(.width), value: .string(CanonicalFluidValueCodec.encode(.init(minimum: 100, preferred: 200, maximum: 260), target: .width)), nodeID: nodes.title.id, session: session)
+            }
+            let before = try DocumentSerializer.encode(session.document), history = session.historySnapshot()
+            for width in [320.0, 430, 599.5] {
+                let page = session.document.pages[0], owner = try narrowChromeNodes(page, header).owner
+                XCTAssertNil(CanonicalPageChrome.automaticMenuRow(owner: owner, page: page, breakpoint: .mobile, width: width), mode)
+                _ = page.resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: width)
+            }
+            XCTAssertEqual(try DocumentSerializer.encode(session.document), before)
+            XCTAssertEqual(session.historySnapshot(), history)
+        }
+    }
+
+    func testAutomaticChromeFixedLogoAndAuthoredGapUseSameInnerBudget() throws {
+        let (session, header, _, _) = try connectedPageSession()
+        let nodes = try narrowChromeNodes(session.document.pages[0], header)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let bytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Private test logo", originalFilename: "logo.png", format: .png,
+            pixelWidth: 2, pixelHeight: 2, byteCount: bytes.count, contentHash: ProjectResourceStore.digest(bytes))
+        try session.execute(.insertImageAsset(.init(asset: asset, index: 0)))
+        let image = DocumentNode(kind: .image, name: "Logo", parent: .node(nodes.content.id), properties: [
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "assetID"), value: .string(asset.id.description)),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "fit"), value: .string("fit")),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "alt"), value: .string("Brand")),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "decorative"), value: .boolean(false)),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.x"), value: .number(0.5)),
+            .init(key: .init(rawValue: CanonicalImageStyle.namespace + "focal.y"), value: .number(0.5)),
+            .init(key: .init(rawValue: "layout.x"), value: .number(0)), .init(key: .init(rawValue: "layout.y"), value: .number(0)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(32)), .init(key: .init(rawValue: "layout.height"), value: .number(16))])
+        try session.execute(.insertNode(.init(pageID: session.document.pages[0].id, node: image, index: 0)))
+        try setConnectedFixtureProperty("layout.gap", value: .number(37), nodeID: nodes.content.id, session: session)
+        let before = session.document
+        for width in [320.0, 360, 430, 599.5] {
+            let page = session.document.pages[0], owner = try narrowChromeNodes(page, header).owner
+            let row = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: owner, page: page, breakpoint: .mobile, width: width))
+            let frames = page.resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: width)
+            let content = try XCTUnwrap(frames[nodes.content.id]?.frame)
+            let allocation = try XCTUnwrap(row.allocate(innerWidth: content.size.width - 2 * row.padding))
+            XCTAssertEqual(allocation.gap, 37)
+            XCTAssertEqual(frames[image.id]?.size.width, 32)
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(frames[nodes.navigation.id]?.size.width), 90)
+            XCTAssertLessThanOrEqual(try XCTUnwrap(frames[image.id]?.frame.maxX), try XCTUnwrap(frames[nodes.title.id]?.frame.minX))
+        }
+        XCTAssertEqual(session.document, before)
+        XCTAssertEqual(session.document.imageAssets, [asset])
+        try setConnectedFixtureProperty("layout.width", value: .number(500), nodeID: image.id, session: session)
+        let page = session.document.pages[0], owner = try narrowChromeNodes(page, header).owner
+        let navigationBounds = try XCTUnwrap(page.resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: 320)[nodes.navigation.id]?.frame)
+        XCTAssertNotNil(CanonicalPageChrome.narrowMenuGuidance(owner: owner, page: page, document: session.document, width: 320, navigationBounds: navigationBounds))
+        XCTAssertEqual(page.nodes.first { $0.id == image.id }?.insertionNumberProperty("layout.width"), 500)
+        XCTAssertEqual(CanonicalPageChrome.mobileOutputRoomFailure(owner: owner, page: page)?.code, "page-flow-navigation-room")
+        let blocked = connectedFluidCompilation(session.document)
+        XCTAssertNil(blocked.plan)
+        XCTAssertTrue(blocked.findings.contains { $0.code == "page-flow-navigation-room" && $0.affectedNodeID == header })
+    }
+
+    func testAutomaticChromeStaticAndFluidAdaptersKeepSharedContinuousAllocationAndBlockers() throws {
+        let (session, header, _, _) = try connectedPageSession()
+        let nodes = try narrowChromeNodes(session.document.pages[0], header)
+        for fluid in [false, true] {
+            if fluid {
+                try setConnectedFixtureProperty(CanonicalFluidValueCodec.key(.height), value: .string(CanonicalFluidValueCodec.encode(.init(minimum: 120, preferred: 180, maximum: 240), target: .height)), nodeID: header, session: session)
+            }
+            let before = session.document
+            let row = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: try narrowChromeNodes(before.pages[0], header).owner,
+                page: before.pages[0], breakpoint: .mobile, width: 320))
+            let rules = ConnectedPageOutput.automaticMenuRules(before.pages[0], usesWrapper: fluid).joined(separator: "\n")
+            XCTAssertTrue(rules.contains("gap:" + row.cssGap))
+            XCTAssertTrue(rules.contains("flex:1 0 90.0px;min-width:90.0px"))
+            XCTAssertTrue(rules.contains("flex:0 1 200.0px;min-width:1.0px"))
+            XCTAssertTrue(rules.contains("left:auto;top:auto"))
+            XCTAssertEqual(rules.contains("." + ConnectedFluidOutputPolicy.wrapperClass(nodes.content.id)), fluid)
+            let plan = try XCTUnwrap(connectedFluidCompilation(before).plan)
+            let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+            XCTAssertTrue(css.contains(row.cssGap))
+            let html = plan.files.filter { $0.path.hasSuffix(".html") }.map(\.contents).joined()
+            XCTAssertTrue(html.contains("data-siteforge-text"))
+            XCTAssertTrue(html.contains("sf-nav-panel-\(nodes.navigation.id)"))
+            XCTAssertEqual(session.document, before)
+        }
+        try setConnectedFixtureProperty(DesignBoxStyleCommandRegistry.namespace + "clip.content", value: .boolean(true), nodeID: header, session: session)
+        let blocked = connectedFluidCompilation(session.document)
+        XCTAssertNil(blocked.plan)
+        XCTAssertTrue(blocked.findings.contains { $0.code == "page-flow-navigation-clipped" && $0.affectedNodeID == header })
+    }
+
+    func testAutomaticChromeNativeSceneSelectionHitAndPreviewShareFinalMenuFrame() async throws {
+        let (session, header, _, _) = try connectedPageSession()
+        let document = session.document, page = document.pages[0], nodes = try narrowChromeNodes(page, header)
+        for width in [320.0, 430, 599.5] {
+            let viewport = try CanvasViewportState(worldOrigin: .init(x: -20, y: -20), viewportSize: .init(width: 680, height: 440),
+                contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: width, height: 960)), pixelRatio: .init(2))
+            let prepared = try await WorkspaceScenePreparationWorker().prepare(.init(document: document,
+                activePageID: page.id, activeContainerID: nil, viewport: viewport, surfaceID: CanvasRenderSurfaceID(), breakpoint: .mobile, viewportWidth: width))
+            let expected = page.resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: width)
+            for id in [nodes.title.id, nodes.navigation.id] {
+                XCTAssertEqual(prepared.renderScene.objects.first { $0.id == id }?.frame, expected[id]?.frame)
+                XCTAssertEqual(prepared.selectionScene?.targets.first { $0.id == id }?.frame, expected[id]?.frame)
+            }
+            let core = CanvasRendererCore()
+            let plan = try core.prepare(scene: prepared.renderScene,
+                overlays: .init(identity: prepared.renderScene.identity, overlays: []), viewport: viewport)
+            let rect = try XCTUnwrap(expected[nodes.navigation.id]?.frame)
+            XCTAssertEqual(core.hitTest(.init(x: rect.minX + rect.size.width / 2, y: rect.minY + rect.size.height / 2), in: plan), nodes.navigation.id)
+            XCTAssertEqual(core.previewSnapshot(from: prepared.renderScene).objects.first { $0.id == nodes.navigation.id }?.frame, rect)
+            let accessible = try XCTUnwrap(plan.accessibilityElements.first { $0.objectID == nodes.navigation.id })
+            let origin = try viewport.transform.worldToViewport(rect.origin)
+            XCTAssertEqual(accessible.frame.origin.x, origin.x, accuracy: 0.5)
+        }
+        var unavailable = document
+        let linkIDs = Set(CanonicalPageChrome.links(owner: nodes.owner, page: page).map(\.id))
+        for index in unavailable.pages[0].nodes.indices where linkIDs.contains(unavailable.pages[0].nodes[index].id) {
+            let property = try XCTUnwrap(unavailable.pages[0].nodes[index].properties.firstIndex {
+                $0.key.rawValue == CanonicalLinkTarget.namespace + "pageID"
+            })
+            unavailable.pages[0].nodes[index].properties[property].value = .string(PageID().description)
+        }
+        let unavailableBytes = try DocumentSerializer.encode(unavailable)
+        let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0), viewportSize: .init(width: 680, height: 440),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 320, height: 960)), pixelRatio: .init(2))
+        let prepared = try await WorkspaceScenePreparationWorker().prepare(.init(document: unavailable,
+            activePageID: page.id, activeContainerID: nil, viewport: viewport, surfaceID: CanvasRenderSurfaceID(), breakpoint: .mobile, viewportWidth: 320))
+        let expected = unavailable.pages[0].resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: 320,
+            availablePageIDs: Set(unavailable.websitePages.map(\.id)))
+        for id in [nodes.title.id, nodes.navigation.id] {
+            XCTAssertEqual(prepared.renderScene.objects.first { $0.id == id }?.frame, expected[id]?.frame)
+            XCTAssertEqual(prepared.selectionScene?.targets.first { $0.id == id }?.frame, expected[id]?.frame)
+        }
+        let snapshot = try XCTUnwrap(CanonicalPageFlow.navigation(owner: nodes.owner, page: unavailable.pages[0],
+            document: unavailable, breakpoint: .mobile, width: 320))
+        XCTAssertFalse(snapshot.usesHamburger)
+        XCTAssertEqual(try DocumentSerializer.encode(unavailable), unavailableBytes)
+        XCTAssertEqual(session.document, document)
+    }
+
+    func testAutomaticChromeEditsCopiesUndoPackageAndRecoveryKeepAllocationNoncanonical() async throws {
+        let fixture = try chromeReuseFixture(), session = DocumentSession(document: fixture.document)
+        try session.execute(PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture), document: session.document).command)
+        let copiedPage = try XCTUnwrap(session.document.pages.first { $0.id == fixture.targets[0] })
+        let copiedOwner = try XCTUnwrap(copiedPage.nodes.first { CanonicalPageFlow.role($0) == .header })
+        XCTAssertNotEqual(copiedOwner.id, fixture.header)
+        let before = session.document, history = session.historySnapshot()
+        for width in [320.0, 457.25, 599.5] {
+            for page in session.document.websitePages {
+                _ = page.resolvedStructuralGeometry(breakpoint: .mobile, viewportWidth: width,
+                    availablePageIDs: Set(session.document.websitePages.map(\.id)))
+            }
+        }
+        XCTAssertEqual(session.document, before); XCTAssertEqual(session.historySnapshot(), history)
+        let copiedRow = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: copiedOwner, page: copiedPage,
+            breakpoint: .mobile, width: 320, availablePageIDs: Set(session.document.websitePages.map(\.id))))
+        XCTAssertTrue(copiedRow.reservesMenu, "Independent copies retain valid destinations on other pages")
+        try session.execute(pageStructureCommand(.contentLayout(fixture.header, axis: .horizontal, gap: 37, alignment: .end), document: session.document, selected: fixture.header))
+        let after = session.document.pages
+        XCTAssertEqual(session.document.pages.first { $0.id == copiedPage.id }, copiedPage)
+        try session.undo(); XCTAssertEqual(session.document.pages, before.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+        let store = ProjectPackageStore(), historyStore = PersistedHistoryStore()
+        let package = try await historyStore.package(ProjectPackage(document: session.document), with: session.historySnapshot())
+        let encoded = try await store.encode(package), reopened = try await store.decode(encoded)
+        XCTAssertEqual(reopened.document, session.document)
+        let owned = try ApplicationOwnedTestFixture.create("automatic-chrome-menu-recovery")
+        defer { try? owned.cleanup() }
+        let directory = owned.url.appendingPathComponent("recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(directory)
+        let url = DocumentLifecycleBackend.recoveryURL(for: package.projectID, in: directory)
+        try await store.write(package, to: url, policy: .recovery(package.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(from: url, expectedProjectID: package.projectID).package
+        XCTAssertEqual(recovered, package)
+    }
+
+    // SF-LOCAL-BUILDER-011 / SF-0604/1202/1204/1206/1211. UNRUN source.
+    private struct ConnectedFluidFixture {
+        let document: CanonicalDocument
+        let header: NodeID, body: NodeID, footer: NodeID, stack: NodeID, grid: NodeID, frame: NodeID
+        let stackChildren: [NodeID], gridChildren: [NodeID]
+    }
+    private func connectedFluidFixture() throws -> ConnectedFluidFixture {
+        let (session, header, bodies, footer) = try connectedPageSession()
+        try session.execute(pageStructureCommand(.height(bodies[0], 2000, .desktop), document: session.document, selected: bodies[0]))
+        let stack = try insertConnectedChild(.stack, parent: bodies[0], size: .init(width: 600, height: 240), session: session)
+        let grid = try insertConnectedChild(.grid, parent: bodies[0], size: .init(width: 600, height: 240), session: session)
+        let frame = try insertConnectedChild(.frame, parent: bodies[0], size: .init(width: 400, height: 160), session: session)
+        try setConnectedFixtureProperty(DesignBoxStyleCommandRegistry.namespace + "padding.uniform", value: .number(8), nodeID: frame, session: session)
+        var stackChildren: [NodeID] = [], gridChildren: [NodeID] = []
+        for _ in 0..<2 { stackChildren.append(try insertConnectedChild(.text, parent: stack, size: .init(width: 120, height: 24), session: session)) }
+        for _ in 0..<3 { gridChildren.append(try insertConnectedChild(.text, parent: grid, size: .init(width: 120, height: 24), session: session)) }
+        _ = try insertConnectedChild(.text, parent: frame, size: .init(width: 120, height: 24), session: session)
+        let entries: [(NodeID, FluidValueTarget, Double, Double, Double)] = [
+            (header, .height, 120, 160, 200), (header, .padding, 8, 12, 16),
+            (footer, .height, 200, 240, 280), (footer, .padding, 16, 24, 32),
+            (stack, .padding, 12, 20, 28), (stack, .gap, 8, 16, 24), (stack, .height, 200, 240, 300),
+            (grid, .padding, 8, 16, 24), (grid, .gap, 8, 12, 16), (grid, .width, 160, 320, 600),
+            (frame, .width, 160, 240, 320), (frame, .height, 120, 160, 200)]
+        for (id, target, low, preferred, high) in entries {
+            try setConnectedFixtureProperty(CanonicalFluidValueCodec.key(target), value: .string(
+                CanonicalFluidValueCodec.encode(.init(minimum: low, preferred: preferred, maximum: high), target: target)), nodeID: id, session: session)
+        }
+        try session.document.validate()
+        return .init(document: session.document, header: header, body: bodies[0], footer: footer,
+            stack: stack, grid: grid, frame: frame, stackChildren: stackChildren, gridChildren: gridChildren)
+    }
+    private func connectedFluidCompilation(_ document: CanonicalDocument, cancelled: Bool = false) -> StaticBuildCompilation {
+        StaticBuildCompiler.compile(document: document, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:], cancelled: cancelled)
+    }
+
+    func testConnectedFluidClampCoefficientsMatchAnchorsFractionalWidthsAndClamping() throws {
+        let value = CanonicalFluidValue(minimum: 7, preferred: 23, maximum: 61)
+        let css = try XCTUnwrap(StaticFluidValueOutputEmitter.expression(for: value, precision: 9))
+        let regex = try NSRegularExpression(pattern: #"clamp\(([-0-9.]+)px, calc\(([-0-9.]+)vw ([+-]) ([-0-9.]+)px\), ([-0-9.]+)px\)"#)
+        let matches = regex.matches(in: css, range: NSRange(css.startIndex..., in: css))
+        XCTAssertEqual(matches.count, 2)
+        func segment(_ match: NSTextCheckingResult, _ width: Double) throws -> Double {
+            func token(_ index: Int) throws -> String { String(css[try XCTUnwrap(Range(match.range(at: index), in: css))]) }
+            let lower = try XCTUnwrap(Double(token(1))), slope = try XCTUnwrap(Double(token(2)))
+            let offset = try XCTUnwrap(Double(token(4))), upper = try XCTUnwrap(Double(token(5)))
+            return min(upper, max(lower, width * slope / 100 + (try token(3) == "-" ? -offset : offset)))
+        }
+        for width in [1.0, 320, 389.9999, 390, 390.0001, 430, 599.5, 599.9999, 600, 767.9999, 768, 768.0001, 900, 1023.5, 1023.9999, 1024, 1439.9999, 1440, 1440.0001, 2000] {
+            let emitted = try segment(matches[0], width) + segment(matches[1], width) - value.preferred
+            XCTAssertEqual(emitted, try XCTUnwrap(value.resolved(viewportWidth: width)), accuracy: 0.000001)
+            let bounds = ConnectedOutputLength.fluid(value).bounds(in: .resolving(width: width))
+            XCTAssertGreaterThanOrEqual(emitted + 0.000001, bounds.minimum)
+            XCTAssertLessThanOrEqual(emitted - 0.000001, bounds.maximum)
+        }
+        XCTAssertNil(StaticFluidValueOutputEmitter.expression(for: .init(minimum: .nan, preferred: 20, maximum: 30)))
+    }
+
+    func testConnectedFluidContainersCompileSemanticHierarchyWithoutSampledOffsets() throws {
+        let fixture = try connectedFluidFixture(), original = try DocumentSerializer.encode(fixture.document)
+        let result = connectedFluidCompilation(fixture.document)
+        let plan = try XCTUnwrap(result.plan, String(describing: result.findings))
+        XCTAssertFalse(result.findings.contains { $0.code == "page-flow-fluid-containing-layout" })
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        XCTAssertTrue(html.contains("<header")); XCTAssertTrue(html.contains("<footer"))
+        for id in [fixture.header, fixture.body, fixture.footer, fixture.stack, fixture.grid, fixture.frame] {
+            XCTAssertTrue(html.contains("class=\"" + ConnectedFluidOutputPolicy.wrapperClass(id) + "\""))
+            XCTAssertTrue(html.contains("data-siteforge-node=\"\(id)\""))
+        }
+        XCTAssertTrue(css.contains("flex-direction:column")); XCTAssertTrue(css.contains("grid-template-columns:repeat(2,"))
+        XCTAssertTrue(css.contains("grid-template-rows:max(1px,24.0px,24.0px) max(1px,24.0px)"))
+        XCTAssertTrue(css.contains("width:max(1px,calc(100% - 2 * var("))
+        XCTAssertTrue(css.contains("margin-block:var(")); XCTAssertTrue(css.contains("clamp("))
+        let headerRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: fixture.header) + " {") }
+        let flowHeaderRules = headerRules.filter { $0.contains("--sf-\(fixture.header)-w:") }
+        XCTAssertEqual(flowHeaderRules.count, ResponsiveBreakpoint.allCases.count)
+        XCTAssertTrue(flowHeaderRules.allSatisfy { $0.contains("position:relative") && $0.contains("top:auto") && $0.contains("width:100%") }, flowHeaderRules.joined(separator: "\n"))
+        XCTAssertEqual(try DocumentSerializer.encode(fixture.document), original)
+        XCTAssertEqual(connectedFluidCompilation(fixture.document).plan?.files, plan.files)
+        let keys = Set(ConnectedFluidOutputPolicy.targets.map(CanonicalFluidValueCodec.key))
+        for source in fixture.document.pages[0].nodes {
+            for property in source.properties where keys.contains(property.key.rawValue) {
+                var isolated = fixture.document
+                for index in isolated.pages[0].nodes.indices { isolated.pages[0].nodes[index].properties.removeAll { keys.contains($0.key.rawValue) } }
+                let index = try XCTUnwrap(isolated.pages[0].nodes.firstIndex { $0.id == source.id })
+                isolated.pages[0].nodes[index].properties.append(property)
+                try isolated.validate()
+                XCTAssertNotNil(connectedFluidCompilation(isolated).plan, "Each supported binding must work independently as well as combined")
+            }
+        }
+    }
+
+    func testConnectedFluidCascadeCustomWidthsResetAndHiddenGridParticipation() throws {
+        let fixture = try connectedFluidFixture(), session = DocumentSession(document: fixture.document)
+        let pageID = session.document.pages[0].id
+        try setConnectedFixtureProperty(ResponsiveContainerLayoutResolver.key(.gap, breakpoint: .mobile), value: .number(3), nodeID: fixture.stack, session: session)
+        try setConnectedFixtureProperty(ResponsiveContainerLayoutResolver.key(.columns, breakpoint: .mobile), value: .number(1), nodeID: fixture.grid, session: session)
+        try setConnectedFixtureProperty(ResponsiveVisibilityResolver.key(.mobile), value: .boolean(false), nodeID: fixture.gridChildren[1], session: session)
+        let stack = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.stack })
+        for width in [320.0, 390, 430, 599.5, 600, 768, 900, 1023.5, 1024, 1440, 1800] {
+            let bp = ResponsiveBreakpoint.resolving(width: width)
+            let policy = ResolvedContainerLayoutPolicy.resolve(stack, children: [], breakpoint: bp, viewportWidth: width)
+            let scalar = ConnectedFluidOutputPolicy.spacing(stack, field: .gap, policy: policy, breakpoint: bp)
+            XCTAssertEqual(scalar.resolved(at: width), policy.gap, accuracy: 0.000001)
+            if width < 600 { XCTAssertEqual(scalar, .fixed(3)) }
+        }
+        let css = try XCTUnwrap(connectedFluidCompilation(session.document).plan?.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("--sf-\(fixture.stack)-g:3.0px"))
+        XCTAssertTrue(css.contains("grid-template-columns:repeat(1,"))
+        let hiddenChild = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.gridChildren[1] })
+        XCTAssertEqual(hiddenChild.kind, .text)
+        XCTAssertTrue(css.contains(CanonicalCSSRule.selector(for: hiddenChild.id) + "[data-siteforge-node] { display:none; }"),
+                      "Visibility must hide the authored Text box, not merely its inner typography span")
+        let override = try XCTUnwrap(stack.insertionProperty(ResponsiveContainerLayoutResolver.key(.gap, breakpoint: .mobile)))
+        try session.execute(.removeProperty(.init(pageID: pageID, nodeID: stack.id, propertyID: override.id)))
+        let reset = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == stack.id })
+        let policy = ResolvedContainerLayoutPolicy.resolve(reset, children: [], breakpoint: .mobile, viewportWidth: 430)
+        XCTAssertNotEqual(ConnectedFluidOutputPolicy.spacing(reset, field: .gap, policy: policy, breakpoint: .mobile), .fixed(3))
+        let fluid = try XCTUnwrap(reset.insertionProperty(CanonicalFluidValueCodec.key(.gap)))
+        try session.execute(.removeProperty(.init(pageID: pageID, nodeID: stack.id, propertyID: fluid.id)))
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == stack.id }?.insertionNumberProperty("layout.gap"), 24)
+        try session.undo(); try session.undo()
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == stack.id }?.insertionProperty(override.key.rawValue)?.id, override.id)
+        try setConnectedFixtureProperty(ResponsiveGeometryResolver.key(.width, breakpoint: .tablet), value: .number(222), nodeID: fixture.frame, session: session)
+        let frame = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.frame })
+        for width in [430.0, 599.5, 600, 900, 1023.5, 1024, 1440] {
+            let bp = ResponsiveBreakpoint.resolving(width: width)
+            let scalar = ConnectedFluidOutputPolicy.dimension(frame, .width, breakpoint: bp)
+            XCTAssertEqual(scalar.resolved(at: width), try XCTUnwrap(ResponsiveGeometryResolver.value(for: .width, node: frame, breakpoint: bp, viewportWidth: width)?.0), accuracy: 0.000001)
+            if bp == .tablet { XCTAssertEqual(scalar, .fixed(222)) }
+            else { XCTAssertNotEqual(scalar, .fixed(222), "Sibling breakpoints do not inherit each other's overrides") }
+        }
+    }
+
+    func testConnectedFluidManagedRoleWidthAndBoxPaddingPrecedenceRemainTruthful() throws {
+        let fixture = try connectedFluidFixture(), session = DocumentSession(document: fixture.document)
+        try setConnectedFixtureProperty(CanonicalFluidValueCodec.key(.width), value: .string(CanonicalFluidValueCodec.encode(.init(minimum: 100, preferred: 200, maximum: 300), target: .width)), nodeID: fixture.header, session: session)
+        try setConnectedFixtureProperty(DesignBoxStyleCommandRegistry.namespace + "padding.uniform", value: .number(6), nodeID: fixture.header, session: session)
+        let header = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.header })
+        for width in [320.0, 430, 768, 900, 1440] {
+            let bp = ResponsiveBreakpoint.resolving(width: width)
+            let snapshot = ConnectedPageLayoutSnapshot(page: session.document.pages[0], breakpoint: bp, width: width)
+            XCTAssertEqual(snapshot.frames[header.id]?.size.width, width)
+            let policy = try XCTUnwrap(snapshot.policies[header.id])
+            XCTAssertEqual(ConnectedFluidOutputPolicy.spacing(header, field: .padding, policy: policy, breakpoint: bp), .fixed(6))
+        }
+        let css = try XCTUnwrap(connectedFluidCompilation(session.document).plan?.files.first { $0.path == "styles.css" }?.contents)
+        let rules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: header.id) + " {") }
+        let flowRules = rules.filter { $0.contains("--sf-\(header.id)-w:") }
+        XCTAssertEqual(flowRules.count, ResponsiveBreakpoint.allCases.count)
+        XCTAssertTrue(flowRules.allSatisfy { $0.contains("width:100%") && !$0.contains("width:var(") }, flowRules.joined(separator: "\n"))
+        XCTAssertNotNil(header.insertionProperty(CanonicalFluidValueCodec.key(.width)))
+        XCTAssertNotNil(header.insertionProperty(CanonicalFluidValueCodec.key(.padding)))
+    }
+
+    func testConnectedFluidHugFillAndBoundedSizingUseSharedScopeWithoutMutation() throws {
+        let fixture = try connectedFluidFixture(), session = DocumentSession(document: fixture.document)
+        let oldHeight = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.stack }?.insertionProperty(CanonicalFluidValueCodec.key(.height)))
+        try session.execute(.removeProperty(.init(pageID: session.document.pages[0].id, nodeID: fixture.stack, propertyID: oldHeight.id)))
+        try setConnectedFixtureProperty(CanonicalSizingConstraints.prefix + "heightMode", value: .string("hug"), nodeID: fixture.stack, session: session)
+        try setConnectedFixtureProperty(CanonicalSizingConstraints.prefix + "widthMode", value: .string("fill"), nodeID: fixture.frame, session: session)
+        // The fluid width wins over the retained Fill declaration until removed.
+        let width = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.frame }?.insertionProperty(CanonicalFluidValueCodec.key(.width)))
+        try session.execute(.removeProperty(.init(pageID: session.document.pages[0].id, nodeID: fixture.frame, propertyID: width.id)))
+        try setConnectedFixtureProperty(CanonicalSizingConstraints.prefix + "maxWidth", value: .number(500), nodeID: fixture.frame, session: session)
+        let before = try DocumentSerializer.encode(session.document)
+        let plan = try XCTUnwrap(connectedFluidCompilation(session.document).plan)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("flex:0 0 auto")); XCTAssertTrue(css.contains("max-width:500.0px"))
+        let page = session.document.pages[0]
+        for width in [320.0, 430, 600, 768, 900, 1023.5, 1440] {
+            let bp = ResponsiveBreakpoint.resolving(width: width)
+            let scope = ResponsiveSizingLayout.scope(page: page, breakpoint: bp, width: width)
+            XCTAssertTrue(scope.affected.contains(fixture.body)); XCTAssertTrue(scope.descendants.contains(fixture.stack))
+            let node = try XCTUnwrap(page.nodes.first { $0.id == fixture.stack })
+            let policy = ResolvedContainerLayoutPolicy.resolve(node, children: [], breakpoint: bp, viewportWidth: width)
+            XCTAssertEqual(try XCTUnwrap(page.resolvedStructuralGeometry(breakpoint: bp, viewportWidth: width)[node.id]?.size.height),
+                48 + 2 * policy.padding + policy.gap, accuracy: 0.001)
+        }
+        XCTAssertEqual(try DocumentSerializer.encode(session.document), before)
+    }
+
+    func testConnectedFluidUnsupportedCasesRetainPreciseCompleteMultipageFindings() throws {
+        let fixture = try connectedFluidFixture(), session = DocumentSession(document: fixture.document)
+        try setConnectedFixtureProperty("layout.height", value: .number(30), nodeID: fixture.grid, session: session)
+        try setConnectedFixtureProperty(DesignBoxStyleCommandRegistry.namespace + "clip.content", value: .boolean(true), nodeID: fixture.header, session: session)
+        try setConnectedFixtureProperty(CanonicalPositioning.namespace + "mode", value: .string("fixed"), nodeID: fixture.frame, session: session)
+        let result = connectedFluidCompilation(session.document)
+        XCTAssertNil(result.plan)
+        for (code, id) in [("page-flow-fluid-grid-row-compression", fixture.grid), ("page-flow-navigation-clipped", fixture.header), ("page-flow-positioning", fixture.frame)] {
+            XCTAssertTrue(result.findings.contains { $0.code == code && $0.affectedNodeID == id && !$0.repair.isEmpty })
+        }
+        XCTAssertThrowsError(try MultiPageStaticBuildPlanner.plan(document: session.document))
+        let cancelled = connectedFluidCompilation(fixture.document, cancelled: true)
+        XCTAssertNil(cancelled.plan); XCTAssertTrue(cancelled.findings.contains { $0.code == "cancelled" })
+        XCTAssertEqual(session.document.pages.count, fixture.document.pages.count)
+        var invalid = fixture.document
+        invalid.pages[0].nodes.append(invalid.pages[0].nodes[0])
+        let invalidResult = connectedFluidCompilation(invalid)
+        XCTAssertNil(invalidResult.plan)
+        XCTAssertTrue(invalidResult.findings.contains { $0.code == "plan-invalid" })
+    }
+
+    func testConnectedFluidLegacyAndFixedOutputRemainDeterministicWithoutWrappers() throws {
+        let (session, _, _, _) = try connectedPageSession()
+        let page = session.document.pages[0]
+        XCTAssertFalse(ConnectedFluidOutputPolicy.needsAdapter(page))
+        XCTAssertTrue(ConnectedFluidOutputPolicy.wrapperIDs(page).isEmpty)
+        let plan = try XCTUnwrap(connectedFluidCompilation(session.document).plan)
+        XCTAssertFalse(plan.files.contains { $0.contents.contains("class=\"sf-layout-") })
+        let baseline = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        XCTAssertEqual(LocalBuildProfileCompiler.compile(baseline, profile: .development).0.files, plan.files)
+        let id = NodeID(), rect = WorldRect(origin: .init(x: 0, y: 0), size: .init(width: 100, height: 40))
+        let tree = InternalRenderTreeSnapshot(documentID: DocumentID(), revision: 0, nodes: [
+            .init(id: id, sourceNodeID: id, paintOrder: 0, frame: rect, semanticElement: "section", cssSelector: CanonicalCSSRule.selector(for: id), formField: nil)])
+        XCTAssertEqual(try SafeHTMLEmitter.emit(tree), "<section data-siteforge-node=\"\(id)\" class=\"sf-node-\(id)\"></section>")
+        XCTAssertEqual(try SafeHTMLEmitter.emit(tree), try SafeHTMLEmitter.emit(tree, layoutContainers: []))
+        XCTAssertThrowsError(try SafeHTMLEmitter.emit(tree, layoutContainers: [NodeID()]))
+    }
+
+    func testConnectedFluidFreeRootsLegacyNavigationAspectAndFillStayExplicitlyBlocked() throws {
+        let fixture = try connectedFluidFixture()
+        let free = DocumentSession(document: fixture.document)
+        let padding = try XCTUnwrap(free.document.pages[0].nodes.first { $0.id == fixture.frame }?.insertionProperty(DesignBoxStyleCommandRegistry.namespace + "padding.uniform"))
+        try free.execute(.removeProperty(.init(pageID: free.document.pages[0].id, nodeID: fixture.frame, propertyID: padding.id)))
+        XCTAssertTrue(connectedFluidCompilation(free.document).findings.contains { $0.code == "page-flow-fluid-free-containing-layout" && $0.affectedNodeID == fixture.frame })
+        var independent = fixture.document
+        let extra = DocumentNode(kind: .frame, name: "Independent root", parent: .page(independent.pages[0].id))
+        independent.pages[0].rootNodeIDs.append(extra.id); independent.pages[0].nodes.append(extra)
+        XCTAssertTrue(connectedFluidCompilation(independent).findings.contains { $0.code == "page-flow-containing-block" })
+        var aspect = fixture.document
+        let frameIndex = try XCTUnwrap(aspect.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        aspect.pages[0].nodes[frameIndex].properties += [
+            .init(key: .init(rawValue: CanonicalSizingConstraints.prefix + "aspectRatio"), value: .number(2.5)),
+            .init(key: .init(rawValue: CanonicalSizingConstraints.prefix + "aspectEnabled"), value: .boolean(true))]
+        XCTAssertEqual(ConnectedFluidOutputPolicy.failures(aspect.pages[0])[fixture.frame]?.code, "page-flow-fluid-aspect-coupling")
+        let fill = DocumentSession(document: fixture.document)
+        let height = try XCTUnwrap(fill.document.pages[0].nodes.first { $0.id == fixture.frame }?.insertionProperty(CanonicalFluidValueCodec.key(.height)))
+        try fill.execute(.removeProperty(.init(pageID: fill.document.pages[0].id, nodeID: fixture.frame, propertyID: height.id)))
+        try setConnectedFixtureProperty(CanonicalSizingConstraints.prefix + "heightMode", value: .string("fill"), nodeID: fixture.frame, session: fill)
+        XCTAssertTrue(connectedFluidCompilation(fill.document).findings.contains { $0.code == "page-flow-fluid-fill-height" && $0.affectedNodeID == fixture.frame })
+        let legacy = DocumentSession(document: fixture.document), page = legacy.document.pages[0]
+        let owner = try XCTUnwrap(page.nodes.first { $0.id == fixture.header })
+        let content = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner))
+        let links = CanonicalPageChrome.links(owner: owner, page: page)
+        var changes = try removeConnectedFixtureSubtree(content, pageID: page.id, document: legacy.document)
+        changes += owner.properties.filter { $0.key.rawValue.hasPrefix(CanonicalPageChrome.namespace) }.map { .removeProperty(.init(pageID: page.id, nodeID: owner.id, propertyID: $0.id)) }
+        changes += links.enumerated().map { index, original in
+            var link = original; link.parent = .node(owner.id)
+            return .insertNode(.init(pageID: page.id, node: link, index: index))
+        }
+        try legacy.execute(.batch(changes))
+        XCTAssertTrue(connectedFluidCompilation(legacy.document).findings.contains { $0.code == "page-flow-fluid-legacy-navigation" && $0.affectedNodeID == owner.id })
+    }
+
+    func testConnectedFluidCompileCloneHistoryPackageRecoveryAndSanitizedContentStayNeutral() async throws {
+        let fixture = try connectedFluidFixture(), session = DocumentSession(document: fixture.document)
+        let target = DocumentPage.minimum(name: "Copy target", route: "/copy-target", role: .standard, provenance: .authored)
+        try session.execute(.insertPage(.init(page: target, index: session.document.pages.count)))
+        let source = session.document.pages[0]
+        let request = PageChromeCopyRequest(documentID: session.document.id, revision: session.document.revision,
+            sourcePageID: source.id, sourceRoles: PageChromeCopyRegistry.sourceRoles(source), roles: [.header, .footer], targetPageIDs: [target.id])
+        try session.execute(PageChromeCopyRegistry().prepare(request, document: session.document).command)
+        let title = try XCTUnwrap(source.nodes.first { $0.kind == .text && CanonicalPageChrome.owner(of: $0, in: source) != nil })
+        try setConnectedFixtureProperty("content.text", value: .string("<script>not executable</script> & content"), nodeID: title.id, session: session)
+        let package = ProjectPackage(document: session.document), store = ProjectPackageStore()
+        let before = try await store.encode(package), history = session.historySnapshot()
+        let plan = try XCTUnwrap(connectedFluidCompilation(session.document).plan)
+        XCTAssertTrue(plan.files.contains { $0.contents.contains("&lt;script&gt;not executable&lt;/script&gt;") })
+        XCTAssertFalse(plan.files.contains { $0.contents.contains("<script>not executable") })
+        XCTAssertEqual(session.historySnapshot(), history)
+        let after = try await store.encode(package); XCTAssertEqual(before, after)
+        let reopened = try await store.decode(after)
+        XCTAssertEqual(reopened.document, session.document)
+        let owned = try ApplicationOwnedTestFixture.create("fluid-output-recovery")
+        defer { try? owned.cleanup() }
+        let directory = owned.url.appendingPathComponent("recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(directory)
+        let url = DocumentLifecycleBackend.recoveryURL(for: package.projectID, in: directory)
+        try await store.write(package, to: url, policy: .recovery(package.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(from: url, expectedProjectID: package.projectID).package
+        XCTAssertEqual(recovered.document, session.document)
+        XCTAssertEqual(connectedFluidCompilation(recovered.document).plan?.files, plan.files)
+    }
+
+    func testConnectedFluidOriginalImageBytesAndMissingResourcesBlockWholePlan() throws {
+        let fixture = try connectedFluidFixture()
+        var document = fixture.document
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        for y in 0..<2 { for x in 0..<2 { bitmap.setColor(.purple, atX: x, y: y) } }
+        let bytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Fluid image", originalFilename: "fluid.png", format: .png,
+            pixelWidth: 2, pixelHeight: 2, byteCount: bytes.count, contentHash: ProjectResourceStore.digest(bytes))
+        document.imageAssets.append(asset)
+        let index = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        document.pages[0].nodes[index].properties += [
+            .init(key: .init(rawValue: CanonicalImageFill.assetKey), value: .string(asset.id.description)),
+            .init(key: .init(rawValue: CanonicalImageFill.modeKey), value: .string("fill"))]
+        let descriptor = ProjectResourceDescriptor(id: asset.resourceID, filename: asset.originalFilename,
+            mediaType: "image/png", byteCount: bytes.count, sha256: asset.contentHash)
+        let before = try DocumentSerializer.encode(document)
+        let compilation = StaticBuildCompiler.compile(document: document, profileSelection: .init(profile: .development),
+            resourceDescriptors: [asset.resourceID: descriptor], resourceData: [asset.resourceID: bytes])
+        XCTAssertEqual(try XCTUnwrap(compilation.plan).binaryFiles.first?.contents, bytes)
+        let missing = connectedFluidCompilation(document)
+        XCTAssertNil(missing.plan)
+        XCTAssertTrue(missing.findings.contains { $0.code == "asset-missing" && $0.affectedNodeID == fixture.frame })
+        let corrupt = StaticBuildCompiler.compile(document: document, profileSelection: .init(profile: .development),
+            resourceDescriptors: [asset.resourceID: descriptor], resourceData: [asset.resourceID: Data([0])])
+        XCTAssertNil(corrupt.plan); XCTAssertTrue(corrupt.findings.contains { $0.severity == .error })
+        XCTAssertEqual(try DocumentSerializer.encode(document), before)
+    }
+
+    func testConnectedFluidBrowserExportSnapshotStaleCancelAndDestinationSafety() async throws {
+        let fixture = try connectedFluidFixture(), owned = try ApplicationOwnedTestFixture.create("fluid-browser-export")
+        defer { try? owned.cleanup() }
+        let controller = BrowserPreviewController { _ in .opened }
+        let document = fixture.document
+        let stale = controller.build(document: document, pageID: document.pages[0].id,
+            package: .init(document: document), isCurrent: { _, _ in false })
+        await stale.value
+        XCTAssertNil(controller.plan)
+        let build = controller.build(document: document, pageID: document.pages[0].id,
+            package: .init(document: document), isCurrent: { _, _ in true })
+        await build.value
+        let plan = try XCTUnwrap(controller.plan)
+        XCTAssertEqual(plan.files, connectedFluidCompilation(document).plan?.files)
+        let destination = owned.url.appendingPathComponent("website")
+        let export = try XCTUnwrap(controller.export(to: destination)); await export.value
+        let http = try WebsitePreviewHTTPContent(plan: plan)
+        for file in plan.files {
+            let bytes = try Data(contentsOf: destination.appendingPathComponent(file.path))
+            XCTAssertEqual(bytes, Data(file.contents.utf8)); XCTAssertEqual(http.files[file.path], bytes)
+        }
+        let cancelledDestination = owned.url.appendingPathComponent("cancelled-output")
+        let cancelled = try XCTUnwrap(controller.export(to: cancelledDestination))
+        controller.stop(); await cancelled.value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cancelledDestination.path))
+        XCTAssertEqual(controller.status, "Website preview stopped.")
+        let oldFile = try Data(contentsOf: destination.appendingPathComponent("index.html"))
+        XCTAssertThrowsError(try LocalStaticBuildWriter.write(plan, to: destination, expectedRevision: plan.revision + 1))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("index.html")), oldFile)
+    }
+
+    // SF-LOCAL-BUILDER-010 / SF-0303/0304/0308/0806. SOURCE ONLY, UNRUN.
+    private struct ChromeReuseFixture {
+        var document: CanonicalDocument
+        let source: PageID, targets: [PageID], header: NodeID, footer: NodeID
+    }
+    private func chromeReuseFixture() throws -> ChromeReuseFixture {
+        let (session, header, bodies, footer) = try connectedPageSession()
+        var document = session.document
+        let source = document.pages[0]
+        var targets: [PageID] = []
+        for index in 0..<2 {
+            var page = DocumentPage.minimum(name: "Chrome destination \(index)", route: "/chrome-\(index)", role: .standard, provenance: .authored)
+            let closure = try PageChromeCopyRegistry.subtree([bodies[0]], page: source)
+            let clone = try CanonicalPageGraphClone.prepare(page: source, included: closure, destinationPageID: page.id,
+                destinationParent: page.rootNodeIDs[0], preservePageLinks: true)
+            page.nodes[0].childIDs = [try XCTUnwrap(clone.nodeIDs[bodies[0]])]
+            page.nodes += clone.nodes
+            document.pages.append(page); targets.append(page.id)
+        }
+        try document.validate()
+        return .init(document: document, source: source.id, targets: targets, header: header, footer: footer)
+    }
+    private func chromeReuseRequest(_ fixture: ChromeReuseFixture, document: CanonicalDocument? = nil,
+                                    roles: Set<PageFlowRole> = [.header, .footer], targets: [PageID]? = nil) throws -> PageChromeCopyRequest {
+        let document = document ?? fixture.document
+        let page = try XCTUnwrap(document.pages.first { $0.id == fixture.source })
+        return .init(documentID: document.id, revision: document.revision, sourcePageID: page.id,
+            sourceRoles: PageChromeCopyRegistry.sourceRoles(page), roles: roles, targetPageIDs: targets ?? fixture.targets)
+    }
+
+    func testPageChromeReuseHeaderFooterBothMissingRoleAndEmptyTargets() throws {
+        let fixture = try chromeReuseFixture(), registry = PageChromeCopyRegistry()
+        let choices: [Set<PageFlowRole>] = [[.header], [.footer], [.header, .footer]]
+        for roles in choices {
+            let session = DocumentSession(document: fixture.document)
+            let request = try chromeReuseRequest(fixture, roles: roles, targets: [fixture.targets[0]])
+            let prepared = try registry.prepare(request, document: session.document)
+            try session.execute(prepared.command)
+            let page = try XCTUnwrap(session.document.pages.first { $0.id == fixture.targets[0] })
+            XCTAssertEqual(Set(PageChromeCopyRegistry.sourceRoles(page).keys), roles)
+            XCTAssertEqual(prepared.copiedRoleCount, roles.count)
+            XCTAssertEqual(session.document.pages.first { $0.id == fixture.source }, fixture.document.pages.first { $0.id == fixture.source })
+        }
+        XCTAssertThrowsError(try registry.prepare(chromeReuseRequest(fixture, targets: []), document: fixture.document))
+        XCTAssertThrowsError(try registry.prepare(chromeReuseRequest(fixture, roles: []), document: fixture.document))
+        let removed = DocumentSession(document: fixture.document)
+        try removed.execute(.batch(removeConnectedFixtureSubtree(fixture.footer, pageID: fixture.source, document: removed.document)))
+        XCTAssertThrowsError(try registry.prepare(chromeReuseRequest(fixture, document: removed.document, roles: [.footer]), document: removed.document)) {
+            XCTAssertEqual($0 as? PageChromeCopyError, .missingSource)
+        }
+    }
+
+    func testPageChromeReuseSkipsExistingProtectedAndComponentPagesWithoutReplacement() throws {
+        var fixture = try chromeReuseFixture()
+        let definition = DocumentPage.minimum(name: "Definition", route: "", role: .componentDefinition, provenance: .authored)
+        fixture.document.pages.append(definition)
+        let session = DocumentSession(document: fixture.document), registry = PageChromeCopyRegistry()
+        try session.execute(registry.prepare(chromeReuseRequest(fixture, roles: [.header], targets: [fixture.targets[0]]), document: session.document).command)
+        let existingPage = try XCTUnwrap(session.document.pages.first { $0.id == fixture.targets[0] })
+        let existingHeader = try XCTUnwrap(PageChromeCopyRegistry.sourceRoles(existingPage)[.header])
+        let existingSubtree = try PageChromeCopyRegistry.subtree([existingHeader], page: existingPage)
+        let referringPage = try XCTUnwrap(session.document.pages.first { $0.id == fixture.targets[1] })
+        let referringRoot = try XCTUnwrap(referringPage.nodes.first { $0.id == referringPage.rootNodeIDs[0] })
+        let inbound = DocumentNode(kind: .link, name: "Inbound section reference", parent: .node(referringRoot.id),
+            properties: CanonicalLinkTarget.section(pageID: existingPage.id, nodeID: existingHeader).properties.map {
+                .init(key: .init(rawValue: $0.0), value: $0.1)
+            })
+        try session.execute(.insertNode(.init(pageID: referringPage.id, node: inbound, index: referringRoot.childIDs.count)))
+        let notFound = try XCTUnwrap(session.document.pages.first { $0.role == .notFound }?.id)
+        let targets = fixture.targets + [fixture.source, notFound, definition.id]
+        let prepared = try registry.prepare(chromeReuseRequest(fixture, document: session.document, targets: targets), document: session.document)
+        XCTAssertEqual(prepared.copiedRoleCount, 3)
+        XCTAssertEqual(prepared.skipped.count, 7)
+        try session.execute(prepared.command)
+        let after = try XCTUnwrap(session.document.pages.first { $0.id == existingPage.id })
+        XCTAssertEqual(after.nodes.filter { existingSubtree.contains($0.id) }, existingPage.nodes.filter { existingSubtree.contains($0.id) })
+        XCTAssertEqual(PageChromeCopyRegistry.sourceRoles(after)[.header], existingHeader)
+        XCTAssertEqual(session.document.pages.first { $0.id == referringPage.id }?.nodes.first { $0.id == inbound.id }, inbound)
+        XCTAssertThrowsError(try registry.prepare(chromeReuseRequest(fixture, document: session.document), document: session.document)) {
+            XCTAssertEqual($0 as? PageChromeCopyError, .noChanges)
+        }
+    }
+
+    func testPageChromeReuseClonesFreshOwnedIDsAndPreservesConnectedBodyAndRoutes() throws {
+        var fixture = try chromeReuseFixture()
+        let headerIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.header })
+        fixture.document.pages[0].nodes[headerIndex].properties.removeAll { $0.key.rawValue.hasPrefix(CanonicalFillLayerCodec.namespaceRoot) || FormattingFamily.retiredFillKeys.contains($0.key.rawValue) }
+        let layer = CanonicalFillLayer.linearGradient(angleDegrees: 45, stops: [
+            .init(id: .init(), position: 0, color: .init(red: 0.1, green: 0.2, blue: 0.3, alpha: 1)),
+            .init(id: .init(), position: 1, color: .init(red: 0.6, green: 0.4, blue: 0.2, alpha: 1))])
+        fixture.document.pages[0].nodes[headerIndex].properties += CanonicalFillLayerCodec.propertyValues(for: [layer]).map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        try fixture.document.validate()
+        let session = DocumentSession(document: fixture.document)
+        let prepared = try PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture), document: session.document)
+        try session.execute(prepared.command)
+        let oldIDs = Set(fixture.document.pages.flatMap(\.nodes).map(\.id))
+        let oldProperties = Set(fixture.document.pages.flatMap(\.nodes).flatMap(\.properties).map(\.id))
+        for targetID in fixture.targets {
+            let before = try XCTUnwrap(fixture.document.pages.first { $0.id == targetID })
+            let after = try XCTUnwrap(session.document.pages.first { $0.id == targetID })
+            XCTAssertEqual(after.id, before.id); XCTAssertEqual(after.route, before.route)
+            let added = after.nodes.filter { !oldIDs.contains($0.id) }
+            XCTAssertTrue(Set(added.flatMap(\.properties).map(\.id)).isDisjoint(with: oldProperties))
+            for old in before.nodes where !before.rootNodeIDs.contains(old.id) { XCTAssertEqual(after.nodes.first { $0.id == old.id }, old) }
+            let root = try XCTUnwrap(after.nodes.first { $0.id == after.rootNodeIDs[0] })
+            let header = try XCTUnwrap(after.nodes.first { $0.id == root.childIDs.first })
+            XCTAssertEqual(CanonicalPageFlow.role(header), .header)
+            XCTAssertEqual(root.childIDs.dropFirst().dropLast(), before.nodes[0].childIDs[...])
+            XCTAssertEqual(after.nodes.first { $0.id == root.childIDs.last }.flatMap(CanonicalPageFlow.role), .footer)
+            let copiedLayer = try XCTUnwrap(CanonicalFillLayerCodec.layers(for: header)?.first)
+            XCTAssertNotEqual(copiedLayer.id, layer.id)
+            XCTAssertTrue(Set(copiedLayer.stops.map(\.id)).isDisjoint(with: Set(layer.stops.map(\.id))))
+            XCTAssertEqual(copiedLayer.angleDegrees, layer.angleDegrees)
+        }
+        let duplicated = try PageCommandRegistry().prepare(.duplicate,
+            identity: .init(documentID: session.document.id, revision: session.document.revision, pageID: fixture.source),
+            in: session.document, isAvailable: true)
+        try session.execute(duplicated.command)
+        let copiedPage = try XCTUnwrap(session.document.pages.first { $0.id == duplicated.selectedPageID })
+        let copiedHeader = try XCTUnwrap(copiedPage.nodes.first { CanonicalPageFlow.role($0) == .header })
+        let copiedLayer = try XCTUnwrap(CanonicalFillLayerCodec.layers(for: copiedHeader)?.first)
+        XCTAssertNotEqual(copiedLayer.id, layer.id)
+        XCTAssertEqual(copiedLayer.stops.map(\.color), layer.stops.map(\.color))
+        XCTAssertEqual(copiedLayer.angleDegrees, layer.angleDegrees)
+    }
+
+    func testPageChromeReuseInternalAndExternalSectionDestinationsRemainTruthful() throws {
+        let (session, header, bodies, footer) = try connectedPageSession()
+        let source = session.document.pages[0], content = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: source.nodes.first { $0.id == header }!))
+        var links: [NodeID] = []
+        for target in [header, bodies[0]] {
+            let link = try insertConnectedChild(.link, parent: content, size: .init(width: 120, height: 32), session: session)
+            let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == link })
+            let values: [(String, PropertyValue)] = [("kind", .string("section")), ("pageID", .string(source.id.description)), ("nodeID", .string(target.description))]
+            try session.execute(.batch(values.map { suffix, value in
+                let key = CanonicalLinkTarget.namespace + suffix
+                return .setProperty(.init(pageID: source.id, nodeID: link, property: .init(id: node.insertionProperty(key)?.id ?? PropertyID(), key: .init(rawValue: key), value: value)))
+            }))
+            links.append(link)
+        }
+        let target = DocumentPage.minimum(name: "Destination", route: "/destination", role: .standard, provenance: .authored)
+        try session.execute(.insertPage(.init(page: target, index: session.document.pages.count)))
+        let fixture = ChromeReuseFixture(document: session.document, source: source.id, targets: [target.id], header: header, footer: footer)
+        let prepared = try PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture, roles: [.header]), document: session.document)
+        try session.execute(prepared.command)
+        let copied = try XCTUnwrap(session.document.pages.first { $0.id == target.id })
+        let newHeader = try XCTUnwrap(PageChromeCopyRegistry.sourceRoles(copied)[.header])
+        let sectionLinks = copied.nodes.filter { $0.insertionStringProperty(CanonicalLinkTarget.namespace + "kind") == "section" }
+        XCTAssertEqual(sectionLinks.count, 2)
+        XCTAssertTrue(sectionLinks.contains { $0.insertionStringProperty(CanonicalLinkTarget.namespace + "nodeID") == newHeader.description && $0.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == target.id.description })
+        XCTAssertTrue(sectionLinks.contains { $0.insertionStringProperty(CanonicalLinkTarget.namespace + "nodeID") == bodies[0].description && $0.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == source.id.description })
+        let navigation = copied.nodes.filter(CanonicalPageFlow.isNavigationLink)
+        XCTAssertTrue(navigation.contains { $0.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == source.id.description })
+        XCTAssertTrue(Set(links).isDisjoint(with: Set(sectionLinks.map(\.id))))
+    }
+
+    func testPageChromeReuseAtomicUndoRedoCancellationBranchAndRepeatNoOp() throws {
+        let fixture = try chromeReuseFixture(), session = DocumentSession(document: fixture.document)
+        let prepared = try PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture), document: session.document)
+        XCTAssertThrowsError(try session.execute(prepared.command, cancellation: .init(isCancelled: { true })))
+        XCTAssertEqual(session.document, fixture.document); XCTAssertTrue(session.historySnapshot().undoEntries.isEmpty)
+        try session.execute(prepared.command)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        let after = session.document.pages
+        XCTAssertThrowsError(try PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture, document: session.document), document: session.document))
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo(); XCTAssertEqual(session.document.pages, fixture.document.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+        try session.undo()
+        try session.execute(.renamePage(.init(pageID: fixture.targets[0], name: "Independent branch")))
+        XCTAssertFalse(session.canRedo)
+    }
+
+    func testPageChromeReuseRejectsStaleDeletedRoleInvalidTargetAndCancelWithoutPartialWrites() throws {
+        let fixture = try chromeReuseFixture(), registry = PageChromeCopyRegistry()
+        let request = try chromeReuseRequest(fixture)
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(.renamePage(.init(pageID: fixture.targets[0], name: "Changed while sheet open")))
+        let before = session.document
+        XCTAssertThrowsError(try registry.prepare(request, document: session.document)) { XCTAssertEqual($0 as? PageChromeCopyError, .stale) }
+        XCTAssertThrowsError(try registry.prepare(chromeReuseRequest(fixture, document: before, targets: [fixture.targets[0], PageID()]), document: before))
+        XCTAssertThrowsError(try registry.prepare(chromeReuseRequest(fixture, document: before, targets: [fixture.targets[0], fixture.targets[0]]), document: before))
+        XCTAssertThrowsError(try registry.prepare(chromeReuseRequest(fixture, document: before), document: before, cancelled: true))
+        XCTAssertEqual(session.document, before)
+        try session.execute(.batch(removeConnectedFixtureSubtree(fixture.header, pageID: fixture.source, document: session.document)))
+        XCTAssertThrowsError(try registry.prepare(request, document: session.document))
+        XCTAssertEqual(session.document.pages.first { $0.id == fixture.targets[0] }?.nodes.count, before.pages.first { $0.id == fixture.targets[0] }?.nodes.count)
+    }
+
+    func testPageChromeReuseIndependentTargetEditDoesNotPropagateOrChangeSource() throws {
+        let fixture = try chromeReuseFixture(), session = DocumentSession(document: fixture.document)
+        let prepared = try PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture), document: session.document)
+        try session.execute(prepared.command)
+        let page = try XCTUnwrap(session.document.pages.first { $0.id == fixture.targets[0] })
+        let owner = try XCTUnwrap(page.nodes.first { CanonicalPageFlow.role($0) == .header })
+        let title = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.titleKey, on: owner))
+        let old = try XCTUnwrap(page.nodes.first { $0.id == title }?.insertionProperty("content.text"))
+        let sourceBefore = session.document.pages.first { $0.id == fixture.source }
+        let otherBefore = session.document.pages.first { $0.id == fixture.targets[1] }
+        try session.execute(.setProperty(.init(pageID: page.id, nodeID: title,
+            property: .init(id: old.id, key: old.key, value: .string("Independent title"), origin: .authored))))
+        XCTAssertEqual(session.document.pages.first { $0.id == fixture.source }, sourceBefore)
+        XCTAssertEqual(session.document.pages.first { $0.id == fixture.targets[1] }, otherBefore)
+        XCTAssertEqual(session.document.pages.first { $0.id == page.id }?.nodes.first { $0.id == title }?.insertionStringProperty("content.text"), "Independent title")
+    }
+
+    func testPageChromeReusePackageRecoveryAndOrdinaryHistoryRoundTrip() async throws {
+        let fixture = try chromeReuseFixture(), session = DocumentSession(document: fixture.document)
+        try session.execute(PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture), document: session.document).command)
+        let store = ProjectPackageStore(), historyStore = PersistedHistoryStore()
+        let package = try await historyStore.package(ProjectPackage(document: session.document), with: session.historySnapshot())
+        let encoded = try await store.encode(package), reopened = try await store.decode(encoded)
+        XCTAssertEqual(reopened.document, session.document)
+        let owned = try ApplicationOwnedTestFixture.create("chrome-reuse-recovery")
+        defer { try? owned.cleanup() }
+        let directory = owned.url.appendingPathComponent("recovery", isDirectory: true)
+        try await store.prepareRecoveryDirectory(directory)
+        let url = DocumentLifecycleBackend.recoveryURL(for: package.projectID, in: directory)
+        try await store.write(package, to: url, policy: .recovery(package.projectID))
+        let recovered = try await store.readOwnedRecoverySnapshot(from: url, expectedProjectID: package.projectID).package
+        XCTAssertEqual(recovered, package)
+        let restored = DocumentSession(document: reopened.document)
+        guard case .restored(let history) = try await historyStore.load(from: reopened) else {
+            return XCTFail("Ordinary copied chrome must retain exact validated history")
+        }
+        try restored.installValidatedHistory(history)
+        try restored.undo(); XCTAssertEqual(restored.document.pages, fixture.document.pages)
+        try restored.redo(); XCTAssertEqual(restored.document.pages, session.document.pages)
+    }
+
+    func testPageChromeReuseResourceTokenComponentIdentityAndMissingDependencyRejection() async throws {
+        var fixture = try chromeReuseFixture()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        for y in 0..<2 { for x in 0..<2 { bitmap.setColor(.purple, atX: x, y: y) } }
+        let bytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let asset = ImageAsset(resourceID: ResourceID(), displayName: "Chrome image", originalFilename: "chrome.png",
+            format: .png, pixelWidth: 2, pixelHeight: 2, byteCount: bytes.count, contentHash: ProjectResourceStore.digest(bytes))
+        let token = LocalColorToken(name: "Chrome color", color: .init(red: 0.2, green: 0.3, blue: 0.4, alpha: 1))
+        fixture.document.imageAssets = [asset]; fixture.document.colorTokens = [token]
+        let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.header })
+        fixture.document.pages[0].nodes[index].properties += [
+            .init(key: .init(rawValue: CanonicalImageFill.assetKey), value: .string(asset.id.description)),
+            .init(key: .init(rawValue: CanonicalImageFill.modeKey), value: .string("fill")),
+            .init(key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)), value: .string(token.id.description))]
+        let definition = DocumentPage.minimum(name: "Chrome component", route: "", role: .componentDefinition, provenance: .authored)
+        fixture.document.pages.append(definition)
+        let content = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: fixture.document.pages[0].nodes[index]))
+        let instance = DocumentNode(kind: .component, name: "Logo instance", parent: .node(content), properties: [
+            .init(key: .init(rawValue: CanonicalComponentReference.key), value: .string(definition.id.description))]
+            + [("layout.x", 0.0), ("layout.y", 0), ("layout.width", 64), ("layout.height", 32)].map { .init(key: .init(rawValue: $0.0), value: .number($0.1)) })
+        fixture.document.pages[0].nodes.append(instance)
+        let contentIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == content })
+        fixture.document.pages[0].nodes[contentIndex].childIDs.append(instance.id)
+        try fixture.document.validate()
+        let descriptor = ProjectResourceDescriptor(id: asset.resourceID, filename: asset.originalFilename, mediaType: "image/png", byteCount: bytes.count, sha256: asset.contentHash)
+        let package = try ProjectPackage(document: fixture.document).withResource(descriptor, data: bytes)
+        let request = try chromeReuseRequest(fixture), worker = PageChromeCopyWorker()
+        let prepared = try await worker.prepare(request, document: fixture.document, package: package)
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(prepared.command)
+        XCTAssertEqual(session.document.imageAssets, fixture.document.imageAssets)
+        XCTAssertEqual(session.document.colorTokens, fixture.document.colorTokens)
+        XCTAssertEqual(session.document.componentDefinitions, fixture.document.componentDefinitions)
+        XCTAssertEqual(try package.resourceData(for: descriptor), bytes)
+        for target in fixture.targets {
+            let page = try XCTUnwrap(session.document.pages.first { $0.id == target })
+            let header = try XCTUnwrap(page.nodes.first { CanonicalPageFlow.role($0) == .header })
+            XCTAssertEqual(CanonicalImageFill.resolve(header)?.assetID, asset.id)
+            XCTAssertEqual(LocalColorTokenBinding.id(for: header, target: .fill), token.id)
+            XCTAssertTrue(page.nodes.contains { CanonicalComponentReference.definitionID(for: $0) == definition.id && $0.id != instance.id })
+        }
+        do {
+            _ = try await worker.prepare(request, document: fixture.document, package: ProjectPackage(document: fixture.document))
+            XCTFail("Missing original bytes must reject before mutation")
+        } catch { XCTAssertEqual(error as? PageChromeCopyError, .dependency) }
+        var missing = fixture.document; missing.colorTokens = []
+        XCTAssertThrowsError(try PageChromeCopyRegistry().prepare(request, document: missing, availableImageIDs: [asset.id]))
+        missing = fixture.document; missing.pages.removeAll { $0.id == definition.id }
+        XCTAssertThrowsError(try PageChromeCopyRegistry().prepare(request, document: missing, availableImageIDs: [asset.id]))
+        XCTAssertFalse(PageChromeCopyError.dependency.localizedDescription.contains(asset.originalFilename))
+    }
+
+    func testPageChromeReuseSheetSelectionRaceAndPreparationCancellationAreNeutral() async throws {
+        let fixture = try chromeReuseFixture(), session = DocumentSession(document: fixture.document)
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1100, height: 700), pixelRatio: 2)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while state.formattingActionCapture == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(state.canCopyPageChrome)
+        state.presentPageChromeCopy()
+        let sheet = try XCTUnwrap(state.pageChromeCopySheet)
+        state.selectLayer(fixture.header)
+        state.preparePageChromeCopy(sheet: sheet, roles: [.header, .footer], targets: fixture.targets)
+        XCTAssertTrue(state.pageChromeCopyStatus.contains("changed"))
+        XCTAssertEqual(session.document, fixture.document)
+        state.pageChromeCopySheet = nil
+        state.presentPageChromeCopy()
+        let current = try XCTUnwrap(state.pageChromeCopySheet)
+        state.preparePageChromeCopy(sheet: current, roles: [.header, .footer], targets: fixture.targets)
+        XCTAssertTrue(state.isPreparingPageChromeCopy)
+        state.cancelPageChromeCopyPreparation()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(state.isPreparingPageChromeCopy)
+        XCTAssertEqual(session.document, fixture.document); XCTAssertTrue(session.historySnapshot().undoEntries.isEmpty)
+        XCTAssertEqual(state.lastPageChromeCopyDiagnostic?.failureCategory, "cancelled")
+        XCTAssertFalse(String(describing: state.lastPageChromeCopyDiagnostic).contains(fixture.source.description))
+    }
+
+    func testPageChromeReuseResponsiveSharedLayoutRendererAndCompilerGraph() async throws {
+        var fixture = try chromeReuseFixture()
+        let headerIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.header })
+        fixture.document.pages[0].nodes[headerIndex].properties.append(.init(
+            key: .init(rawValue: ResponsiveGeometryResolver.key(.height, breakpoint: .mobile)), value: .number(200)))
+        let navigation = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: fixture.document.pages[0].nodes[headerIndex]))
+        let navigationIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == navigation })
+        let fluid = CanonicalFluidValue(minimum: 8, preferred: 16, maximum: 24)
+        fixture.document.pages[0].nodes[navigationIndex].properties.append(.init(key: .init(rawValue: CanonicalFluidValueCodec.key(.gap)),
+            value: .string(try CanonicalFluidValueCodec.encode(fluid, target: .gap))))
+        try fixture.document.validate()
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture), document: session.document).command)
+        let page = try XCTUnwrap(session.document.pages.first { $0.id == fixture.targets[0] })
+        let roles = PageChromeCopyRegistry.sourceRoles(page)
+        for width in [390.0, 520, 768, 1100, 1440] {
+            let snapshot = ConnectedPageLayoutSnapshot(page: page, breakpoint: .resolving(width: width), width: width)
+            for role in PageChromeCopyRegistry.roles {
+                let id = try XCTUnwrap(roles[role]), frame = try XCTUnwrap(snapshot.frames[id])
+                XCTAssertEqual(frame.size.width, width, accuracy: 0.001)
+                XCTAssertEqual(frame.origin.x, 0, accuracy: 0.001)
+                if role == .header && width < 600 { XCTAssertEqual(frame.size.height, 200, accuracy: 0.001) }
+            }
+            let viewport = try CanvasViewportState()
+            let prepared = try await WorkspaceScenePreparationWorker().prepare(.init(document: session.document, activePageID: page.id,
+                activeContainerID: nil, viewport: viewport, surfaceID: .init(), breakpoint: .resolving(width: width), viewportWidth: width))
+            for id in roles.values {
+                let object = try XCTUnwrap(prepared.renderScene.objects.first { $0.id == id })
+                XCTAssertEqual(object.frame, snapshot.frames[id]?.frame)
+            }
+        }
+        let copiedHeader = try XCTUnwrap(page.nodes.first { $0.id == roles[.header] })
+        let copiedNavigation = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: copiedHeader))
+        let navigationNode = try XCTUnwrap(page.nodes.first { $0.id == copiedNavigation })
+        let copiedFluid = try XCTUnwrap(CanonicalFluidValueCodec.value(for: .gap, node: navigationNode)?.0)
+        XCTAssertNotEqual(copiedFluid.id, fluid.id)
+        XCTAssertEqual(copiedFluid.minimum, fluid.minimum); XCTAssertEqual(copiedFluid.maximum, fluid.maximum)
+        let output = StaticBuildCompiler.compile(document: session.document, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        let plan = try XCTUnwrap(output.plan)
+        XCTAssertTrue(plan.files.contains { $0.path.hasSuffix(".html") && $0.contents.contains("<header") && $0.contents.contains("<footer") })
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
     private func responsiveCardPage() throws -> (CanonicalDocument, [String: NodeID]) {
         var document = ProjectCreation.blank()
         let asset = ImageAsset(resourceID: ResourceID(), displayName: "Fixture image", originalFilename: "fixture.png",
@@ -168,7 +1518,7 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(state.supportedFluidValueTargets, [.padding])
         XCTAssertEqual(state.containerLayoutValue(for: .padding),
             .single(.number(32), .authored, applicableCount: 1, skippedCount: 0))
-        XCTAssertEqual(state.containerLayoutResponsiveSource(for: .padding), "Fluid responsive value")
+        XCTAssertEqual(state.containerLayoutResponsiveSource(for: .padding), "Smooth scaling")
         XCTAssertFalse(state.containerLayoutAvailability(for: .padding).isEnabled)
         XCTAssertFalse(state.commitContainerLayout(field: .padding, value: .number(99), provenance: .keyboard))
         XCTAssertEqual(session.document.pages, baseline)
@@ -181,12 +1531,12 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertTrue(state.commitContainerLayout(field: .padding, value: .number(10), provenance: .keyboard,
             draftScope: state.layoutInspectorDraftScope))
         await adopt()
-        XCTAssertEqual(state.containerLayoutResponsiveSource(for: .padding), "Authored for Tablet")
+        XCTAssertEqual(state.containerLayoutResponsiveSource(for: .padding), "Set here · Tablet")
         XCTAssertTrue(state.commitContainerLayout(field: .padding, value: nil, provenance: .keyboard,
             draftScope: state.layoutInspectorDraftScope))
         await adopt()
         XCTAssertEqual(session.document.pages, baseline)
-        XCTAssertEqual(state.containerLayoutResponsiveSource(for: .padding), "Fluid responsive value")
+        XCTAssertEqual(state.containerLayoutResponsiveSource(for: .padding), "Smooth scaling")
         try session.undo(); await adopt()
         XCTAssertEqual(state.containerLayoutValue(for: .padding),
             .single(.number(10), .authored, applicableCount: 1, skippedCount: 0))
@@ -304,7 +1654,7 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(state.fluidValueFailure, .stale)
         XCTAssertFalse(state.commitResponsiveVisibility(false, provenance: .pointer, expectedContext: desktop))
         XCTAssertEqual(live.document, before)
-        XCTAssertTrue(state.fluidValueEffectiveSummary(for: .fontSize).contains("Fluid responsive value"))
+        XCTAssertTrue(state.fluidValueEffectiveSummary(for: .fontSize).contains("Smooth scaling"))
         let mobile = state.responsiveInspectorEditContext
         state.selectLayer(ids["Title 2"]!)
         XCTAssertFalse(state.commitFluidValue(nil, target: .fontSize, provenance: .pointer, expectedContext: mobile))
@@ -463,11 +1813,11 @@ final class InsertionModelTests: XCTestCase {
         await waitForAdoption()
         state.selectLayer(cardID)
         XCTAssertEqual(state.selectionState.orderedIDs, [cardID])
-        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Effective Fill"))
+        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Fill available space"))
         let desktopScope = state.layoutInspectorDraftScope
         state.reviewBreakpoint(.mobile)
         await waitForAdoption()
-        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Effective Fixed"))
+        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Exact size"))
         XCTAssertTrue(state.sizingModeSource(for: .width).contains("Mobile"))
         let before = session.document
         XCTAssertFalse(state.commitGeometryInspectorValue(999, field: .width, provenance: .keyboard, draftScope: desktopScope))
@@ -475,7 +1825,7 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(session.document, before)
         XCTAssertTrue(state.resetSizingDimensionOverride(.width, expectedScope: state.layoutInspectorDraftScope))
         await waitForAdoption()
-        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Effective Fill"))
+        XCTAssertTrue(state.sizingModeSource(for: .width).contains("Fill available space"))
         XCTAssertNil(session.document.pages[0].nodes[index].insertionProperty(override.key.rawValue))
         XCTAssertEqual(session.document.pages[0].nodes[index].insertionGeometry, document.pages[0].nodes[index].insertionGeometry)
         XCTAssertEqual(session.document.pages[0].id, pageID)
@@ -648,9 +1998,9 @@ final class InsertionModelTests: XCTestCase {
             let navigation = try XCTUnwrap(page.nodes.first { $0.id == navigationID })
             let contentID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner))
             let contentRules = css.components(separatedBy: "\n").filter {
-                $0.hasPrefix(CanonicalCSSRule.selector(for: contentID) + " {")
+                $0.hasPrefix(CanonicalCSSRule.selector(for: contentID) + " {") && $0.contains("box-sizing:border-box")
             }
-            XCTAssertFalse(contentRules.isEmpty)
+            XCTAssertEqual(contentRules.count, ResponsiveBreakpoint.allCases.count)
             XCTAssertTrue(contentRules.allSatisfy { $0.contains("width:max(1px,calc(100% - ") },
                           "Managed chrome content must fill the same padded owner width as native layout")
             XCTAssertEqual(CanonicalPageChrome.navigationAlignment(surface: navigation, settings: owner), "end")
@@ -660,9 +2010,19 @@ final class InsertionModelTests: XCTestCase {
                 XCTAssertEqual(snapshot.alignment, "end")
             }
             let selector = CanonicalCSSRule.selector(for: navigationID)
-            let navigationRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(selector + " {") }
-            XCTAssertFalse(navigationRules.isEmpty)
+            let navigationRules = css.components(separatedBy: "\n").filter {
+                $0.hasPrefix(selector + " {") && $0.contains("box-sizing:border-box")
+            }
+            XCTAssertEqual(navigationRules.count, ResponsiveBreakpoint.allCases.count)
             XCTAssertTrue(navigationRules.allSatisfy { $0.contains("width:auto;") && $0.contains("flex:1 1 0px;") })
+            let mobile = try XCTUnwrap(CanonicalPageChrome.automaticMenuRow(owner: owner, page: page,
+                breakpoint: .mobile, width: nil, availablePageIDs: Set(document.websitePages.map(\.id))))
+            XCTAssertTrue(mobile.reservesMenu)
+            XCTAssertEqual(mobile.navigationMinimum, 90)
+            let mobileRules = ConnectedPageOutput.automaticMenuRules(page, usesWrapper: false,
+                availablePageIDs: Set(document.websitePages.map(\.id))).joined(separator: "\n")
+            XCTAssertTrue(mobileRules.contains(selector + " { position:relative;left:auto;top:auto;width:90.0px;flex:1 0 90.0px;min-width:90.0px;max-width:none; }"),
+                          "The narrow override must reserve the real Menu before distributing the remaining row")
             XCTAssertTrue(css.contains(".sf-page-navigation-\(navigationID) .sf-nav-inline { gap:"))
             XCTAssertTrue(css.contains("justify-content:flex-end"))
         }
@@ -1088,8 +2448,14 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
     }
 
-    private func connectedPageSession() throws -> (DocumentSession, NodeID, [NodeID], NodeID) {
-        let fixture = makeFixture(), session = DocumentSession(document: fixture.document)
+    private func connectedPageSession(includeAbout: Bool = false) throws -> (DocumentSession, NodeID, [NodeID], NodeID) {
+        var fixture = makeFixture()
+        if includeAbout {
+            var document = fixture.document
+            document.pages.append(DocumentPage.minimum(name: "About", route: "/about", role: .standard, provenance: .authored))
+            fixture = fixture.with(document: document)
+        }
+        let session = DocumentSession(document: fixture.document)
         let header = NodeID(), footer = NodeID(), bodies = [NodeID(), NodeID()]
         let insertions: [(NodeID, AuthoringElementTemplate?)] = [(footer, .footer), (header, .header), (bodies[0], nil), (bodies[1], nil)]
         for (id, template) in insertions {
@@ -1101,6 +2467,118 @@ final class InsertionModelTests: XCTestCase {
             try session.execute(prepared.documentCommand)
         }
         return (session, header, bodies, footer)
+    }
+
+    // SF-0806-006, SF-1203-003/006, SF-1211-004: retain a small actual
+    // compiler artifact for independent browser diagnosis, not a second emitter.
+    func testMinimalManagedMenuCompilerReproductionPreservesRuntimeAndDocument() throws {
+        let (session, header, _, _) = try connectedPageSession()
+        let original = session.document
+        var document = original
+        let root = try XCTUnwrap(document.pages[0].nodes.first)
+        var retained: Set<NodeID> = [root.id, header]
+        var pending = [header]
+        while let id = pending.popLast() {
+            let node = try XCTUnwrap(document.pages[0].nodes.first { $0.id == id })
+            for child in node.childIDs where retained.insert(child).inserted { pending.append(child) }
+        }
+        document.pages[0].nodes.removeAll { !retained.contains($0.id) }
+        let rootIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == root.id })
+        document.pages[0].nodes[rootIndex].childIDs = [header]
+        let before = try DocumentSerializer.encode(document)
+        let plan = try MultiPageStaticBuildPlanner.plan(document: document)
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        XCTAssertEqual(html.components(separatedBy: "<details ").count - 1, 1)
+        XCTAssertTrue(html.contains("<header"))
+        XCTAssertFalse(html.contains("<footer"))
+        XCTAssertEqual(plan.files.first { $0.path == "siteforge-navigation.js" }?.contents, ConnectedPageOutput.menuScript)
+        XCTAssertEqual(try DocumentSerializer.encode(document), before)
+        XCTAssertEqual(session.document, original)
+        let artifact = FileManager.default.temporaryDirectory.appendingPathComponent("SiteForgeMenuReproduction-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: artifact, withIntermediateDirectories: false)
+        for file in plan.files {
+            let target = artifact.appendingPathComponent(file.path)
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(file.contents.utf8).write(to: target, options: .atomic)
+        }
+        let receipt = XCTAttachment(string: artifact.path)
+        receipt.name = "SF-MENU private compiler reproduction location"; receipt.lifetime = .keepAlways; add(receipt)
+        print("SF_MENU_REPRODUCTION " + artifact.path)
+    }
+
+    // SF-0806-006, SF-1203-003/006, SF-1211-004: real shared output
+    // retains both chrome roles and real destination routes for browser proof.
+    func testManagedHeaderFooterMenuReproductionUsesRealRoutesAndUnchangedRuntime() throws {
+        let (session, _, _, _) = try connectedPageSession(includeAbout: true)
+        let before = try DocumentSerializer.encode(session.document)
+        let plan = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        XCTAssertEqual(html.components(separatedBy: "<details ").count - 1, 2)
+        XCTAssertTrue(html.contains("Header navigation menu")); XCTAssertTrue(html.contains("Footer navigation menu"))
+        XCTAssertTrue(html.contains("href=\"about.html\""))
+        XCTAssertTrue(plan.files.contains { $0.path == "about.html" })
+        XCTAssertEqual(plan.files.first { $0.path == "siteforge-navigation.js" }?.contents, ConnectedPageOutput.menuScript)
+        XCTAssertEqual(try DocumentSerializer.encode(session.document), before)
+        let artifact = FileManager.default.temporaryDirectory.appendingPathComponent("SiteForgeMenuOverlay-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: artifact, withIntermediateDirectories: false)
+        for file in plan.files {
+            let target = artifact.appendingPathComponent(file.path)
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(file.contents.utf8).write(to: target, options: .atomic)
+        }
+        let receipt = XCTAttachment(string: artifact.path)
+        receipt.name = "SF-MENU private Header Footer output location"; receipt.lifetime = .keepAlways; add(receipt)
+        print("SF_MENU_OVERLAY " + artifact.path)
+    }
+
+    // SF-0806-006, SF-1203-003/006, SF-1211-004: shared output uses
+    // intrinsic details content for both roles, without mutating authored data.
+    func testManagedMenuOverlayUsesIntrinsicContentAndCanonicalAlignment() throws {
+        let (session, _, _, _) = try connectedPageSession(includeAbout: true)
+        let before = try DocumentSerializer.encode(session.document)
+        let plan = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("@supports selector(details::details-content)"))
+        XCTAssertTrue(css.contains("grid-template-rows:1lh;height:1lh;"))
+        XCTAssertTrue(css.contains("justify-self:var(--sf-menu-panel-alignment,start)"))
+        XCTAssertTrue(css.contains(".sf-nav-menu[open] nav { position:static; }"))
+        XCTAssertTrue(css.contains("footer .sf-nav-menu[open]::details-content { align-self:end;margin-block-start:0;margin-block-end:1lh; }"))
+        XCTAssertTrue(css.contains("--sf-menu-panel-alignment:end;"))
+        XCTAssertTrue(css.contains("@supports not selector(details::details-content)"))
+        XCTAssertFalse(css.contains("translateZ")); XCTAssertFalse(css.contains("visibility:hidden"))
+        XCTAssertEqual(plan.files.first { $0.path == "siteforge-navigation.js" }?.contents, ConnectedPageOutput.menuScript)
+        XCTAssertEqual(try DocumentSerializer.encode(session.document), before)
+    }
+
+    // SF-0806-006, SF-1203-003/006, SF-1206-003: managed menus and
+    // nested routes consume exactly the shared external runtime, not a
+    // Preview-only script or differently encoded resource.
+    func testManagedNavigationRuntimeReferenceAndHTTPBytesMatchRootAndNestedOutput() throws {
+        let (session, _, _, _) = try connectedPageSession()
+        for (route, output, prefix) in [("/", "index.html", ""), ("/nested/contact", "nested/contact.html", "../")] {
+            var document = session.document
+            document.pages[0].route = PageRoute(rawValue: route)
+            document.pages[0].role = route == "/" ? .home : .standard
+            let before = try DocumentSerializer.encode(document)
+            let plan = try MultiPageStaticBuildPlanner.plan(document: document)
+            let html = try XCTUnwrap(plan.files.first { $0.path == output }?.contents)
+            XCTAssertTrue(html.contains("<script src=\"\(prefix)siteforge-navigation.js\" defer></script>"))
+            XCTAssertTrue(html.contains("data-siteforge-navigation"))
+            let scripts = plan.files.filter { $0.path == "siteforge-navigation.js" }
+            XCTAssertEqual(scripts.count, 1)
+            let expected = Data(ConnectedPageOutput.menuScript.utf8)
+            XCTAssertEqual(Data(try XCTUnwrap(scripts.first).contents.utf8), expected)
+            let http = try WebsitePreviewHTTPContent(plan: plan)
+            let response = http.response(to: Data("GET /siteforge-navigation.js HTTP/1.1\r\nHost: 127.0.0.1:4321\r\n\r\n".utf8), port: 4321)
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(response.type, "text/javascript; charset=utf-8")
+            XCTAssertEqual(response.body, expected)
+            XCTAssertEqual(plan.revision, document.revision)
+            XCTAssertEqual(try DocumentSerializer.encode(document), before)
+            let digest = SHA256.hash(data: response.body).map { String(format: "%02x", $0) }.joined()
+            let receipt = XCTAttachment(string: "route=\(route);revision=\(document.revision);bytes=\(response.body.count);sha256=\(digest)")
+            receipt.name = "SF-NAV shared compiler HTTP bytes"; receipt.lifetime = .keepAlways; add(receipt)
+        }
     }
 
     // SF-0502-003, SF-1201-003: short pages keep the authored root
@@ -1495,6 +2973,16 @@ final class InsertionModelTests: XCTestCase {
             property: .init(id: old?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored))))
     }
 
+    private func removeConnectedFixtureSubtree(_ root: NodeID, pageID: PageID, document: CanonicalDocument) throws -> [DocumentCommand] {
+        let page = try XCTUnwrap(document.pages.first { $0.id == pageID })
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        func commands(_ id: NodeID) throws -> [DocumentCommand] {
+            let node = try XCTUnwrap(byID[id])
+            return try node.childIDs.flatMap { try commands($0) } + [.removeNode(.init(pageID: pageID, nodeID: id))]
+        }
+        return try commands(root)
+    }
+
     // SF-0501/0502/0503/1204: source acceptance; deliberately unrun in Prompt 9.
     func testConnectedNestedContainerOutputUsesResolvedOwnershipAtAllBreakpoints() async throws {
         let (session, header, bodies, footer) = try connectedPageSession()
@@ -1684,6 +3172,53 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertFalse(state.transformOverlays.contains { $0.kind.hasPrefix("transform-handle-") })
         XCTAssertEqual(state.selectedPageChromeOwner?.id, headerID)
         XCTAssertEqual(session.document, original)
+    }
+
+    // SF-0507-003/004, SF-0604-003, SF-1202-003/004, SF-1204-003/004.
+    func testManagedChromeTitleStaticOverflowRetainsSemanticIdentityAndResponsiveHeight() throws {
+        let (session, headerID, _, _) = try connectedPageSession()
+        let original = session.document
+        XCTAssertThrowsError(try pageStructureCommand(.title(headerID, text: "Line\nbreak"),
+            document: original, selected: headerID))
+        XCTAssertEqual(session.document, original)
+        try session.execute(pageStructureCommand(.title(headerID, text: "Long  title keeps <complete> intent"),
+            document: session.document, selected: headerID))
+        let document = session.document, page = document.pages[0]
+        let routes = try Dictionary(uniqueKeysWithValues: document.websitePages.map {
+            ($0.id, try MultiPageStaticBuildPlanner.outputPath(for: $0))
+        })
+        let owner = try XCTUnwrap(page.nodes.first { $0.id == headerID })
+        let titleID = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.titleKey, on: owner))
+        for width in [1440.0, 430, 320] {
+            let breakpoint = ResponsiveBreakpoint.resolving(width: width)
+            let tree = try InternalDocumentRenderTreeCompiler.compile(page: page,
+                documentID: document.id, revision: document.revision, staticRoutes: routes,
+                breakpoint: breakpoint, viewportWidth: width)
+            let title = try XCTUnwrap(tree.nodes.first { $0.id == titleID })
+            XCTAssertTrue(title.isManagedChromeTitle)
+            XCTAssertEqual(title.sourceNodeID, titleID)
+            XCTAssertEqual(title.frame, page.resolvedStructuralGeometry(breakpoint: breakpoint, viewportWidth: width,
+                availablePageIDs: Set(routes.keys))[titleID]?.frame)
+            XCTAssertEqual(title.textContent, "Long  title keeps <complete> intent")
+            XCTAssertEqual(CanvasTextLayoutPolicy.visibleLineCapacity(height: title.frame.size.height,
+                lineHeight: try XCTUnwrap(title.typography).lineHeight), 1)
+            let html = try SafeHTMLEmitter.emit(tree)
+            XCTAssertTrue(html.contains("<span data-siteforge-text>Long  title keeps &lt;complete&gt; intent</span>"))
+            XCTAssertFalse(html.contains("aria-hidden=\"true\">Long"))
+            let css = StaticTypographyOutputEmitter.emit(nodes: tree.nodes)
+            XCTAssertTrue(css.contains("-webkit-line-clamp:max(1,round(down,calc(var(--sf-text-height) / 1lh),1))"))
+            XCTAssertTrue(css.contains("padding-inline:4.0px"))
+            XCTAssertTrue(css.contains("white-space: pre-wrap;"))
+            XCTAssertFalse(css.contains("white-space:nowrap"))
+        }
+        let output = try MultiPageStaticBuildPlanner.plan(document: document)
+        let css = try XCTUnwrap(output.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("--sf-text-height:24.0px") || css.contains("--sf-text-height:24px"))
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(document)), document)
+        XCTAssertEqual(session.document, document)
+        try session.execute(pageStructureCommand(.showTitle(headerID, false), document: document, selected: headerID))
+        let hiddenCSS = ConnectedPageOutput.css(pages: session.document.pages)
+        XCTAssertTrue(hiddenCSS.contains("\(CanonicalCSSRule.selector(for: titleID))[data-siteforge-node] { display:none; }"))
     }
 
     func testHeaderDefaultAndAuthoredTitleUseSameResolutionInInspectorRendererAndOutput() throws {

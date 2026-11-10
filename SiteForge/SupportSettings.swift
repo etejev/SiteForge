@@ -515,7 +515,7 @@ struct SupportSettingsView: View {
             VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
                 SiteForgeSettingsHeader(
                     title: "Support",
-                    scope: "Application health · This Mac",
+                    scope: AuthoringLanguage.appPreferencesScope,
                     detail: "Review updates, recovery policy, and privacy-preserving diagnostics.",
                     systemImage: "lifepreserver"
                 )
@@ -1035,7 +1035,7 @@ private struct ExperimentalTestingView: View {
     @ObservedObject var store: ExperimentalTestingStore
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
-            SiteForgeSettingsHeader(title: "Advanced", scope: "",
+            SiteForgeSettingsHeader(title: "Advanced", scope: AuthoringLanguage.appPreferencesScope,
                 detail: "Runs a separate prepared app, not this installed controller. Keep the Mac unlocked for UI automation.", systemImage: "checkmark.seal")
             GroupBox("Testing") {
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
@@ -1068,7 +1068,7 @@ private struct SiteForgeAccessibilitySettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
-            SiteForgeSettingsHeader(title: "Accessibility", scope: "Inherited from macOS",
+            SiteForgeSettingsHeader(title: "Accessibility", scope: "Uses macOS accessibility settings · does not change your website",
                 detail: "SiteForge follows your system display preferences and native keyboard navigation.",
                 systemImage: "accessibility")
             GroupBox("Display preferences") {
@@ -1104,8 +1104,8 @@ struct UpdateSettingsView: View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
             SiteForgeSettingsHeader(
                 title: "Updates",
-                scope: "Application · Signed distribution",
-                detail: "Check public release metadata. Installation remains fail-closed until a trusted signed updater is approved.",
+                scope: AuthoringLanguage.appPreferencesScope,
+                detail: "Check for SiteForge updates. Installation is unavailable until an approved, trusted signed updater is configured. Your website is unchanged.",
                 systemImage: "arrow.triangle.2.circlepath"
             )
             GroupBox("Installed version") {

@@ -1,5 +1,301 @@
 # SiteForge Visual Contract
 
+## Current visual acceptance —2026-11-02, closeout remains IN PROGRESS
+
+Native Header/Footer are actual semantic containers for their child controls,
+not overlapping background leaves in the accessibility tree. Paint-only surfaces
+inside those groups do not become competing AX targets. Header/Footer labels
+and geometry remain discoverable. The native popup fills the resolved navigation
+frame;90 points is a minimum allocation budget, not a cap or visual offset.
+Both strict native journeys pass511.484s/50.786s with geometry/pointer/focus/
+destination assertions unchanged.19 originals were reviewed in temporary
+`siteforge-native-two-required-reviewed-20261102`: upright readable native menus,
+visible restored focus, aligned430-point controls, clean320/430 browser states
+and768 inline links. No selected-grid chrome enters the website. This supersedes
+the native pause below, but does not itself establish a green full gate.
+
+The later ordinary/responsive comparison preserves matched548×516 geometry and
+all four AX collapse checks. Its ordinary Footer baseline incorrectly included
+the deliberately reopened Header popup; the final screen correctly shows both
+closed. Keep mutual exclusion, but compare final pixels with the same viewport's
+all-closed baseline. The original full selector now passes972.799s; all four
+comparisons have zero changed pixels. All14 original screenshots were inspected:
+readable upright panels, upward Footer opening, visible focus and no close residue.
+The two storage-backed retries pass2/2 with9 originals inspected: aligned
+selection, distinct pasteboard/page, readable named-copy sheet and truthful Saved
+reopened state. These observations do not replace the outstanding native gate.
+Native Preview's read-only probe confirms the visible popup wins the real AppKit
+center hit-test, but does not waive failed cross-process AX/pointer acceptance.
+
+The strict generated-browser Escape/pixel journey now passes, first822.330s in
+`focused-01d348fd-ecd6-45e0-a32f-8e6b3474ba13`, then1011.238s in the stable
+full inventory. All four320/430 Header/Footer former-panel comparisons are
+0/33600 changed pixels (allowed33); wider768 and real destinations pass. Nine
+originals were inspected. The intrinsic closed-menu layout correction preserves
+canonical geometry and the shared runtime. Historical residue failures below
+remain diagnostic history, not the current strict-browser outcome.
+
+Post-inventory originals also confirm readable, contained component search and
+filter controls, upright inline/committed typography, aligned fill/selection,
+and visible native opacity controls after real scrolling. The Where Used row
+must respond across its entire bounded visible label, including the central
+space: its corrected pointer journey passes33.692s and dismisses the sheet
+before selecting the exact linked instance. These scoped visuals do not certify
+native Header Menu pointer readiness: that remains failed. Presentation-context
+comparison is being replayed after a measured Safari page-zoom setup correction.
+See [the current inventory and focused receipts](../evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md).
+No full-green, milestone-complete or Git handoff claim is made.
+
+## Historical menu-closure failure —2026-11-02, superseded by strict replay above
+
+FINAL: the new actual-pixel gate fails1/1,106.962s in
+`focused-8bc86f35-54f4-494c-985e-15d9244794b0`:1855/33600 former-panel
+pixels differ after Escape (allowed33), while DOM/focus/hit checks pass. A unique
+visible fixture prefix rules out an older Home document; the exact recording
+frame shows the same residue. Earlier assertion-only passes below are NOT the
+current method's acceptance. No active run; no accepted visual fix. Preserve
+this failure and the pixel gate. See the focused receipt's Final pixel gate
+section for original filenames, interrupted scaling attempt and next bounded
+same-artifact/non-RDM investigation. No full gate/Git/install was run.
+
+A closed DOM, aria-expanded=false, checkVisibility=false and restored summary
+focus do not override contradictory original-resolution screenshots.
+At320/430 the screen-before-Inspector originals still paint Header/Footer panels;
+at768 inline navigation remains readable. Do not label narrow closure fixed.
+The explicit closed-CSS experiment is removed as ineffective. Actual shared
+script delivery and Escape execution are proven, not a visual repair.
+Latest exact images/results are in the012–016 focused receipt.
+
+## Latest bounded013 visual observation —2026-11-02, NOT complete acceptance
+
+Independent native Footer originals show ordinary pointer-opened Home/About,
+keyboard focus and actual About navigation. Native Header ordinary XCUI click
+still fails. Both controls are visibly upright/in-bounds; correct local native
+hits do not certify cross-process readiness. No further host/role/frame rewrite.
+All nine independent Safari originals at measured CSS320/430/768 were reviewed:
+title/navigation regions remain separated, narrow menus are readable and768 uses
+inline links, with no editor grid/selection contamination. Long titles ellipsize.
+IMPORTANT: after-Escape images still paint menu panels despite a focused summary.
+Focus is not proof of closure; correlate live details.open/aria-expanded/script
+state versus paint before acceptance. Do not classify these as passing visuals
+or invent a cause. Exact filenames and retained failures are in the current
+focused receipt; older unreached statements below predate this independent proof.
+
+## Focused012–016 review — partial,2026-11-01
+
+Current observed evidence supersedes the historical UNRUN statements below only
+for the exact [focused receipt](../evidence/SF-LOCAL-BUILDER-012-016-FOCUSED-ACCEPTANCE.md).
+Reviewed Save/reopen and output-repair originals show coherent native panes,
+upright text, grid gutters, aligned authored surfaces/selection and explicit
+invalid/blocked/repaired states. The Save fixture's hidden legacy node is not
+blank-project content. The scrolled Design screenshot still truncates a state
+opacity draft placeholder; do not claim universal label/large-text acceptance.
+Canvas accessibility/actions must respect its own window's document-modal sheet
+and restore afterward, without disabling other windows. Its exact regression
+and actual Save/repair journeys pass. Native Preview Menu geometry/appearance
+alone is insufficient: its keyboard/pointer activation remains unaccepted;
+the same sheet's standard controls work. The later bounded native-control repair
+visibly opens Header Home/About with Down and restores focus on Escape, but
+initial pointer readiness still fails. The approved AppKit host experiment
+did not improve that boundary and has been removed. Original native hosting is
+restored; no further host replacement, AX ownership fabrication or test waiver
+is implied. Corrected time-aligned review proves the prior Safari frame was after
+test teardown, not key dispatch. Actual native-control originals show one upright
+readable popup with current-page checkmark and no proxy/ghost paint; Footer and
+measured-Safari interactions remain unreviewed/unaccepted in013. No universal
+runtime, larger-text or pointer certification is claimed.
+No complete visual/full-verification or delivery claim is made.
+
+## 016 integration closeout — source direction, NOT visually accepted
+
+Retain012 plain-language/app-versus-website scope and014 identity-stable native
+fields/cards. Display refresh must not erase dirty Design text or announce a
+committed color as the value of an unfinished field. Show stale/invalid recovery;
+Escape reloads, valid Save/Preview uses existing commits, clean-only navigation
+never commits unrelated input. An equivalent value must not leave a valid editor
+stuck dirty. Check Website during writing shows the actual running status with
+Wait/Cancel guidance rather than restarting it. Keep retained output distinct
+from current findings and forbid actions on a replacement project's artifact.
+
+No new screenshots or concept comparison were performed; seven new code methods
+and the refined015 native journey are UNRUN. The [016 current matrix](../evidence/SF-LOCAL-BUILDER-016-SOURCE-INTEGRATION-CLOSEOUT.md)
+is the finite deferred normal/compact/enlarged/focus/browser acceptance handoff.
+Do not infer visual/runtime acceptance or auto-start017/testing/full verification.
+
+## 015 output repair — source direction, NOT visually accepted
+
+Preview and Check Website findings use a shared readable severity/explanation/
+repair hierarchy. Keep native focusable actions as separate accessible children;
+show one exact existing-editor action only when its receipt/context/target is
+current and safe. No arbitrary name/prose-derived editor or invented resource
+route. No-target findings retain their instructions without a misleading button.
+Long findings scroll centrally while footer actions remain reachable. Preserve
+native materials, readable wrapping, keyboard operation and quiet section framing.
+
+Keep last successful output and latest findings visibly distinct, including two
+attempts at one revision. Refresh is explicit; Export identifies the retained
+successful artifact, never a failed plan. Navigation is not repair: after exact
+live selection/renderer adoption, close the panel and restore existing Inspector
+section/focus. Drafts/IME, stale contexts, unavailable targets and active Export
+must retain bounded recovery explanations without committing unrelated edits.
+
+Five code methods and one native journey are UNRUN. No screenshots, measured
+compact/scaled focus review, concept comparison or visual acceptance exists.
+[015 evidence](../evidence/SF-LOCAL-BUILDER-015-PREVIEW-REPAIR-WORKFLOW.md) lists
+remaining acceptance. IN PROGRESS; no automatic execution or016.
+
+## 014 stable Inspector — source direction, NOT visually accepted
+
+Use actual strip geometry and shared current-label/font measurement. Five full
+destinations fill one usable row whenever they fit; otherwise preserve explicit
+native overflow, not clipping, horizontal scrolling, tiny type or a second row.
+Keep visible keyboard focus, quiet ordinary pointer selection and native AX.
+Retain1100×700 support,500-point canvas minimum and existing pane maxima; measured
+tab demand can raise a pane minimum only within its available budget. Enlarged
+fonts grow the strip height, not truncate against a fixed32-point row.
+
+Inspector groups use leading full-width header/divider/content with current
+tokens/materials/contrast fallbacks. Persistent labels sit above usable editors;
+numeric field columns depend on label minimums and pane width, never draft text.
+Long actions wrap/stack while preserving editor identities and actual commit/
+cancel/focus behavior. Common formatting remains directly reachable; mixed,
+invalid, locked, missing and source explanations remain visible. Do not add
+nested decorative cards, a new Settings layout, theme or smaller labels.
+
+Header/Footer, Text Essentials/Design and Component Content are source-refined.
+Four code methods, one native journey and one affected existing test are UNRUN.
+Original01/05/12 concept files were not available in the inspected repository;
+no new screenshots/comparison or visual acceptance exists. The014 evidence
+records exact fit equations and deferred normal/minimum/wider/increased-text
+acceptance. Mandatory verification remains deferred, not waived. No015.
+
+## 013 narrow automatic chrome — source direction, not visually accepted
+
+Reserve usable Menu space before default title width in eligible automatic
+Header/Footer phone rows. Preserve full semantic title/help and complete-line
+policy. Hidden titles consume no reservation; Menu requires a visible available
+destination. Custom dimensions/fonts/spacing remain with existing-settings repair
+guidance and output safety blockers. Native/CSS share containing-box priorities,
+not preset coordinates. The existing native 90-point budget is not a breakpoint
+or authored property. Nine code methods and one native/Safari journey are UNRUN;
+new screenshots and compact/browser visual acceptance remain deferred.
+The013 continuation uses the same real available-destination context for Menu
+presence and allocation. No slot for empty navigation; broken links remain
+truthfully disabled without a Menu floor. Existing controls explain missing/empty
+destinations; no ghost Menu or forced hamburger setting. Source-only usability
+review is complete, not a visual receipt. Footer originals remain unreviewed.
+
+## 012 usability/language source direction — not visually accepted
+
+Common formatting commands belong in the selected-object header across all five
+Inspector destinations, not behind Inspector Tools. Search/pinning and advanced
+geometry transfer may remain secondary. Keep applicable/skipped/mixed and failure
+feedback visible; details may move to help, never disabled-state explanations.
+Assets' import action has a visible native text label. Preserve native spacing,
+flat Inspector sections, Settings cards, readable five-destination tabs, palette,
+centered empty canvas and persistent viewport controls.
+
+Use Inner spacing, Space between items, Exact size, Fill available space,
+Fit content, Smooth scaling and Screen size for their specific authoring roles.
+Image Fit/Fill semantics are distinct. Explain gradual scaling and preview-width
+versus property-edit scope. Source labels identify Set here / Uses Desktop /
+Uses component default / Uses website default without changing stored intent.
+Settings headers expose app-local scope; Site & Page Settings is project content.
+Settings window/pane geometry is unchanged. No new theme, branding or panel model.
+
+These later source changes are UNVERIFIED. No new originals were captured or
+reviewed; original01/05/12 PNGs were unavailable in the checkout during this pass.
+Their recorded reference mapping guides source intent, not a new visual pass.
+Normal/compact/increased-text visual acceptance and verification remain deferred
+under the owner's execution pause. The title receipt below predates012 edits.
+
+012 continuation wording is also source-only: distinguish original components,
+linked copies and independent copies; Use original value applies to one valid
+copy value, while counted reset/removal names its actual scope. Missing data is
+kept recoverable, never presented as repaired by removing a custom value.
+Fallback-only slots are Default contents/top-level items, not supported custom
+contents on each copy. The shared component Inspector owns the direct original/
+independent actions without a Design/Content detour or duplicate editor.
+
+Reusable-style creation identifies a solid-color/opacity sample, distinct from
+full-family Reuse Formatting. Short row actions retain precise native help.
+Comparison counts identify objects with custom screen-size values; zero is not
+a visual check. Conversion/reset help identifies the values removed and the
+next source. Longer spacing labels sit above fields and Smooth scaling controls
+stack using existing spacing, without changing pane/window geometry or fonts.
+Five new code methods and one native journey are UNRUN; original-resolution
+normal/compact/increased-text review is still required after separate approval.
+
+## Targeted title-overflow receipt —2026-10-30
+
+For the measured current Safari path, a managed title's authored box owns
+geometry and vertical centering; one neutral noninteractive inner span owns
+complete-line truncation and the same4-point horizontal inset as native text.
+Retain full semantic/accessibility text, IDs, wrapping/hard-break policy where
+applicable, visibility and typography. Never globally nowrap body paragraphs,
+grow fixed boxes or shorten authored content to hide overflow. Actual CSS widths
+1440/430/320 andscale1 were measured; all15 final originals inspected. Long,
+short, hidden titles and multiline body pass. Existing320navigation exhaustion
+and broad cross-engine/older-browser/fluid-type certification remain deferred.
+Later012 source-only language/layout edits require separate future acceptance.
+
+## 2026-10-30 bounded focused visual acceptance
+
+The historical source-only notes below are superseded only for the observed
+007–010 states in the [focused receipt](../evidence/SF-LOCAL-BUILDER-007-011-FOCUSED-ACCEPTANCE.md).
+Width/comparison/review, formatting feedback and normal/compact chrome-copy
+originals were inspected. Native canvas resize must assign raster/text layer
+frames in identity coordinates before restoring shared pan/zoom reprojection.
+Artboard clipping is specified in live viewport coordinates and converted once
+into each retained raster subtree, including after new-plan adoption. Validation
+rows and review navigation must not displace paint or leave off-page slivers.
+Three exact compositor regressions pass. Real Safari startup/export cancellation/
+reopen now passes and its six originals were inspected. The retained long
+fixed-height title wraps/clips in Safari unlike native truncation; browser
+typography/overflow parity remains unaccepted. No full verification or general
+browser/scale acceptance is claimed.
+
+## Responsive layout review — source extension awaiting acceptance
+
+SF-LOCAL-BUILDER-008, bounded SF-0606-002/003/004/006/007/008,
+SF-0602-002/003/004/006, SF-0402-002/003/006 and SF-0701-003/006.
+Use the existing Compare sheet, dark cards, spacing and real responsive samples.
+Horizontal boundary crossings are labeled Review, not automatic errors. Show
+the exact sampled width, object/containing bounds and winning sizing source;
+intent may be deliberate. No tap/glyph/collision heuristic or fake all-clear.
+Provide readable native Review element, Refresh/Cancel/progress/error guidance.
+Keep finding rows scrollable and bounded with explicit totals; no new toolbar
+audit pane. Keyboard/accessibility semantics must retain full measured context.
+Review opens the exact real node at the exact sample width in the existing Layout
+sizing section. It does not widen the viewport, move geometry or apply a fix.
+Off-artboard content stays clipped; inspection must not create ghost chrome.
+Ordinary controls and Undo/Redo remain the authoring path; stale context must not
+look current. Linked component internals, viewport-fixed/sticky subtrees and
+managed navigation chrome are explicitly outside this horizontal review slice.
+
+SOURCE ONLY: ten code methods and one six-screenshot UI journey are UNRUN.
+No original-resolution visual, accessibility, scale or runtime acceptance is
+claimed. Later normal/compact visual review and mandatory verification are
+deferred under the renewed no-testing hold, not waived.
+
+## Custom responsive width — source extension awaiting acceptance
+
+SF-LOCAL-BUILDER-007 / SF-0602-002/003/004/006/008: expose a readable native
+Width field labeled CSS pixels beside the breakpoint picker. Width is scene
+inspection state, independent of zoom/display scale, not canonical project data.
+Presets set exact references; the effective breakpoint follows Mobile <600,
+Tablet 600..<1024, Desktop >=1024. Return and valid focus loss commit, Escape
+restores; invalid/incomplete drafts keep the last valid canvas and explain recovery.
+Keep the persistent header usable at practical minimum width by wrapping groups,
+not labels or controls. Accepted width changes use fitted artboard/pasteboard
+presentation with canonical geometry and selection identity unchanged. Comparison
+shows three preset references and a distinct current-width sample, with bounded
+progress while shared resolution runs off-main. No stale sample is current.
+
+This extension is SOURCE ONLY: no new screenshot or runtime/visual acceptance
+has been performed. Normal maximized and compact original-resolution review,
+keyboard/focus and error-state review remain required after owner approval.
+
 Retained numeric/font input must be announced as the current uncommitted draft,
 not replaced in accessibility by a computed canonical value. Native popovers own
 their own hit-test/containment surface. Viewport focus publication follows the
@@ -937,6 +1233,16 @@ pasteboard never enter Preview pixels. Missing links remain visibly inert and
 announce repair guidance. External targets are not executed by this bounded
 local runtime.
 
+Focused012–016 correction: native Preview fits the page's resolved width (at
+most1:1) and scrolls its document height. It must not fit an entire tall page
+into a thumbnail that shrinks its real navigation menu below an operable size.
+This presentation does not change breakpoint width, authored geometry or output
+CSS. The viewport header reserves the shared28-point compact-control minimum
+for each adaptive group; moving focus to the Inspector must not change canvas
+height merely because native control intrinsic measurement settles. Larger
+content may still increase the row height. Focused runtime review is in progress,
+not a claim of completed module acceptance.
+
 ## Practical component reuse — source contract, native review pending
 
 SF-LOCAL-BUILDER-002 reuses the existing Components pane and organized property
@@ -1045,3 +1351,54 @@ skips; no new Page Background minimum-width screenshot is claimed.
 Image Fit Mode uses a separate single-line label above its full-width native
 segmented picker so the mixed fourth choice cannot squeeze or wrap the label.
 This addition preserves the established canvas/artboard contract.
+
+### Formatting reuse — SF-LOCAL-BUILDER-009 source extension, acceptance deferred
+
+Bounded SF-0702/0703/0308: use the native Edit menu and one compact existing
+Inspector Reuse Formatting menu for Copy/Paste Text Style and Appearance. Keep
+labels single-line and provide full accessible names/help. No added tool window,
+large card or normal Command-C/V interception. Show common/mixed-source reasons,
+base Default-state scope, applicable/skipped guidance and bounded preparation/
+cancel/result state. Never borrow primary values for a mixed bundle. Success
+follows matching renderer adoption; no overlay or authored geometry change.
+
+Normal/compact and increased-text visual inspection is UNRUN under the current
+owner hold. The source UI journey requests named screenshots but supplies no
+visual pass evidence. Existing grid/artboard/text/window requirements remain.
+
+### Independent Header/Footer reuse — SF-LOCAL-BUILDER-010, source only
+
+Bounded SF-0303/0304/0308/0806: expose Copy Header/Footer to Pages in the native
+Page/Pages context and existing dedicated role settings. Use one compact native
+sheet, not a second management pane. Show source, available roles, unchecked
+target choices, existing-role status and explicit copied/skipped counts. State
+that copies are ordinary independent editable content; existing shared dependency
+links retain their usual meaning. Existing chrome is kept, never silently merged
+or replaced. Keep missing/protected states readable without color-only signals.
+
+Source preparation has bounded progress and Cancel/Escape; after a commit show
+adoption progress rather than claiming cancellation would undo it. Success waits
+for the matching renderer revision and offers ordinary target-page navigation.
+Existing connected Header/body/Footer geometry, canvas hierarchy, native window
+presentation and normal Inspector controls remain authoritative.
+
+Normal and practical-minimum screenshot checkpoints are UNRUN source only. No
+original-resolution, increased-text, keyboard or VoiceOver acceptance is claimed.
+Future native/Safari visual review and mandatory verification remain deferred.
+
+### Connected fluid output — SF-LOCAL-BUILDER-011, source only
+
+Use existing Build findings and Preview Website/Export actions; no new audit or
+code pane. Supported responsive intent must survive into real browser-evaluated
+CSS, while remaining unsupported property/containing combinations name the
+affected node and ordinary repair. Do not substitute native Preview or sampled
+preset pixels for browser proof. Semantic Header/body/Footer order, padding once,
+responsive Stack/Grid flow, authored bounds, original resources and accessibility
+content remain authoritative. Neutral compiler layout wrappers are not editor
+objects and never enter packages/history/accessibility virtualization.
+
+Native editor geometry, text, grid/artboard hierarchy and window policy are
+unchanged. New native/Safari checkpoint attachments are UNRUN. Future acceptance
+must measure actual CSS viewport/zoom and inspect original screenshots at anchor,
+fractional and intermediate widths; CSS strings or view-frame points alone are
+not a visual pass. Mandatory verification and visual review remain deferred.

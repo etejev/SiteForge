@@ -130,7 +130,7 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
     }
     var provenance: String {
         if isDirty { return "Preview — not saved. Apply to keep this appearance." }
-        return draft == nil ? "Default — Dark editor." : "Authored — this Mac only."
+        return draft == nil ? "Default — Dark editor." : "Set here — this Mac only."
     }
 
     func begin() {
@@ -245,8 +245,8 @@ struct AppearanceSettingsView: View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
             SiteForgeSettingsHeader(
                 title: "Appearance",
-                scope: "Application · This Mac",
-                detail: "Changes SiteForge’s native appearance, not your website or project files.",
+                scope: AuthoringLanguage.appPreferencesScope,
+                detail: "Preview Light, Dark or System, then Apply to keep your choice.",
                 systemImage: "circle.lefthalf.filled"
             )
             GroupBox("Interface") {

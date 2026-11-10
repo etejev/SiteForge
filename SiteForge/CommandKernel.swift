@@ -92,6 +92,258 @@ struct PreparedPageEdit {
     let selectedPageID: PageID
 }
 
+/// Shared by whole-page duplication and independent page-chrome copies.
+/// Ownership and internal destinations are remapped; external references remain
+/// explicit same-project references, never guesses based on names.
+enum CanonicalPageGraphClone {
+    struct Result { let nodes: [DocumentNode]; let nodeIDs: [NodeID: NodeID] }
+    static func prepare(page: DocumentPage, included: Set<NodeID>? = nil,
+                        destinationPageID: PageID, destinationParent: NodeID? = nil,
+                        preservePageLinks: Bool = false) throws -> Result {
+        let source = page.nodes.filter { included?.contains($0.id) ?? true }
+        let ids = Dictionary(uniqueKeysWithValues: source.map { ($0.id, NodeID()) })
+        let nodes = try source.map { node -> DocumentNode in
+            try Task.checkCancellation()
+            let parent: NodeParent
+            switch node.parent {
+            case .page: parent = destinationParent.map(NodeParent.node) ?? .page(destinationPageID)
+            case .node(let old):
+                if let mapped = ids[old] { parent = .node(mapped) }
+                else if let destinationParent { parent = .node(destinationParent) }
+                else { throw PageAuthoringError.stale }
+            }
+            var layerIDs: [String: String] = [:], stopIDs: [String: [String: String]] = [:]
+            if case .layers(let layers) = try CanonicalFillLayerCodec.decodeLayers(for: node) {
+                for layer in layers {
+                    layerIDs[layer.id.description] = FillLayerID().description
+                    stopIDs[layer.id.description] = Dictionary(uniqueKeysWithValues: layer.stops.map { ($0.id.description, GradientStopID().description) })
+                }
+            }
+            let targetNode = node.insertionStringProperty(CanonicalLinkTarget.namespace + "nodeID").flatMap(NodeID.init(uuidString:))
+            let internalSection = targetNode.flatMap { ids[$0] } != nil
+                && node.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == page.id.description
+            let properties = try node.properties.map { property -> NodeProperty in
+                var key = property.key.rawValue, value = property.value
+                if CanonicalPageChrome.referenceKeys.contains(key), case .string(let raw) = value {
+                    guard let old = NodeID(uuidString: raw), let mapped = ids[old] else { throw PageAuthoringError.stale }
+                    value = .string(mapped.description)
+                } else if key == CanonicalLinkTarget.namespace + "pageID", value == .string(page.id.description),
+                          !preservePageLinks || internalSection { value = .string(destinationPageID.description) }
+                else if key == CanonicalLinkTarget.namespace + "nodeID", internalSection, let old = targetNode, let mapped = ids[old] {
+                    value = .string(mapped.description)
+                } else if CanonicalComponentAction.overrideID(key) != nil, case .string(let raw) = value,
+                          let target = CanonicalComponentAction.decode(raw) {
+                    switch target {
+                    case .page(let id) where id == page.id && !preservePageLinks:
+                        value = .string(CanonicalComponentAction.encode(.page(destinationPageID)))
+                    case .section(let id, let nodeID) where id == page.id:
+                        if let mapped = ids[nodeID] { value = .string(CanonicalComponentAction.encode(.section(pageID: destinationPageID, nodeID: mapped))) }
+                    default: break
+                    }
+                } else if key == CanonicalFormField.optionsKey, case .string(let raw) = value {
+                    value = .string(try CanonicalFormSelectOptions.remappingStableIDs(in: raw))
+                } else if key.hasPrefix(CanonicalFluidValueCodec.namespace + "."), case .string(let raw) = value,
+                          let target = FluidValueTarget(rawValue: String(key.dropFirst(CanonicalFluidValueCodec.namespace.count + 1))) {
+                    value = .string(try CanonicalFluidValueCodec.remappingStableID(in: raw, target: target))
+                }
+                if key.hasPrefix(CanonicalFillLayerCodec.namespaceRoot + ".") {
+                    var parts = key.split(separator: ".").map(String.init)
+                    let oldLayer = parts.count > 4 ? parts[4] : ""
+                    if key == CanonicalFillLayerCodec.orderKey, case .string(let raw) = value {
+                        value = .string(raw.split(separator: ",").map { layerIDs[String($0)] ?? String($0) }.joined(separator: ","))
+                    } else if key.hasSuffix(".stops"), case .string(let raw) = value {
+                        value = .string(raw.split(separator: ",").map { stopIDs[oldLayer]?[String($0)] ?? String($0) }.joined(separator: ","))
+                    }
+                    if parts.count > 4 { parts[4] = layerIDs[oldLayer] ?? oldLayer }
+                    if parts.count > 6, parts[5] == "stop" { parts[6] = stopIDs[oldLayer]?[parts[6]] ?? parts[6] }
+                    key = parts.joined(separator: ".")
+                }
+                return .init(key: .init(rawValue: key), value: value, origin: property.origin)
+            }
+            guard let id = ids[node.id], node.childIDs.allSatisfy({ ids[$0] != nil }) else { throw PageAuthoringError.stale }
+            return .init(id: id, kind: node.kind, name: node.name, parent: parent,
+                childIDs: node.childIDs.compactMap { ids[$0] }, properties: properties)
+        }
+        return .init(nodes: nodes, nodeIDs: ids)
+    }
+}
+
+enum PageChromeCopyError: String, Error, LocalizedError, Sendable {
+    case stale, unavailable, missingSource, noTargets, noChanges, invalidGraph, dependency, cancelled, capacity
+    var errorDescription: String? {
+        switch self {
+        case .stale: "The page, role, selection or document changed. Close this sheet and open Copy Header/Footer again. Nothing changed."
+        case .unavailable: "Open a normal website page with a Header or Footer. Protected and component-definition pages cannot receive copies."
+        case .missingSource: "The selected Header or Footer is missing. Choose an available role or restore it first."
+        case .noTargets: "Select at least one eligible destination page."
+        case .noChanges: "All selected roles already exist or destinations are ineligible. No content or Undo history changed."
+        case .invalidGraph: "A chrome graph or destination is incompatible. Repair its ownership/references with the existing page controls, then retry. Nothing changed."
+        case .dependency: "A referenced image, token, style, component or section is unavailable. Restore the original dependency before copying; no reference was guessed."
+        case .cancelled: "Copy preparation cancelled. All pages and history are unchanged."
+        case .capacity: "This copy exceeds the bounded page/node budget. Choose fewer destination pages."
+        }
+    }
+}
+
+struct PageChromeCopyTarget: Identifiable, Equatable, Sendable {
+    let id: PageID
+    let name: String
+    let existingRoles: Set<PageFlowRole>
+    let disabledReason: String?
+}
+struct PageChromeCopyRequest: Equatable, Sendable {
+    let documentID: DocumentID
+    let revision: UInt64
+    let sourcePageID: PageID
+    let sourceRoles: [PageFlowRole: NodeID]
+    let roles: Set<PageFlowRole>
+    let targetPageIDs: [PageID]
+}
+struct PageChromeCopySkip: Equatable, Sendable {
+    let pageID: PageID
+    let role: PageFlowRole
+    let reason: String
+}
+struct PreparedPageChromeCopy: Sendable {
+    let command: DocumentCommand
+    let copiedPageIDs: [PageID]
+    let copiedRoleIDs: [PageID: [NodeID]]
+    let copiedRoleCount: Int
+    let skipped: [PageChromeCopySkip]
+}
+
+/// Add-missing only. No existing subtree is deleted, merged or replaced, so
+/// inbound references and destination body ownership remain intact.
+struct PageChromeCopyRegistry {
+    static let roles: [PageFlowRole] = [.header, .footer]
+    static let maximumTargets = 100
+    static let maximumSubtreeNodes = 10_000
+    static let maximumDefinitions = 256
+    static func sourceRoles(_ page: DocumentPage) -> [PageFlowRole: NodeID] {
+        guard page.role != .componentDefinition, page.rootNodeIDs.count == 1,
+              let root = page.nodes.first(where: { $0.id == page.rootNodeIDs[0] }) else { return [:] }
+        var result: [PageFlowRole: NodeID] = [:]
+        for role in roles {
+            let matches = page.nodes.filter { $0.parent == .node(root.id) && CanonicalPageFlow.role($0) == role }
+            if matches.count == 1 { result[role] = matches[0].id }
+        }
+        return result
+    }
+    static func targets(document: CanonicalDocument, sourcePageID: PageID) -> [PageChromeCopyTarget] {
+        document.pages.filter { $0.id != sourcePageID }.map { page in
+            let root = page.rootNodeIDs.first.flatMap { id in page.nodes.first { $0.id == id } }
+            let reason: String?
+            if page.role == .componentDefinition || page.role == .notFound { reason = "Protected/non-website destination" }
+            else if page.rootNodeIDs.count != 1 || root?.kind != .frame { reason = "Requires one existing page root" }
+            else if root?.selectionBooleanProperty("locked") == true || root?.selectionBooleanProperty("hidden") == true { reason = "Unlock and show the page root first" }
+            else { reason = nil }
+            return .init(id: page.id, name: page.name, existingRoles: Set(sourceRoles(page).keys), disabledReason: reason)
+        }
+    }
+    static func subtree(_ roots: [NodeID], page: DocumentPage) throws -> Set<NodeID> {
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        var pending = Array(roots.reversed()), visited = Set<NodeID>()
+        while let id = pending.popLast() {
+            try Task.checkCancellation()
+            guard visited.count < maximumSubtreeNodes,
+                  visited.insert(id).inserted, let node = byID[id] else { throw PageChromeCopyError.invalidGraph }
+            pending.append(contentsOf: node.childIDs.reversed())
+        }
+        return visited
+    }
+    /// Include component definition resources without materializing instances or
+    /// changing their override identities. Existing dependency rules still own it.
+    static func dependencyNodes(request: PageChromeCopyRequest, document: CanonicalDocument) throws -> [DocumentNode] {
+        guard let page = document.pages.first(where: { $0.id == request.sourcePageID }) else { throw PageChromeCopyError.stale }
+        let roots = roles.filter(request.roles.contains).compactMap { request.sourceRoles[$0] }
+        let ids = try subtree(roots, page: page)
+        var result = page.nodes.filter { ids.contains($0.id) }
+        var visited = Set<PageID>(), pending = result.compactMap(CanonicalComponentReference.definitionID)
+        while let id = pending.popLast() {
+            try Task.checkCancellation()
+            guard visited.insert(id).inserted else { continue }
+            guard visited.count <= maximumDefinitions,
+                  let definition = document.componentDefinitions.first(where: { $0.id == id }) else { throw PageChromeCopyError.dependency }
+            result += definition.nodes
+            pending += definition.nodes.compactMap(CanonicalComponentReference.definitionID)
+        }
+        for node in result where node.kind == .component {
+            guard try !CanonicalComponentOverrides.requiresRecovery(instance: node, document: document) else { throw PageChromeCopyError.dependency }
+        }
+        guard result.count <= ResolvedGraphPolicy.maximumNodes else { throw PageChromeCopyError.capacity }
+        return result
+    }
+    func prepare(_ request: PageChromeCopyRequest, document: CanonicalDocument,
+                 availableImageIDs: Set<AssetID> = [], cancelled: Bool = false) throws -> PreparedPageChromeCopy {
+        guard !cancelled else { throw PageChromeCopyError.cancelled }
+        guard request.documentID == document.id, request.revision == document.revision, document.revision < UInt64.max - 1,
+              let source = document.pages.first(where: { $0.id == request.sourcePageID }),
+              request.sourceRoles == Self.sourceRoles(source) else { throw PageChromeCopyError.stale }
+        guard source.role != .componentDefinition && source.role != .notFound else { throw PageChromeCopyError.unavailable }
+        guard !request.roles.isEmpty, request.roles.isSubset(of: Set(Self.roles)),
+              request.roles.allSatisfy({ request.sourceRoles[$0] != nil }) else { throw PageChromeCopyError.missingSource }
+        guard !request.targetPageIDs.isEmpty else { throw PageChromeCopyError.noTargets }
+        guard request.targetPageIDs.count <= Self.maximumTargets,
+              Set(request.targetPageIDs).count == request.targetPageIDs.count else { throw PageChromeCopyError.capacity }
+        let dependencies = try Self.dependencyNodes(request: request, document: document)
+        let styles = try CanonicalReusableStyleIndex(document: document)
+        for node in dependencies {
+            for asset in CanonicalGraphReferences.assets(node) where !availableImageIDs.contains(asset) { throw PageChromeCopyError.dependency }
+            for token in CanonicalGraphReferences.tokens(node) where !document.colorTokens.contains(where: { $0.id == token }) { throw PageChromeCopyError.dependency }
+            for style in try CanonicalReusableStyleIndex.strictlyDecodedAppliedIDs(node) where styles.byID[style] == nil { throw PageChromeCopyError.dependency }
+            if ["page", "section"].contains(node.insertionStringProperty(CanonicalLinkTarget.namespace + "kind") ?? "") {
+                guard let raw = node.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID"),
+                      document.websitePages.contains(where: { $0.id.description == raw }) else { throw PageChromeCopyError.dependency }
+            }
+            if node.insertionStringProperty(CanonicalLinkTarget.namespace + "kind") == "section",
+               let pageRaw = node.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID"),
+               let nodeRaw = node.insertionStringProperty(CanonicalLinkTarget.namespace + "nodeID") {
+                guard document.pages.contains(where: { page in page.id.description == pageRaw && page.nodes.contains { $0.id.description == nodeRaw && $0.kind == .section } }) else { throw PageChromeCopyError.dependency }
+            }
+        }
+        let rows = Dictionary(uniqueKeysWithValues: Self.targets(document: document, sourcePageID: source.id).map { ($0.id, $0) })
+        var commands: [DocumentCommand] = [], copied: [PageID] = [], copiedIDs: [PageID: [NodeID]] = [:], skipped: [PageChromeCopySkip] = []
+        var nodeCount = document.pages.reduce(0) { $0 + $1.nodes.count }
+        for targetID in request.targetPageIDs {
+            try Task.checkCancellation()
+            guard let target = document.pages.first(where: { $0.id == targetID }) else { throw PageChromeCopyError.stale }
+            let row = rows[targetID]
+            let missing = Self.roles.filter { request.roles.contains($0) && row?.disabledReason == nil && targetID != source.id && row?.existingRoles.contains($0) == false }
+            for role in Self.roles where request.roles.contains(role) && !missing.contains(role) {
+                skipped.append(.init(pageID: targetID, role: role, reason: targetID == source.id ? "Source page stays unchanged" : row?.disabledReason ?? "Existing chrome kept; add-missing does not replace it"))
+            }
+            guard !missing.isEmpty, let rootID = target.rootNodeIDs.first,
+                  let root = target.nodes.first(where: { $0.id == rootID }) else { continue }
+            let roots = missing.compactMap { request.sourceRoles[$0] }
+            let closure = try Self.subtree(roots, page: source)
+            nodeCount += closure.count
+            guard nodeCount <= InsertionPolicy.maximumNodeCount else { throw PageChromeCopyError.capacity }
+            let clone = try CanonicalPageGraphClone.prepare(page: source, included: closure,
+                destinationPageID: target.id, destinationParent: rootID, preservePageLinks: true)
+            let byID = Dictionary(uniqueKeysWithValues: clone.nodes.map { ($0.id, $0) })
+            var rootCount = root.childIDs.count
+            for role in missing {
+                guard let old = request.sourceRoles[role], let clonedRoot = clone.nodeIDs[old] else { throw PageChromeCopyError.invalidGraph }
+                var pending: [(NodeID, Int)] = [(clonedRoot, role == .header ? 0 : rootCount)]
+                rootCount += 1
+                while let (id, index) = pending.popLast() {
+                    guard var node = byID[id] else { throw PageChromeCopyError.invalidGraph }
+                    pending.append(contentsOf: node.childIDs.enumerated().reversed().map { ($0.element, $0.offset) })
+                    node.childIDs = []
+                    commands.append(.insertNode(.init(pageID: target.id, node: node, index: index)))
+                }
+                copiedIDs[target.id, default: []].append(clonedRoot)
+            }
+            copied.append(target.id)
+        }
+        guard !commands.isEmpty else { throw PageChromeCopyError.noChanges }
+        let batch = DocumentCommand.batch(commands)
+        guard CommandRegistry().availability(for: batch, in: document).isEnabled else { throw PageChromeCopyError.invalidGraph }
+        return .init(command: batch, copiedPageIDs: copied, copiedRoleIDs: copiedIDs,
+            copiedRoleCount: copiedIDs.values.reduce(0) { $0 + $1.count }, skipped: skipped)
+    }
+}
+
 struct PageCommandRegistry {
     func prepare(_ edit: PageEdit, identity: PageEditIdentity, in document: CanonicalDocument,
                  isAvailable: Bool, cancelled: Bool = false) throws -> PreparedPageEdit {
@@ -154,50 +406,8 @@ struct PageCommandRegistry {
                 copyRoute = StaticPagePolicy.uniqueRoute(stem: "/page-copy", in: document)
             }
             let newID = PageID()
-            let ids = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, NodeID()) })
-            let nodes = try page.nodes.map { node in
-                let parent: NodeParent = switch node.parent {
-                case .page: .page(newID)
-                case .node(let id): .node(ids[id]!)
-                }
-                let properties = try node.properties.map { property in
-                    var value = property.value
-                    if CanonicalPageChrome.referenceKeys.contains(property.key.rawValue),
-                       case .string(let raw) = value, let old = NodeID(uuidString: raw), let replacement = ids[old] {
-                        value = .string(replacement.description)
-                    }
-                    if property.key.rawValue == CanonicalLinkTarget.namespace + "pageID",
-                       value == .string(page.id.description) { value = .string(newID.description) }
-                    if property.key.rawValue == CanonicalLinkTarget.namespace + "nodeID",
-                       node.insertionStringProperty(CanonicalLinkTarget.namespace + "pageID") == page.id.description,
-                       case .string(let raw) = value, let old = NodeID(uuidString: raw), let replacement = ids[old] {
-                        value = .string(replacement.description)
-                    }
-                    if CanonicalComponentAction.overrideID(property.key.rawValue) != nil,
-                       case .string(let raw) = value, let target = CanonicalComponentAction.decode(raw) {
-                        switch target {
-                        case .page(let targetPage) where targetPage == page.id:
-                            value = .string(CanonicalComponentAction.encode(.page(newID)))
-                        case .section(let targetPage, let targetNode) where targetPage == page.id:
-                            value = .string(CanonicalComponentAction.encode(.section(pageID: newID, nodeID: ids[targetNode] ?? targetNode)))
-                        default: break
-                        }
-                    }
-                    if property.key.rawValue == CanonicalFormField.optionsKey,
-                       case .string(let encoded) = value {
-                        value = .string(try CanonicalFormSelectOptions.remappingStableIDs(in: encoded))
-                    }
-                    if property.key.rawValue.hasPrefix(CanonicalFluidValueCodec.namespace + "."),
-                       case .string(let encoded) = value,
-                       let target = FluidValueTarget(rawValue: String(property.key.rawValue.dropFirst(
-                            CanonicalFluidValueCodec.namespace.count + 1))) {
-                        value = .string(try CanonicalFluidValueCodec.remappingStableID(in: encoded, target: target))
-                    }
-                    return NodeProperty(key: property.key, value: value, origin: property.origin)
-                }
-                return DocumentNode(id: ids[node.id]!, kind: node.kind, name: node.name,
-                                    parent: parent, childIDs: node.childIDs.map { ids[$0]! }, properties: properties)
-            }
+            let cloned = try CanonicalPageGraphClone.prepare(page: page, destinationPageID: newID)
+            let ids = cloned.nodeIDs, nodes = cloned.nodes
             let copy = DocumentPage(id: newID, name: copyName,
                 route: .init(rawValue: copyRoute),
                 role: .standard, provenance: .authored,
