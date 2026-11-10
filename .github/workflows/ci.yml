@@ -17,8 +17,6 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     env:
-      SITEFORGE_DERIVED_DATA: ${{ runner.temp }}/SiteForge/DerivedData
-      SITEFORGE_TEST_RESULTS_ROOT: ${{ runner.temp }}/siteforge-ci/TestResults
       SITEFORGE_CI_PREBUILT_TESTS: '1'
     steps:
       - uses: actions/checkout@v5
@@ -26,6 +24,8 @@ jobs:
         timeout-minutes: 8
         run: |
           mkdir -p "$RUNNER_TEMP/siteforge-ci"
+          printf '%s\n' "SITEFORGE_DERIVED_DATA=$RUNNER_TEMP/SiteForge/DerivedData" \
+            "SITEFORGE_TEST_RESULTS_ROOT=$RUNNER_TEMP/siteforge-ci/TestResults" >> "$GITHUB_ENV"
           sudo xcode-select -s /Applications/Xcode.app
           { sw_vers; uname -m; xcodebuild -version; xcode-select -p; } | tee "$RUNNER_TEMP/siteforge-ci/environment.log"
           set -o pipefail
@@ -83,8 +83,6 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
-      SITEFORGE_DERIVED_DATA: ${{ runner.temp }}/SiteForge/DerivedData
-      SITEFORGE_TEST_RESULTS_ROOT: ${{ runner.temp }}/siteforge-ci/TestResults
       SITEFORGE_CI_PREBUILT_TESTS: '1'
     steps:
       - uses: actions/checkout@v5
@@ -92,6 +90,8 @@ jobs:
         timeout-minutes: 2
         run: |
           mkdir -p "$RUNNER_TEMP/siteforge-ci"
+          printf '%s\n' "SITEFORGE_DERIVED_DATA=$RUNNER_TEMP/SiteForge/DerivedData" \
+            "SITEFORGE_TEST_RESULTS_ROOT=$RUNNER_TEMP/siteforge-ci/TestResults" >> "$GITHUB_ENV"
           sudo xcode-select -s /Applications/Xcode.app
           { sw_vers; uname -m; xcodebuild -version; xcode-select -p; } | tee "$RUNNER_TEMP/siteforge-ci/environment.log"
       - name: Build app and test targets
