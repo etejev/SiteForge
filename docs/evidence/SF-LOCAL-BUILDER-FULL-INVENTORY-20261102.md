@@ -5,6 +5,21 @@ SF-0507-003/004, SF-0606-002/003/004/006/007/008, SF-0806-006,
 SF-0901-006, SF-1203-003/006 and SF-1211-004. This is a diagnostic inventory,
 not complete milestone acceptance.
 
+## Hosted UI test compile follow-up
+
+[Run 42745329588](https://github.com/etejev/SiteForge/actions/runs/42745329588)
+on `8e214a7` cleared the two original app compile errors on Xcode 26.6
+but failed before tests ran. `SiteForgeLaunchTests.swift` reported
+“sending 'self' risks causing data races” at lines 4306, 7056, and 7069
+in the native file chooser and the related-page pointer/focus helpers.
+The two enclosing XCTest methods now explicitly share the main actor
+with the local helpers; the chooser helper is explicitly isolated too.
+No change to user interaction, click accounting, assertions, production
+code, or test selection (SF-0801-002, SF-0802-006, SF-0308-006, SF-0806-006).
+Clean unsigned `build-for-testing` passed with Xcode 27.2 (27B52),
+including the UI target for arm64 and x86_64. No tests were launched;
+Xcode 26.6 confirmation depends on the push-triggered run.
+
 ## Hosted compile follow-up
 
 [SiteForge CI run 42743446225](https://github.com/etejev/SiteForge/actions/runs/42743446225)

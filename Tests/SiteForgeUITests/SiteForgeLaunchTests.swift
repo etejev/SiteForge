@@ -4295,6 +4295,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-SOURCE-07 reused assets preserve image geometry and semantic edits")
     }
 
+    @MainActor
     func testPracticalImageReuseScopedReplacementAndTypographyJourney() throws {
         let firstURL = try makeLocalImageFixture(named: "workflow-picture-one.png")
         let secondURL = try makeLocalImageFixture(named: "workflow-picture-two.png", palette: 1)
@@ -4302,7 +4303,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let project = fixtureRoot.appendingPathComponent("image-type-workflow.siteforge")
         var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
         XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
-        func chooseFile(_ url: URL) {
+        @MainActor func chooseFile(_ url: URL) {
             XCTAssertTrue(waitForNativeOpenPanel(in: application))
             application.typeKey("g", modifierFlags: [.command, .shift])
             let path = application.sheets.textFields["PathTextField"]
@@ -7025,6 +7026,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "Workflow typography exact Undo Redo without destination changes")
     }
 
+    @MainActor
     func testRelatedPageReuseNavigationActionAuditAndNativeReopenJourney() throws {
         continueAfterFailure = false
         let project = fixtureRoot.appendingPathComponent("related-page-workflow.siteforge")
