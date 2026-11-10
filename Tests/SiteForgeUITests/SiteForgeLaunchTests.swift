@@ -779,17 +779,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let identifier = object.identifier
         let editor = application.textViews["canvas.text.editor"]
         @MainActor func beginInlineEdit() {
-            if application.state != .runningForeground { application.activate() }
-            XCTAssertTrue(application.wait(for: .runningForeground, timeout: 5))
-            let selected = application.descendants(matching: .any)[identifier].firstMatch
-            XCTAssertTrue(selected.exists && selected.isSelected)
-            // Do not let XCTest discover/reopen a global menu match while
-            // AppKit is tracking the Selection menu for this window.
-            let selection = application.menuBars.menuBarItems["Selection"]
-            selection.click()
-            let action = selection.menus.firstMatch.menuItems["Edit Selected Text"]
-            XCTAssertTrue(waitForEnabled(action))
-            action.click()
+            openSelectedTextEditor(identifier, in: application)
             XCTAssertTrue(editor.waitForExistence(timeout: 5))
             XCTAssertTrue(waitForKeyboardFocus(editor, in: application))
         }
@@ -1074,7 +1064,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [foreground], timeout: 10), .completed)
         let authoredTitle = safari.webViews.staticTexts["AURORA browser acceptance"].firstMatch
-        XCTAssertTrue(authoredTitle.waitForExistence(timeout: 10), safari.debugDescription)
+        let loaded = authoredTitle.waitForExistence(timeout: 10)
+        if !loaded { attachPreviewHTTPFailureDiagnostic(url) }
+        XCTAssertTrue(loaded, safari.debugDescription)
         let browser = XCTAttachment(screenshot: safari.windows.firstMatch.screenshot())
         browser.name = "SF-LOCAL-BUILDER actual Safari authored website"
         browser.lifetime = .keepAlways
@@ -2346,7 +2338,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             .contains("outside Mobile artboard") == true)
         attachWindowScreenshot(application, named: "SF-AUTHORING-016 Mobile authored override")
 
-        let reset = application.buttons["inspector.layout.resetBreakpointOverrides"]
+        let reset = revealStructuralLayoutControl(application.buttons["inspector.layout.resetBreakpointOverrides"], in: application)
         XCTAssertTrue(reset.isHittable); reset.click()
         XCTAssertTrue(waitForValue(application.textFields["inspector.layout.width"], containing: "Uses Desktop"))
         XCTAssertFalse(application.buttons["inspector.layout.resetBreakpointOverrides"].isEnabled)
@@ -2440,7 +2432,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         application.menuBars.menuBarItems["Selection"].click()
         let clearSelection = application.menuItems["Clear Selection"]
         XCTAssertTrue(clearSelection.waitForExistence(timeout: 2)); clearSelection.click()
-        componentMenu("Insert", "Insert Grid at Center", in: application)
+        insertGridAtCenterWithShortcut(in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 4", timeout: 5))
         for count in 5...6 {
             application.menuBars.menuBarItems["Insert"].click()
@@ -3231,7 +3223,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         componentMenu("Edit", "Redo", in: application)
         XCTAssertTrue(waitForValue(application.textFields["inspector.design.typography.family"], containing: "System"))
         XCTAssertTrue(waitForValue(application.descendants(matching: .any)["inspector.design.typography.weight"], containing: "Bold"))
-        componentMenu("Selection", "Edit Selected Text", in: application)
+        openSelectedTextEditor(objectID, in: application)
         let editor = application.textViews["canvas.text.editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         let frame = application.descendants(matching: .any)[objectID].frame
@@ -4297,18 +4289,6 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-SOURCE-07 reused assets preserve image geometry and semantic edits")
     }
 
-    private func chooseWorkflowImage(_ url: URL, in application: XCUIApplication) {
-        XCTAssertTrue(waitForNativeOpenPanel(in: application))
-        application.typeKey("g", modifierFlags: [.command, .shift])
-        let path = application.sheets.textFields["PathTextField"]
-        XCTAssertTrue(path.waitForExistence(timeout: 3))
-        replaceText(in: path, with: url.path, application: application); path.typeKey(.return, modifierFlags: [])
-        let go = application.sheets.buttons["Go"]
-        if path.exists && go.exists && go.isEnabled { go.click() }
-        let confirm = application.buttons["OKButton"]
-        XCTAssertTrue(waitForHittable(confirm, in: application)); confirm.click()
-    }
-
     @MainActor
     func testPracticalImageReuseScopedReplacementAndTypographyJourney() throws {
         let firstURL = try makeLocalImageFixture(named: "workflow-picture-one.png")
@@ -4317,7 +4297,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let project = fixtureRoot.appendingPathComponent("image-type-workflow.siteforge")
         var application = launchIntegrationOpen(project, base64Fixture: legacyFixtureURL(named: "schema-v4-legacy-surface"))
         XCTAssertTrue(waitForWorkspaceReady(application)); assertNormalWindowPolicy(in: application)
-        componentMenu("Insert", "Import and Insert Image…", in: application); chooseWorkflowImage(firstURL, in: application)
+        componentMenu("Insert", "Import and Insert Image…", in: application); chooseNativePanelFile(firstURL, in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 1", timeout: 5))
         let firstImage = canvasObject(named: "Image: workflow-picture-one; alternative text is empty", in: application)
         XCTAssertTrue(firstImage.waitForExistence(timeout: 5))
@@ -4328,7 +4308,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let secondID = try XCTUnwrap(images.allElementsBoundByIndex.first { $0.identifier != firstID }?.identifier)
         let before = application.descendants(matching: .any)[secondID].firstMatch.frame
         selectInspectorTab("Design", identifier: "design", in: application)
-        revealComponentPointerTarget("inspector.image.import", in: application).click(); chooseWorkflowImage(secondURL, in: application)
+        revealComponentPointerTarget("inspector.image.import", in: application).click(); chooseNativePanelFile(secondURL, in: application)
         XCTAssertTrue(waitForValue(application.staticTexts["inspector.image.status"], containing: "selected uses"))
         XCTAssertEqual(application.descendants(matching: .any)[secondID].firstMatch.frame, before)
         attachWindowScreenshot(application, named: "SF-LOCAL-BUILDER-004 selected-use replacement preserves geometry")
@@ -4342,7 +4322,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         attachWindowScreenshot(application, named: "SF-LOCAL-BUILDER-004 explicit global replacement reference scope")
         let globalReplacement = application.dialogs.firstMatch.buttons["Choose Global Replacement…"]
         XCTAssertTrue(waitForHittable(globalReplacement, in: application))
-        globalReplacement.click(); chooseWorkflowImage(thirdURL, in: application)
+        globalReplacement.click(); chooseNativePanelFile(thirdURL, in: application)
         XCTAssertTrue(application.staticTexts["workflow-picture-three.png"].waitForExistence(timeout: 5))
         componentMenu("Edit", "Undo", in: application)
         XCTAssertTrue(application.staticTexts["workflow-picture-two.png"].waitForExistence(timeout: 5))
@@ -5272,9 +5252,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .any)["status.selectionPath"].label
             .localizedCaseInsensitiveContains("Heading"))
         selectInspectorTab("Design", identifier: "design", in: application)
-        let inspector = application.scrollViews["inspector.selection.scroll"]
-        let element = application.descendants(matching: .any)["inspector.semantic.element"]
-        for _ in 0..<14 where !element.isHittable { inspector.scroll(byDeltaX: 0, deltaY: -120) }
+        let element = revealStructuralLayoutControl(
+            application.popUpButtons["inspector.semantic.element"], in: application
+        )
         XCTAssertTrue(element.isHittable)
         XCTAssertTrue((element.value as? String ?? "").contains("<h2>"))
         attachWindowScreenshot(application, named: "SF-AUTHORING-099 semantic Heading template")
@@ -6192,10 +6172,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         return url
     }
 
-    private func navigateReviewSavePanel(to directory: URL, in application: XCUIApplication) {
+    private func navigateNativeFilePanel(to directory: URL, in application: XCUIApplication) {
         var isDirectory: ObjCBool = false
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory)
-                      && isDirectory.boolValue, "The intended Save folder must exist")
+                      && isDirectory.boolValue, "The intended native panel folder must exist")
         application.typeKey("g", modifierFlags: [.command, .shift])
         let folder = application.textFields["PathTextField"]
         XCTAssertTrue(folder.waitForExistence(timeout: 5))
@@ -6210,18 +6190,19 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     private func openProjectThroughNativePanel(_ url: URL, in application: XCUIApplication) {
         componentMenu("File", "Open…", in: application)
+        chooseNativePanelFile(url, in: application)
+    }
+
+    private func chooseNativePanelFile(_ url: URL, in application: XCUIApplication) {
         XCTAssertTrue(waitForNativeOpenPanel(in: application))
-        application.typeKey("g", modifierFlags: [.command, .shift])
-        let path = application.textFields["PathTextField"]
-        XCTAssertTrue(path.waitForExistence(timeout: 5))
         // Resolve the parent first: Go to Folder autocompletion can otherwise
         // enter the similarly named .siteforge.resources-v1 sidecar directory.
-        replaceText(in: path, with: url.deletingLastPathComponent().path, application: application)
-        path.typeKey(.return, modifierFlags: [])
+        navigateNativeFilePanel(to: url.deletingLastPathComponent(), in: application)
         let package = application.descendants(matching: .any).matching(NSPredicate(
             format: "label == %@ OR value == %@", url.lastPathComponent, url.lastPathComponent
         )).firstMatch
         XCTAssertTrue(package.waitForExistence(timeout: 5), application.debugDescription)
+        XCTAssertTrue(waitForHittable(package, in: application))
         package.click()
         // The panel resolves the typed package asynchronously. A visible Open
         // button is not yet an enabled, validated file selection.
@@ -6265,6 +6246,14 @@ final class SiteForgeLaunchTests: XCTestCase {
             let bitmap = try XCTUnwrap(NSBitmapImageRep(data: capture.pngRepresentation))
             let color = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2,
                 y: Int(Double(bitmap.pixelsHigh) * 0.35))?.usingColorSpace(.sRGB))
+            if abs(color.redComponent - 34.0 / 255) > 0.03
+                || abs(color.greenComponent - 51.0 / 255) > 0.03
+                || abs(color.blueComponent - 68.0 / 255) > 0.03 {
+                let sample = XCTAttachment(screenshot: capture)
+                sample.name = "Page Background exact failed sample source"
+                sample.lifetime = .keepAlways
+                add(sample)
+            }
             XCTAssertEqual(color.redComponent, 34.0 / 255, accuracy: 0.03)
             XCTAssertEqual(color.greenComponent, 51.0 / 255, accuracy: 0.03)
             XCTAssertEqual(color.blueComponent, 68.0 / 255, accuracy: 0.03)
@@ -6936,7 +6925,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForValue(application.textFields["inspector.flow.height"], containing: "240"))
         revealComponentPointerTarget("navigator.tab.layers", in: application).click()
         revealComponentPointerTarget("navigator.layer." + stackID, in: application).click()
-        componentMenu("Insert", "Insert Grid at Center", in: application)
+        insertGridAtCenterWithShortcut(in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 13", timeout: 5))
         componentMenu("Insert", "Insert Section in Flow", in: application)
         XCTAssertTrue(waitForLiveCanvasValue(in: application, containing: "rendered objects 14", timeout: 5))
@@ -7841,6 +7830,19 @@ final class SiteForgeLaunchTests: XCTestCase {
 
     // Instance methods preserve MainActor isolation under the hosted Swift
     // compiler; nested helpers must not capture the non-Sendable XCTestCase.
+    private func openSelectedTextEditor(_ identifier: String, in application: XCUIApplication) {
+        if application.state != .runningForeground { application.activate() }
+        XCTAssertTrue(application.wait(for: .runningForeground, timeout: 5))
+        let selected = application.descendants(matching: .any)[identifier].firstMatch
+        XCTAssertTrue(selected.exists && selected.isSelected)
+        // Scope the action to the menu AppKit is currently tracking.
+        let selection = application.menuBars.menuBarItems["Selection"]
+        selection.click()
+        let action = selection.menus.firstMatch.menuItems["Edit Selected Text"]
+        XCTAssertTrue(waitForEnabled(action))
+        action.click()
+    }
+
     private func componentMenu(_ menu: String, _ action: String, in application: XCUIApplication) {
         // Activation during AppKit menu tracking dismisses the pending menu.
         // Establish foreground ownership before opening its real menu bar.
@@ -7876,6 +7878,13 @@ final class SiteForgeLaunchTests: XCTestCase {
         preset.click()
         application.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForKeyboardFocus(preset, in: application))
+    }
+
+    private func insertGridAtCenterWithShortcut(in application: XCUIApplication) {
+        // In the compact Insert menu, XCTest's synthesized pointer can land
+        // on a neighboring row after the native menu scrolls.
+        focusDocumentCommands(in: application)
+        application.typeKey("3", modifierFlags: [.command, .option])
     }
 
     private func editComponentHex(_ value: String, in application: XCUIApplication) {
@@ -8711,26 +8720,14 @@ final class SiteForgeLaunchTests: XCTestCase {
     @MainActor
     func testInspectorProvidesTruthfulUnavailableContentAndInteractionsDestinations() throws {
         let application = launchWorkspace(windowAlignment: .right)
-        let design = application.buttons["inspector.tab.design"]
-        let layout = application.buttons["inspector.tab.layout"]
-        let content = application.buttons["inspector.tab.content"]
-        let interactions = application.buttons["inspector.tab.interactions"]
-        let accessibility = application.buttons["inspector.tab.accessibility"]
-
-        for (tab, identifier) in [
-            (design, "design"),
-            (layout, "layout"),
-            (accessibility, "accessibility"),
-        ] {
-            XCTAssertTrue(waitForHittable(tab, in: application))
-            tab.click()
+        for identifier in ["design", "layout", "accessibility"] {
+            selectInspectorTab(identifier.capitalized, identifier: identifier, in: application)
             attachScreenshot(named: "SF-PRODUCT-UI-003 inspector \(identifier)")
         }
 
-        XCTAssertTrue(waitForHittable(content, in: application))
-        XCTAssertEqual(content.label, "Content")
-        XCTAssertTrue(content.isEnabled)
-        content.click()
+        let content = application.buttons["inspector.tab.content"]
+        if content.exists { XCTAssertEqual(content.label, "Content"); XCTAssertTrue(content.isEnabled) }
+        selectInspectorTab("Content", identifier: "content", in: application)
         // SF-AUTHORING-020 enables Content/Interactions for Button/Link.
         // An empty selection remains unavailable without falsely claiming
         // that the entire feature is not implemented.
@@ -8742,9 +8739,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(application.descendants(matching: .button)["inspector.transform.moveRight"].exists == false)
         attachScreenshot(named: "SF-PRODUCT-UI-003 inspector content unavailable")
 
-        XCTAssertTrue(waitForHittable(interactions, in: application))
-        XCTAssertEqual(interactions.label, "Interactions")
-        interactions.click()
+        let interactions = application.buttons["inspector.tab.interactions"]
+        if interactions.exists { XCTAssertEqual(interactions.label, "Interactions") }
+        selectInspectorTab("Interactions", identifier: "interactions", in: application)
         let interactionsUnavailable = application.descendants(matching: .any)["inspector.empty"]
         XCTAssertTrue(interactionsUnavailable.waitForExistence(timeout: 5))
         XCTAssertTrue(interactionsUnavailable.label.localizedCaseInsensitiveContains("Nothing Selected"))
@@ -9165,11 +9162,18 @@ final class SiteForgeLaunchTests: XCTestCase {
         selectInspectorTab("Content", identifier: "content", in: application)
         replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: headerTitle, in: application)
         componentMenu("Insert", "Insert Footer after Page Content", in: application)
-        replaceStructuralLayoutField(application.textFields["inspector.navigation.title"], with: footerTitle, in: application)
         selectNavigatorTab("Layers", identifier: "layers", in: application)
         let footerRow = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "navigator.layer.", "Footer")).firstMatch
         XCTAssertTrue(footerRow.waitForExistence(timeout: 3))
         let footerID = footerRow.identifier.replacingOccurrences(of: "navigator.layer.", with: "")
+        let footerSelected = NSPredicate { _, _ in footerRow.exists && footerRow.isSelected }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: footerSelected, object: nil)],
+                                       timeout: 5), .completed)
+        // The old query tried to resolve the field's identifier while the
+        // Footer's Content inspector was still replacing the Header controls.
+        let footerTitleField = application.textFields["inspector.navigation.title"]
+        XCTAssertTrue(footerTitleField.waitForExistence(timeout: 5))
+        replaceStructuralLayoutField(footerTitleField, with: footerTitle, in: application)
         replaceText(in: application.textFields["canvas.viewport.width"], with: "320", application: application)
         application.textFields["canvas.viewport.width"].typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.width", containing: "320"))
@@ -10263,8 +10267,9 @@ final class SiteForgeLaunchTests: XCTestCase {
             }
             let overflow = application.descendants(matching: .any)[prefix + ".overflow"].firstMatch
             if overflow.exists {
-                XCTAssertTrue(waitForHittable(overflow, in: application))
-                overflow.click()
+                let liveOverflow = revealComponentPointerTarget(prefix + ".overflow", in: application)
+                XCTAssertTrue(liveOverflow.isHittable)
+                liveOverflow.click()
                 // Slim render-01 panes use genuine native overflow. Every
                 // destination still has a real operable menu action.
                 for (_, title) in titles {
@@ -10284,7 +10289,7 @@ final class SiteForgeLaunchTests: XCTestCase {
             ("design", "Design"), ("layout", "Layout"), ("content", "Content"),
             ("interactions", "Interactions"), ("accessibility", "Accessibility")])
 
-        pages.click()
+        revealComponentPointerTarget("navigator.tab.pages", in: application).click()
         XCTAssertTrue(waitForKeyboardFocus(pages, in: application))
         for destination in navigatorTabs.dropFirst() {
             application.typeKey("\t", modifierFlags: [])
@@ -10805,7 +10810,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let filename = application.textFields["saveAsNameTextField"]
         XCTAssertTrue(filename.waitForExistence(timeout: 5))
         replaceText(in: filename, with: destination.deletingPathExtension().lastPathComponent, application: application)
-        navigateReviewSavePanel(to: destination.deletingLastPathComponent(), in: application)
+        navigateNativeFilePanel(to: destination.deletingLastPathComponent(), in: application)
         let save = application.buttons["OKButton"]
         XCTAssertTrue(waitForHittable(save, in: application)); save.click()
         XCTAssertTrue(waitForLiveDocumentStatus(in: application, containing: "Saved", timeout: 5))
@@ -10847,7 +10852,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         }, object: nil)], timeout: 10), .completed)
         // Safari exposes native web-link names as titles; their labels may be empty.
         let currentLink = safari.webViews.links.matching(NSPredicate(format: "title == %@", "Workflow Review")).firstMatch
-        XCTAssertTrue(currentLink.waitForExistence(timeout: 10), safari.debugDescription)
+        let loaded = currentLink.waitForExistence(timeout: 10)
+        if !loaded { attachPreviewHTTPFailureDiagnostic(url) }
+        XCTAssertTrue(loaded, safari.debugDescription)
         let browser = XCTAttachment(screenshot: safari.windows.firstMatch.screenshot())
         browser.name = "Aurora reuse actual Safari independent page"; browser.lifetime = .keepAlways; add(browser)
         safari.typeKey("w", modifierFlags: .command) // Only our verified new preview tab.
@@ -10865,7 +10872,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         let exportName = application.textFields["saveAsNameTextField"]
         XCTAssertTrue(exportName.waitForExistence(timeout: 5))
         replaceText(in: exportName, with: exported.lastPathComponent, application: application)
-        navigateReviewSavePanel(to: exported.deletingLastPathComponent(), in: application)
+        navigateNativeFilePanel(to: exported.deletingLastPathComponent(), in: application)
         let exportSave = application.windows["save-panel"].buttons["OKButton"]
         XCTAssertTrue(waitForHittable(exportSave, in: application)); exportSave.click()
         XCTAssertTrue(waitForLiveValue(in: application, identifier: "preview.website.status", containing: "Exported"))
@@ -11398,6 +11405,36 @@ final class SiteForgeLaunchTests: XCTestCase {
     /// Query the live production node for an adopted render-plan assertion;
     /// retaining the original AX proxy would test a stale accessibility
     /// snapshot rather than the renderer's current canonical scene.
+    private func attachPreviewHTTPFailureDiagnostic(_ url: URL) {
+        // Diagnose listener vs Safari after the real assertion has timed out.
+        // The owned loopback URL is never printed, and no response body is kept.
+        guard url.scheme == "http", url.host == "127.0.0.1", url.port != nil,
+              url.user == nil, url.password == nil else { return }
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        probe.arguments = ["--disable", "--noproxy", "*", "--silent", "--max-time", "3",
+                           "--output", "/dev/null", "--write-out", "%{http_code} %{size_download}",
+                           "--", url.absoluteString]
+        let report = Pipe()
+        probe.standardOutput = report
+        do {
+            try probe.run()
+            probe.waitUntilExit()
+            let bytes = report.fileHandleForReading.readDataToEndOfFile()
+            let fields = String(decoding: bytes, as: UTF8.self).split(separator: " ").compactMap { Int($0) }
+            let details = fields.count == 2 ? "HTTP \(fields[0]); bytes \(fields[1])" : "No numeric HTTP receipt"
+            let receipt = XCTAttachment(string: "Loopback GET exit \(probe.terminationStatus); \(details)")
+            receipt.name = "Safari timeout loopback diagnostic"
+            receipt.lifetime = .keepAlways
+            add(receipt)
+        } catch {
+            let receipt = XCTAttachment(string: "Loopback GET probe could not start.")
+            receipt.name = "Safari timeout loopback diagnostic"
+            receipt.lifetime = .keepAlways
+            add(receipt)
+        }
+    }
+
     private func waitForLiveCanvasValue(
         in application: XCUIApplication,
         containing text: String,
@@ -11473,26 +11510,39 @@ final class SiteForgeLaunchTests: XCTestCase {
             }
         }
         for _ in 0..<10 {
-            if isSafelyVisibleForPointer(liveElement, inside: scroll) { break }
+            let safeViewport = inspectorScrollViewport(scroll, in: application)
+            if liveElement.exists, liveElement.isHittable, safeViewport.contains(liveElement.frame) { break }
             let targetFrame = liveElement.frame
-            let safeViewport = pointerSafeIntersection(for: scroll.frame)
+            guard !safeViewport.isNull, !safeViewport.isEmpty else { break }
             let deltaY: CGFloat = targetFrame.minY < safeViewport.minY + 8 ? 180 : -180
-            scroll.scroll(byDeltaX: 0, deltaY: deltaY)
+            // Older AX can describe the scroll content height as the scroll
+            // view's frame. Send the real wheel event inside the visible pane.
+            let origin = scroll.frame.origin
+            scroll.coordinate(withNormalizedOffset: .zero).withOffset(.init(
+                dx: safeViewport.midX - origin.x, dy: safeViewport.midY - origin.y
+            )).scroll(byDeltaX: 0, deltaY: deltaY)
             // Undo/redo and reset can replace the SwiftUI control host. A
             // fresh, role-preserving AX query observes the live shipping
             // control rather than retaining an obsolete proxy or resolving
             // the non-hittable SwiftUI wrapper that shares its identifier.
             liveElement = liveStructuralLayoutControl(identifier, in: application)
         }
-        let safelyVisible = isSafelyVisibleForPointer(liveElement, inside: scroll)
+        let safeViewport = inspectorScrollViewport(scroll, in: application)
+        let safelyVisible = liveElement.exists && liveElement.isHittable && safeViewport.contains(liveElement.frame)
         if !safelyVisible {
             attachPointerDiagnostics(control: liveElement, application: application)
         }
         XCTAssertTrue(
             safelyVisible,
-            "Inspector control \(identifier) must remain inside the usable display and reachable; control=\(liveElement.frame), scroll=\(scroll.frame), safe=\(pointerSafeIntersection(for: scroll.frame)), hittable=\(liveElement.isHittable)"
+            "Inspector control \(identifier) must remain inside the usable display and reachable; control=\(liveElement.frame), scroll=\(scroll.frame), safe=\(safeViewport), hittable=\(liveElement.isHittable)"
         )
         return liveElement
+    }
+
+    private func inspectorScrollViewport(_ scroll: XCUIElement, in application: XCUIApplication) -> CGRect {
+        let pane = application.descendants(matching: .any)["shell.inspector"].firstMatch
+        guard scroll.exists, pane.exists else { return .null }
+        return pointerSafeIntersection(for: scroll.frame.intersection(pane.frame))
     }
 
     /// XCTest can report a control as hittable when an oversized product

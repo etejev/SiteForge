@@ -5,6 +5,104 @@ SF-0507-003/004, SF-0606-002/003/004/006/007/008, SF-0806-006,
 SF-0901-006, SF-1203-003/006 and SF-1211-004. This is a diagnostic inventory,
 not complete milestone acceptance.
 
+## OD-031 sharded execution — run 42847939727
+
+[Run 42847939727](https://github.com/etejev/SiteForge/actions/runs/42847939727)
+on `7a74d58` accepted the workflow and ran on macOS 26.7.2 (25G332),
+arm64, Xcode 26.6 (17F113). Core completed discovery and passed all 888
+non-UI tests. Shards 4 and 8 each had 21 selectors and no test steps:
+GitHub's check annotations say the job was not acquired by a hosted runner
+after multiple attempts and identify macOS arm64 capacity constraints.
+These 42 unrun selectors are not UI assertion failures.
+
+| Job | Passed | Failed | Policy skip | Not run | First observed failures |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Core | 888 | 0 | 0 | 0 | Discovery and full non-UI receipt passed. |
+| UI 1 | 20 | 1 | 0 | 0 | Generated website paint journey queried the replaced Footer title field before adoption. |
+| UI 2 | 18 | 3 | 1 | 0 | Compact Inspector Accessibility destination, native image import readiness, responsive Grid render adoption. |
+| UI 3 | 19 | 2 | 1 | 0 | Aurora browser remained unloaded after foreground; generated menu comparison queried a replaced Footer title field. |
+| UI 4 | 0 | 0 | 0 | 21 | Runner was never assigned. |
+| UI 5 | 17 | 4 | 0 | 0 | Nested Grid adoption, keyboard overflow reachability, Footer title replacement, and Page Background pixel mismatch. |
+| UI 6 | 19 | 2 | 0 | 0 | Installed font journey did not open the inline editor via the unscoped menu query; narrow Footer companion had the same title lookup failure as UI 3. |
+| UI 7 | 13 | 8 | 0 | 0 | See first-failure boundaries below. |
+| UI 8 | 0 | 0 | 0 | 21 | Runner was never assigned. |
+
+The terminal UI totals are 106 passed, 20 failed, two observed owner-only
+skips, and 42 not run. The aggregate Verify job 129992842804 rejected
+missing receipts `ui-4` and `ui-8`, exit 1. Replaying the seven unique
+downloaded receipts through the revised aggregator printed the same
+per-shard counts and still exited 1. The dark-flow project transfer and
+visible-gradient skips are documented by the real test transcripts.
+
+UI 2/5 evidence: Accessibility was available through
+the compact overflow rather than the direct button. The keyboard traversal
+probe now aligns the real overflow before opening it, then re-aligns Pages
+for the initial click. Image Open became hittable only by the time failure
+diagnostics ran; the journey now uses the exact native folder/file readiness
+sequence. Two Grid count failures still lack a render/selection diagnosis.
+The Page Background film shows an authored fill on the artboard, but the
+fixed sample's red value was 0.1753 versus expected 0.1333 ±0.03. Neither
+the color check nor the sample has been relaxed. The custom responsive
+width journey passed on UI 5 without a change.
+
+UI 7 first failures:
+
+- Aurora responsive conversion: Mobile preset did not report the expected
+  value after the native menu action.
+- Heading template and responsive geometry: semantic picker and breakpoint
+  reset button were not hittable through their immediate checks.
+- Normal destination rows and stable Inspector strips: the 1024-point
+  runner clips the leading side of the 1100-point window; native resize to
+  1280 did not move the screen-edge grip. No minimum or wider-row acceptance
+  was relaxed.
+- Preview repair: AX scroll height was 2435 points, so its generated center
+  hit was outside the actual display. The shared reveal helper now sends
+  the real scroll within the pane/display intersection, then still requires
+  strict containment. The Heading picker and geometry reset use that path.
+- Related-page reopen: native Open matched an offscreen completion row.
+  Resolve the exact parent and wait for Go to Folder dismissal before
+  selecting a real hittable file row and confirming Open.
+- Basic website preview: Safari was foreground but the loopback WebArea
+  was not loaded. The same symptom recurred in Aurora; the reason for the
+  load failure has not been established.
+
+The Footer hierarchy showed the selected Footer and its real title field
+after the failing early query. The companion now waits for that selected
+row and live field. The font journey now uses the scoped Selection menu
+helper already exercised in the focused inline-text acceptance. Exact
+history, text, geometry, native panel and Safari assertions remain.
+Relevant evidence: SF-0406-006, SF-0507-006, SF-0602-006, SF-0701-006,
+SF-1203-006, SF-1204-006, SF-1605-008.
+
+The hosted Xcode 26 tree omitted an approved skip's reason, while its
+own transcript retained the exact module-qualified XCTest diagnostic.
+Accounting now uses that exact case diagnostic only when the tree already
+records a skip and lacks a reason; a missing, duplicate or unapproved
+reason still fails. Five synthetic tests and a real shard 3 transcript
+replay passed. Local Xcode 27.2 unsigned build-for-testing passed; no
+local UI suite was launched in that follow-up.
+
+### Batched candidate and exact failure map
+
+The owner approved UI `max-parallel: 2` without changing eight shard
+assignments, coverage, job time limits, local verification, or retry policy.
+
+| Shared boundary | Exact failing methods (SiteForgeLaunchTests) | Candidate disposition |
+| --- | --- | --- |
+| Footer Content host replacement | `testGeneratedWebsiteMenuEscapeStateAndPaintJourney`, `testGeneratedWebsiteMenuEscapePresentationContextComparison`, `testMeasuredSafariNarrowChromeBoundaryCompanion`, `testNarrowChromeFooterAndMeasuredSafariBoundaryCompanion` | Await selected Footer row and the real live title field; no browser assertions removed. |
+| Compact scroll/pane geometry and overflow | `testInspectorProvidesTruthfulUnavailableContentAndInteractionsDestinations`, `testKeyboardFocusTraversesWorkspaceForwardAndReverse`, `testHeadingTemplateElementsMenuTypographyAndHistoryJourney`, `testResponsiveBreakpointGeometryAuthoringUndoResetAndAccessibilityJourney`, `testPreviewAndCheckWebsiteFindingRepairUsesExistingEditorJourney` | Use the real reachable pane or overflow; scroll inside the visible Inspector intersection, not the AX content-height center. |
+| Native panel readiness | `testPracticalImageReuseScopedReplacementAndTypographyJourney`, `testRelatedPageReuseNavigationActionAuditAndNativeReopenJourney` | Resolve the fixture parent, await dismissal, select the exact real file, and require enabled native Open/Import. |
+| Inline menu tracking | `testInstalledFontPairChooserCancelAtomicUndoAndHeadingSemanticsJourney` | Scope to the live Selection menu after confirming the exact text selection. |
+| Compact scrolled Insert menu | `testResponsiveContainerLayoutAndBreakpointVisibilityJourney`, `testConnectedNestedSectionContainerGeometryAndBreakpointJourney` | The films show the pointer over Header or the bottom scroll arrow, not Grid. Use the existing Command–Option–3 Grid action; preserve exact counts and subsequent layout/identity assertions. |
+| Foreground Safari with unloaded WebArea | `testAuroraRelatedPageReuseNativeCopyAndSafariJourney`, `testWebsitePreviewBuildsAuthoredOutputAndOpensActualSafari` | Unresolved. Core loopback HTTP test passes. A failure-only three-second probe now records exact route HTTP status/byte count without response contents or URL, separately from the unchanged real Safari assertion. |
+| Normal width evidence on 1024-point runner | `testNormalFiveDestinationRowsAndInspectorFieldStabilityJourney`, `testStableInspectorStripsFieldsDraftsAndComponentRecoveryAtNormalAndCompactWidthsJourney` | Unresolved. Actual normal-window width was 1100, left edge −76, and the 1280-point native drag never moved. Need real wider-screen evidence or a supported on-screen resize path, not reduced coverage. |
+| Mobile preset publication | `testAuroraResponsiveContentConversionPreservesSelectionAndReflowsAcrossPresetsJourney` | Unresolved. Need live preset value and exact action target after native tracking; no product change inferred. |
+| Exact page fill sample | `testPageBackgroundEntryUsesSharedFillEditorAndTransparentHistory` | Unresolved. Retain the exact lossless failing crop; film shows an authored fill but cannot resolve sampling coordinates/profile/adoption. Same channels and tolerances. |
+
+The distinct custom-width journey passed and was not changed. The revised
+accounting displays missing shard counts alongside available receipts and
+rejects duplicate receipts without choosing one by download order.
+
 ## Hosted execution and capacity — run 42746959758
 
 [Run 42746959758](https://github.com/etejev/SiteForge/actions/runs/42746959758),

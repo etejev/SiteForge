@@ -83,6 +83,20 @@ class AccountingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CI.records(tree)
 
+    def test_xcode_26_omitted_skip_reason_requires_exact_transcript_diagnostic(self):
+        key, reason = next(iter(CI.SKIPS.items()))
+        target, suite, method = key.split("/")
+        entries = [{"selector": key, "outcome": "Skipped", "reasons": []}]
+        other = f"/checkout/Test.swift:245: -[{suite} testOther] : Test skipped - {reason}"
+        CI.restore_skip_reasons(entries, other)
+        self.assertEqual(entries[0]["reasons"], [])
+        exact = f"/checkout/Test.swift:245: -[{target}.{suite} {method}] : Test skipped - {reason}"
+        CI.restore_skip_reasons(entries, exact)
+        self.assertEqual(entries[0]["reasons"], [reason])
+        entries[0]["reasons"] = []
+        CI.restore_skip_reasons(entries, exact + "\n" + exact)
+        self.assertEqual(entries[0]["reasons"], [reason, reason])
+
 
 if __name__ == "__main__":
     unittest.main(buffer=True)

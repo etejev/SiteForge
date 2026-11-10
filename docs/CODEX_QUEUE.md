@@ -4,6 +4,15 @@
 
 ### Latest integrated receipt
 
+OD-031 run `42847939727` at `7a74d58` is terminal: Xcode 26.6 built,
+888 core passed; UI 106 passed, 20 failed, two owner-only skips, and 42
+did not run. The aggregate rejected the two unassigned-runner shards.
+The owner approved capping the same eight UI shards at two concurrent
+jobs. The scoped batch compiles locally, five accounting tests and four
+harness cases passed, and no local UI suite ran. See the
+[sharded receipt](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#od-031-sharded-execution--run-42847939727)
+and [approved capacity choice](OPEN_DECISIONS.md#od-031--hosted-verification-capacity).
+
 `56650d2` compiled on hosted Xcode 26.6 and ran all 888 non-UI tests
 successfully. The serial UI job was canceled near its 90-minute limit:
 46 passed, 14 failed, one interrupted, 109 never started. Fix-only

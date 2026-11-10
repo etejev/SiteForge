@@ -34,6 +34,28 @@ next hosted checkpoint push. Safe temporary assumption: fail closed until
 all job and selector receipts confirm coverage; do not interpret a missing
 artifact or canceled shard as a pass.
 
+First sharded run 42847939727: shards 4 and 8 were canceled before acquiring
+a macOS runner, leaving 42 selectors unrun. The core job completed all 888.
+Other shards reported actual test failures; replaying only the missing
+jobs cannot make this SHA green. A same-SHA recovery is worth considering
+only for a terminal run whose only missing coverage is runner assignment,
+with unexpired artifacts and no artifact already published for the target
+shard. A retry of a shard with an existing artifact is not supported by
+the current receipt design: GitHub may reject the name or expose multiple
+same-name artifacts across attempts. Do not overwrite or select a receipt
+by download order.
+
+Owner-approved capacity follow-up: keep all eight shards and
+the same 90-minute job limits, but stagger UI allocation with matrix
+`max-parallel: 2` (plus the independent core job). Queue latency can grow;
+the cap reduces simultaneous demand but does not guarantee runner
+availability. The owner authorized one fresh normal push of the reviewed
+batch. Same-SHA recovery remains unapproved; any future design must use immutable
+attempt-qualified artifacts, require the exact run ID, SHA, shard and
+authoritative latest job attempt, reject duplicate or stale receipts, and
+test this selection before allowing a targeted retry. Do not rerun the
+previous run or assume staggered allocation proves UI acceptance.
+
 ## OD-030 — Complete macOS UI automation authorization
 
 Status: exact ordinary-identity image replay passed. The later full run

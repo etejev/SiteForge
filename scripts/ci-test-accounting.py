@@ -1,6 +1,7 @@
 """OD-031: schedule exact XCTest selectors and reconcile hosted receipts."""
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -98,14 +99,36 @@ def records(payload):
     return list(visit(payload["testNodes"]))
 
 
+def restore_skip_reasons(entries, transcript):
+    # Xcode 26's tree omitted the skip message from the hosted receipt.
+    # Use only the exact XCTest diagnostic for this already-skipped case.
+    for entry in entries:
+        if entry["outcome"] != "Skipped" or entry["reasons"]:
+            continue
+        target, suite, method = entry["selector"].split("/")
+        marker = r"-\[" + "(?:" + re.escape(target + ".") + ")?" + re.escape(f"{suite} {method}] : Test skipped - ")
+        entry["reasons"] = re.findall(r"(?m)^/[^\n]+:\d+: " + marker + r"([^\r\n]+)$", transcript)
+
+
 def reconcile(receipts, groups, sha):
     labels = ["core", *(f"ui-{i}" for i in range(1, SHARDS + 1))]
-    exact([item["job"] for item in receipts], labels, "Job receipts")
-    by_job = {item["job"]: item for item in receipts}
-    core = discovery(by_job["core"]["enumeration"], groups)
     errors = []
+    try:
+        exact([item["job"] for item in receipts], labels, "Job receipts")
+    except ValueError as error:
+        errors.append(str(error))
+    frequencies = Counter(item["job"] for item in receipts)
+    by_job = {item["job"]: item for item in receipts if frequencies[item["job"]] == 1}
+    core = []
+    try:
+        core = discovery(by_job["core"]["enumeration"], groups)
+    except (ValueError, KeyError, TypeError) as error:
+        errors.append(f"Core discovery unavailable: {error}")
     for label, expected in zip(labels, [core, *groups], strict=True):
-        receipt = by_job[label]
+        receipt = by_job.get(label)
+        if receipt is None:
+            print(f"{label}: no receipt; not recorded={len(expected) if expected else 'unknown'}")
+            continue
         require(receipt["sha"] == sha, f"{label}: receipt SHA mismatch")
         entries = receipt["records"]
         keys = [selector(record["selector"]) for record in entries]
@@ -148,6 +171,8 @@ def create_receipt(args):
             text=True, timeout=60)
         result["records"] = records(json.loads(raw))
         require(result["records"], "Empty XCTest result")
+        if any(entry["outcome"] == "Skipped" and not entry["reasons"] for entry in result["records"]):
+            restore_skip_reasons(result["records"], bundle.with_suffix(".log").read_text(errors="replace"))
     except (ValueError, KeyError, OSError, TypeError, subprocess.SubprocessError) as error:
         result["error"] = str(error)
     (args.directory / "receipt.json").write_text(json.dumps(result, indent=2) + "\n")
