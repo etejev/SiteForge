@@ -6,8 +6,8 @@ cd "$ROOT"
 
 WATCH_ROOTS=(SiteForge Tests Package.swift)
 existing=()
-for path in "${WATCH_ROOTS[@]}"; do
-  [[ -e "$path" ]] && existing+=("$path")
+for watch_root in "${WATCH_ROOTS[@]}"; do
+  [[ -e "$watch_root" ]] && existing+=("$watch_root")
 done
 
 if (( ${#existing[@]} == 0 )); then
@@ -22,18 +22,18 @@ fingerprint() {
 
 last=$(fingerprint)
 print "Watching SiteForge sources. Press Control-C to stop."
-./sf verify || true
+./sf build || true
 
 while true; do
   sleep 1
   current=$(fingerprint)
   if [[ "$current" != "$last" ]]; then
     last="$current"
-    print "\nChange detected — verifying…"
-    if ./sf verify; then
-      print "Verification passed."
+    print "\nChange detected — building…"
+    if ./sf build; then
+      print "Build passed."
     else
-      print -u2 "Verification failed. Waiting for the next change."
+      print -u2 "Build failed. Waiting for the next change."
     fi
   fi
 done

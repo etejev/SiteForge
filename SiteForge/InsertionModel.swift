@@ -1337,6 +1337,7 @@ enum ComponentGraphResolver {
                     && !$0.key.rawValue.hasPrefix(CanonicalComponentAction.namespace)
                     && !$0.key.rawValue.hasPrefix(CanonicalComponentSlot.namespace)
                     && !$0.key.rawValue.hasPrefix(CanonicalComponentOrganization.namespace)
+                    && !CanonicalComponentUsageNotes.owns($0)
                     && (visibilityBinding == nil || !$0.key.rawValue.hasPrefix(ResponsiveVisibilityResolver.namespace + "."))
             }.map { property in
                 NodeProperty(id: PropertyID(DocumentPage.deterministicUUID(namespace: id.rawValue,

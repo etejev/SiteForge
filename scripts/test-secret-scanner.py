@@ -3,12 +3,14 @@
 
 from pathlib import Path
 from contextlib import contextmanager
+from errno import EIO
 import importlib.util
 import os
 import shutil
 import sys
 import tempfile
 from typing import Optional
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 module_path = ROOT / "scripts/scan-repository-secrets.py"
@@ -89,6 +91,41 @@ prove_cleanup(None)
 prove_cleanup(RuntimeError("synthetic failure"))
 prove_cleanup(KeyboardInterrupt())
 
+with tempfile.TemporaryDirectory(prefix="siteforge-scanner-traversal-") as scratch:
+    root = Path(scratch)
+    visible = root / "source"
+    visible.mkdir()
+    (visible / ".env").touch()
+    excluded = [root / name for name in scanner.SKIP_DIRECTORIES]
+    excluded.extend(visible / f"generated{suffix}" for suffix in scanner.SKIP_SUFFIXES)
+    for directory in excluded:
+        directory.mkdir()
+        (directory / ".env").touch()
+
+    directories_opened = []
+    real_scandir = os.scandir
+
+    def record_directory(path):
+        directories_opened.append(Path(path))
+        return real_scandir(path)
+
+    with patch("os.scandir", side_effect=record_directory):
+        findings = scanner.scan(root)
+    if set(directories_opened) != {root, visible}:
+        raise SystemExit("Secret scanner opened an excluded directory")
+    if findings != [scanner.Finding(Path("source/.env"), 1, "sensitive-file")]:
+        raise SystemExit("Secret scanner missed a nested in-scope finding")
+
+    def fail_in_scope(path):
+        if Path(path) == visible:
+            raise OSError(EIO, "synthetic directory read failure", path)
+        return real_scandir(path)
+
+    with patch("os.scandir", side_effect=fail_in_scope):
+        findings = scanner.scan(root)
+    if findings != [scanner.Finding(Path("source"), 1, "unreadable-directory")]:
+        raise SystemExit("Secret scanner treated a partial directory scan as clean")
+
 negative_relative = Path("Tests/Fixtures/SecretScanner/negative.txt")
 negative = scanner.scan_file(ROOT / negative_relative, negative_relative)
 if negative:
@@ -102,5 +139,6 @@ if repository_findings:
     raise SystemExit("Secret scanner found repository content; run scan-repository-secrets.py for redacted locations")
 print(
     f"Secret scanner tests passed ({len(positive)} seeded pattern detections, "
-    "4 sensitive-name policies, runtime fixture cleanup, 0 negative-fixture findings)."
+    "4 sensitive-name policies, excluded-tree pruning, directory read failure, runtime fixture cleanup, "
+    "0 negative-fixture findings)."
 )

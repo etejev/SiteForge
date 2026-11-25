@@ -2,10 +2,48 @@ import AppKit
 import ImageIO
 import XCTest
 import SwiftUI
+import WebKit
 @testable import SiteForge
 
 @MainActor
 final class CanvasTextRenderingTests: XCTestCase {
+
+    // SF-0508-003/008, SF-1204-003: compare real Core Graphics painting
+    // with WebKit CSS pixels, including different RGB and alpha endpoints.
+    func testNativeGradientAlphaPixelsMatchActualBrowserCSS() async throws {
+        let web = WKWebView(frame: .init(x: 0, y: 0, width: 640, height: 128), configuration: WKWebViewConfiguration())
+        let window = NSWindow(contentRect: web.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = web; window.makeKeyAndOrderFront(nil)
+        defer { web.stopLoading(); window.orderOut(nil); window.close() }
+        web.loadHTMLString("<!doctype html><html><style>html,body{margin:0;background:white}#gradient{width:640px;height:128px;background:linear-gradient(90deg,rgba(255,0,0,0) 0%,rgba(0,0,255,1) 100%)}</style><body><div id='gradient'></div></body></html>", baseURL: nil)
+        var ready = false
+        for _ in 0..<200 {
+            if (try? await web.evaluateJavaScript("!!document.getElementById('gradient')")) as? Bool == true { ready = true; break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertTrue(ready)
+        let browser = try await web.takeSnapshot(configuration: nil)
+        let browserBitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(browser.tiffRepresentation)))
+        let context = try XCTUnwrap(CGContext(data: nil, width: 640, height: 128, bitsPerComponent: 8, bytesPerRow: 640*4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(gray: 1, alpha: 1)); context.fill(.init(x: 0, y: 0, width: 640, height: 128))
+        NativeAuthoredFillPainter.draw(.init(id: UUID(), kind: .linearGradient, isEnabled: true, rgba: nil, angleDegrees: 0, stops: [
+            .init(id: UUID(), position: 0, rgba: [1,0,0,0]), .init(id: UUID(), position: 1, rgba: [0,0,1,1])]),
+            in: .init(x: 0, y: 0, width: 640, height: 128), context: context)
+        let native = try XCTUnwrap(context.makeImage())
+        let nativeBitmap = NSBitmapImageRep(cgImage: native)
+        for fraction in [0.2, 0.5, 0.8] {
+            let a = try XCTUnwrap(nativeBitmap.colorAt(x: Int(640*fraction), y: 64)?.usingColorSpace(.sRGB))
+            let b = try XCTUnwrap(browserBitmap.colorAt(x: Int(Double(browserBitmap.pixelsWide)*fraction), y: browserBitmap.pixelsHigh/2)?.usingColorSpace(.sRGB))
+            XCTAssertEqual(a.redComponent, b.redComponent, accuracy: 0.02, "Native and CSS premultiplied alpha red at \(fraction)")
+            XCTAssertEqual(a.greenComponent, b.greenComponent, accuracy: 0.02)
+            XCTAssertEqual(a.blueComponent, b.blueComponent, accuracy: 0.02, "Native and CSS premultiplied alpha blue at \(fraction)")
+        }
+        let a = XCTAttachment(data: try XCTUnwrap(nativeBitmap.representation(using: .png, properties: [:])), uniformTypeIdentifier: "public.png")
+        a.name = "Native transparent red to opaque blue gradient"; a.lifetime = .keepAlways; add(a)
+        let b = XCTAttachment(data: try XCTUnwrap(browserBitmap.representation(using: .png, properties: [:])), uniformTypeIdentifier: "public.png")
+        b.name = "Actual WebKit CSS transparent red to opaque blue gradient"; b.lifetime = .keepAlways; add(b)
+    }
 
     // SF-0806-006, SF-1203-006: exercise the real SwiftUI/AppKit sizing
     // boundary at Header's 24-point row, not only a standalone 32-point popup.
@@ -1386,6 +1424,240 @@ final class CanvasTextRenderingTests: XCTestCase {
             "The production shadow must paint beyond the authored object without changing its frame."
         )
         XCTAssertEqual(object.frame, frame)
+    }
+
+    // SF-0508-003/008, SF-1204-003: inspect production CALayer painting,
+    // including unequal aspect ratios and tile-local coordinate conversion.
+    func testNativeGradientDirectionAndContinuityMatchPhysicalCSSGeometry() throws {
+        let width = 400, height = 400
+        for size in [(240.0, 80.0), (80.0, 240.0)] {
+        for angle in [0.0, 45.0, 90.0, 135.0] {
+        for zoom in [1.0, 1.25] {
+            let frame = WorldRect(origin: .init(x: 30, y: 30), size: .init(width: size.0, height: size.1))
+            var viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+                viewportSize: .init(width: Double(width), height: Double(height)),
+                contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: Double(width), height: Double(height))),
+                pixelRatio: .init(1))
+            try viewport.zoom(to: zoom, around: .init(x: 0, y: 0))
+            let fill = CanvasAuthoredFillLayer(id: UUID(), kind: .linearGradient,
+                isEnabled: true, rgba: nil, angleDegrees: angle, stops: [
+                    .init(id: UUID(), position: 0, rgba: [1, 0, 0, 1]),
+                    .init(id: UUID(), position: 1, rgba: [0, 0, 1, 1])])
+            let object = CanvasRenderObject(id: NodeID(), frame: frame, clipRect: viewport.contentBounds,
+                paintOrder: 0, style: .frameSurface, isVisible: true,
+                accessibilityLabel: "Native gradient", fillLayers: [fill])
+            var bytes = [UInt8](repeating: 0, count: width * height * 4)
+            try bytes.withUnsafeMutableBytes { buffer in
+                let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: width, height: height,
+                    bitsPerComponent: 8, bytesPerRow: width * 4,
+                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                let root = CALayer(); root.frame = .init(x: 0, y: 0, width: width, height: height)
+                root.isGeometryFlipped = true
+                let container = CALayer(); container.frame = root.bounds; container.isGeometryFlipped = false
+                root.addSublayer(container)
+                for x in stride(from: 0, to: width, by: 100) {
+                    let tile = CanvasContentTileLayer()
+                    tile.frame = .init(x: x, y: 0, width: 100, height: height)
+                    tile.viewportState = viewport; tile.tileOrigin = tile.frame.origin
+                    tile.objects = [object]; tile.contentsScale = 1
+                    container.addSublayer(tile); tile.setNeedsDisplay()
+                }
+                root.render(in: context)
+                if zoom == 1 {
+                    let image = try XCTUnwrap(context.makeImage())
+                    let attachment = XCTAttachment(image: NSImage(cgImage: image, size: .init(width: width, height: height)))
+                    attachment.name = "native-gradient-\(Int(size.0))x\(Int(size.1))-\(Int(angle))"
+                    attachment.lifetime = .keepAlways; add(attachment)
+                }
+            }
+            let origin = try viewport.transform.worldToViewport(frame.origin)
+            let radians = angle * .pi / 180
+            let dx = cos(radians), dy = sin(radians)
+            let length = abs(dx) * size.0 * zoom + abs(dy) * size.1 * zoom
+            // Interior points plus both sides of a real 100pt tile boundary.
+            for point in [(0.25, 0.5), (0.5, 0.25), (0.75, 0.5), (0.5, 0.75)] {
+                let px = Int(origin.x + size.0 * zoom * point.0)
+                let py = Int(origin.y + size.1 * zoom * point.1)
+                let deltaX = Double(px) + 0.5 - origin.x - size.0 * zoom / 2
+                let deltaY = Double(py) + 0.5 - origin.y - size.1 * zoom / 2
+                let t = min(1, max(0, 0.5 + (deltaX * dx + deltaY * dy) / length))
+                let offset = ((height - 1 - py) * width + px) * 4
+                XCTAssertEqual(Double(bytes[offset]), (1 - t) * 255, accuracy: 4,
+                    "Native physical direction, size \(size), angle \(angle), zoom \(zoom), point \(point)")
+                XCTAssertEqual(Double(bytes[offset + 2]), t * 255, accuracy: 4)
+            }
+            for py in [Int(origin.y + size.1 * zoom / 2)] {
+                for px in [99, 199] where Double(px) > origin.x + 2 && Double(px + 1) < origin.x + size.0 * zoom - 2 {
+                    let a = ((height - 1 - py) * width + px) * 4
+                    let b = a + 4
+                    XCTAssertLessThanOrEqual(abs(Int(bytes[a]) - Int(bytes[b])), 5, "No tile seam")
+                    XCTAssertEqual(bytes[a + 3], 255); XCTAssertEqual(bytes[b + 3], 255)
+                }
+            }
+        }
+        }
+        }
+    }
+
+    // SF-0508-003/008, SF-1201-003: the real native device Preview
+    // surface must paint the spatial ramp rather than its midpoint color.
+    func testNativeDevicePreviewSurfaceRetainsSpatialGradientAndAlpha() throws {
+        let view = NativeAuthoredFillSurfaceView(frame: .init(x: 0, y: 0, width: 240, height: 80))
+        view.fills = [.init(id: UUID(), kind: .linearGradient, isEnabled: true, rgba: nil, angleDegrees: 0,
+            stops: [.init(id: UUID(), position: 0, rgba: [1, 0, 0, 0.5]),
+                    .init(id: UUID(), position: 1, rgba: [0, 0, 1, 0.5])])]
+        var bytes = [UInt8](repeating: 0, count: 240 * 80 * 4)
+        bytes.withUnsafeMutableBytes { raw in
+            let context = CGContext(data: raw.baseAddress, width: 240, height: 80, bitsPerComponent: 8,
+                bytesPerRow: 240 * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+            view.draw(view.bounds)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        let pixels = Data(bytes)
+        let left = rgba(at: (20, 40), in: pixels, width: 240, height: 80)
+        let right = rgba(at: (220, 40), in: pixels, width: 240, height: 80)
+        XCTAssertGreaterThan(left.red, left.blue + 80)
+        XCTAssertGreaterThan(right.blue, right.red + 80)
+        XCTAssertEqual(Int(left.alpha), 128, accuracy: 2)
+        XCTAssertEqual(Int(right.alpha), 128, accuracy: 2)
+    }
+
+    // SF-0508-003/005/008: inserting a stop must preserve actual native
+    // interpolation with alpha, not only a helper's numerical result.
+    func testNativeGradientInsertionAlphaHardStopsAndGroupedOpacity() throws {
+        let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: 300, height: 120),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 300, height: 120)), pixelRatio: .init(1))
+        let frame = WorldRect(origin: .init(x: 20, y: 30), size: .init(width: 240, height: 60))
+        let canonical = CanonicalFillLayer.linearGradient(angleDegrees: 0, stops: [
+            .init(id: GradientStopID(), position: 0, color: .init(red: 1, green: 0, blue: 0, alpha: 0.2)),
+            .init(id: GradientStopID(), position: 1, color: .init(red: 0, green: 0, blue: 1, alpha: 0.8))])
+        let stop = try XCTUnwrap(GradientAuthoringInsertion.stop(in: canonical))
+        func layer(_ stops: [CanonicalGradientStop]) -> CanvasAuthoredFillLayer {
+            .init(id: canonical.id.rawValue, kind: .linearGradient, isEnabled: true, rgba: nil, angleDegrees: 0,
+                stops: stops.map { .init(id: $0.id.rawValue, position: $0.position,
+                    rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha]) })
+        }
+        func object(_ layers: [CanvasAuthoredFillLayer], opacity: Double = 1) -> CanvasRenderObject {
+            .init(id: NodeID(), frame: frame, clipRect: viewport.contentBounds, paintOrder: 0,
+                style: .frameSurface, isVisible: true, accessibilityLabel: "Alpha gradient", fillLayers: layers, opacity: opacity)
+        }
+        let original = rasterizedBytes(object: object([layer(canonical.stops)]), viewport: viewport)
+        let inserted = rasterizedBytes(object: object([layer(canonical.stops + [stop])]), viewport: viewport)
+        let maximumDifference = zip(original, inserted).reduce(0) { max($0, abs(Int($1.0) - Int($1.1))) }
+        XCTAssertLessThanOrEqual(maximumDifference, 2, "Insertion preserves native alpha pixels")
+        let hardStops: [CanonicalGradientStop] = [
+            .init(id: GradientStopID(), position: 0, color: .init(red: 1, green: 0, blue: 0, alpha: 1)),
+            .init(id: GradientStopID(), position: 0.5, color: .init(red: 1, green: 0, blue: 0, alpha: 1)),
+            .init(id: GradientStopID(), position: 0.5, color: .init(red: 0, green: 0, blue: 1, alpha: 1)),
+            .init(id: GradientStopID(), position: 1, color: .init(red: 0, green: 0, blue: 1, alpha: 1))]
+        let hard = rasterizedBytes(object: object([layer(hardStops)]), viewport: viewport)
+        let left = rgba(at: (138, 60), in: hard, width: 300, height: 120)
+        let right = rgba(at: (142, 60), in: hard, width: 300, height: 120)
+        XCTAssertGreaterThan(left.red, 250); XCTAssertLessThan(left.blue, 5)
+        XCTAssertGreaterThan(right.blue, 250); XCTAssertLessThan(right.red, 5)
+        let opaque = CanvasAuthoredFillLayer(id: UUID(), kind: .solid, isEnabled: true, rgba: [0, 1, 0, 1], angleDegrees: nil, stops: [])
+        let group = rasterizedBytes(object: object([opaque, layer(hardStops)], opacity: 0.4), viewport: viewport)
+        XCTAssertEqual(Int(rgba(at: (100, 60), in: group, width: 300, height: 120).alpha), 102, accuracy: 2)
+        let received = NSMutableArray()
+        let coordinator = NativeDesignColorWell.Coordinator { value in received.add(value.hexadecimalRGBA) }
+        let well = AccessibleDesignColorWell(frame: .zero)
+        well.activate(true)
+        NSColorPanel.shared.makeKeyAndOrderFront(nil)
+        defer { well.deactivate(); NSColorPanel.shared.close() }
+        well.color = NSColor(displayP3Red: 1, green: 0, blue: 0, alpha: 0.35)
+        coordinator.colorChanged(well)
+        XCTAssertEqual(received.lastObject as? String, "#FF000059", "Native panel samples convert to finite, gamut-clipped canonical sRGB with alpha")
+    }
+
+    // SF-0508-005/006: closing the real shared Colors panel must end the
+    // owning well once, even when AppKit leaves the well active when hidden.
+    func testNativeColorsPanelCloseEndsOwnedInteractionOnce() async throws {
+        let well = AccessibleDesignColorWell(frame: .init(x: 0, y: 0, width: 40, height: 24))
+        var ended = 0, colorActions = 0
+        let coordinator = NativeDesignColorWell.Coordinator(onCommit: { _ in colorActions += 1 })
+        coordinator.onEnd = { ended += 1 }
+        coordinator.attach(well)
+        defer { coordinator.detach(); well.onPanelDeactivated = nil; well.deactivate(); NSColorPanel.shared.close() }
+        well.activate(true)
+        NSColorPanel.shared.makeKeyAndOrderFront(nil)
+        await Task.yield()
+        XCTAssertTrue(well.isActive)
+        NSColorPanel.shared.performClose(nil)
+        for _ in 0..<100 where well.isActive { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(NSColorPanel.shared.isVisible)
+        XCTAssertFalse(well.isActive)
+        XCTAssertEqual(ended, 1)
+        NSColorPanel.shared.close()
+        XCTAssertEqual(ended, 1)
+        let completedActions = colorActions
+        well.color = NSColor(srgbRed: 0.7, green: 0.2, blue: 0.4, alpha: 1)
+        coordinator.colorChanged(well)
+        XCTAssertEqual(colorActions, completedActions,
+            "A late action from the closed well must not reopen a preview or commit on the next control")
+        well.deactivate()
+        XCTAssertEqual(ended, 1, "Inactive reconciliation has no second completion")
+        well.activate(true)
+        NSColorPanel.shared.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(well.isActive)
+        NSColorPanel.shared.orderOut(nil)
+        for _ in 0..<100 where well.isActive { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(well.isActive, "Ordering the shared panel out must relinquish the color interaction too")
+        XCTAssertEqual(ended, 2)
+        coordinator.colorChanged(well)
+        XCTAssertEqual(colorActions, completedActions)
+    }
+
+    // SF-0508-006, SF-0701-006: reporting an accessible value must not
+    // write into a native control's actual editing value or send an action.
+    func testNativeDesignControlAccessibilityValuesDoNotMutateNativeColorOrNumber() throws {
+        let legacy = NSStepper(frame: .zero)
+        legacy.minValue = 0; legacy.maxValue = 100; legacy.doubleValue = 100
+        legacy.setAccessibilityValue("100.0 percent")
+        let oldBehaviour = XCTAttachment(string: "AppKit accessibility setter diagnostic: number=\(legacy.doubleValue), object=\(String(describing: legacy.objectValue))")
+        oldBehaviour.name = "Native accessibility setter semantics"; oldBehaviour.lifetime = .keepAlways; add(oldBehaviour)
+        let stepper = AccessibleDesignOpacityStepper(frame: .zero)
+        stepper.minValue = 0; stepper.maxValue = 100; stepper.increment = 1; stepper.doubleValue = 100
+        stepper.authoredAccessibilityValue = "100 percent, defaulted"
+        XCTAssertEqual(stepper.doubleValue, 100)
+        XCTAssertTrue(stepper.accessibilityPerformDecrement())
+        XCTAssertEqual(stepper.doubleValue, 99)
+        stepper.authoredAccessibilityValue = "99 percent, preview"
+        XCTAssertEqual(stepper.doubleValue, 99)
+        XCTAssertEqual((stepper.accessibilityValue() as? NSNumber)?.doubleValue, 99)
+        XCTAssertEqual(stepper.accessibilityValueDescription(), "99 percent, preview")
+        let well = AccessibleDesignColorWell(frame: .zero)
+        well.color = NSColor(srgbRed: 0.2, green: 0.3, blue: 0.4, alpha: 0.5)
+        let color = well.color
+        well.authoredAccessibilityValue = "#334D6680"
+        XCTAssertEqual(well.color, color)
+        XCTAssertEqual(well.accessibilityValue() as? String, "#334D6680")
+    }
+
+    // SF-0506-003/008, SF-0508-003: native border width is the authored
+    // inside thickness and object opacity composites the complete surface once.
+    func testNativeBorderThicknessAndOpacityMatchAuthoredValues() throws {
+        let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: 300, height: 120),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 300, height: 120)), pixelRatio: .init(1))
+        let frame = WorldRect(origin: .init(x: 40, y: 30), size: .init(width: 160, height: 60))
+        let object = CanvasRenderObject(id: NodeID(), frame: frame, clipRect: viewport.contentBounds,
+            paintOrder: 0, style: .frameSurface, isVisible: true, accessibilityLabel: "Measured border",
+            fillRGBA: [0, 0, 1, 1], opacity: 0.5,
+            border: .init(rgba: [1, 0, 0, 1], width: 4, style: .solid))
+        let pixels = rasterizedBytes(object: object, viewport: viewport)
+        let edge = rgba(at: (43, 60), in: pixels, width: 300, height: 120)
+        let middle = rgba(at: (120, 60), in: pixels, width: 300, height: 120)
+        let borderEdge = rgba(at: (40, 60), in: pixels, width: 300, height: 120)
+        let measured = XCTAttachment(string: "4pt native border, inside x+3: RGBA \(edge); edge alpha \(borderEdge.alpha); interior alpha \(middle.alpha)")
+        measured.name = "Native measured border thickness and surface opacity"; measured.lifetime = .keepAlways; add(measured)
+        XCTAssertGreaterThan(edge.red, edge.blue, "Four authored points cover the fourth inside pixel")
+        XCTAssertEqual(Int(borderEdge.alpha), 128, accuracy: 2, "Fill and border share one object-opacity group")
+        XCTAssertEqual(Int(middle.alpha), 128, accuracy: 2)
     }
 
     private func rasterizedBytes(object: CanvasRenderObject, viewport: CanvasViewportState, backingScale: Double = 1, includeText: Bool = false) -> Data {

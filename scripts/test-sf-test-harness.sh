@@ -1,5 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
+export SITEFORGE_TEST_MONITOR=0
 
 # Focused regression checks for sf's capability-aware UI test lifecycle. They
 # use only a temporary PATH shim: no real Xcode process is launched.

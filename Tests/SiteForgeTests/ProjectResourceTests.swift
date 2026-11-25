@@ -8,6 +8,33 @@ import XCTest
 
 final class ProjectResourceTests: XCTestCase {
 
+    // SF-0802-003/004/008: inspect the real generated pixels and decode them.
+    func testGeneratedQRCodeQuietZoneSharpPixelsAndActualPayload() async throws {
+        let result = try await QRCodeResourceWorker().prepare(payload: "https://example.com")
+        try ProjectQRCodeVerifier.verify(result.data, payload: "https://example.com")
+        XCTAssertThrowsError(try ProjectQRCodeVerifier.verify(result.data, payload: "https://example.com/wrong"))
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(result.data as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(image.width, image.height); XCTAssertEqual(image.width % 8, 0)
+        let context = try XCTUnwrap(CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+            bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let bytes = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        var black = 0
+        for y in 0..<image.height { for x in 0..<image.width {
+            let offset = (y * image.width + x) * 4
+            XCTAssertTrue(bytes[offset] == 0 || bytes[offset] == 255, "QR pixels must stay sharp without interpolation")
+            if x < 32 || y < 32 || x >= image.width - 32 || y >= image.height - 32 {
+                XCTAssertEqual(bytes[offset], 255); XCTAssertEqual(bytes[offset+1], 255); XCTAssertEqual(bytes[offset+2], 255)
+            }
+            if bytes[offset] == 0 { black += 1 }
+            XCTAssertEqual(bytes[offset+3], 255)
+        } }
+        XCTAssertGreaterThan(black, image.width)
+        let attachment = XCTAttachment(data: result.data, uniformTypeIdentifier: "public.png")
+        attachment.name = "Locally generated and decoded QR with quiet zone"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
     @MainActor func testPackageBackedOutputWorkersPreserveImageBytesAndCanonicalIdentity() async throws {
         let (session, asset, bytes, _) = try twoImageUseFixture(), fixture = try makeFixture()
         let lifecycle = DocumentLifecycleController(session: session, recoveryDirectory: fixture.url.appendingPathComponent("recovery"))
@@ -111,6 +138,7 @@ final class ProjectResourceTests: XCTestCase {
         let state = WorkspaceShellState(documentSession: session, lifecycle: lifecycle)
         state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
         try await ready(state); state.selectLayer(ids[0])
+        XCTAssertTrue(state.selectInspectorTab(.layout))
         var draft: LayoutInspectorNumericDraft? = .init(text: "-", committed: "160", scope: state.layoutInspectorDraftScope)
         let subscription = state.editCommitRequests.sink { request in
             guard let current = draft else { return }

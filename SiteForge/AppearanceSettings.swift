@@ -82,7 +82,7 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
     private weak var settingsWindow: NSWindow?
 
     init(defaults: UserDefaults = .standard,
-         present: @escaping (ApplicationAppearance) -> Void = { NSApp.appearance = $0.nativeAppearance }) {
+         present: @escaping (ApplicationAppearance) -> Void = { AppearanceSettingsStore.presentNativeAppearance($0) }) {
         self.defaults = defaults
         self.present = present
         committedData = defaults.data(forKey: Self.storageKey)
@@ -95,6 +95,15 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
             lastDiagnostic = AppearanceSettingsDiagnostic(operation: "load", failureCategory: "unsupported-record", durationSeconds: 0)
         }
         present(resolved)
+    }
+
+    private static func presentNativeAppearance(_ appearance: ApplicationAppearance) {
+        NSApp.appearance = appearance.nativeAppearance
+        if let bundle = Bundle.main.bundleIdentifier {
+            DistributedNotificationCenter.default().postNotificationName(
+                .init("app.siteforge.testingAppearanceChanged"), object: bundle,
+                userInfo: ["appearance": appearance.rawValue], deliverImmediately: true)
+        }
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -235,65 +244,129 @@ final class AppearanceSettingsStore: NSObject, ObservableObject {
     }
 
     func close() { cancel(); editing = false }
-    func closeWindow() { settingsWindow?.performClose(nil) }
 }
 
 struct AppearanceSettingsView: View {
     @ObservedObject var store: AppearanceSettingsStore
 
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+
     var body: some View {
-        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
-            SiteForgeSettingsHeader(
-                title: "Appearance",
-                scope: AuthoringLanguage.appPreferencesScope,
-                detail: "Preview Light, Dark or System, then Apply to keep your choice.",
-                systemImage: "circle.lefthalf.filled"
-            )
-            GroupBox("Interface") {
-                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
-                    Picker("Appearance", selection: Binding(get: { store.choice }, set: { store.preview($0) })) {
-                        ForEach(ApplicationAppearance.allCases, id: \.self) { choice in
-                            Text(choice.title).tag(choice)
-                        }
+        let palette = SiteForgeChromePalette(scheme: scheme, contrast: contrast)
+        VStack(alignment: .leading, spacing: 25) {
+            SiteForgeSettingsHeader(title: "Appearance", scope: "", detail: "")
+            GroupBox("Theme") {
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        Text("App appearance").font(.body.weight(.medium))
+                        Spacer(minLength: 8)
+                        choices(palette)
                     }
-                    .pickerStyle(.radioGroup)
-                    .accessibilityIdentifier("settings.appearance.choice")
-                    Text(store.status).font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityLabel(store.status)
-                        .accessibilityIdentifier("settings.appearance.status")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("App appearance").font(.body.weight(.medium))
+                        choices(palette)
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack {
-                Button("Reset to Default") { store.reset() }
-                    .accessibilityValue(store.draft == nil ? "Already default" : "Reset available")
-                    .accessibilityIdentifier("settings.appearance.reset")
-                Button("Restore Previous") { store.restorePrevious() }
-                    .disabled(!store.canRestore)
-                    .accessibilityIdentifier("settings.appearance.restore")
-                Spacer()
-            }
-            HStack {
-                Spacer()
-                Button("Close") { store.closeWindow() }
-                    .accessibilityIdentifier("settings.appearance.close")
-                Button("Cancel") { store.cancel() }.keyboardShortcut(.cancelAction)
-                    .accessibilityIdentifier("settings.appearance.cancel")
-                Button("Apply") { store.apply() }.keyboardShortcut(.defaultAction)
-                    .disabled(!store.canApply)
-                    .accessibilityIdentifier("settings.appearance.apply")
+                .padding(.vertical, 3)
             }
         }
-        .padding(SiteForgeVisualSystem.settingsFormPadding)
-        .frame(maxWidth: SiteForgeVisualSystem.settingsContentMaxWidth, alignment: .topLeading)
-        // Native close, not SwiftUI appearance-driven view replacement, owns
-        // draft rollback. The host never changes window geometry or content.
         .background(AppearanceSettingsWindowHost(store: store).frame(width: 0, height: 0))
         .onChange(of: store.status) { _, status in
             NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
                 userInfo: [.announcement: status, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
         }
+    }
+
+    private func choices(_ palette: SiteForgeChromePalette) -> some View {
+        HStack(spacing: 3) {
+            ForEach(ApplicationAppearance.allCases, id: \.self) { choice in
+                let selected = store.choice == choice
+                Button { store.preview(choice) } label: {
+                    Text(choice.title == "Follow macOS" ? "System" : choice.title)
+                        .font(.callout.weight(selected ? .semibold : .regular))
+                        .fixedSize()
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .frame(minHeight: 25)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(selected ? palette.selected : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .foregroundStyle(selected ? palette.text : palette.quiet)
+                .accessibilityLabel(choice.title)
+                .accessibilityValue(selected ? "Selected" : "Not selected")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityIdentifier("settings.appearance.choice.\(choice.rawValue)")
+            }
+        }
+        .padding(3)
+        .background(palette.inset, in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Appearance")
+        .accessibilityIdentifier("settings.appearance.choice")
+    }
+}
+
+struct AppearanceSettingsActions: View {
+    @ObservedObject var store: AppearanceSettingsStore
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var palette: SiteForgeChromePalette { .init(scheme: scheme, contrast: contrast) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(palette.line).frame(height: 1).accessibilityHidden(true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    recoveryActions
+                    Spacer(minLength: 8)
+                    status
+                    commitActions
+                }
+                VStack(alignment: .trailing, spacing: 8) {
+                    status
+                    HStack { recoveryActions; Spacer(); commitActions }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .frame(minHeight: 51)
+        }
+        .background(palette.bar)
+    }
+
+    @ViewBuilder private var recoveryActions: some View {
+        Button("Reset to Default") { store.reset() }
+            .buttonStyle(SiteForgeChromeButtonStyle(palette: palette))
+            .accessibilityValue(store.draft == nil ? "Already default" : "Reset available")
+            .accessibilityIdentifier("settings.appearance.reset")
+        if store.canRestore {
+            Button("Restore Previous") { store.restorePrevious() }
+                .accessibilityIdentifier("settings.appearance.restore")
+        }
+    }
+
+    private var status: some View {
+        Text(store.isDirty ? "Unsaved preview" : store.status)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .accessibilityValue(store.status)
+            .accessibilityIdentifier("settings.appearance.status")
+    }
+
+    @ViewBuilder private var commitActions: some View {
+        Button("Cancel") { store.cancel() }
+            .buttonStyle(SiteForgeChromeButtonStyle(palette: palette))
+            .keyboardShortcut(.cancelAction)
+            .accessibilityIdentifier("settings.appearance.cancel")
+        Button("Apply") { store.apply() }
+            .buttonStyle(SiteForgeChromeButtonStyle(palette: palette, primary: true))
+            .keyboardShortcut(.defaultAction)
+            .disabled(!store.canApply)
+            .accessibilityIdentifier("settings.appearance.apply")
     }
 }
 

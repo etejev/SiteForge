@@ -139,20 +139,6 @@ struct FillLayerListInspectorView: View {
                 .controlSize(.small)
                 .accessibilityLabel("Delete fill layer")
                 .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).delete")
-                if layer.kind == .solid, let color = layer.solidColor {
-                    NativeDesignColorWell(
-                        color: color,
-                        isEnabled: layer.isEnabled,
-                        accessibilityValue: color.hexadecimalRGBA,
-                        accessibilityHint: "Open the native color panel to edit this solid fill layer.",
-                        accessibilityIdentifier: "inspector.design.layers.\(layer.id.description).color",
-                        accessibilityLabel: "Solid fill color",
-                        onCommit: { color in
-                            _ = state.commitDesignFillLayer(.setSolidColor(layer.id, color), operation: "edit solid layer color", provenance: .picker)
-                        }
-                    )
-                    .frame(width: 38, height: 22)
-                }
                 Toggle(isOn: Binding(
                     get: { layer.isEnabled },
                     set: { enabled in
@@ -165,6 +151,11 @@ struct FillLayerListInspectorView: View {
                 .toggleStyle(.checkbox)
                 .accessibilityIdentifier("inspector.design.layers.\(layer.id.description).enabled")
                 Spacer(minLength: 0)
+            }
+            if layer.kind == .solid, let color = layer.solidColor {
+                DesignColorEditor(state: state, color: color, isEnabled: layer.isEnabled,
+                    label: "Solid fill color", identifier: "inspector.design.layers.\(layer.id.description).color",
+                    edit: { .fill(.setSolidColor(layer.id, $0)) })
             }
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
@@ -193,7 +184,7 @@ struct FillLayerListInspectorView: View {
                 }
                 Button("Add Stop") {
                     _ = state.commitDesignFillLayer(
-                        .addStop(layer.id, .init(id: GradientStopID(), position: 0.5, color: .legacySurface), at: layer.stops.count),
+                        .addStop(layer.id, GradientAuthoringInsertion.stop(in: layer)!, at: layer.stops.count),
                         operation: "add gradient stop", provenance: .accessibility
                     )
                 }
@@ -209,18 +200,6 @@ struct FillLayerListInspectorView: View {
                             Text("Stop \(stopIndex + 1)")
                                 .font(.caption.weight(.medium))
                                 .lineLimit(1).fixedSize()
-                            NativeDesignColorWell(
-                                color: stop.color,
-                                isEnabled: layer.isEnabled,
-                                accessibilityValue: stop.color.hexadecimalRGBA,
-                                accessibilityHint: "Open the native color panel to edit this gradient stop.",
-                                accessibilityIdentifier: "inspector.design.layers.\(layer.id.description).stop.\(stop.id.description).color",
-                                accessibilityLabel: "Gradient stop color",
-                                onCommit: { color in
-                                    _ = state.commitDesignFillLayer(.setStop(layer.id, stop.id, position: stop.position, color: color), operation: "edit gradient stop color", provenance: .picker)
-                                }
-                            )
-                            .frame(width: 38, height: 22)
                             TextField("Position", text: stopBinding(for: stop))
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 54)
@@ -232,6 +211,10 @@ struct FillLayerListInspectorView: View {
                             Text("%")
                             Spacer(minLength: 0)
                         }
+                        DesignColorEditor(state: state, color: stop.color, isEnabled: layer.isEnabled,
+                            label: "Gradient stop color",
+                            identifier: "inspector.design.layers.\(layer.id.description).stop.\(stop.id.description).color",
+                            edit: { .fill(.setStop(layer.id, stop.id, position: stop.position, color: $0)) })
                         HStack(spacing: 6) {
                             Spacer(minLength: 0)
                             Button("Move Up", systemImage: "arrow.up") {

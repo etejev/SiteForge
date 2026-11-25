@@ -23,11 +23,12 @@ For each ready queue item:
 2. Confirm that no unresolved owner decision blocks it.
 3. Write a short implementation plan in the task entry.
 4. Implement one bounded vertical slice.
-5. Add or update tests before declaring the slice complete.
-6. Run `./sf verify`.
+5. Add or update focused tests for newly added or meaningfully changed behavior.
+6. Verify the affected scope using the policy below. Run `./sf verify` for a major feature or before an owner-requested commit or GitHub push.
 7. Review the diff for unrelated changes, debug artifacts, secrets, accessibility regressions, and architectural drift.
 8. Update `docs/IMPLEMENTATION_STATUS.md`, `docs/CHANGELOG.md`, and the queue item.
-9. Continue to the next ready item while the current Codex run has sufficient context and verification remains green.
+9. After a feature or fix passes verification, refresh `/Applications/SiteForge.app` with `scripts/package-owner-local-app.sh --install`. Verify the installed bundle and its source fingerprint before reporting delivery. If the installed app is open, let the owner save and quit it normally before retrying.
+10. Continue to the next ready item while the current Codex run has sufficient context and verification remains green. SiteForge development and verification run through Codex on this Mac. The OpenCode evaluation and former local-model dispatch files are archived.
 
 Do not stop merely because the first happy path works. Check empty, loading, error, cancellation, keyboard, accessibility, persistence, undo/redo, and migration behavior when applicable.
 
@@ -82,7 +83,9 @@ After each meaningful change:
 
 ## Required verification
 
-Run `./sf verify` before reporting completion. If it fails, diagnose and fix it. If the failure is external or pre-existing, record exact evidence and do not claim the item is complete.
+- Use focused tests for new behavior and changes that need regression coverage. Choose exact affected selectors and existing subsystem checks. Documentation and routine edits may use review, compilation, or another lightweight check appropriate to the change.
+- Run the full `./sf verify` gate for a major feature, a broad UI redesign, and before an owner-requested commit or GitHub push. UI redesign verification includes the full native UI suite. Reuse a green result for the exact source being committed when the scope and environment are unchanged.
+- Diagnose and fix verification failures. Record exact evidence for external or pre-existing failures and identify the checks still pending. Keep the hosted verification gate intact.
 
 ## Release safety
 

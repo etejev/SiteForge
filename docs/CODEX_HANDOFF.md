@@ -1,4 +1,252 @@
+## Active styling and interactive showcase checkpoint — November 22
+
+Continue FAST_STYLE_AUTHORING, INTERACTIVE_GRADIENT_AND_SHOWCASE, the highest
+queue plan and ADR-0026. Owner authorizes only the final reviewed local commit
+after expanded acceptance/full gate/install; no push/PR/release. Keep originals
+Aurora/Dark Flow and recovery. Installed verified baseline is still build26.11.22
+source9883; no fast-style/effect candidate installed or committed yet.
+
+The Mac was locked during `effects-start-1`; the owner subsequently unlocked it,
+CGSession confirmed unlocked, and native Settings → Testing → Start works again.
+Do not treat the old CUA prompt as a dependency. Use one collector and real native
+Start buttons for all normal tests. Native input controller now checks for an
+actual Allow button before enumerating a Documents prompt, avoiding a stale
+normal-window snapshot. `effects-start-3` input controller passed and quit viewer
+normally. No active collector remains from its terminal report.
+
+Latest source edit is compiling via `bootstrap-alpha-fix.log` under
+`.codex-loop/interactive`; do not change fingerprinted inputs until packaging
+ends. `colors-alpha-start` native Start Regular report
+`20261122-071658-eedfaf1a` is terminal failed at source
+`b956e4a1c9d1820070d224086b441d0c33045e08a0f3c1e355a1b5b1241e3380`:
+3/4 passed (Colors close/orderOut lifecycle now corrected, native AX, native
+slider Escape/history); actual WebKit/native alpha parity failed six pixel
+assertions. Read SF-FAST-STYLE-AUTHORING's inspected PNG evidence. Native
+unpremultiplied alpha introduced pink where WebKit showed blue. Current fix:
+CanonicalSolidColor premultiplied interpolation shared by headless sampler and
+Add Stop; native varying-alpha/color uses CGShading callback, opaque/uniform-alpha
+keeps CGGradient. Stop identities/order stay canonical. Compile then replay alpha
+parity, insertion/hard stops, native geometry and Colors controls. Callback math
+must be pixel/performance verified. Static fill projection now includes already
+supported stack/grid/button kinds; add focused output proof too.
+
+Earlier expanded Start Regular run `20261122-071125-10fa067b` at source
+`9c2799d59556222387351d6e1c06e290cb27aa4ec26d46b11724629d7204d21e`
+passed 7/8. Effect validation/history/serialization/output, ordinary Footer
+responsive groups/exact undo/copy, actual local QR decoding/quiet-zone/sharp
+pixels/regeneration/mismatch-output gate, AX and tooling bridge passed. Only
+Colors orderOut-before-key failed; active-session-only visibility fallback now
+passed in later b956. Tooling ledger includes Samples fingerprint coverage.
+First `20261122-070724-b252df01` stopped at a new typed numeric assertion compile
+error; fixture corrected before the executed receipt. No failure is waived.
+
+Integrated WIP files: DecorativeEffects.swift is headless command/runtime/output;
+DecorativeEffectsInspector.swift is native controls plus isolated ephemeral WK
+preview (local-only scheme/CSP, no app bridge/network). Canonical Flow/Glass and
+QRCode data live in DocumentModel.swift; schema21 gates new closed namespaces,
+nested Footer references and optional dark color variants out of schema<=20.
+Clipboard v4 gates new data while preserving v2/v3. Theme-aware token output and
+native Dark hex control are compiled but need focused persistence/copy/browser
+acceptance. Native effects sliders now carry actual minima for truthful AX.
+FooterContent.swift uses ordinary responsive Stack/Grid/content batches and the
+existing immutable resource/history path, local Core Image QR + Vision verification,
+regeneration and Convert-to-Image. Shared asset replacement is actionable for QR.
+Output re-decodes each generated asset against retained payload. Nearest native
+and pixelated CSS output preserve QR edges. Footer and QR native UI still need
+actual gestures/selection/save/undo/long-label/compact acceptance.
+
+Current temp native project points to EffectsStartController.swift with four
+code selectors for the last Colors/alpha pass; adjust exact selectors for next
+Start run. Bootstrap candidates only live under `.build/owner-local`; installed
+app remains9883. Actual opacity regression passed `20261122-033811-f11bc3de`
+source8b7e (unchanged hex binding guard, stronger ordered native Undo/Redo).
+Temporary event traces were removed. Earlier7/7 native plus slider/gradient/
+Safari/save and advanced/text-color UI receipts retain separate exact sources.
+
+Expanded work remains: actual browser runtime movement/parameter/lifecycle/
+performance/media tests, live-preview/Flow/Glass native controls, Dark variant
+roundtrip/copy/output tests, fresh Aurora Flow bundled example and Start card,
+responsive dark/light/reduced-motion/transparency visual passes, exact-source
+full gate, strict verified install/installed smoke and scoped local commit.
+Do not stop at partial functionality. No OpenCode/unrelated queue work.
+
+Ignored drafts under `.codex-loop/interactive`: `implementation-notes.md`,
+`aurora-recipe-draft.swift` (uncompiled sample recipe; fix WebsiteMetadata
+`description`→`defaultDescription`, complete border color components, responsive
+hero typography, CTA links and fictional Contact details before integrating),
+`native-browser-alpha-test.swift`, older Footer/QR/runtime drafts. The integrated
+source supersedes old drafts. Future sample generation writes owned ignored/temp
+artifacts during tests, then copy reviewed bytes into Samples only after terminal;
+Samples now affect shared prepared/installed fingerprint. Do not mutate frozen
+source during tests. One collector; PID19034 is idle Xcode GUI, leave it alone.
+
+## Retained earlier styling evidence and setup
+
+Native gradient pixel baseline failed 36 assertions before paint changes;
+physical-size line geometry fixed them. Nine code checks passed at source
+`f5f5cadfd1eb…`, run `20261122-004955-a81c4a6b`. First UI run
+`20261122-005625-3b754e95` passed compact reachability, failed actual opacity
+arrow and ramp handle AX count. Captures and faithful extracted failure video
+frames were inspected. Current replay fixes compact labels, moves Image Fill
+below ordinary controls, reasserts stepper target/action during reconciliation,
+protects native tracking values and contains handle accessibility children.
+An explicit stop-color assertion now diagnoses the observed discarded hex edit.
+Native alpha/insertion/group-opacity/P3 test compiles but has not executed yet.
+
+Owner clarification requires first-class native sliders, not only steppers.
+The source now builds corner/width/opacity sliders backed by owned typed previews;
+corner range derives from selected geometry and is frozen during tracking, with
+numeric values through 10,000 pt retained. Native slider test executes actual
+drags, undo/redo and sends real Escape during a held drag (CGEvent preflight is
+asserted, not skipped). The prior replay was cancelled after compact pass and
+opacity failure; new workflow was unresolved. Standard Colors panel close can
+leave its well active: a willClose observer now explicitly deactivates the owned
+well to finish its preview before another control's action. Opacity arrows now
+use the shared owned preview/finish bridge too. These need current replay.
+
+Latest observed UI run `20261122-012449-8843483a` completed failed: all
+three native slider drags and one-step undo/redo passed before a test-runner
+CGEvent permission preflight failed. The full gradient flow, stop drag/undo and
+actual Safari output were reached, then first-save fixture lacked a destination.
+Captures are in `.codex-loop/fast-style/slider-1-attachments`. Normal native
+XCTest works; its sandbox cannot post independent cross-process CG keyboard
+input. No owner permission change is needed for the replacement actual AppKit
+window-event tracking fixture. UI method is now renamed to
+`testFastStyleNativeSlidersLiveUndoAndKeyboardJourney` and uses a retained project
+fixture; gradient journey now saves and reopens the same project.
+
+Native value decoration now uses overridden accessibility getters instead of
+AppKit's value setters. Regular fixtures inspect native getter/value behavior,
+actual local mouse+Escape tracking with renderer/history rollback, Colors close,
+alpha/stop insertion and measured border width/opacity. The last native Regular
+run `20261122-014129-dff73fd7` failed BUILD ONLY (no cases ran) due to sending
+NSEvents across actor isolation. Events are now constructed inside MainActor
+callbacks. Current input controller's third retry is launching six selectors in
+`.codex-loop/fast-style/native-event-selectors.txt`. First controller paste attempt
+left Start disabled and was restored to known-working native typing. Check the
+actual current report before editing source. The border fixture intentionally
+checks the newly noticed half-inside stroke and separately painted opacity;
+painting has NOT yet been changed for these observations. Diagnose its actual
+native pixels before changing that path. Native getter causes remain pending
+runtime evidence. Full gate and installation have not happened.
+
+Pending: finish native interactions and all color-target ownership, two clean
+Light/Dark/compact visual passes, real Safari gradient comparison, save/reopen,
+focused code/appearance checks, then required major-feature full gate once via
+Testing's Full button. Update evidence/status/changelog/queue/handoff, package
+and install through the owner-local script, verify strict signatures and matching
+source/harness identity, then inspect installed native entry points. Keep user
+projects, prior verified receipts and other dirty work intact. Native automation
+authentication briefly timed out, then completed and subsequent Start succeeded;
+no CUA permission detour or global preference change was needed.
+
+## Current checkpoint — UI consistency installed, November 22
+
+`/Applications/SiteForge.app` build 26.11.22 is installed with strict deep app
+and helper signatures. Source/harness fingerprint:
+`9883ae6d6c5f068ff1346ac937918a75fea594ebd050c44067f89d441cfd4606`.
+The owner-selected semantic macOS grays supersede black Testing/monitor and
+fixed custom chrome colors. Website paper/data are unchanged. Testing now has
+equal Start peers, concise scope/outcomes, native readable/live history, stable
+paused controls and exact details/routing. Helper environment and scoped live
+notifications follow app appearance/preview/cancel. Blue contrast samples all
+pass 3:1 (3.25–5.13). Workspace role reassertion restores usable-desktop geometry;
+UUID-scoped DEBUG auxiliary review phases check native minima without document
+ownership. The maintained Settings journey tests 720×552 and 900×692.
+
+Final exact-source receipts: `20261121-234252-9115caa4` (one Settings/Testing UI
+journey) and `20261121-235142-c7e95d3e` (one XCTest + 88 named nested tooling
+cases, zero failures/skips), both launched from native Start. Retained gray
+53-core/5-appearance and earlier nine-UI receipts have distinct fingerprints.
+No new full-gate claim. `palette-final-4.xcresult`, `after-1.xcresult` and installed
+smoke receipts are under `/private/tmp/siteforge-ui-consistency`. Final captures
+and reconciled receipts are under `.codex-loop/ui-consistency/final` and the
+parent directory. [Evidence](evidence/SF-NATIVE-UI-CONSISTENCY.md) records the
+owner color decision, actual fixes, all failed diagnostic/fixture outcomes,
+corrected replays, contrast/opaque limitations and installation.
+
+Installed Settings→Testing, the actual installed helper's Light/Dark transition,
+CLI scope review without starting a run, Open Report, Reveal Logs and reopen
+passed. Installed editor Dark/Light/restore inspection also passed; final images
+use an explicit document-window query. The XCTest input runner cannot invoke xcrun from its sandbox; the local
+shell launched the read-only installed viewer for this inspection. This is not
+an application permission dependency. Native testing/capture works without CUA.
+No active collector remains. All work is local/uncommitted; no OpenCode patch
+exists. The completed scope fix and redesign receipts remain retained. Use the
+current queue and native Start workflow for later owner-authorized work.
+Historical checkpoints follow.
+
 # Codex Continuation Handoff
+
+## November 15 owner-local install
+
+Build `26.11.15` is installed at `/Applications/SiteForge.app` from the
+November 15 green local candidate below. The owner-local signature validated,
+and the installed provisioning fingerprint matches the current source. The
+owner retired the local-model queue. Continue development on this Mac and
+refresh the installed app after each verified feature or fix under `AGENTS.md`.
+The separate component usage-notes changes need integrated verification before
+their own install. [Local verification and installation evidence](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#november-15-owner-local-install)
+
+## November 15 — SF-0907 usage notes verified and installed
+
+The shared full gate passed 895 core and 167 UI tests, with three approved
+skips and zero failures or unrun. Owner-local build `26.11.15` includes
+the notes workflow. Strict signature and OwnerTesting provisioning
+verification passed for the same source-content fingerprint. The approved
+native redesign is next. Hosted OD-031 remains separate.
+[SF-0907 verification and installation evidence](evidence/SF-0907-LOCAL-USAGE-NOTES.md)
+
+## November 14 desktop closeout
+
+The owner lifted the desktop hold. Select All, connected height and spacing,
+the strict automatic narrow chrome journey and viewport operability have
+focused passing receipts. Workspace traversal passed both directions.
+Safari's Develop menu is confirmed and the same-artifact comparison passed.
+The fresh November 15 `./sf verify` exited 0. Its bundle reconciles 890
+core passes, 167 UI passes, three approved owner Dark Flow skips,
+zero failures, and zero unrun. All five earlier failures passed exact
+replay and the fresh full run after the Safari viewport and responsive
+review focus changes. Evidence and distinct fingerprints stay in the
+[local inventory](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#november-14-desktop-closeout-replay).
+OD-031 hosted acceptance is independent.
+
+## November 14 keyboard source pass
+
+This source checkpoint preceded desktop replay. The Page Editor Select
+All change compiled with both XCTest targets. The Pages → Layers Tab
+boundary was still awaiting a live key-view trace at that checkpoint.
+See [keyboard evidence](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#november-14-keyboard-source-pass).
+
+## November 14 resumed local acceptance
+
+The full local collector exited 65 (888 core passes; 158 UI passes, nine
+failures and three approved skips, zero unrun). The scanner recovery and
+Inspector full-width restore pass. Six responsive Safari selectors require
+the local Develop menu. Native Tab traversal and page-editor Select All
+reproduced on exact replay; image reuse passed. See the
+[full result and replay](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#november-14-resumed-acceptance).
+
+## November 14 local restoration
+
+The repository scanner now prunes existing exclusions before descent and
+passes its seeded regression and full scan. The candidate and current
+toolchain evidence are recorded in the
+[acceptance inventory](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#november-14-local-restoration).
+OD-028 is resolved. Xcode 27.2 (27B52) returned 0 with the process-scoped
+developer directory. The hosted selector ledger resolves the four saved shard summaries
+and the unassigned shard. Same-attempt receipts for shards 6–8 are pending.
+
+## Active hosted baseline — OD-031
+
+Adopt [run 42866090110](https://github.com/etejev/SiteForge/actions/runs/42866090110),
+attempt 1, SHA `013393965a49f925d42fd5d8ba82497bdd83c79b`. UI shards 1,
+3, 4 and 5 reported 74 passes, ten failures and one approved skip. Core
+and UI shard 2 did not acquire a macOS runner (888 and 22 unrun); shards
+6–8 account for the 63 selectors not yet reconciled.
+Recheck the same run and reconcile every remaining shard before advancing.
+Actual failures rule out same-SHA recovery of this attempt. Do not stitch
+receipts from another SHA, rerun successful jobs, or resume UI redesign.
 
 ## Current closeout — targeted replay only
 
@@ -2765,3 +3013,33 @@ SF-1201 and SF-1202 remain Partial outside this bounded local-preview surface:
 runtime bundles, generated render trees, export/preview parity, large-project
 performance certification, broad accessibility matrices and release acceptance
 remain future work.
+
+
+## November 21 — Testing window closeout delivered
+
+Bounded SF-0206-002/003/004/006/008, SF-1607-002/004/008 and SF-1902-007/008.
+Build 26.11.22 is installed and strict signature/source/harness checks pass.
+Final fingerprint:
+`1c3bb00f2c512d96b51bdcb75f70a803c111a93dd15fa81db01478d8ded30dcb`.
+Installed Start Regular run `20261121-191113-10a30223` passed 17/17. Native
+Settings replay `20261121-190627-2b525677` passed 1/1; Safari's unaffected pass
+is retained from `20261121-185412-9aa6f4bf`. Earlier failed attempts remain failed.
+Forty-nine tooling checks, native pointer/control/click-through acceptance,
+complete repository checking, CLI review and actual report/Finder retrieval pass.
+No active collector or current permission blocker remains. Native XCTest works
+without CUA. Do not restart the redesign full suite; its original green receipt
+and the earlier 21-code/two-UI exact continuation remain retained.
+
+Use Settings → Advanced → Open Testing for local starts. Regular is code;
+UI is native journeys; exact/affected scope and explicit full verification are
+shown before Start. Normal local CLI opens this same review window. Closing it
+preserves the detached run. Reports and captures persist under the shared
+Application Support TestingReports directory. When the owner says testing
+finished, read those receipts and compare fingerprints before changing source.
+The final report's viewer-screenshots and the ignored closeout captures/logs
+contain clean accepted states. See
+[evidence](evidence/SF-TESTING-PROGRESS-MONITOR.md) for exact receipts and scoped
+reuse. Queue/status/changelog/traceability are updated. Changes remain local and
+uncommitted. OpenCode is archived with no patch; deleted/renamed scope mapping
+is a later bounded tooling fix. Codex remains the sole testing-file/install
+owner and there is one desktop collector at a time.

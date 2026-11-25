@@ -92,6 +92,23 @@ Instances remain childless, and supplied-content state is not introduced.
 OD-018 records the unresolved storage/cardinality decision before that broader
 architecture can change. These source additions are unverified until Prompt 10.
 
+## Optional local usage notes — SF-0907
+
+Document schema 20 reserves one versioned plain-text property for the
+canonical definition root. A missing property supplies the optional
+default. Editing keeps the property identity and history stores the
+existing property command and its inverse. Historical project schemas
+reject the namespace. Clipboard v3 carries notes with definitions and
+the v2 reader path supports transfers without notes. Root ownership,
+property origin and text validation apply at both serialization boundaries.
+
+Definition duplication and compatible import share the remapper in
+TransformModel. Transfer owns envelope validation and resource reconciliation.
+Their copied definitions own new graph/property identities. Structural
+equivalence includes notes. Derived instance expansion removes the note
+before rendering or detachment. OD-018 and OD-019 retain their existing
+scope.
+
 ## Deferred
 
 Source-only SF-AUTHORING-120 derives recovery findings from the original stable

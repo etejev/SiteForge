@@ -56,6 +56,25 @@ authoritative latest job attempt, reject duplicate or stale receipts, and
 test this selection before allowing a targeted retry. Do not rerun the
 previous run or assume staggered allocation proves UI acceptance.
 
+Display capability remains an independent gate. Run `42847939727` recorded
+an unchanged native window `(-76, 31, 1100, 752)` after the required
+1280-point resize: the native drag's target was X=1202 on a 1024-point
+display. Its separate five-destination journey could not hit Pages.
+Run `42866090110` again captures a 1024-point hosted desktop
+in shards 1 and 3. The current shard 7 still needs its own receipt; do
+not count the earlier results against the new SHA.
+
+If shard 7 confirms the same boundary, the recommended next choice is
+owner approval to check for a supported display mode on the disposable
+host, then use a mode that exposes the full native 1280-point window if
+available. If unavailable, consider an explicitly approved host with
+that capability and sufficient runner capacity. Changing the host has
+an operational/trust cost; neither option changes test coverage, the
+production minimum, or the window contract. Decision deadline: before
+another baseline push that depends on the wider display. Until then,
+preserve the strict native hit and resize assertions and do not change
+runner settings or move UI development ahead of a green baseline.
+
 ## OD-030 — Complete macOS UI automation authorization
 
 Status: exact ordinary-identity image replay passed. The later full run
@@ -149,6 +168,20 @@ currently needed; final verification/commit/push are still pending.
   hit-path diagnostic, not host/control replacement or speculative experiments.
 
 ## OD-028 — Complete Xcode's required system components
+
+November 14 resumed check: Xcode 27.2 (27B52) returns exit 0 from
+`xcodebuild -checkFirstLaunchStatus` with the process-scoped Xcode developer
+directory. The global developer setting still points to Command Line Tools.
+The earlier exit 69 below is historical.
+
+November 14 restoration update: Xcode 27.2 (27B52) is installed. With
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`,
+`xcodebuild -checkFirstLaunchStatus` returns 69 without output both inside
+and outside the agent sandbox. The console has a logged-in owner and the
+project-local verification Python check passes. Open Xcode and complete
+first-launch prompts. If **Install Required System Components** appears,
+select **Install** and complete macOS authentication. Resume focused XCTest
+once the same process-scoped readiness check returns 0.
 
 Status: Resolved by owner — 2026-11-02
 

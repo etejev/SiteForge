@@ -459,6 +459,94 @@ final class ClipboardTransferTests: XCTestCase {
         XCTAssertEqual(source.pages[0].nodes[index].properties.count + 1, supplied.properties.count)
     }
 
+    func testComponentUsageNotesTransferPreservesContentAndDistinguishesEquivalence() throws {
+        let registry = ClipboardTransferRegistry()
+        let privateNote = "Private author context <component> \(AssetID())"
+        func fixture(_ note: String?) throws -> (CanonicalDocument, ComponentFixture) {
+            var document = CanonicalDocument()
+            let component = try addComponent(named: "Card", text: "Shared", to: &document)
+            if let note {
+                let index = try XCTUnwrap(document.pages.firstIndex { $0.id == component.definitionID })
+                document.pages[index].nodes[0].properties.append(.init(
+                    key: .init(rawValue: CanonicalComponentUsageNotes.key), value: .string(note), origin: .authored))
+            }
+            try document.validate()
+            return (document, component)
+        }
+        for (sourceNote, existingNote, resolution) in [
+            (privateNote, privateNote, ClipboardComponentTransferSummary.Entry.Resolution.reused),
+            (privateNote, "Different usage note", .renamed),
+            (privateNote, nil, .renamed),
+            (nil, privateNote, .renamed)
+        ] {
+            let (source, sourceComponent) = try fixture(sourceNote)
+            let (destination, destinationComponent) = try fixture(existingNote)
+            let envelope = try registry.prepareCopy(identity: operationIdentity(document: source,
+                pageID: source.pages[0].id, selected: [sourceComponent.instanceID]), document: source,
+                resourceData: { _ in XCTFail("A note supplies no asset dependency"); throw ClipboardTransferError.invalidDependency })
+            XCTAssertEqual(envelope.version, sourceNote == nil ? 2 : 3)
+            XCTAssertTrue(envelope.imageDependencies.isEmpty)
+            let bytes = try SiteForgeClipboardCodec.encode(envelope)
+            XCTAssertEqual(try SiteForgeClipboardCodec.decode(bytes), envelope)
+            if sourceNote != nil {
+                var historical = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+                historical["version"] = 2
+                XCTAssertThrowsError(try SiteForgeClipboardCodec.decode(JSONSerialization.data(withJSONObject: historical))) {
+                    XCTAssertEqual($0 as? ClipboardTransferError, .unsupportedVersion)
+                }
+            }
+
+            let target = destination.pages[0]
+            let identity = operationIdentity(document: destination, pageID: target.id, selected: [])
+            let context = validationContext(identity, activeContainerID: target.rootNodeIDs[0])
+            let paste = try registry.preparePaste(envelope: envelope, identity: identity, document: destination,
+                context: context, placement: .inPlace)
+            let entry = try XCTUnwrap(paste.componentSummary?.entries.first)
+            XCTAssertEqual(entry.resolution, resolution)
+            XCTAssertFalse(String(describing: paste.componentSummary).contains(privateNote))
+            let session = DocumentSession(document: destination)
+            try session.execute(paste.command)
+            let imported = try XCTUnwrap(session.document.componentDefinitions.first { $0.id == entry.destinationDefinitionID })
+            XCTAssertEqual(CanonicalComponentUsageNotes.text(in: imported), sourceNote)
+            let existing = try XCTUnwrap(session.document.componentDefinitions.first { $0.id == destinationComponent.definitionID })
+            XCTAssertEqual(CanonicalComponentUsageNotes.text(in: existing), existingNote)
+            XCTAssertEqual(imported.id == existing.id, resolution == .reused)
+            XCTAssertEqual(try XCTUnwrap(session.document.pages[0].nodes.last)
+                .insertionStringProperty(CanonicalComponentReference.key), imported.id.description)
+            let committed = session.document.pages
+            try session.undo(); XCTAssertEqual(session.document.pages, destination.pages)
+            try session.redo(); XCTAssertEqual(session.document.pages, committed)
+        }
+    }
+
+    func testComponentUsageNotesClipboardRejectsNonRootAndInstanceNotes() throws {
+        var document = CanonicalDocument()
+        let component = try addComponent(named: "Card", text: "Shared", to: &document)
+        let registry = ClipboardTransferRegistry()
+        let identity = operationIdentity(document: document, pageID: document.pages[0].id,
+                                         selected: [component.instanceID])
+        let original = try registry.prepareCopy(identity: identity, document: document,
+            resourceData: { _ in throw ClipboardTransferError.invalidDependency })
+        let note = NodeProperty(key: .init(rawValue: CanonicalComponentUsageNotes.key),
+            value: .string("Private draft"), origin: .authored)
+        var definition = try XCTUnwrap(original.componentDefinitions.first)
+        definition.nodes[1].properties.append(note)
+        var nodes = original.nodes
+        nodes[0].properties.append(note)
+        for (copiedNodes, definitions) in [(original.nodes, [definition]), (nodes, original.componentDefinitions)] {
+            let malformed = SiteForgeClipboardEnvelope(version: 3,
+                sourceDocumentID: original.sourceDocumentID, sourcePageID: original.sourcePageID,
+                roots: original.roots, nodes: copiedNodes, componentDefinitions: definitions)
+            XCTAssertThrowsError(try SiteForgeClipboardCodec.encode(malformed)) {
+                XCTAssertEqual($0 as? ClipboardTransferError, .invalidEnvelope)
+            }
+            let unvalidated = try JSONEncoder().encode(malformed)
+            XCTAssertThrowsError(try SiteForgeClipboardCodec.decode(unvalidated)) {
+                XCTAssertEqual($0 as? ClipboardTransferError, .invalidEnvelope)
+            }
+        }
+    }
+
     func testCrossProjectComponentReuseAndSameNameConflictUseStructuralIdentity() throws {
         var source = CanonicalDocument()
         let sourceComponent = try addComponent(named: "Card", text: "Shared", to: &source)

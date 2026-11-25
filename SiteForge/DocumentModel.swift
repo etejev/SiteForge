@@ -236,7 +236,17 @@ enum CanonicalPageChrome {
             // Missing references remain recoverable intent. Existing targets
             // must never borrow an unrelated node or cross a hierarchy.
             if let node = page.nodes.first(where: { $0.id == id }) {
-                guard node.kind == kind, node.parent == .node(parent) else { throw ModelValidationError.invalidSemanticElementState }
+                guard node.kind == kind else { throw ModelValidationError.invalidSemanticElementState }
+                if CanonicalPageFlow.role(owner) == .footer, id != contentID {
+                    var cursor = node, visited = Set<NodeID>()
+                    while cursor.parent != .node(contentID) {
+                        guard visited.insert(cursor.id).inserted, visited.count <= 256,
+                              case .node(let parentID) = cursor.parent,
+                              let next = page.nodes.first(where: { $0.id == parentID }), next.kind.acceptsAuthoredChildren
+                        else { throw ModelValidationError.invalidSemanticElementState }
+                        cursor = next
+                    }
+                } else if node.parent != .node(parent) { throw ModelValidationError.invalidSemanticElementState }
             }
         }
     }
@@ -618,6 +628,18 @@ struct CanonicalSolidColor: Codable, Equatable, Sendable {
         return "#\(channel(red))\(channel(green))\(channel(blue))\(channel(alpha))"
     }
 
+    /// CSS gradient interpolation uses premultiplied sRGB components; the
+    /// stored result remains straight RGBA so ordinary compositing applies once.
+    static func premultipliedInterpolation(_ a: Self, _ b: Self, fraction: Double) -> Self? {
+        guard a.isValid, b.isValid, fraction.isFinite, (0...1).contains(fraction) else { return nil }
+        let alpha = a.alpha * (1 - fraction) + b.alpha * fraction
+        guard alpha > 0 else { return .init(red: 0, green: 0, blue: 0, alpha: 0) }
+        func channel(_ x: Double, _ y: Double) -> Double {
+            (x * a.alpha * (1 - fraction) + y * b.alpha * fraction) / alpha
+        }
+        return .init(red: channel(a.red, b.red), green: channel(a.green, b.green), blue: channel(a.blue, b.blue), alpha: alpha)
+    }
+
     static func parse(hexadecimal: String) -> CanonicalSolidColor? {
         let source = hexadecimal.trimmingCharacters(in: .whitespacesAndNewlines)
         let digits = source.hasPrefix("#") ? String(source.dropFirst()) : source
@@ -636,29 +658,124 @@ struct CanonicalSolidColor: Codable, Equatable, Sendable {
 
 /// A single project-local collection. Its array order and stable IDs are
 /// canonical; presentation drafts and color-panel state are not.
+/// SF-0508/SF-1101/SF-1103: only authored configuration is canonical.
+/// Pointer position, velocity and deformation never enter these properties.
+struct CanonicalFlowGradient: Equatable, Sendable {
+    static let namespace = "style.flow.v1."
+    static let documentSchema = 21
+    static let defaults = Self(enabled: true, radius: 240, strength: 0.65, response: 10, returnSeconds: 0.8)
+    var enabled: Bool
+    var radius: Double
+    var strength: Double
+    var response: Double
+    var returnSeconds: Double
+    var isValid: Bool {
+        radius.isFinite && (24...1_200).contains(radius)
+            && strength.isFinite && (0...1).contains(strength)
+            && response.isFinite && (0.5...30).contains(response)
+            && returnSeconds.isFinite && (0.1...5).contains(returnSeconds)
+    }
+    var properties: [String: PropertyValue] {
+        [Self.namespace + "enabled": .boolean(enabled), Self.namespace + "radius": .number(radius),
+         Self.namespace + "strength": .number(strength), Self.namespace + "response": .number(response),
+         Self.namespace + "returnSeconds": .number(returnSeconds)]
+    }
+    static func resolve(_ node: DocumentNode) throws -> Self? {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix("style.flow.") }
+        guard !owned.isEmpty else { return nil }
+        let keys = Set(defaults.properties.keys)
+        guard [.frame, .section].contains(node.kind), Set(owned.map(\.key.rawValue)) == keys,
+              owned.count == keys.count,
+              case .boolean(let enabled)? = node.insertionProperty(namespace + "enabled")?.value,
+              let radius = node.insertionNumberProperty(namespace + "radius"),
+              let strength = node.insertionNumberProperty(namespace + "strength"),
+              let response = node.insertionNumberProperty(namespace + "response"),
+              let duration = node.insertionNumberProperty(namespace + "returnSeconds") else {
+            throw ModelValidationError.invalidInteractionStyleState
+        }
+        let result = Self(enabled: enabled, radius: radius, strength: strength, response: response, returnSeconds: duration)
+        guard result.isValid else { throw ModelValidationError.invalidInteractionStyleState }
+        return result
+    }
+    static let unavailableReason = "Flow needs one enabled linear-gradient fill on a Frame, Section or page background, without an image fill. Keep or restore that fill, or disable Flow."
+}
+
+/// Optional glass uses the ordinary authored fill when supported, and an
+/// explicit opaque surface when backdrop blur/transparency is unavailable.
+struct CanonicalGlassSurface: Equatable, Sendable {
+    static let namespace = "style.glass.v1."
+    var blur: Double
+    var fallback: CanonicalSolidColor
+    var darkFallback: CanonicalSolidColor? = nil
+    var isValid: Bool { blur.isFinite && (0...60).contains(blur) && fallback.isValid && fallback.alpha == 1 && (darkFallback.map { $0.isValid && $0.alpha == 1 } ?? true) }
+    var properties: [String: PropertyValue] {
+        var values: [String: PropertyValue] = [Self.namespace + "blur": .number(blur), Self.namespace + "fallback.red": .number(fallback.red),
+         Self.namespace + "fallback.green": .number(fallback.green), Self.namespace + "fallback.blue": .number(fallback.blue),
+         Self.namespace + "fallback.alpha": .number(fallback.alpha)]
+        if let color = darkFallback {
+            for (key, value) in [("red", color.red), ("green", color.green), ("blue", color.blue), ("alpha", color.alpha)] {
+                values[Self.namespace + "darkFallback." + key] = .number(value)
+            }
+        }
+        return values
+    }
+    static func resolve(_ node: DocumentNode) throws -> Self? {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix("style.glass.") }
+        guard !owned.isEmpty else { return nil }
+        var expected = Set(Self(blur: 16, fallback: .legacySurface).properties.keys)
+        let hasDark = owned.contains { $0.key.rawValue.hasPrefix(namespace + "darkFallback.") }
+        if hasDark { expected.formUnion(["red", "green", "blue", "alpha"].map { namespace + "darkFallback." + $0 }) }
+        guard [.frame, .section, .stack, .grid, .button].contains(node.kind),
+              Set(owned.map(\.key.rawValue)) == expected, owned.count == expected.count,
+              let blur = node.insertionNumberProperty(namespace + "blur"),
+              let red = node.insertionNumberProperty(namespace + "fallback.red"),
+              let green = node.insertionNumberProperty(namespace + "fallback.green"),
+              let blue = node.insertionNumberProperty(namespace + "fallback.blue"),
+              let alpha = node.insertionNumberProperty(namespace + "fallback.alpha") else {
+            throw ModelValidationError.invalidBoxStyleState
+        }
+        var result = Self(blur: blur, fallback: .init(red: red, green: green, blue: blue, alpha: alpha))
+        if hasDark {
+            guard let r = node.insertionNumberProperty(namespace + "darkFallback.red"), let g = node.insertionNumberProperty(namespace + "darkFallback.green"),
+                  let b = node.insertionNumberProperty(namespace + "darkFallback.blue"), let a = node.insertionNumberProperty(namespace + "darkFallback.alpha")
+            else { throw ModelValidationError.invalidBoxStyleState }
+            result.darkFallback = .init(red: r, green: g, blue: b, alpha: a)
+        }
+        guard result.isValid else { throw ModelValidationError.invalidBoxStyleState }
+        return result
+    }
+}
+
+
 struct LocalColorToken: Codable, Equatable, Identifiable, Sendable {
     let id: ColorTokenID
     var name: String
     var color: CanonicalSolidColor
+    var darkColor: CanonicalSolidColor?
 
-    private enum CodingKeys: String, CodingKey, CaseIterable { case id, name, color }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, name, color, darkColor }
 
-    init(id: ColorTokenID = ColorTokenID(), name: String, color: CanonicalSolidColor) {
-        self.id = id; self.name = name; self.color = color
+    init(id: ColorTokenID = ColorTokenID(), name: String, color: CanonicalSolidColor, darkColor: CanonicalSolidColor? = nil) {
+        self.id = id; self.name = name; self.color = color; self.darkColor = darkColor
     }
 
     init(from decoder: Decoder) throws {
-        try requireExactKeys(CodingKeys.self, in: decoder, when: SiteForgeDecodingPolicy.requiresExactKeys(decoder))
+        try requireKnownKeys(CodingKeys.self, in: decoder)
+        let raw = try decoder.container(keyedBy: AnySiteForgeCodingKey.self)
+        guard Set(["id", "name", "color"]).isSubset(of: Set(raw.allKeys.map(\.stringValue))),
+              (decoder.userInfo[SiteForgeDecodingPolicy.sourceDocumentSchema] as? Int ?? 21) >= 21 || !raw.allKeys.contains(where: { $0.stringValue == "darkColor" })
+        else { throw DocumentSerializationError.malformedInput }
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(ColorTokenID.self, forKey: .id)
         name = try values.decode(String.self, forKey: .name)
         color = try values.decode(CanonicalSolidColor.self, forKey: .color)
+        darkColor = try values.decodeIfPresent(CanonicalSolidColor.self, forKey: .darkColor)
     }
 
     var isValid: Bool {
         !name.isEmpty && name == name.trimmingCharacters(in: .whitespacesAndNewlines)
             && name.utf8.count <= 128 && !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
-            && color.isValid
+            && color.isValid && (darkColor?.isValid ?? true)
     }
 }
 
@@ -2105,6 +2222,25 @@ enum CanonicalLinkError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
+/// SF-0802-001/004/005: optional QR intent is bound to immutable image bytes.
+struct CanonicalQRCode: Equatable, Sendable {
+    static let namespace = "content.qr.v1."
+    let payload: String
+    let hash: String
+    static func resolve(_ node: DocumentNode) throws -> Self? {
+        let owned = node.properties.filter { $0.key.rawValue.hasPrefix("content.qr.") }
+        guard !owned.isEmpty else { return nil }
+        guard node.kind == .image, owned.count == 2,
+              Set(owned.map(\.key.rawValue)) == [namespace + "payload", namespace + "hash"],
+              let payload = node.insertionStringProperty(namespace + "payload"), payload.utf8.count <= 1_024,
+              CanonicalLinkTarget.validateExternal(payload),
+              let hash = node.insertionStringProperty(namespace + "hash"),
+              hash.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+              CanonicalImageStyle.resolve(node) != nil else { throw ModelValidationError.invalidImageReference }
+        return .init(payload: payload, hash: hash)
+    }
+}
+
 struct CanonicalImageStyle: Equatable, Sendable {
     static let namespace = "content.image.v1."
     let assetID: AssetID
@@ -2546,6 +2682,7 @@ enum CanonicalComponentReference {
                 || $0.key.rawValue.hasPrefix(CanonicalComponentAction.namespace)
                 || $0.key.rawValue.hasPrefix(CanonicalComponentSlot.namespace)
                 || $0.key.rawValue.hasPrefix(CanonicalComponentOrganization.namespace)
+                || CanonicalComponentUsageNotes.owns($0)
         }) {
             return // The definition-scoped validator owns exposed bindings.
         }
@@ -3213,6 +3350,44 @@ enum ComponentPropertyDiscovery {
     }
 }
 
+/// A definition's root owns one optional authored note. Absence is the
+/// default and carries no property identity or serialized placeholder.
+enum CanonicalComponentUsageNotes {
+    static let namespace = "component.documentation."
+    static let key = namespace + "v1.usageNotes"
+    static let documentSchema = 20
+    static let maximumBytes = 4_096
+
+    static func owns(_ property: NodeProperty) -> Bool {
+        property.key.rawValue.hasPrefix(namespace)
+    }
+
+    static func normalized(_ draft: String) throws -> String? {
+        let lines = draft.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        guard !lines.unicodeScalars.contains(where: {
+            CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t"
+        }) else { throw ModelValidationError.invalidComponentUsageNotes }
+        let value = lines.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.utf8.count <= maximumBytes else { throw ModelValidationError.invalidComponentUsageNotes }
+        return value.isEmpty ? nil : value
+    }
+
+    static func text(in definition: DocumentPage) -> String? {
+        guard definition.role == .componentDefinition, let rootID = definition.rootNodeIDs.first else { return nil }
+        return definition.nodes.first { $0.id == rootID }?.insertionStringProperty(key)
+    }
+
+    static func validate(_ node: DocumentNode, isDefinitionRoot: Bool) throws {
+        let properties = node.properties.filter(owns)
+        guard !properties.isEmpty else { return }
+        guard isDefinitionRoot, properties.count == 1, let property = properties.first,
+              property.key.rawValue == key, property.origin == .authored,
+              case .string(let value) = property.value, let normalized = try normalized(value),
+              value.utf8.elementsEqual(normalized.utf8) else { throw ModelValidationError.invalidComponentUsageNotes }
+    }
+}
+
 /// Definition-owned presentation metadata references the existing typed binding;
 /// it never duplicates defaults, overrides, child order, or slot ownership.
 enum CanonicalComponentOrganization {
@@ -3855,12 +4030,15 @@ enum ModelValidationError: Error, Equatable, LocalizedError {
     case invalidColorToken
     case invalidSizingConstraints
     case invalidComponentReference
+    case invalidComponentUsageNotes
 
     var errorDescription: String? {
         switch self {
         case .componentTextIntentWouldBeLost: "This text property has authored instance values. Reset those values or detach the affected instances before removing its source or binding."
         case .componentVisibilityIntentWouldBeLost: "This visibility property has authored instance values. Reset them or detach affected instances before removing its source or binding."
         case .revisionNotIncrementable: "The document revision cannot accept another transaction."
+        case .invalidComponentUsageNotes:
+            "Enter up to \(CanonicalComponentUsageNotes.maximumBytes) UTF-8 bytes of plain text. Line breaks and tabs are allowed."
         case .invalidComponentReference: "The component reference is malformed or belongs to an incompatible object."
         case .emptyPageList: "A project must contain at least one page."
         case .duplicatePageID: "Page identifiers must be unique."
@@ -4067,7 +4245,7 @@ enum CanonicalBoxStyleNamespaceValidator {
         let values = Dictionary(uniqueKeysWithValues: owned.map { (String($0.key.rawValue.dropFirst(root.count)), $0.value) })
         if !borderKeys.isDisjoint(with: suffixes) {
             guard borderKeys.isSubset(of: suffixes), case .number(let width)? = values["border.width"],
-                  width.isFinite, width > 0, width <= 100, case .string(let style)? = values["border.style"],
+                  width.isFinite, width >= 0, width <= 100, case .string(let style)? = values["border.style"],
                   ["solid", "dashed", "dotted"].contains(style) else { throw ModelValidationError.invalidBoxStyleState }
             try validateColor("border.color", values: values)
         }
@@ -4426,7 +4604,9 @@ extension CanonicalDocument {
             catch { throw ModelValidationError.invalidImageAsset }
         }
         let assetIDs = Set(imageAssets.map(\.id))
+        let assetsByID = Dictionary(uniqueKeysWithValues: imageAssets.map { ($0.id, $0) })
 
+        var qrPayloads: [AssetID: String] = [:]
         var documentNodeIDs = Set<NodeID>()
         var documentPropertyIDs = Set<PropertyID>()
         for page in pages {
@@ -4437,7 +4617,15 @@ extension CanonicalDocument {
                 assetIDs: assetIDs,
                 checkpoint: checkpoint
             )
-            for node in page.nodes { try LocalColorTokenBinding.validate(node) }
+            for node in page.nodes {
+                try LocalColorTokenBinding.validate(node)
+                if let qr = try CanonicalQRCode.resolve(node) {
+                    guard let image = CanonicalImageStyle.resolve(node), assetsByID[image.assetID]?.contentHash == qr.hash
+                    else { throw ModelValidationError.invalidImageReference }
+                    guard qrPayloads[image.assetID] == nil || qrPayloads[image.assetID] == qr.payload else { throw ModelValidationError.invalidImageReference }
+                    qrPayloads[image.assetID] = qr.payload
+                }
+            }
         }
         guard pages.flatMap(\.nodes).filter({ CanonicalIsolationRoot.property(in: $0) != nil }).count <= 1 else {
             throw ModelValidationError.invalidIsolationRootState
@@ -4600,6 +4788,10 @@ private extension DocumentPage {
             try CanonicalComponentAction.validate(node, inDefinition: role == .componentDefinition)
             try CanonicalComponentSlot.validate(node, inDefinition: role == .componentDefinition)
             try CanonicalComponentOrganization.validate(node, inDefinition: role == .componentDefinition)
+            try CanonicalComponentUsageNotes.validate(node,
+                isDefinitionRoot: role == .componentDefinition && node.id == rootNodeIDs.first)
+            _ = try CanonicalFlowGradient.resolve(node)
+            _ = try CanonicalGlassSurface.resolve(node)
             try CanonicalBoxStyleNamespaceValidator.validate(node)
             try CanonicalSizingNamespaceValidator.validate(node)
             if case .node(let parentID) = node.parent, let parent = nodesByID[parentID],
@@ -4738,7 +4930,7 @@ enum DocumentSerializer {
     // definition fallback slots without changing instance child ownership.
     // Schema 15 adds optional definition-owned property presentation metadata.
     // Historical schemas cannot acquire newer closed namespaces by permissive decoding.
-    static let currentSchemaVersion = 19
+    static let currentSchemaVersion = CanonicalFlowGradient.documentSchema
     static let minimumSupportedSchemaVersion = 1
 
     private struct SchemaHeader: Decodable {
@@ -5114,7 +5306,7 @@ enum DocumentSerializer {
                     }
                 }
             } catch { throw DocumentSerializationError.malformedInput }
-        case 10, 11, 12, 13, 14, 15, 16, 17, 18, currentSchemaVersion:
+        case 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, currentSchemaVersion:
             do {
                 let strictDecoder = JSONDecoder()
                 strictDecoder.userInfo[SiteForgeDecodingPolicy.strictCurrentSchema] = true
@@ -5127,6 +5319,24 @@ enum DocumentSerializer {
             throw DocumentSerializationError.unsupportedSchema(header.schemaVersion)
         }
         try checkpoint()
+        if header.schemaVersion < CanonicalFlowGradient.documentSchema,
+           document.pages.contains(where: { $0.nodes.contains { node in
+               node.properties.contains { $0.key.rawValue.hasPrefix("style.flow.") || $0.key.rawValue.hasPrefix("style.glass.") || $0.key.rawValue.hasPrefix("content.qr.") }
+           } }) { throw DocumentSerializationError.malformedInput }
+        if header.schemaVersion < 21, document.pages.contains(where: { page in
+            page.nodes.contains { owner in
+                guard CanonicalPageFlow.role(owner) == .footer,
+                      let contentID = CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner) else { return false }
+                return [CanonicalPageChrome.titleKey, CanonicalPageChrome.navigationKey].contains { key in
+                    guard let id = CanonicalPageChrome.reference(key, on: owner), let node = page.nodes.first(where: { $0.id == id }) else { return false }
+                    return node.parent != .node(contentID)
+                }
+            }
+        }) { throw DocumentSerializationError.malformedInput }
+        if header.schemaVersion < CanonicalComponentUsageNotes.documentSchema,
+           document.pages.contains(where: { $0.nodes.contains { $0.properties.contains(where: CanonicalComponentUsageNotes.owns) } }) {
+            throw DocumentSerializationError.malformedInput
+        }
         if header.schemaVersion < 19, document.pages.contains(where: { page in page.nodes.contains { node in
             let sizing = node.properties.filter { $0.key.rawValue.hasPrefix(CanonicalSizingConstraints.prefix) }
             return !sizing.isEmpty && (![NodeKind.frame, .image].contains(node.kind) || sizing.contains {

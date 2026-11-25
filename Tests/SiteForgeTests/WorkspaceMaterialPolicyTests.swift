@@ -4,18 +4,31 @@ import XCTest
 @testable import SiteForge
 
 final class WorkspaceMaterialPolicyTests: XCTestCase {
+    // SF-0201-003/006/008: SwiftUI may replace its native window identifier
+    // between attachment and the queued configurator update.
+    @MainActor func testAnchoredConfiguratorRestoresDocumentRoleAfterSceneIdentifierReplacement() {
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1100, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        let view = WorkspaceWindowConfigurationView(frame: .zero)
+        window.contentView = view
+        window.identifier = .init("workspace-AppWindow-1")
+        XCTAssertFalse(WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(window))
+        view.configureWindow(composition: .init(arguments: ["-SiteForgeUITestMode", "YES"], enabled: true))
+        XCTAssertTrue(WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(window))
+        view.detach()
+    }
+
     // SF-LOCAL-BUILDER-014 / SF-0201-009, SF-0701-006.
     @MainActor
     func testMeasuredSidebarTabsHonorActualPaneBudgetAtNormalCompactAndIncreasedText() {
-        let gutters = 2 * (SiteForgeVisualSystem.panePadding + SiteForgeVisualSystem.tabStripInset)
-        let gap = Double(SiteForgeVisualSystem.hairlineSpacing)
+        let gutters = 2 * SiteForgeVisualSystem.tabStripInset
+        let gap = 0.0
         for window in [CGFloat(1100), 1182, 1200, 1278, 1280, 1440, 1710, 2560] {
-            for font in [CGFloat(12), 18, 24] {
+            for font in [SiteForgeVisualSystem.tabLabelSize, 18, 24] {
                 let face = NSFont.systemFont(ofSize: font, weight: .semibold)
                 let height = ShellTabLayoutPolicy.rowHeight(fontSize: font)
                 XCTAssertGreaterThanOrEqual(height, ceil(face.ascender - face.descender + face.leading)
                     + 2 * SiteForgeVisualSystem.compactSpacing)
-                if font == 12 { XCTAssertEqual(height, SiteForgeVisualSystem.tabStripHeight) }
+                if font == SiteForgeVisualSystem.tabLabelSize { XCTAssertEqual(height, SiteForgeVisualSystem.tabStripHeight) }
                 let nav = ShellTabLayoutPolicy.measuredMinimumWidths(labels: NavigatorTab.allCases.map(\.title), fontSize: font)
                 let inspector = ShellTabLayoutPolicy.measuredMinimumWidths(labels: InspectorTab.allCases.map(\.title), fontSize: font)
                 let panes = WorkspaceMetrics.sidePaneAllocation(windowWidth: window,
@@ -23,7 +36,7 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
                     inspectorRequired: gutters + CGFloat(ShellTabLayoutPolicy.requiredWidth(minimumWidths: inspector, gap: gap)))
                 XCTAssertLessThanOrEqual(panes.navigatorMinimum, panes.navigatorMaximum)
                 XCTAssertLessThanOrEqual(panes.inspectorMinimum, panes.inspectorMaximum)
-                XCTAssertGreaterThanOrEqual(window - panes.navigatorMaximum - panes.inspectorMaximum - 2,
+                XCTAssertGreaterThanOrEqual(window - panes.navigatorMaximum - panes.inspectorMaximum - WorkspaceMetrics.workspacePaneOverhead,
                     WorkspaceMetrics.minimumCanvasWidth.nextDown) // one floating-point ULP, not a visual-point tolerance
                 for (labels, lower, upper) in [(nav, panes.navigatorMinimum, panes.navigatorMaximum),
                                                (inspector, panes.inspectorMinimum, panes.inspectorMaximum)] {
@@ -32,7 +45,7 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
                         for selected in labels.indices {
                             let result = ShellTabLayoutPolicy.allocate(width: available, minimumWidths: labels, selected: selected, gap: gap)
                             XCTAssertEqual(result.overflow, ShellTabLayoutPolicy.requiredWidth(minimumWidths: labels, gap: gap) > available)
-                            if window >= 1280, font == 12 { XCTAssertFalse(result.overflow) }
+                            if window >= 1280, font == SiteForgeVisualSystem.tabLabelSize { XCTAssertFalse(result.overflow) }
                             XCTAssertTrue(result.indices.contains(selected) || (result.overflow && result.indices.isEmpty))
                             XCTAssertEqual(result.indices, result.indices.sorted())
                             for (offset, index) in result.indices.enumerated() {
@@ -91,13 +104,14 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         button.addItems(withTitles: ["", "Pages", "Layers"])
         button.updateDisplayedItem(title: "Pages", fullWidth: false, fontSize: 12)
         let displayed = try XCTUnwrap(button.item(at: 0))
-        XCTAssertNotNil(displayed.image, "A pull-down menu must paint the first item's icon, not a hidden NSButton.image")
-        XCTAssertTrue(displayed.image?.isTemplate == true)
-        XCTAssertEqual(button.imagePosition, .imageOnly)
+        XCTAssertNil(displayed.image, "Compact More matches the text-only tab strip")
+        XCTAssertEqual(displayed.title, "More")
+        XCTAssertEqual(button.imagePosition, .noImage)
         XCTAssertTrue(button.acceptsFirstResponder)
         XCTAssertTrue(button.canBecomeKeyView)
         button.updateDisplayedItem(title: "Layers", fullWidth: true, fontSize: 24)
         XCTAssertEqual(displayed.title, "Layers")
+        XCTAssertTrue(displayed.image?.isTemplate == true)
         XCTAssertEqual(button.imagePosition, .imageTrailing)
         XCTAssertEqual(button.font?.pointSize, 24)
         XCTAssertEqual(button.menu?.font.pointSize, 24)
@@ -110,8 +124,7 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             let inspector = WorkspaceMetrics.inspectorMaximumWidth(for: width)
             XCTAssertTrue(WorkspaceMetrics.navigatorWidth.contains(navigator))
             XCTAssertTrue(WorkspaceMetrics.inspectorWidth.contains(inspector))
-            XCTAssertGreaterThanOrEqual(width - navigator - inspector - 2, WorkspaceMetrics.minimumCanvasWidth)
-            XCTAssertGreaterThanOrEqual(inspector, navigator)
+            XCTAssertGreaterThanOrEqual(width - navigator - inspector - WorkspaceMetrics.workspacePaneOverhead, WorkspaceMetrics.minimumCanvasWidth)
         }
         XCTAssertEqual(WorkspaceMetrics.navigatorMaximumWidth(for: 1536), 360, accuracy: 0.001)
         XCTAssertEqual(WorkspaceMetrics.inspectorMaximumWidth(for: 1536), 420, accuracy: 0.001)
@@ -125,20 +138,22 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
                 (InspectorTab.allCases.map(\.title), WorkspaceMetrics.inspectorMinimumWidth(for: width)),
             ] {
                 let minima = labels.map { Double(ceil(($0 as NSString).size(withAttributes: [
-                    .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-                ]).width) + SiteForgeVisualSystem.microSpacing * 2) }
-                let available = Double(paneWidth - 2 * SiteForgeVisualSystem.panePadding - 2 * SiteForgeVisualSystem.tabStripInset)
+                    .font: NSFont.systemFont(ofSize: SiteForgeVisualSystem.tabLabelSize, weight: .semibold),
+                ]).width) + SiteForgeVisualSystem.tabLabelInset * 2) }
+                let available = Double(paneWidth - 2 * SiteForgeVisualSystem.tabStripInset)
                 for selected in minima.indices {
                     let result = ShellTabLayoutPolicy.allocate(width: available, minimumWidths: minima,
-                        selected: selected, gap: Double(SiteForgeVisualSystem.hairlineSpacing))
+                        selected: selected, gap: 0)
                     XCTAssertFalse(result.overflow, "All normal-size destinations must be directly visible: \(labels)")
                     XCTAssertEqual(result.indices, Array(minima.indices))
-                    for index in minima.indices { XCTAssertGreaterThanOrEqual(result.widths[index], minima[index]) }
+                    for (offset, index) in result.indices.enumerated() {
+                        XCTAssertGreaterThanOrEqual(result.widths[offset], minima[index])
+                    }
                 }
             }
         }
-        XCTAssertEqual(WorkspaceMetrics.navigatorMinimumWidth(for: 1100), 250)
-        XCTAssertEqual(WorkspaceMetrics.inspectorMinimumWidth(for: 1100), 280)
+        XCTAssertEqual(WorkspaceMetrics.navigatorMinimumWidth(for: 1100), 268)
+        XCTAssertEqual(WorkspaceMetrics.inspectorMinimumWidth(for: 1100), 252)
     }
     func testConceptAlignedSettingsHasOneSidebarIncludingInheritedAccessibility() {
         XCTAssertEqual(SettingsDestination.allCases.map(\.rawValue),
@@ -146,8 +161,8 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertEqual(Set(SettingsDestination.allCases.map(\.title)).count,
                        SettingsDestination.allCases.count)
         XCTAssertTrue(SettingsDestination.allCases.allSatisfy { !$0.symbol.isEmpty })
-        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 344)
-        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 384)
+        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 276)
+        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 304)
         XCTAssertGreaterThanOrEqual(SiteForgeVisualSystem.inspectorBottomClearance, 80)
     }
 
@@ -263,8 +278,12 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertEqual(colors.count, 5)
         let chrome = colors[0], elevated = colors[1], pasteboard = colors[2], paper = colors[3]
         XCTAssertLessThan(chrome.redComponent, elevated.redComponent)
-        XCTAssertLessThan(elevated.redComponent, pasteboard.redComponent)
-        XCTAssertLessThan(pasteboard.blueComponent, 0.30)
+        XCTAssertLessThan(chrome.redComponent, pasteboard.redComponent)
+        XCTAssertEqual(pasteboard.redComponent, pasteboard.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(pasteboard.redComponent, pasteboard.blueComponent, accuracy: 0.001)
+        var nativePasteboard: NSColor?
+        appearance.performAsCurrentDrawingAppearance { nativePasteboard = NSColor.underPageBackgroundColor.usingColorSpace(.sRGB) }
+        XCTAssertEqual(pasteboard, try XCTUnwrap(nativePasteboard))
         XCTAssertGreaterThan(paper.redComponent, 0.98)
         XCTAssertEqual(paper.redComponent, paper.blueComponent, accuracy: 0.001)
         XCTAssertEqual(colors[4].alphaComponent, 0.20, accuracy: 0.001)
@@ -297,11 +316,14 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
             let chrome = try luminance(SiteForgeVisualSystem.chromeSurfaceNSColor, appearance: appearance)
             let pasteboard = try luminance(SiteForgeVisualSystem.canvasPasteboardNSColor, appearance: appearance)
             let artboard = try luminance(SiteForgeVisualSystem.artboardSurfaceNSColor, appearance: appearance)
-            XCTAssertGreaterThan(abs(chrome - pasteboard), 0.03)
-            XCTAssertGreaterThan(abs(artboard - pasteboard), 0.06)
+            XCTAssertNotEqual(chrome, pasteboard)
+            // The owner replaced the custom palette with native system grays.
+            // Its former fixed RGB-distance budget is superseded; keep real
+            // role separation and unchanged authored paper in each appearance.
+            XCTAssertNotEqual(artboard, pasteboard)
         }
         XCTAssertEqual(SiteForgeVisualSystem.hairlineSpacing, 2)
-        XCTAssertEqual(SiteForgeVisualSystem.tabStripInset, 3)
+        XCTAssertEqual(SiteForgeVisualSystem.tabStripInset, 6)
         XCTAssertEqual(SiteForgeVisualSystem.microSpacing, 4)
         XCTAssertEqual(SiteForgeVisualSystem.compactSpacing, 6)
         XCTAssertEqual(SiteForgeVisualSystem.controlInset, 8)
@@ -311,18 +333,18 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         XCTAssertEqual(SiteForgeVisualSystem.gridUnit, 8)
         XCTAssertEqual(SiteForgeVisualSystem.launchInnerPadding, 32)
         XCTAssertEqual(SiteForgeVisualSystem.launchOuterPadding, 40)
-        XCTAssertEqual(SiteForgeVisualSystem.settingsSidebarWidth, 250)
+        XCTAssertEqual(SiteForgeVisualSystem.settingsSidebarWidth, 201)
         XCTAssertGreaterThan(SiteForgeVisualSystem.settingsContentMaxWidth,
                              SiteForgeVisualSystem.settingsSidebarWidth)
-        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 344)
-        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 384)
+        XCTAssertEqual(SiteForgeVisualSystem.navigatorIdealWidth, 276)
+        XCTAssertEqual(SiteForgeVisualSystem.inspectorIdealWidth, 304)
         XCTAssertLessThan(SiteForgeVisualSystem.navigatorIdealWidth, SiteForgeVisualSystem.inspectorIdealWidth)
         XCTAssertTrue(WorkspaceMetrics.navigatorWidth.contains(SiteForgeVisualSystem.navigatorIdealWidth))
         XCTAssertTrue(WorkspaceMetrics.inspectorWidth.contains(SiteForgeVisualSystem.inspectorIdealWidth))
         XCTAssertLessThanOrEqual(
             SiteForgeVisualSystem.navigatorIdealWidth
                 + SiteForgeVisualSystem.inspectorIdealWidth
-                + WorkspaceMetrics.minimumCanvasWidth,
+                + WorkspaceMetrics.minimumCanvasWidth + WorkspaceMetrics.workspacePaneOverhead,
             WorkspaceMetrics.defaultWindowSize.width
         )
     }
@@ -412,8 +434,15 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         defer { view.detach(); view.removeFromSuperview(); window.close() }
         let composition = DebugTestComposition(arguments: ["SiteForge", "-SiteForgeUITestMode", "YES",
             "-SiteForgeUITestWindowAlignment", "left"], enabled: true)
+        let opened = window.frame
+        let initialMinimum = window.minSize
         view.configureWindow(composition: composition)
-        XCTAssertEqual(window.minSize.width, 1100)
+        XCTAssertEqual(window.frame, opened, "Launch arguments do not resize the window before the requested phase")
+        XCTAssertEqual(window.minSize, initialMinimum)
+        let screen = window.screen?.visibleFrame ?? opened
+        let placement = WorkspaceUITestWindowPlacement(horizontal: .left, vertical: .top)
+        window.setFrame(WorkspaceMetrics.uiTestWindowFrame(windowFrame: opened,
+            visibleFrame: screen, placement: placement), display: true)
         let moved = window.frame.offsetBy(dx: 80, dy: 0)
         window.setFrame(moved, display: true)
         let accepted = window.frame
@@ -422,7 +451,7 @@ final class WorkspaceMaterialPolicyTests: XCTestCase {
         NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
         view.configureWindow(composition: composition)
         XCTAssertEqual(window.frame, accepted)
-        XCTAssertEqual(window.minSize.width, 1100)
+        XCTAssertEqual(window.minSize, initialMinimum)
     }
 
     // SF-0201-002, SF-0201-003, SF-0201-008 — generic UI composition is a

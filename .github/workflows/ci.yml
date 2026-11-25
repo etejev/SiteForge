@@ -107,10 +107,16 @@ jobs:
         shell: zsh {0}
         env:
           SHARD: ${{ matrix.shard }}
+          TEST_RUNNER_SITEFORGE_HOSTED_SAFARI_SETUP: '1'
         run: |
           set -euo pipefail
           selectors=$(python3 scripts/ci-test-accounting.py selectors "$SHARD")
           print -r -- "$selectors" | tee "$RUNNER_TEMP/siteforge-ci/selectors.txt"
+          if [[ "$selectors" =~ 'Safari|BrowserPreview|GeneratedWebsiteMenuEscape|ManagedChromeTitle|FastStyleVisibleColors' ]]; then
+            # Initialize this disposable desktop's Safari before the real
+            # preview handoff. Never pre-open an authored or loopback URL.
+            /usr/bin/open -b com.apple.Safari about:blank
+          fi
           ./sf test focused "${(@f)selectors}"
       - name: Collect UI accounting
         if: always()

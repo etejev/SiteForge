@@ -511,72 +511,67 @@ struct SupportSettingsView: View {
     @ObservedObject var store: SupportSettingsStore
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
-                SiteForgeSettingsHeader(
-                    title: "Support",
-                    scope: AuthoringLanguage.appPreferencesScope,
-                    detail: "Review updates, recovery policy, and privacy-preserving diagnostics.",
-                    systemImage: "lifepreserver"
-                )
-                GroupBox("Application & Updates") {
-                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
-                        LabeledContent("Installed", value: store.updateSummary)
-                        if let provenance = LocalArtifactProvenance.summary() {
-                            Text(provenance).font(.caption).textSelection(.enabled)
-                                .accessibilityIdentifier("settings.support.buildProvenance")
-                        }
-                        Text("Updates are provided by the installed distribution. This build does not download or install updates from Settings.")
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text("Only a future signed, verified updater may cross the install boundary.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
-                GroupBox("Recovery") {
-                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
-                        Label("Recovery snapshots are active for edited projects", systemImage: "checkmark.shield")
-                        Text("A durable Save retires its recovery snapshot. Launch recovery keeps Restore, Discard, and cancellation explicit.")
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
-                GroupBox("Diagnostics") {
-                    VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
-                        Text("Reports contain build, schema, recovery-policy, and bounded-retention metadata. They exclude projects, paths, authored values, credentials, and raw identifiers.")
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        HStack {
-                            Button("Generate Report") { store.generate() }
-                                .disabled(store.state == .preparing)
-                                .accessibilityIdentifier("settings.support.generate")
-                            Button("Cancel") { store.cancel() }
-                                .disabled(!store.canCancel)
-                                .accessibilityIdentifier("settings.support.cancel")
-                            Spacer()
-                            Button("Copy Report") { store.copyReport() }
-                                .disabled(!store.canShare)
-                                .accessibilityIdentifier("settings.support.copy")
-                            Button("Export…") { store.exportReport() }
-                                .disabled(!store.canShare)
-                                .accessibilityIdentifier("settings.support.export")
-                        }
-                        if store.canShare {
-                            ReviewableSupportReportView(text: store.reportText)
-                            .frame(minHeight: 150)
-                            .background(SiteForgeVisualSystem.fieldSurface, in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.fieldCornerRadius))
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
-                Text(store.status)
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(store.status)
-                    .accessibilityIdentifier("settings.support.status")
+        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
+            SiteForgeSettingsHeader(
+                title: "Support",
+                scope: AuthoringLanguage.appPreferencesScope,
+                detail: "Review updates, recovery policy, and privacy-preserving diagnostics."
+            )
+            GroupBox("Application & Updates") {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+                    LabeledContent("Installed", value: store.updateSummary)
+                    if let provenance = LocalArtifactProvenance.summary() {
+                        Text(provenance).font(.caption).textSelection(.enabled)
+                            .accessibilityIdentifier("settings.support.buildProvenance")
+                    }
+                    Text("Updates are provided by the installed distribution. This build does not download or install updates from Settings.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Only a future signed, verified updater may cross the install boundary.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(SiteForgeVisualSystem.settingsFormPadding)
+            GroupBox("Recovery") {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) {
+                    Label("Recovery snapshots are active for edited projects", systemImage: "checkmark.shield")
+                    Text("A durable Save retires its recovery snapshot. Launch recovery keeps Restore, Discard, and cancellation explicit.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            GroupBox("Diagnostics") {
+                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+                    Text("Reports contain build, schema, recovery-policy, and bounded-retention metadata. They exclude projects, paths, authored values, credentials, and raw identifiers.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Generate Report") { store.generate() }
+                            .disabled(store.state == .preparing)
+                            .accessibilityIdentifier("settings.support.generate")
+                        Button("Cancel") { store.cancel() }
+                            .disabled(!store.canCancel)
+                            .accessibilityIdentifier("settings.support.cancel")
+                        Spacer()
+                        Button("Copy Report") { store.copyReport() }
+                            .disabled(!store.canShare)
+                            .accessibilityIdentifier("settings.support.copy")
+                        Button("Export…") { store.exportReport() }
+                            .disabled(!store.canShare)
+                            .accessibilityIdentifier("settings.support.export")
+                    }
+                    if store.canShare {
+                        ReviewableSupportReportView(text: store.reportText)
+                        .frame(minHeight: 150)
+                        .background(SiteForgeVisualSystem.fieldSurface, in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.fieldCornerRadius))
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text(store.status)
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(store.status)
+                .accessibilityIdentifier("settings.support.status")
         }
-        .frame(maxWidth: 680, minHeight: 500, alignment: .topLeading)
         .onChange(of: store.status) { _, status in
             NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
                 userInfo: [.announcement: status, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
@@ -641,12 +636,12 @@ enum SettingsDestination: String, CaseIterable, Identifiable, Sendable {
     var symbol: String {
         switch self {
         case .appearance: "paintbrush"
-        case .canvas: "square.grid.3x3"
+        case .canvas: "grid"
         case .accessibility: "accessibility"
-        case .defaults: "gearshape.2"
+        case .defaults: "slider.horizontal.3"
         case .updates: "arrow.triangle.2.circlepath"
         case .support: "lifepreserver"
-        case .advanced: "checkmark.seal"
+        case .advanced: "gearshape.2"
         }
     }
 }
@@ -686,15 +681,18 @@ struct SettingsWindowGeometry: Equatable {
     let contentSize: NSSize
     let sidebarWidth: CGFloat
     let formWidth: CGFloat
-    static let preferred = Self(contentSize: .init(width: 970, height: 740), sidebarWidth: 250, formWidth: 680)
+    static let preferred = Self(contentSize: .init(width: SiteForgeVisualSystem.settingsIdealWidth,
+        height: SiteForgeVisualSystem.settingsIdealHeight - 28),
+        sidebarWidth: SiteForgeVisualSystem.settingsSidebarWidth, formWidth: SiteForgeVisualSystem.settingsContentMaxWidth)
 
     static func resolve(visibleFrame: NSRect, titlebarHeight: CGFloat = 28) -> Self? {
         guard [visibleFrame.minX, visibleFrame.minY, visibleFrame.width, visibleFrame.height, titlebarHeight].allSatisfy(\.isFinite),
               visibleFrame.width >= 640, visibleFrame.height >= 400, titlebarHeight >= 0 else { return nil }
         let width = min(preferred.contentSize.width, visibleFrame.width - 16)
-        let height = min(preferred.contentSize.height, visibleFrame.height - titlebarHeight - 16)
+        let height = min(SiteForgeVisualSystem.settingsIdealHeight, visibleFrame.height - 16) - titlebarHeight
+        guard height > 0 else { return nil }
         return .init(contentSize: .init(width: width, height: height), sidebarWidth: preferred.sidebarWidth,
-                     formWidth: min(preferred.formWidth, width - preferred.sidebarWidth - 40))
+                     formWidth: min(preferred.formWidth, width - preferred.sidebarWidth - 1 - 2 * SiteForgeVisualSystem.settingsHorizontalInset))
     }
 }
 
@@ -769,12 +767,14 @@ struct SiteForgeSettingsRootView: View {
     @ObservedObject var defaults: ApplicationSettingsGroupStore
     @ObservedObject var updates: UpdateSettingsStore
     @ObservedObject var support: SupportSettingsStore
-    @StateObject private var testing = ExperimentalTestingStore()
+    @StateObject private var testing = ExperimentalTestingStore.shared
     @State private var geometry = SettingsWindowGeometry.resolve(visibleFrame: NSScreen.main?.visibleFrame ?? .zero) ?? .preferred
 
-    private var destinations: [SettingsDestination] {
-        return SettingsDestination.allCases
-    }
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @FocusState private var focusedDestination: SettingsDestination?
+    private var palette: SiteForgeChromePalette { .init(scheme: scheme, contrast: contrast) }
+    private let destinations = SettingsDestination.allCases
     private var selection: SettingsDestination { navigation.selection }
 
     init(
@@ -794,58 +794,80 @@ struct SiteForgeSettingsRootView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            List(destinations, selection: Binding(get: { navigation.selection }, set: { navigation.selectFromNativeList($0) })) { destination in
-                Label(destination.title, systemImage: destination.symbol)
-                    .font(.body)
-                    .padding(.vertical, SiteForgeVisualSystem.compactSpacing)
-                    .frame(minHeight: SiteForgeVisualSystem.settingsSidebarRowHeight)
-                    .lineLimit(1)
-                    .tag(destination)
-                    .listRowInsets(.init(top: 0, leading: 12, bottom: 0, trailing: 12))
-                    .accessibilityIdentifier("settings.sidebar.\(destination.rawValue)")
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .padding(.top, SiteForgeVisualSystem.settingsFormPadding)
-            .frame(width: geometry.sidebarWidth)
-            .frame(maxHeight: .infinity)
-            .workspaceChrome(.navigator)
-            .accessibilityLabel("Settings categories")
-            .accessibilityIdentifier("settings.sidebar")
-            ScrollView {
-                Group {
-                    switch selection {
-                    case .appearance: AppearanceSettingsView(store: appearance)
-                    case .canvas: CanvasSettingsView(store: canvas)
-                    case .accessibility: SiteForgeAccessibilitySettingsView()
-                    case .defaults: ApplicationSettingsGroupView(store: defaults)
-                    case .updates: UpdateSettingsView(store: updates)
-                    case .support: SupportSettingsView(store: support)
-                    case .advanced: ExperimentalTestingView(store: testing)
-                    }
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
+                sidebar
+                Rectangle().fill(palette.line).frame(width: 1).accessibilityHidden(true)
+                ScrollView {
+                    destinationForm
+                        .frame(width: geometry.formWidth, alignment: .topLeading)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(selection.title + " preferences")
+                        .accessibilityIdentifier("settings.form")
+                        .padding(.top, 40)
+                        .padding(.bottom, 24)
+                        .frame(maxWidth: .infinity, alignment: .top)
                 }
-                .frame(width: geometry.formWidth, alignment: .topLeading)
+                .id(selection)
+                .groupBoxStyle(SiteForgeSettingsGroupStyle())
                 .accessibilityElement(children: .contain)
-                .accessibilityLabel(selection.title + " preferences")
-                .accessibilityIdentifier("settings.form")
-                .frame(maxWidth: .infinity, alignment: .top)
+                .accessibilityIdentifier("settings.content")
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) { pendingDraftNotice }
-            .background(SiteForgeVisualSystem.elevatedSurface)
-            .groupBoxStyle(SiteForgeSettingsGroupStyle())
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("settings.content")
+            if selection == .appearance {
+                AppearanceSettingsActions(store: appearance)
+            }
+            if selection != .appearance || canvas.isDirty {
+                pendingDraftNotice
+
+            }
         }
         .frame(width: geometry.contentSize.width, height: geometry.contentSize.height)
+        .background(palette.base)
         .background(FixedSettingsWindowHost { updated in if geometry != updated { geometry = updated } }.frame(width: 0, height: 0))
-        // Give the root its own semantic container. Without it SwiftUI forwards
-        // this identifier to both native scroll views, replacing their distinct
-        // sidebar/content identities and confusing assistive navigation.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.root")
-        .onAppear {
-            if !destinations.contains(selection) { navigation.show(.defaults) }
+    }
+
+    private var sidebar: some View {
+        ScrollView {
+            VStack(spacing: 4) {
+                ForEach(destinations) { destination in
+                    SiteForgeSettingsSidebarRow(title: destination.title, symbol: destination.symbol,
+                                                 selected: selection == destination) {
+                        navigation.show(destination)
+                    }
+                    .focused($focusedDestination, equals: destination)
+                    .onMoveCommand { direction in
+                        guard direction == .up || direction == .down,
+                              let index = destinations.firstIndex(of: destination) else { return }
+                        let next = index + (direction == .up ? -1 : 1)
+                        guard destinations.indices.contains(next) else { return }
+                        focusedDestination = destinations[next]
+                        navigation.show(destinations[next])
+                    }
+                    .accessibilityIdentifier("settings.sidebar.\(destination.rawValue)")
+                }
+            }
+            .padding(.horizontal, 13)
+            .padding(.top, 29)
+            .padding(.bottom, 19)
+        }
+        .frame(width: geometry.sidebarWidth)
+        .frame(maxHeight: .infinity)
+        .background(palette.panel)
+        .accessibilityLabel("Settings categories")
+        .accessibilityIdentifier("settings.sidebar")
+    }
+
+    @ViewBuilder private var destinationForm: some View {
+        switch selection {
+        case .appearance: AppearanceSettingsView(store: appearance)
+        case .canvas: CanvasSettingsView(store: canvas)
+        case .accessibility: SiteForgeAccessibilitySettingsView()
+        case .defaults: ApplicationSettingsGroupView(store: defaults)
+        case .updates: UpdateSettingsView(store: updates)
+        case .support: SupportSettingsView(store: support)
+        case .advanced: ExperimentalTestingView(store: testing)
         }
     }
 
@@ -897,6 +919,170 @@ struct SiteForgeSettingsRootView: View {
 /// provisioned a matching harness. Public distributions remain unavailable.
 @MainActor
 final class ExperimentalTestingStore: ObservableObject {
+    static let shared = ExperimentalTestingStore()
+    @Published var scopePolicy: TestingScopePolicy = .all
+    @Published var selectorText = ""
+    @Published var requestDescription: String?
+    @Published private(set) var scopeDescription = "All prepared methods in the selected target."
+    @Published private(set) var scopeReady = true
+    @Published private(set) var snapshot: TestingRunSnapshot?
+    @Published private(set) var history: [TestingRunRecord] = []
+    @Published private(set) var viewedRun: URL?
+    @Published private(set) var controlPending = false
+    @Published private(set) var cancellationRequested = false
+    var presentationNotice: String? {
+        if viewedRun != nil { return "Viewing a retained run" + (running ? " · the current run continues independently." : ".") }
+        guard let snapshot else { return status }
+        let lifecycle = ["Testing \(snapshot.status). Detailed logs and results are retained locally.",
+                         "Starting detached testing. This installed app and your open documents remain untouched.",
+                         "Resuming testing…", "Pausing after the current case…", "Cancelling testing…"]
+        return lifecycle.contains(status) ? nil : status
+    }
+    var displayedPhase: String {
+        if viewedRun == nil && running {
+            if cancellationRequested { return "cancelling" }
+            if controlPending { return snapshot?.status == "paused" ? "resuming" : "pausing" }
+        }
+        return snapshot?.status ?? "preparing"
+    }
+    @Published var affectedBase = "origin/main"
+    private var preparedSelectors: [String] = []
+    private var scopeGeneration = UUID()
+    private var historyGeneration = UUID()
+    private var testingWindow: NSWindow?
+    var displayedReport: URL? { viewedRun ?? report }
+
+    func openTestingWindow() {
+        refresh()
+        if testingWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 660),
+                                  styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            window.title = "SiteForge Testing"
+            window.identifier = NSUserInterfaceItemIdentifier("SiteForge.Testing")
+            window.isReleasedWhenClosed = false
+            window.contentMinSize = NSSize(width: 720, height: 520)
+            window.backgroundColor = .windowBackgroundColor
+            window.appearance = nil
+            window.contentView = NSHostingView(rootView: SiteForgeTestingWindow(store: self))
+            window.setFrameAutosaveName("SiteForge.Testing")
+            window.center()
+            testingWindow = window
+        }
+        testingWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        Task { await reloadHistory() }
+    }
+
+    static func selectors(in text: String) -> [String]? {
+        let values = Array(Set(text.split(whereSeparator: \.isWhitespace).map(String.init))).sorted()
+        guard !values.isEmpty, values.allSatisfy({
+            $0.range(of: #"^SiteForge(?:UI)?Tests/[A-Za-z_][A-Za-z0-9_]*(?:/test[A-Za-z0-9_]+)?$"#, options: .regularExpression) != nil
+        }) else { return nil }
+        return values
+    }
+
+    func prepareScope() async {
+        let generation = UUID()
+        scopeGeneration = generation
+        if scopePolicy == .all {
+            preparedSelectors = []; scopeDescription = "All prepared methods in the selected target."; scopeReady = true
+            return
+        }
+        if scopePolicy == .focused {
+            let values = Self.selectors(in: selectorText)
+            preparedSelectors = values ?? []
+            scopeReady = values != nil
+            scopeDescription = values.map { "\($0.count) requested selector\($0.count == 1 ? "" : "s"). Exact executable methods are validated against the fresh build." } ?? "Enter exact Target/Class or Target/Class/testMethod selectors."
+            return
+        }
+        guard let workspace else { scopeReady = false; scopeDescription = "A provisioned source checkout is required."; return }
+        scopeReady = false; scopeDescription = "Resolving affected features…"
+        let root = workspace.path
+        let base = affectedBase
+        let result = await Task.detached { () -> (Int32, String) in
+            let process = Process(); let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.arguments = [root + "/scripts/select-test-scope.py", "--root", root, "--base", base]
+            process.standardOutput = pipe; process.standardError = pipe
+            do {
+                try process.run()
+                let output = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                return (process.terminationStatus, String(data: output, encoding: .utf8) ?? "")
+            } catch { return (1, "Scope resolution unavailable.") }
+        }.value
+        guard generation == scopeGeneration else { return }
+        let values = result.0 == 0 ? Self.selectors(in: result.1) : nil
+        preparedSelectors = values ?? []; scopeReady = values != nil
+        scopeDescription = values.map { "Affected scope against " + base + ":\n" + $0.joined(separator: "\n") + "\nExact methods are validated against the fresh build before execution." }
+            ?? "No bounded affected scope is available against \(base). Choose exact selectors or explicitly start Full Verification."
+    }
+
+    var harnessAvailable: Bool {
+        guard workspace != nil, let resources else { return false }
+        let owner = resources.appendingPathComponent("OwnerTesting")
+        return FileManager.default.fileExists(atPath: owner.appendingPathComponent("unattended-verification.py").path)
+            && FileManager.default.isExecutableFile(atPath: owner.appendingPathComponent("SiteForgeTestingProgress").path)
+    }
+    func canStart(mode: String) -> Bool {
+        guard !running, harnessAvailable, scopeReady else { return false }
+        if scopePolicy == .all { return true }
+        let target = mode == "ui" ? "SiteForgeUITests" : "SiteForgeTests"
+        return preparedSelectors.contains { $0.hasPrefix(target + "/") }
+    }
+    func startPrepared(mode: String) {
+        guard canStart(mode: mode) else { return }
+        let target = mode == "ui" ? "SiteForgeUITests" : "SiteForgeTests"
+        run(mode: mode, selectors: preparedSelectors.filter { $0.hasPrefix(target + "/") })
+    }
+    func showRun(_ url: URL?) {
+        if let url, url.deletingLastPathComponent().standardizedFileURL != reportsRoot.standardizedFileURL { return }
+        viewedRun = url
+        refreshSnapshot()
+    }
+    private func refreshSnapshot() {
+        let next = displayedReport.flatMap { try? Data(contentsOf: $0.appendingPathComponent("state.json")) }
+            .flatMap { try? JSONDecoder().decode(TestingRunSnapshot.self, from: $0) }
+        if snapshot != next { snapshot = next }
+        if let report, viewedRun == nil {
+            let files = FileManager.default
+            let nextPending = ["pause.request", "resume.request", "cancel.request"].contains {
+                files.fileExists(atPath: report.appendingPathComponent($0).path)
+            } && running
+            if controlPending != nextPending { controlPending = nextPending }
+            let cancelling = running && files.fileExists(atPath: report.appendingPathComponent("cancel.request").path)
+            if cancellationRequested != cancelling { cancellationRequested = cancelling }
+        }
+    }
+    func reloadHistory() async {
+        let generation = UUID(); historyGeneration = generation
+        let root = reportsRoot
+        let records = await Task.detached { () -> [TestingRunRecord] in
+            let files = FileManager.default
+            let urls = (try? files.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey])) ?? []
+            return urls.compactMap { url -> (URL, Date)? in
+                guard let properties = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey]),
+                      properties.isDirectory == true else { return nil }
+                return (url, properties.contentModificationDate ?? .distantPast)
+            }.sorted { $0.1 > $1.1 }.prefix(100).compactMap { url, _ in
+                guard let data = try? Data(contentsOf: url.appendingPathComponent("state.json")),
+                      let value = try? JSONDecoder().decode(TestingRunSnapshot.self, from: data) else { return nil }
+                return TestingRunRecord(url: url, status: value.status, mode: value.resolvedMode == "full" && value.scope?.selectors.isEmpty == false ? "focused" : value.resolvedMode, startedAt: value.startedAt)
+            }
+        }.value
+        if generation == historyGeneration, history != records { history = records }
+    }
+    func pauseOrResume() {
+        guard running, !controlPending, viewedRun == nil, let snapshot,
+              ["running", "paused"].contains(snapshot.status), let report else { return }
+        let request = snapshot.status == "paused" ? "resume.request" : "pause.request"
+        do {
+            try Data().write(to: report.appendingPathComponent(request), options: .atomic)
+            controlPending = true
+            status = snapshot.status == "paused" ? "Resuming testing…" : "Pausing after the current case…"
+        } catch { status = "Testing control request could not be saved. Reveal Logs for this run." }
+    }
+
     @Published private(set) var status = "Owner-local testing is unavailable in this installation."
     @Published private(set) var workspace: URL?
     @Published private(set) var report: URL?
@@ -940,9 +1126,24 @@ final class ExperimentalTestingStore: ObservableObject {
         return url.isFileURL && required.allSatisfy { FileManager.default.fileExists(atPath: url.appendingPathComponent($0).path) }
     }
 
-    func run(mode: String) {
+    // The owned helper receives presentation only; project and run scope stay
+    // with their existing stores. Live preference previews use the same bridge.
+    static func progressEnvironment(base: [String: String], appearance: NSAppearance?, sourceBundle: String?) -> [String: String] {
+        var environment = base
+        environment["SITEFORGE_TESTING_APPEARANCE"] = appearance.map {
+            $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
+        } ?? "system"
+        environment["SITEFORGE_TESTING_APPEARANCE_SOURCE"] = sourceBundle
+        return environment
+    }
+    private var progressEnvironment: [String: String] {
+        Self.progressEnvironment(base: ProcessInfo.processInfo.environment,
+                                 appearance: NSApp.appearance, sourceBundle: Bundle.main.bundleIdentifier)
+    }
+
+    func run(mode: String, selectors: [String] = []) {
         refresh()
-        guard ["full", "ui"].contains(mode), !running,
+        guard ["full", "ui", "code"].contains(mode), !running,
               let workspace, Self.validWorkspace(workspace),
               let resources, let expectedFingerprint else {
             status = running ? "A testing run is already active." : "Testing unavailable: install a current owner-local build with its provisioned harness."; return
@@ -958,11 +1159,16 @@ final class ExperimentalTestingStore: ObservableObject {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         process.arguments = ["python3", collector.path, "--root", workspace.path, "--mode", mode,
             "--progress", progress.path, "--reports-root", reportsRoot.path,
-            "--expected-source-fingerprint", expectedFingerprint]
+            "--expected-source-fingerprint", expectedFingerprint, "--source-check-progress"]
+        for selector in selectors { process.arguments?.append(contentsOf: ["--selector", selector]) }
         process.standardOutput = pipe
         process.standardError = pipe
+        process.environment = progressEnvironment
         do {
             try process.run()
+            viewedRun = nil
+            snapshot = nil
+            requestDescription = nil
             launcher = process
             output = pipe
             running = true
@@ -992,27 +1198,32 @@ final class ExperimentalTestingStore: ObservableObject {
            let value = try? JSONSerialization.jsonObject(with: data) as? [String: String], let path = value["run"] {
             let candidate = URL(fileURLWithPath: path).standardizedFileURL
             guard candidate.deletingLastPathComponent() == parent.standardizedFileURL else { return }
+            if launcher != nil, candidate == report { return }
             if report != candidate { report = candidate }
             if let data = try? Data(contentsOf: candidate.appendingPathComponent("state.json")),
                let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let outcome = value["status"] as? String {
-                let nextStatus = value["failureCategory"] as? String == "stale-source"
+                let nextStatus = value["failureCategory"] as? String == "scope-unresolved"
+                    ? "Testing scope unresolved in the built inventory. Choose surviving exact selectors or explicit Full Verification; no cases launched."
+                    : value["failureCategory"] as? String == "stale-source"
                     ? "Testing unavailable: provisioned source changed. Reinstall the current owner-local build. No stale tests ran."
                     : "Testing \(outcome). Detailed logs and results are retained locally."
                 if status != nextStatus { status = nextStatus }
             }
         }
+        refreshSnapshot()
     }
 
-    func revealReport() { if let report { NSWorkspace.shared.activateFileViewerSelecting([report]) } }
+    func revealReport() { if let report = displayedReport { NSWorkspace.shared.activateFileViewerSelecting([report]) } }
     func openProgress() {
         guard let report, let resources else { return }
         let process = Process()
         process.executableURL = resources.appendingPathComponent("OwnerTesting/SiteForgeTestingProgress")
         process.arguments = [report.path]
+        process.environment = progressEnvironment
         do { try process.run() } catch { status = "The progress window could not open. Reveal the report instead." }
     }
-    func openReport() { if let report { NSWorkspace.shared.open(report.appendingPathComponent("REPORT.md")) } }
+    func openReport() { if let report = displayedReport { NSWorkspace.shared.open(report.appendingPathComponent("REPORT.md")) } }
     func cancel() {
         guard running,
               let data = try? Data(contentsOf: reportsRoot.appendingPathComponent("active.json")),
@@ -1020,7 +1231,12 @@ final class ExperimentalTestingStore: ObservableObject {
               let path = ownership["run"] as? String else { return }
         let active = URL(fileURLWithPath: path).standardizedFileURL
         guard active.deletingLastPathComponent() == reportsRoot.standardizedFileURL else { return }
-        do { try Data().write(to: active.appendingPathComponent("cancel.request"), options: .atomic) }
+        do {
+            try Data().write(to: active.appendingPathComponent("cancel.request"), options: .atomic)
+            cancellationRequested = true
+            controlPending = true
+            status = "Cancelling testing…"
+        }
         catch { status = "Cancellation could not be requested. Reveal Logs for the active run." }
     }
 }
@@ -1034,28 +1250,21 @@ struct OwnerTestingInstallation: Codable, Equatable {
 private struct ExperimentalTestingView: View {
     @ObservedObject var store: ExperimentalTestingStore
     var body: some View {
-        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
-            SiteForgeSettingsHeader(title: "Advanced", scope: AuthoringLanguage.appPreferencesScope,
-                detail: "Runs a separate prepared app, not this installed controller. Keep the Mac unlocked for UI automation.", systemImage: "checkmark.seal")
+        VStack(alignment: .leading, spacing: 25) {
+            SiteForgeSettingsHeader(title: "Advanced", scope: "", detail: "")
             GroupBox("Testing") {
-                VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
-                    Button("Run Full Testing") { store.run(mode: "full") }
-                        .disabled(store.running || store.workspace == nil).accessibilityIdentifier("settings.testing.full")
-                    Button("Run UI Automation") { store.run(mode: "ui") }
-                        .disabled(store.running || store.workspace == nil).accessibilityIdentifier("settings.testing.ui")
-                    Text(store.status).fixedSize(horizontal: false, vertical: true)
-                        .accessibilityLabel(store.status).accessibilityIdentifier("settings.testing.status")
-                    HStack {
-                        Button("Open Progress") { store.openProgress() }.disabled(store.report == nil)
-                        Button("Open Latest Report") { store.openReport() }.disabled(store.report == nil)
-                        Button("Reveal Logs") { store.revealReport() }.disabled(store.report == nil)
+                HStack {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Run local testing").font(.body.weight(.medium))
+                        Text("Choose a scope, follow progress, and reopen retained results in the Testing window.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    Button("Cancel Testing") { store.cancel() }.disabled(!store.running)
-                    Text("Keep the Mac unlocked and avoid keyboard/pointer use during UI automation. Xcode may request one-time permission to control test applications. Reports persist in Application Support/SiteForge/TestingReports.")
-                        .font(.caption).fixedSize(horizontal: false, vertical: true)
-                }
+                    Spacer()
+                    Button("Open Testing") { store.openTestingWindow() }
+                        .accessibilityIdentifier("settings.testing.open")
+                }.padding(8)
             }
-        }.padding(SiteForgeVisualSystem.settingsFormPadding)
+        }
     }
 }
 
@@ -1069,8 +1278,7 @@ private struct SiteForgeAccessibilitySettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: SiteForgeVisualSystem.sectionSpacing) {
             SiteForgeSettingsHeader(title: "Accessibility", scope: "Uses macOS accessibility settings · does not change your website",
-                detail: "SiteForge follows your system display preferences and native keyboard navigation.",
-                systemImage: "accessibility")
+                detail: "SiteForge follows your system display preferences and native keyboard navigation.")
             GroupBox("Display preferences") {
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
                     LabeledContent("Reduce transparency", value: reduceTransparency ? "On · opaque surfaces" : "Off · native materials")
@@ -1089,7 +1297,6 @@ private struct SiteForgeAccessibilitySettingsView: View {
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(SiteForgeVisualSystem.settingsFormPadding)
         .frame(maxWidth: SiteForgeVisualSystem.settingsContentMaxWidth, alignment: .topLeading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Accessibility preferences")
@@ -1105,8 +1312,7 @@ struct UpdateSettingsView: View {
             SiteForgeSettingsHeader(
                 title: "Updates",
                 scope: AuthoringLanguage.appPreferencesScope,
-                detail: "Check for SiteForge updates. Installation is unavailable until an approved, trusted signed updater is configured. Your website is unchanged.",
-                systemImage: "arrow.triangle.2.circlepath"
+                detail: "Check for SiteForge updates. Installation is unavailable until an approved, trusted signed updater is configured. Your website is unchanged."
             )
             GroupBox("Installed version") {
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
@@ -1160,7 +1366,6 @@ struct UpdateSettingsView: View {
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(SiteForgeVisualSystem.settingsFormPadding)
         .frame(maxWidth: SiteForgeVisualSystem.settingsContentMaxWidth, alignment: .topLeading)
         .onChange(of: store.status) { _, status in
             NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,

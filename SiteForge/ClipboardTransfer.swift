@@ -5,7 +5,8 @@ import Foundation
 // They are never part of the canonical document or project package; only the
 // validated result is compiled into the existing document command registry.
 struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
-    static let currentVersion = 2
+    private static let versionWithoutUsageNotes = 2
+    static let currentVersion = 4
     static let maximumEncodedBytes = 64 * 1_024 * 1_024
     static let maximumNodes = 10_000
     static let maximumRoots = 1_000
@@ -24,7 +25,7 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
     let componentDefinitions: [DocumentPage]
 
     init(
-        version: Int = Self.currentVersion,
+        version: Int? = nil,
         sourceDocumentID: DocumentID,
         sourcePageID: PageID,
         roots: [NodeID],
@@ -34,7 +35,14 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
         reusableStyleDependencies: [ClipboardReusableStyleDependency] = [],
         componentDefinitions: [DocumentPage] = []
     ) {
-        self.version = version
+        let containsUsageNotes = componentDefinitions.contains { definition in
+            definition.nodes.contains { $0.properties.contains(where: CanonicalComponentUsageNotes.owns) }
+        }
+        let usesDecorativeData = colorTokenDependencies.contains { $0.darkColor != nil }
+            || (nodes + componentDefinitions.flatMap(\.nodes)).contains { node in node.properties.contains {
+                $0.key.rawValue.hasPrefix("style.flow.") || $0.key.rawValue.hasPrefix("style.glass.") || $0.key.rawValue.hasPrefix("content.qr.")
+            } }
+        self.version = version ?? (usesDecorativeData ? Self.currentVersion : containsUsageNotes ? 3 : Self.versionWithoutUsageNotes)
         self.sourceDocumentID = sourceDocumentID
         self.sourcePageID = sourcePageID
         self.roots = roots
@@ -66,7 +74,9 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
     }
 
     func validate() throws {
-        guard version == Self.currentVersion else { throw ClipboardTransferError.unsupportedVersion }
+        guard (Self.versionWithoutUsageNotes...Self.currentVersion).contains(version) else {
+            throw ClipboardTransferError.unsupportedVersion
+        }
         let properties = nodes.flatMap(\.properties)
         guard !roots.isEmpty, roots.count <= Self.maximumRoots,
               Set(roots).count == roots.count,
@@ -118,7 +128,15 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
                 $0.key.rawValue.hasPrefix(CanonicalComponentSlot.unsupportedOverrideNamespace)
             }
         }) else { throw ClipboardTransferError.unsupportedSlotContent }
+        if version < 4, colorTokenDependencies.contains(where: { $0.darkColor != nil }) || allNodes.contains(where: { node in node.properties.contains {
+            $0.key.rawValue.hasPrefix("style.flow.") || $0.key.rawValue.hasPrefix("style.glass.") || $0.key.rawValue.hasPrefix("content.qr.")
+        } }) { throw ClipboardTransferError.unsupportedVersion }
         let definitionNodeIDs = Set(definitionNodes.map(\.id))
+        let definitionRootIDs = Set(componentDefinitions.compactMap { $0.rootNodeIDs.first })
+        if version < 3,
+           allNodes.contains(where: { $0.properties.contains(where: CanonicalComponentUsageNotes.owns) }) {
+            throw ClipboardTransferError.unsupportedVersion
+        }
         do {
             for node in allNodes {
                 guard Set(node.properties.map(\.key)).count == node.properties.count else {
@@ -127,7 +145,11 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
                 try CanonicalComponentAction.validate(node, inDefinition: definitionNodeIDs.contains(node.id))
                 try CanonicalComponentSlot.validate(node, inDefinition: definitionNodeIDs.contains(node.id))
                 try CanonicalComponentOrganization.validate(node, inDefinition: definitionNodeIDs.contains(node.id))
+                try CanonicalComponentUsageNotes.validate(node, isDefinitionRoot: definitionRootIDs.contains(node.id))
                 try CanonicalLinkTarget.validate(node)
+                _ = try CanonicalFlowGradient.resolve(node)
+                _ = try CanonicalGlassSurface.resolve(node)
+                _ = try CanonicalQRCode.resolve(node)
             }
         } catch { throw ClipboardTransferError.invalidEnvelope }
         let allProperties = allNodes.flatMap(\.properties)
@@ -615,7 +637,7 @@ struct ClipboardTransferRegistry {
         var tokenMap: [ColorTokenID: ColorTokenID] = [:]
         var resultingTokens = document.colorTokens
         for token in envelope.colorTokenDependencies {
-            if let existing = resultingTokens.first(where: { $0.name == token.name && $0.color == token.color }) {
+            if let existing = resultingTokens.first(where: { $0.name == token.name && $0.color == token.color && $0.darkColor == token.darkColor }) {
                 tokenMap[token.id] = existing.id
             } else {
                 let newID = ColorTokenID()
@@ -626,7 +648,7 @@ struct ClipboardTransferRegistry {
                     name = String(base.prefix(112)) + " Copy \(suffix)"; suffix += 1
                 }
                 tokenMap[token.id] = newID
-                resultingTokens.append(.init(id: newID, name: name, color: token.color))
+                resultingTokens.append(.init(id: newID, name: name, color: token.color, darkColor: token.darkColor))
             }
         }
 
@@ -903,10 +925,10 @@ struct ClipboardTransferRegistry {
         let sourceAssets = Dictionary(uniqueKeysWithValues: envelope.imageDependencies.map { ($0.asset.id, $0.asset.contentHash) })
         let destinationAssets = Dictionary(uniqueKeysWithValues: document.imageAssets.map { ($0.id, $0.contentHash) })
         let sourceTokens = Dictionary(uniqueKeysWithValues: envelope.colorTokenDependencies.map {
-            ($0.id, "\($0.name)|\($0.color.hexadecimalRGBA)")
+            ($0.id, "\($0.name)|\($0.color.hexadecimalRGBA)|\($0.darkColor?.hexadecimalRGBA ?? "no-dark-variant")")
         })
         let destinationTokens = Dictionary(uniqueKeysWithValues: document.colorTokens.map {
-            ($0.id, "\($0.name)|\($0.color.hexadecimalRGBA)")
+            ($0.id, "\($0.name)|\($0.color.hexadecimalRGBA)|\($0.darkColor?.hexadecimalRGBA ?? "no-dark-variant")")
         })
         let sourceStyles = Dictionary(uniqueKeysWithValues: envelope.reusableStyleDependencies.map {
             ($0.id, styleSemantic(name: $0.name, fill: $0.fill, opacity: $0.opacity))
@@ -966,22 +988,25 @@ struct ClipboardTransferRegistry {
                 continue
             }
             let destinationID = PageID()
-            var name = source.name, suffix = 2
-            let renamed: Bool
-            if reservedNames.contains(name.lowercased()) {
-                repeat {
-                    name = String(source.name.prefix(112)) + " Copy \(suffix)"; suffix += 1
-                } while reservedNames.contains(name.lowercased())
-                renamed = true
-            } else { renamed = false }
+            let renamed = reservedNames.contains(source.name.lowercased())
+            let name = renamed
+                ? ComponentDefinitionGraphCopy.uniqueCopyName(source.name, reserved: reservedNames)
+                : source.name
             reservedNames.insert(name.lowercased())
-            let translated = try translatedDefinition(
-                source, destinationID: destinationID, name: name,
-                assetMap: assetMap, tokenMap: tokenMap, styleMap: styleMap,
-                textMap: &textMap, visibilityMap: &visibilityMap, choiceMap: &choiceMap, mediaMap: &mediaMap,
-                actionMap: &actionMap, definitionNodes: &definitionNodes,
-                pageReferenceMap: pageReferenceMap, nodeReferenceMap: nodeReferenceMap
-            )
+            let translated: DocumentPage
+            do {
+                translated = try ComponentDefinitionGraphCopy.remap(
+                    source, destinationID: destinationID, name: name,
+                    assetMap: assetMap, tokenMap: tokenMap, styleMap: styleMap,
+                    textMap: &textMap, visibilityMap: &visibilityMap, choiceMap: &choiceMap, mediaMap: &mediaMap,
+                    actionMap: &actionMap, definitionNodes: &definitionNodes,
+                    pageReferenceMap: pageReferenceMap, nodeReferenceMap: nodeReferenceMap
+                )
+            } catch ComponentDefinitionGraphCopy.Failure.invalidGraph {
+                throw ClipboardTransferError.invalidEnvelope
+            } catch ComponentDefinitionGraphCopy.Failure.missingDependency {
+                throw ClipboardTransferError.invalidDependency
+            }
             definitionMap[source.id] = destinationID
             definitionNameMap[source.id] = name
             imported.append(translated)
@@ -1103,130 +1128,6 @@ struct ClipboardTransferRegistry {
             if let old = CanonicalComponentAction.property(on: sourceNode)?.id,
                let new = CanonicalComponentAction.property(on: destinationNode)?.id { action[old] = new }
         }
-    }
-
-    private static func translatedDefinition(
-        _ source: DocumentPage,
-        destinationID: PageID,
-        name: String,
-        assetMap: [AssetID: AssetID],
-        tokenMap: [ColorTokenID: ColorTokenID],
-        styleMap: [ReusableStyleID: ReusableStyleID],
-        textMap: inout [ComponentTextPropertyID: ComponentTextPropertyID],
-        visibilityMap: inout [ComponentVisibilityPropertyID: ComponentVisibilityPropertyID],
-        choiceMap: inout [ComponentChoicePropertyID: ComponentChoicePropertyID],
-        mediaMap: inout [ComponentMediaPropertyID: ComponentMediaPropertyID],
-        actionMap: inout [ComponentActionPropertyID: ComponentActionPropertyID],
-        definitionNodes: inout [NodeID: NodeID],
-        pageReferenceMap: [PageID: PageID], nodeReferenceMap: [NodeID: NodeID]
-    ) throws -> DocumentPage {
-        let nodeMap = Dictionary(uniqueKeysWithValues: source.nodes.map { ($0.id, NodeID()) })
-        definitionNodes.merge(nodeMap, uniquingKeysWith: { first, _ in first })
-        let slotMap = Dictionary(uniqueKeysWithValues: CanonicalComponentSlot.properties(in: source).map { ($0.id, ComponentSlotPropertyID()) })
-        let propertyMap = Dictionary(uniqueKeysWithValues: source.nodes.flatMap(\.properties).map { ($0.id, PropertyID()) })
-        for node in source.nodes {
-            if let old = CanonicalComponentText.property(on: node)?.id { textMap[old] = ComponentTextPropertyID() }
-            if let old = CanonicalComponentVisibility.property(on: node)?.id { visibilityMap[old] = ComponentVisibilityPropertyID() }
-            if let old = CanonicalComponentChoice.property(on: node)?.id { choiceMap[old] = ComponentChoicePropertyID() }
-            if let old = CanonicalComponentMedia.property(on: node)?.id { mediaMap[old] = ComponentMediaPropertyID() }
-            if let old = CanonicalComponentAction.property(on: node)?.id { actionMap[old] = ComponentActionPropertyID() }
-        }
-        let nodes = try source.nodes.map { node -> DocumentNode in
-            guard let id = nodeMap[node.id] else { throw ClipboardTransferError.invalidEnvelope }
-            let parent: NodeParent = switch node.parent {
-            case .page: .page(destinationID)
-            case .node(let old): nodeMap[old].map(NodeParent.node) ?? .page(destinationID)
-            }
-            let properties = try node.properties.compactMap { property -> NodeProperty? in
-                let key = property.key.rawValue
-                if key.hasPrefix(CanonicalReusableStyleIndex.namespace + "definition.") { return nil }
-                guard let propertyID = propertyMap[property.id] else { throw ClipboardTransferError.invalidEnvelope }
-                var outputKey = key, value = property.value
-                if CanonicalPageChrome.referenceKeys.contains(key), case .string(let raw) = value,
-                   let old = NodeID(uuidString: raw), let mapped = nodeMap[old] {
-                    value = .string(mapped.description)
-                }
-                if [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].contains(key),
-                   case .string(let raw) = value, let old = AssetID(uuidString: raw), let mapped = assetMap[old] {
-                    value = .string(mapped.description)
-                } else if key.hasPrefix(LocalColorTokenBinding.prefix), case .string(let raw) = value,
-                          let old = ColorTokenID(uuidString: raw), let mapped = tokenMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalReusableStyleIndex.appliedKey, case .string(let raw) = value {
-                    value = .string(try raw.split(separator: ",", omittingEmptySubsequences: false).map { part in
-                        guard let old = ReusableStyleID(uuidString: String(part)), let mapped = styleMap[old] else {
-                            throw ClipboardTransferError.invalidDependency
-                        }
-                        return mapped.description
-                    }.joined(separator: ","))
-                } else if key == CanonicalComponentText.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentTextPropertyID(uuidString: raw), let mapped = textMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentVisibility.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentVisibilityPropertyID(uuidString: raw), let mapped = visibilityMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentChoice.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentChoicePropertyID(uuidString: raw), let mapped = choiceMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentMedia.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentMediaPropertyID(uuidString: raw), let mapped = mediaMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentAction.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentActionPropertyID(uuidString: raw), let mapped = actionMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentSlot.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentSlotPropertyID(uuidString: raw), let mapped = slotMap[old] {
-                    value = .string(mapped.description)
-                } else if key.hasPrefix(CanonicalComponentOrganization.namespace), key.hasSuffix(".binding"),
-                          case .string(let raw) = value, let identity = ComponentOverridePropertyIdentity.reference(raw) {
-                    let mapped: ComponentOverridePropertyIdentity
-                    switch identity {
-                    case .text(let id): guard let id = textMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .text(id)
-                    case .visibility(let id): guard let id = visibilityMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .visibility(id)
-                    case .choice(let id): guard let id = choiceMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .choice(id)
-                    case .media(let id): guard let id = mediaMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .media(id)
-                    case .action(let id): guard let id = actionMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .action(id)
-                    case .slot(let id): guard let id = slotMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .slot(id)
-                    }
-                    value = .string(mapped.stableDescription)
-                } else if key == CanonicalLinkTarget.namespace + "nodeID", case .string(let raw) = value,
-                          let old = NodeID(uuidString: raw), let mapped = nodeMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalLinkTarget.namespace + "pageID", case .string(let raw) = value,
-                          PageID(uuidString: raw) == source.id { value = .string(destinationID.description)
-                } else if key == CanonicalLinkTarget.namespace + "pageID", case .string(let raw) = value,
-                          let old = PageID(uuidString: raw), let mapped = pageReferenceMap[old] { value = .string(mapped.description)
-                } else if key == CanonicalLinkTarget.namespace + "nodeID", case .string(let raw) = value,
-                          let old = NodeID(uuidString: raw), let mapped = nodeReferenceMap[old] { value = .string(mapped.description)
-                } else if key == CanonicalFormField.optionsKey, case .string(let encoded) = value {
-                    value = .string(try CanonicalFormSelectOptions.remappingStableIDs(in: encoded))
-                } else if key.hasPrefix(CanonicalFluidValueCodec.namespace + "."), case .string(let encoded) = value,
-                          let target = FluidValueTarget(rawValue: String(key.dropFirst(CanonicalFluidValueCodec.namespace.count + 1))) {
-                    value = .string(try CanonicalFluidValueCodec.remappingStableID(in: encoded, target: target))
-                } else if let old = CanonicalComponentText.overrideID(key) {
-                    guard let mapped = textMap[old] else { throw ClipboardTransferError.invalidDependency }
-                    outputKey = CanonicalComponentText.overrideKey(mapped)
-                } else if let old = CanonicalComponentVisibility.overrideID(key) {
-                    guard let mapped = visibilityMap[old] else { throw ClipboardTransferError.invalidDependency }
-                    outputKey = CanonicalComponentVisibility.overrideKey(mapped)
-                } else if let old = CanonicalComponentChoice.overrideID(key) {
-                    guard let mapped = choiceMap[old] else { throw ClipboardTransferError.invalidDependency }
-                    outputKey = CanonicalComponentChoice.overrideKey(mapped)
-                } else if let old = CanonicalComponentMedia.overrideID(key) {
-                    guard let mapped = mediaMap[old] else { throw ClipboardTransferError.invalidDependency }
-                    outputKey = CanonicalComponentMedia.overrideKey(mapped)
-                    if case .string(let raw) = value, let asset = AssetID(uuidString: raw), let remapped = assetMap[asset] {
-                        value = .string(remapped.description)
-                    }
-                }
-                return NodeProperty(id: propertyID, key: .init(rawValue: outputKey), value: value, origin: property.origin)
-            }
-            return DocumentNode(id: id, kind: node.kind, name: node.name, parent: parent,
-                                childIDs: node.childIDs.compactMap { nodeMap[$0] }, properties: properties)
-        }
-        return DocumentPage(id: destinationID, name: name, route: .init(rawValue: ""),
-                            role: .componentDefinition, provenance: .authored,
-                            rootNodeIDs: source.rootNodeIDs.compactMap { nodeMap[$0] }, nodes: nodes)
     }
 
     private static func styleDefinitionProperties(_ styles: [ClipboardReusableStyleDependency]) -> [NodeProperty] {

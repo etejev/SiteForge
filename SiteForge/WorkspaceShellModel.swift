@@ -34,7 +34,7 @@ enum ShellTabLayoutPolicy {
         let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
         return labels.map {
             Double(ceil(($0 as NSString).size(withAttributes: [.font: font]).width)
-                + SiteForgeVisualSystem.microSpacing * 2)
+                + SiteForgeVisualSystem.tabLabelInset * 2)
         }
     }
 
@@ -484,7 +484,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     /// The persistent authoring rail stays deliberately bounded at the
     /// practical minimum window. Every other tool remains available through
     /// the adjacent native menu and the central Insert menu/shortcuts.
-    static let primaryToolbarTools: [Self] = [.select, .frame, .text, .image, .component]
+    static let primaryToolbarTools: [Self] = [.select, .frame, .text, .image, .section]
     static let additionalToolbarTools: [Self] = allCases.filter { !primaryToolbarTools.contains($0) }
 
     var title: String {
@@ -1123,6 +1123,9 @@ enum ShellFocus: Hashable {
     case navigatorComponents
     case navigatorOverflow
     case navigatorPage(PageID)
+    case navigatorDuplicate(PageID)
+    case navigatorDelete(PageID)
+    case navigatorMore(PageID)
     case navigatorLayer(NodeID)
     case viewportPreset
     case viewportWidth
@@ -1130,9 +1133,7 @@ enum ShellFocus: Hashable {
     case viewportGrid
     case viewportZoomOut
     case viewportZoomIn
-    case viewportReset
     case viewportFitCanvas
-    case viewportFit
     case viewportCanvas
     case inspectorDesign
     case inspectorLayout
@@ -1151,9 +1152,10 @@ enum ShellFocusTraversal {
     static func order(pageIDs: [PageID], layerIDs: [NodeID] = []) -> [ShellFocus] {
         [
             .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents,
-        ] + pageIDs.map(ShellFocus.navigatorPage) + layerIDs.map(ShellFocus.navigatorLayer) + [
+        ] + pageIDs.flatMap { [.navigatorPage($0), .navigatorMore($0)] }
+            + layerIDs.map(ShellFocus.navigatorLayer) + [
             .viewportPreset, .viewportWidth, .viewportCompare, .viewportGrid, .viewportZoomOut, .viewportZoomIn,
-            .viewportReset, .viewportFitCanvas, .viewportFit, .viewportCanvas,
+            .viewportFitCanvas, .viewportCanvas,
             .inspectorDesign, .inspectorLayout, .inspectorContent, .inspectorInteractions, .inspectorAccessibility,
         ]
     }
@@ -1184,6 +1186,9 @@ extension ShellFocus {
         case .navigatorComponents: "navigator.tab.components"
         case .navigatorOverflow: "navigator.tab.overflow"
         case let .navigatorPage(id): NavigatorPageAccessibility.identifier(for: id)
+        case let .navigatorDuplicate(id): "navigator.pageActions.duplicate.\(id.description)"
+        case let .navigatorDelete(id): "navigator.pageActions.delete.\(id.description)"
+        case let .navigatorMore(id): "navigator.pageActions.more.\(id.description)"
         case let .navigatorLayer(id): "navigator.layer.\(id.description)"
         case .viewportPreset: "canvas.viewport.preset"
         case .viewportWidth: "canvas.viewport.width"
@@ -1191,9 +1196,7 @@ extension ShellFocus {
         case .viewportGrid: "canvas.grid.toggle"
         case .viewportZoomOut: "canvas.zoom.out"
         case .viewportZoomIn: "canvas.zoom.in"
-        case .viewportReset: "canvas.zoom.reset"
         case .viewportFitCanvas: "canvas.zoom.fitCanvas"
-        case .viewportFit: "canvas.zoom.fit"
         case .viewportCanvas: "canvas.interaction"
         case .inspectorDesign: "inspector.tab.design"
         case .inspectorLayout: "inspector.tab.layout"
@@ -1277,8 +1280,8 @@ enum NavigatorPageAccessibility {
 enum WorkspaceMetrics {
     static let minimumWindowSize = CGSize(width: 1_100, height: 700)
     static let defaultWindowSize = CGSize(width: 1_280, height: 800)
-    static let navigatorWidth: ClosedRange<CGFloat> = 250...360
-    static let inspectorWidth: ClosedRange<CGFloat> = 280...420
+    static let navigatorWidth: ClosedRange<CGFloat> = 268...360
+    static let inspectorWidth: ClosedRange<CGFloat> = 252...420
     static let minimumCanvasWidth: CGFloat = 500
     static let uiTestScreenEdgeInset: CGFloat = 16
     struct SidePaneAllocation: Equatable {
@@ -1304,34 +1307,55 @@ enum WorkspaceMetrics {
             inspectorMinimum: minimum(inspectorMinimumWidth(for: width), inspectorMax, inspectorRequired),
             inspectorMaximum: inspectorMax)
     }
-    // Measured 12-point semibold labels, all five native targets, gaps and pane
-    // gutters require 323/353 points. A normal-width workspace reserves these
-    // rows; constrained windows retain explicit overflow rather than tiny type.
     static func navigatorMinimumWidth(for windowWidth: CGFloat) -> CGFloat {
-        windowWidth >= defaultWindowSize.width ? 324 : navigatorWidth.lowerBound
+        navigatorWidth.lowerBound
     }
+
     static func inspectorMinimumWidth(for windowWidth: CGFloat) -> CGFloat {
-        windowWidth >= defaultWindowSize.width ? 356 : inspectorWidth.lowerBound
+        windowWidth >= defaultWindowSize.width ? SiteForgeVisualSystem.inspectorIdealWidth : inspectorWidth.lowerBound
     }
+
+    static var workspacePaneOverhead: CGFloat { SiteForgeVisualSystem.toolRailWidth + 3 }
+
     static func navigatorMaximumWidth(for windowWidth: CGFloat) -> CGFloat {
-        let available = max(0, windowWidth - minimumCanvasWidth - 2)
-        return max(navigatorMinimumWidth(for: windowWidth),
-            min(navigatorWidth.upperBound, available * 344 / 728))
+        let available = windowWidth - minimumCanvasWidth - workspacePaneOverhead
+        let inspectorMinimum = inspectorMinimumWidth(for: windowWidth)
+        return max(navigatorWidth.lowerBound, min(navigatorWidth.upperBound, available - inspectorMinimum, available * 0.47))
     }
+
     static func inspectorMaximumWidth(for windowWidth: CGFloat) -> CGFloat {
-        let available = max(0, windowWidth - minimumCanvasWidth - 2 - navigatorMaximumWidth(for: windowWidth))
-        return max(inspectorMinimumWidth(for: windowWidth), min(inspectorWidth.upperBound, available))
+        let available = windowWidth - minimumCanvasWidth - workspacePaneOverhead - navigatorMaximumWidth(for: windowWidth)
+        let compactLimit = inspectorWidth.lowerBound + max(0, windowWidth - minimumWindowSize.width)
+        return max(inspectorMinimumWidth(for: windowWidth), min(inspectorWidth.upperBound, available, compactLimit))
+    }
+
+    static func navigatorIdealWidth(for windowWidth: CGFloat) -> CGFloat {
+        windowWidth <= minimumWindowSize.width ? navigatorWidth.lowerBound : SiteForgeVisualSystem.navigatorIdealWidth
+    }
+
+    static func inspectorIdealWidth(for windowWidth: CGFloat) -> CGFloat {
+        windowWidth <= minimumWindowSize.width ? inspectorWidth.lowerBound : SiteForgeVisualSystem.inspectorIdealWidth
     }
 
     static func supportsLayout(at size: CGSize) -> Bool {
         size.width >= minimumWindowSize.width
             && size.height >= minimumWindowSize.height
-            && navigatorWidth.lowerBound + minimumCanvasWidth + inspectorWidth.lowerBound < size.width
+            && navigatorWidth.lowerBound + minimumCanvasWidth + inspectorWidth.lowerBound + workspacePaneOverhead <= size.width
     }
 
     static func requestedWindowSize(composition: DebugTestComposition = .current()) -> CGSize? {
         guard composition.value(after: "-SiteForgeWindowSize") == "minimum" else { return nil }
         return minimumWindowSize
+    }
+
+    static func requestedReviewFrameSize(composition: DebugTestComposition = .current()) -> CGSize? {
+        guard composition.boolValue(after: "-SiteForgeUITestMode") == true else { return nil }
+        switch composition.value(after: "-SiteForgeReviewWindowSize") {
+        case "start": return CGSize(width: 1_440, height: 780)
+        case "workspace": return CGSize(width: 1_440, height: 800)
+        case "compact": return minimumWindowSize
+        default: return nil
+        }
     }
 
     static func requestedWindowFrameSize(
@@ -1347,10 +1371,21 @@ enum WorkspaceMetrics {
         )
     }
 
+    @MainActor static var windowContentMinimum: CGSize {
+        let composition = DebugTestComposition.current()
+        guard composition.boolValue(after: "-SiteForgeUITestMode") == true,
+              let visible = NSScreen.main?.visibleFrame.size else {
+            return effectiveMinimumWindowSize(composition: composition)
+        }
+        return CGSize(width: min(visible.width, minimumWindowSize.width),
+                      height: min(visible.height, effectiveMinimumWindowSize(composition: composition).height))
+    }
+
     static func effectiveMinimumWindowSize(
         composition: DebugTestComposition = .current()
     ) -> CGSize {
-        guard requestedUITestWindowPlacement(composition: composition) != nil else {
+        guard requestedUITestWindowPlacement(composition: composition) != nil
+                || requestedReviewFrameSize(composition: composition) != nil else {
             return minimumWindowSize
         }
         // A titled AppKit window cannot move its title bar above the hosted
@@ -1928,6 +1963,7 @@ actor WorkspaceScenePreparationWorker {
                 shadow: shadow,
                 typography: typography,
                 imageAssetID: imageAssetID,
+                imageIsPixelated: (try? CanonicalQRCode.resolve(node)) != nil ? true : nil,
                 imageData: imageAssetID.flatMap { request.imageResourceData[$0] },
                 imagePixelWidth: imageAsset?.pixelWidth,
                 imagePixelHeight: imageAsset?.pixelHeight,
@@ -2278,6 +2314,12 @@ enum ComponentCollectionSort: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self { case .canonical: "Project Order"; case .name: "Name"; case .usage: "Most Used" }
     }
+}
+
+struct ComponentDetailsRequest: Identifiable, Equatable {
+    let id: PageID
+    let documentID: DocumentID
+    let instanceID: NodeID?
 }
 
 struct ComponentDependencySnapshot: Equatable, Sendable {
@@ -2689,7 +2731,7 @@ final class WorkspaceShellState: ObservableObject {
     @Published var selectedTool: CanvasTool = .select
     @Published var navigatorTab: NavigatorTab = .pages
     @Published var selectedPageID: PageID?
-    @Published var inspectorTab: InspectorTab = .layout
+    @Published var inspectorTab: InspectorTab = .design
     @Published var inspectorSectionQuery = ""
     @Published var pinnedInspectorSections: Set<InspectorTab> = []
     @Published var inspectorTransferField: GeometryInspectorField = .width
@@ -2762,7 +2804,8 @@ final class WorkspaceShellState: ObservableObject {
         let nodeID: NodeID
         let identity: DesignInspectorOperationIdentity
         let frame: WorldRect
-        let resizesHeight: Bool
+        let heightScope: LayoutInspectorDraftScope?
+        var resizesHeight: Bool { heightScope != nil }
         var target: Double
     }
     private var pageFlowGesture: PageFlowGesture?
@@ -2823,6 +2866,11 @@ final class WorkspaceShellState: ObservableObject {
     @Published var assetFolderFilter: String?
     @Published var assetTagFilter: String?
     @Published var selectedAssetID: AssetID?
+    @Published private(set) var isAddingFooterContent = false
+    @Published private(set) var lastFooterContentAnnouncement = ""
+    @Published private(set) var footerContentCompletion = UUID()
+    private let footerContentWorker = FooterContentWorker()
+    private var footerContentTask: Task<Void, Never>?
     @Published private(set) var isImportingImages = false
     @Published private(set) var lastAssetAnnouncement = "No image asset selected"
     @Published private(set) var imageThumbnailData: [AssetID: Data] = [:]
@@ -2844,6 +2892,7 @@ final class WorkspaceShellState: ObservableObject {
     private var pendingPageChromeCopyAdoption: (documentID: DocumentID, revision: UInt64, message: String)?
     @Published private(set) var pageAnnouncement = ""
     @Published private(set) var componentAnnouncement = ""
+    @Published var componentDetailsRequest: ComponentDetailsRequest?
     @Published var componentSearchText = ""
     @Published var componentCollectionFilter: ComponentCollectionFilter = .all
     @Published var componentCollectionSort: ComponentCollectionSort = .canonical
@@ -3074,6 +3123,7 @@ final class WorkspaceShellState: ObservableObject {
             request.reject()
         }
         editCommitRequests.send(request)
+        if request.isAccepted, let preview = designStylePreview, !finishDesignStylePreview(owner: preview.owner) { request.reject() }
         if request.isAccepted, textEditingSession.isActive { commitTextEditing() }
         guard request.isAccepted, !textEditingSession.isActive else {
             workspaceActionStatus = "\(action.rawValue) paused. Finish the current edit or press Escape to cancel its draft, then retry. This action has not run; the remaining draft is retained."
@@ -4178,6 +4228,12 @@ final class WorkspaceShellState: ObservableObject {
         guard prepareForWorkspaceAction(.context) else { return }
         guard !isImportingImages, transformValidationContext.isLifecycleAvailable,
               let original = documentSession.document.imageAssets.first(where: { $0.id == assetID }) else { return }
+        if documentSession.document.pages.flatMap(\.nodes).contains(where: {
+            CanonicalImageStyle.resolve($0)?.assetID == assetID && (try? CanonicalQRCode.resolve($0)) != nil
+        }) {
+            lastAssetAnnouncement = "This asset is a generated QR code. Select its Image and use Regenerate QR, or Convert to Image before replacing its bytes."
+            announcementPoster.post(lastAssetAnnouncement); return
+        }
         let expectedDocumentID = documentSession.document.id
         let expectedRevision = documentSession.document.revision
         let references = ImageAssetReference.references(to: assetID, in: documentSession.document)
@@ -4240,6 +4296,80 @@ final class WorkspaceShellState: ObservableObject {
             } catch {
                 lastAssetAnnouncement = "The image could not be replaced"
             }
+        }
+    }
+
+    func convertQRCodeToImage(nodeID: NodeID) {
+        guard !isAddingFooterContent, prepareForWorkspaceAction(.context), let pageID = effectiveSelectedPageID,
+              selectedCanonicalNodes.count == 1, selectedCanonicalNodes[0].id == nodeID,
+              !selectedCanonicalNodes[0].selectionBooleanProperty("locked") else { return }
+        let commands = selectedCanonicalNodes[0].properties.filter { $0.key.rawValue.hasPrefix("content.qr.") }.map {
+            DocumentCommand.removeProperty(.init(pageID: pageID, nodeID: nodeID, propertyID: $0.id))
+        }
+        do {
+            _ = try documentSession.execute(.batch(commands))
+            lastFooterContentAnnouncement = "Converted to an ordinary Image. Its bytes, alt text and independent adjacent link are retained. Undo restores QR editing."
+        } catch { lastFooterContentAnnouncement = error.localizedDescription }
+    }
+
+    func regenerateQRCode(nodeID: NodeID, payload: String) {
+        guard !isAddingFooterContent, prepareForWorkspaceAction(.context), let pageID = effectiveSelectedPageID,
+              selectedCanonicalNodes.count == 1, selectedCanonicalNodes[0].id == nodeID,
+              transformValidationContext.isLifecycleAvailable else { return }
+        let document = documentSession.document
+        isAddingFooterContent = true; lastFooterContentAnnouncement = "Generating and decoding the QR code locally…"
+        footerContentTask = Task { [weak self] in
+            guard let self else { return }
+            defer { isAddingFooterContent = false; footerContentTask = nil }
+            do {
+                let prepared = try await footerContentWorker.prepareQRUpdate(nodeID: nodeID, pageID: pageID, document: document, payload: payload)
+                try Task.checkCancellation()
+                guard documentSession.document.id == document.id, documentSession.document.revision == document.revision,
+                      effectiveSelectedPageID == pageID, selectionState.orderedIDs == [nodeID],
+                      transformValidationContext.isLifecycleAvailable else { throw DesignInspectorError.stale }
+                if let resource = prepared.resource {
+                    _ = try lifecycle.installingProjectResource(resource.descriptor, data: resource.data) { try documentSession.execute(prepared.command) }
+                } else { _ = try documentSession.execute(prepared.command) }
+                refreshImageThumbnails(for: documentSession.document)
+                lastFooterContentAnnouncement = "QR regenerated and decoded successfully. Other uses of the previous image are unchanged."
+            } catch is CancellationError { lastFooterContentAnnouncement = "QR generation cancelled; content is unchanged." }
+            catch { lastFooterContentAnnouncement = error.localizedDescription }
+        }
+    }
+
+    func cancelFooterContent() { footerContentTask?.cancel() }
+
+    func addFooterContent(preset: FooterGroupPreset, footerID: NodeID, selectedGridID: NodeID?,
+                          createColumnsConfirmed: Bool, payload: String) {
+        guard !isAddingFooterContent, prepareForWorkspaceAction(.context),
+              let pageID = effectiveSelectedPageID, transformValidationContext.isLifecycleAvailable else { return }
+        let document = documentSession.document, selection = selectionState.orderedIDs
+        isAddingFooterContent = true; lastFooterContentAnnouncement = "Preparing editable Footer content…"
+        footerContentTask = Task { [weak self] in
+            guard let self else { return }
+            defer { isAddingFooterContent = false; footerContentTask = nil }
+            do {
+                let prepared = try await footerContentWorker.prepare(preset: preset, footerID: footerID,
+                    selectedGridID: selectedGridID, createColumnsConfirmed: createColumnsConfirmed,
+                    document: document, pageID: pageID, payload: payload)
+                try Task.checkCancellation()
+                guard documentSession.document.id == document.id, documentSession.document.revision == document.revision,
+                      effectiveSelectedPageID == pageID, selectionState.orderedIDs == selection,
+                      transformValidationContext.isLifecycleAvailable else {
+                    lastFooterContentAnnouncement = "The document or selection changed. Review the Footer and add again."; return
+                }
+                if let resource = prepared.resource {
+                    _ = try lifecycle.installingProjectResource(resource.descriptor, data: resource.data) {
+                        try documentSession.execute(prepared.command)
+                    }
+                } else { _ = try documentSession.execute(prepared.command) }
+                pendingSelectionAfterInsertion = prepared.groupID
+                refreshImageThumbnails(for: documentSession.document)
+                lastFooterContentAnnouncement = "Added editable Footer section. Select its elements to rename, reorder, duplicate or change links and layout."
+                footerContentCompletion = UUID()
+                announcementPoster.post(lastFooterContentAnnouncement)
+            } catch is CancellationError { lastFooterContentAnnouncement = "Footer insertion cancelled; content is unchanged." }
+            catch { lastFooterContentAnnouncement = error.localizedDescription }
         }
     }
 
@@ -4671,6 +4801,8 @@ final class WorkspaceShellState: ObservableObject {
     private var activeAuthoringPage: DocumentPage? {
         documentSession.document.pages.first { $0.id == effectiveSelectedPageID }
     }
+    var artboardTitle: String { activeAuthoringPage?.name ?? "" }
+
     func showResponsiveComparison() {
         guard prepareForWorkspaceAction(.context) else { return }
         isResponsiveComparisonPresented = true
@@ -4932,6 +5064,55 @@ final class WorkspaceShellState: ObservableObject {
         currentComponentDependencySnapshot?.entry(for: id)
     }
 
+    func presentComponentDetails(_ id: PageID, fromInstance instanceID: NodeID? = nil) {
+        if let instanceID {
+            guard let instance = selectedComponent, instance.id == instanceID,
+                  CanonicalComponentReference.definitionID(for: instance) == id else { return }
+        }
+        guard componentDefinitions.contains(where: { $0.id == id }) else { return }
+        componentDetailsRequest = .init(id: id, documentID: documentSession.document.id, instanceID: instanceID)
+        refreshComponentDependencies()
+    }
+
+    func componentDefinitionForDetails(_ request: ComponentDetailsRequest) -> DocumentPage? {
+        guard request.documentID == documentSession.document.id else { return nil }
+        return componentDefinitions.first { $0.id == request.id }
+    }
+
+    func componentUsageNotesDraftIdentity(_ request: ComponentDetailsRequest) -> DesignInspectorOperationIdentity? {
+        guard componentDetailsRequest == request, transformValidationContext.isLifecycleAvailable,
+              request.documentID == documentSession.document.id, let identity = componentTextDraftIdentity,
+              (try? ComponentCommandRegistry.editableDefinition(request.id, activePageID: identity.pageID,
+                document: documentSession.document)) != nil else { return nil }
+        if let instanceID = request.instanceID {
+            guard let instance = selectedComponent, instance.id == instanceID,
+                  CanonicalComponentReference.definitionID(for: instance) == request.id else { return nil }
+        }
+        return identity
+    }
+
+    func commitComponentUsageNotes(_ draft: String?, request: ComponentDetailsRequest,
+                                   identity: DesignInspectorOperationIdentity, openingSelection: [NodeID]) -> Bool {
+        guard componentDetailsRequest == request, request.documentID == identity.documentID else {
+            componentAnnouncement = "This Details sheet no longer owns the draft. Close it and reopen the current component."
+            announcementPoster.post(componentAnnouncement)
+            return false
+        }
+        guard effectiveSelectedPageID != nil, canvasRenderPlan != nil else {
+            componentAnnouncement = "Wait for the current page to load, then reopen the notes editor."
+            announcementPoster.post(componentAnnouncement)
+            return false
+        }
+        return performComponentEdit(.setUsageNotes(definitionID: request.id,
+            openingSelection: openingSelection, draft: draft), draftIdentity: identity)
+    }
+
+    func cancelComponentUsageNotes(_ request: ComponentDetailsRequest) {
+        guard documentSession.document.id == request.documentID else { return }
+        documentSession.diagnostics.recordComponentUsageNotesOperation(definitionID: request.id,
+            command: .setProperty, result: .cancelled, durationMilliseconds: 0)
+    }
+
     func componentDefinitionName(_ id: PageID) -> String {
         componentDefinitions.first(where: { $0.id == id })?.name ?? "Missing component"
     }
@@ -5154,12 +5335,24 @@ final class WorkspaceShellState: ObservableObject {
             breakpoint: viewportPreset.responsiveBreakpoint, width: viewportState.contentBounds.size.width)
     }
     @discardableResult
-    func commitPageStructure(_ edit: PageStructureEdit, identity: DesignInspectorOperationIdentity) -> Bool {
+    func commitPageStructureHeight(_ nodeID: NodeID, value: Double, scope: LayoutInspectorDraftScope,
+                                   identity: DesignInspectorOperationIdentity) -> Bool {
+        commitPageStructure(.height(nodeID, value, scope.breakpoint), identity: identity, draftScope: scope)
+    }
+
+    @discardableResult
+    func commitPageStructure(_ edit: PageStructureEdit, identity: DesignInspectorOperationIdentity,
+                             draftScope: LayoutInspectorDraftScope? = nil) -> Bool {
         let started = DispatchTime.now().uptimeNanoseconds
         var succeeded = false
         defer {
             documentSession.diagnostics.recordPageStructureOperation(pageID: identity.pageID, nodeIDs: selectionState.orderedIDs,
                 succeeded: succeeded, durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+        }
+        if let draftScope, draftScope != layoutInspectorDraftScope || !layoutInspectorHasCurrentScene {
+            componentAnnouncement = AuthoringLanguage.staleDraft
+            announcementPoster.post(componentAnnouncement)
+            return false
         }
         do {
             let command = try PageStructureCommandRegistry().prepare(edit, identity: identity, document: documentSession.document,
@@ -5392,6 +5585,11 @@ final class WorkspaceShellState: ObservableObject {
         guard let id = selectedComponent?.id else { return }
         performComponentEdit(.detach(id))
     }
+    func duplicateComponentDefinition(_ id: PageID) {
+        guard prepareForWorkspaceAction(.context, requiresCleanEditors: true) else { return }
+        performComponentEdit(.duplicateDefinition(id))
+    }
+
     func deleteComponent(_ id: PageID, detachUses: Bool) {
         performComponentEdit(.delete(definitionID: id, detachUses: detachUses))
     }
@@ -5411,9 +5609,15 @@ final class WorkspaceShellState: ObservableObject {
         let started = DispatchTime.now().uptimeNanoseconds
         var succeeded = false
         defer {
-            documentSession.diagnostics.recordComponentOperation(pageID: pageID,
-                nodeIDs: selectionState.orderedIDs, succeeded: succeeded,
-                durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+            let duration = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            if case .setUsageNotes(let definitionID, _, let draft) = edit {
+                documentSession.diagnostics.recordComponentUsageNotesOperation(definitionID: definitionID,
+                    command: draft == nil ? .removeProperty : .setProperty,
+                    result: succeeded ? .success : .failure, durationMilliseconds: duration)
+            } else {
+                documentSession.diagnostics.recordComponentOperation(pageID: pageID,
+                    nodeIDs: selectionState.orderedIDs, succeeded: succeeded, durationMilliseconds: duration)
+            }
         }
         do {
             let prepared = try ComponentCommandRegistry().prepare(edit, identity: draftIdentity ?? .init(
@@ -5430,7 +5634,8 @@ final class WorkspaceShellState: ObservableObject {
             succeeded = true
             pendingSelectionAfterInsertion = prepared.selectedNodeID
             scheduleScenePreparation()
-            componentAnnouncement = "Component change committed"
+            if case .setUsageNotes = edit { componentAnnouncement = "Usage notes saved." }
+            else { componentAnnouncement = "Component change committed" }
         } catch { componentAnnouncement = error.localizedDescription }
         announcementPoster.post(componentAnnouncement)
         return succeeded
@@ -5621,8 +5826,9 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func performPageEdit(_ edit: PageEdit, pageID: PageID) {
-        _ = commitPageEdit(edit, identity: .init(documentID: documentSession.document.id,
-            revision: documentSession.document.revision, pageID: pageID))
+        let identity = PageEditIdentity(documentID: documentSession.document.id,
+            revision: documentSession.document.revision, pageID: pageID)
+        if !commitPageEdit(edit, identity: identity) { workspaceActionStatus = pageAnnouncement }
     }
 
     var effectiveSelectedPageID: PageID? {
@@ -6910,28 +7116,30 @@ final class WorkspaceShellState: ObservableObject {
         return selectionState.orderedIDs == [root.id]
     }
 
-    var pageBackgroundSummary: String {
+    var pageBackgroundSummary: String { pageBackgroundAppearance.summary }
+
+    var pageBackgroundAppearance: (summary: String, color: CanonicalSolidColor?) {
         guard let root = PageBackgroundPolicy.root(in: activeAuthoringPage) else {
-            return pageBackgroundUnavailableReason ?? "Page Background unavailable"
+            return (pageBackgroundUnavailableReason ?? "Page Background unavailable", nil)
         }
-        if let status = LocalColorTokenResolver.status(for: root, in: documentSession.document, target: .fill) {
-            return status
+        let document = documentSession.document
+        let layers = LocalColorTokenResolver.resolvedLayers(for: root, in: document).filter(\.isEnabled)
+        let solid = layers.count == 1 ? layers.first?.solidColor : nil
+        if let status = LocalColorTokenResolver.status(for: root, in: document, target: .fill) {
+            return (status, solid)
         }
-        let layers = DesignInspectorCommandRegistry.resolvedLayers(for: root).filter(\.isEnabled)
-        guard !layers.isEmpty else {
+        if layers.isEmpty {
             if !CanonicalReusableStyleIndex.appliedIDs(root).isEmpty,
-               let index = try? CanonicalReusableStyleIndex(document: documentSession.document),
+               let index = try? CanonicalReusableStyleIndex(document: document),
                let appearance = try? CanonicalResolvedAppearance.resolve(node: root, index: index),
                let color = appearance.fill {
-                return "Inherited solid \(color.hexadecimalRGBA)"
+                return ("Inherited solid \(color.hexadecimalRGBA)", color)
             }
-            return "Transparent / None"
+            return ("Transparent / None", nil)
         }
-        if layers.count == 1, let layer = layers.first {
-            if let color = layer.solidColor { return "Solid \(color.hexadecimalRGBA)" }
-            return "Linear gradient"
-        }
-        return "\(layers.count) enabled fill layers"
+        if let solid { return ("Solid \(solid.hexadecimalRGBA)", solid) }
+        if layers.count == 1 { return ("Linear gradient", nil) }
+        return ("\(layers.count) enabled fill layers", nil)
     }
 
     /// Navigation only. Existing Design controls retain ownership of drafts,
@@ -7230,6 +7438,135 @@ final class WorkspaceShellState: ObservableObject {
             announcementPoster.post(lastDesignInspectorAnnouncement)
             return false
         }
+    }
+
+    // SF-0508-002/004/005: one owned, revision/selection-bound paint preview.
+    // The cloned document is used only by scene preparation, never persistence.
+    private struct DesignStylePreview {
+        let owner: UUID
+        let context: ResponsiveInspectorEditContext
+        let document: CanonicalDocument
+        let command: DocumentCommand
+        let operation: String
+        let applicable: Int
+        let skipped: Int
+    }
+    let designStyleCancellation = PassthroughSubject<Void, Never>()
+    private var designStylePreview: DesignStylePreview?
+
+    var previewedDesignStyleNode: DocumentNode? {
+        guard selectionState.orderedIDs.count == 1, let pageID = effectiveSelectedPageID else { return nil }
+        return (designStylePreview?.document ?? documentSession.document).pages.first { $0.id == pageID }?.nodes.first { $0.id == selectionState.orderedIDs[0] }
+    }
+
+    @discardableResult
+    func previewDesignStyle(_ edit: DesignStylePreviewEdit, owner: UUID,
+                            expectedContext: ResponsiveInspectorEditContext? = nil) -> Bool {
+        if let expectedContext, expectedContext != responsiveInspectorEditContext {
+            lastDesignInspectorAnnouncement = "The color edit belongs to an earlier context. Press Escape and retry."
+            return false
+        }
+        if let previous = designStylePreview, previous.owner != owner {
+            guard finishDesignStylePreview(owner: previous.owner) else { return false }
+        }
+        guard let pageID = effectiveSelectedPageID, let plan = canvasRenderPlan,
+              plan.identity.documentID == documentSession.document.id,
+              plan.identity.revision == documentSession.document.revision else {
+            lastDesignInspectorAnnouncement = "Wait for the current canvas before editing appearance."
+            return false
+        }
+        let identity = DesignInspectorOperationIdentity(documentID: documentSession.document.id,
+            pageID: pageID, revision: documentSession.document.revision,
+            sceneID: plan.identity.sceneID, rendererGeneration: plan.identity.sceneGeneration)
+        do {
+            let command: DocumentCommand
+            let applicable: Int, skipped: Int
+            switch edit {
+            case .fill(let value):
+                let prepared = try designInspectorRegistry.prepare(.init(identity: identity,
+                    orderedNodeIDs: selectionState.orderedIDs, edit: value,
+                    provenance: .picker, cancelled: false), in: documentSession.document,
+                    context: transformValidationContext)
+                command = prepared.documentCommand
+                applicable = prepared.applicableNodeIDs.count; skipped = prepared.skippedNodeIDs.count
+            case .opacity(let value):
+                let prepared = try designInspectorRegistry.prepare(.init(identity: identity,
+                    orderedNodeIDs: selectionState.orderedIDs, edit: .opacity(value),
+                    provenance: .picker, cancelled: false), in: documentSession.document,
+                    context: transformValidationContext)
+                command = prepared.documentCommand
+                applicable = prepared.applicableNodeIDs.count; skipped = prepared.skippedNodeIDs.count
+            case .typography(let value):
+                let prepared = try typographyRegistry.prepare(.init(identity: identity,
+                    orderedNodeIDs: selectionState.orderedIDs, edit: value,
+                    provenance: .picker, cancelled: false), in: documentSession.document,
+                    context: transformValidationContext)
+                command = prepared.documentCommand
+                applicable = prepared.applicableNodeIDs.count; skipped = prepared.skippedNodeIDs.count
+            case .effect(let value):
+                let prepared = try DecorativeEffectCommandRegistry.prepare(value, identity: identity,
+                    orderedNodeIDs: selectionState.orderedIDs, document: documentSession.document,
+                    context: transformValidationContext)
+                command = prepared.documentCommand
+                applicable = prepared.applicableNodeIDs.count; skipped = prepared.skippedNodeIDs.count
+            case .box(let value):
+                let prepared = try designBoxStyleRegistry.prepare(.init(identity: identity,
+                    orderedNodeIDs: selectionState.orderedIDs, edit: value,
+                    provenance: .picker, cancelled: false), in: documentSession.document,
+                    context: transformValidationContext)
+                command = prepared.documentCommand
+                applicable = prepared.applicableNodeIDs.count; skipped = prepared.skippedNodeIDs.count
+            }
+            var draft = documentSession.document
+            _ = try documentSession.registry.apply(command, to: &draft)
+            try draft.validate()
+            let operation: String
+            switch edit {
+            case .fill(.replaceSolid), .fill(.setSolidColor): operation = "solid-fill"
+            case .opacity: operation = "opacity"
+            default: operation = "appearance"
+            }
+            objectWillChange.send()
+            designStylePreview = .init(owner: owner, context: responsiveInspectorEditContext,
+                                       document: draft, command: command, operation: operation, applicable: applicable, skipped: skipped)
+            scheduleScenePreparation()
+            return true
+        } catch DesignInspectorError.noChanges {
+            cancelDesignStylePreview(owner: owner); return true
+        } catch TypographyCommandError.noChanges {
+            cancelDesignStylePreview(owner: owner); return true
+        } catch DesignBoxStyleError.noChanges {
+            cancelDesignStylePreview(owner: owner); return true
+        } catch {
+            lastDesignInspectorAnnouncement = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func finishDesignStylePreview(owner: UUID) -> Bool {
+        guard let preview = designStylePreview, preview.owner == owner else { return true }
+        designStylePreview = nil
+        guard preview.context == responsiveInspectorEditContext else {
+            scheduleScenePreparation(); return false
+        }
+        do {
+            _ = try documentSession.execute(preview.command)
+            lastDesignInspectorAnnouncement = "Design \(preview.operation) committed for \(preview.applicable) object\(preview.applicable == 1 ? "" : "s")"
+                + (preview.skipped == 0 ? "" : "; skipped \(preview.skipped) incompatible object\(preview.skipped == 1 ? "" : "s")")
+            announcementPoster.post(lastDesignInspectorAnnouncement)
+            return true
+        } catch {
+            scheduleScenePreparation()
+            lastDesignInspectorAnnouncement = error.localizedDescription
+            return false
+        }
+    }
+
+    func cancelDesignStylePreview(owner: UUID) {
+        guard designStylePreview?.owner == owner else { return }
+        designStylePreview = nil
+        scheduleScenePreparation()
     }
 
     @discardableResult
@@ -7612,6 +7949,8 @@ final class WorkspaceShellState: ObservableObject {
     }
 
     func cancelDesignInspectorDraft() {
+        designStyleCancellation.send()
+        if let preview = designStylePreview { cancelDesignStylePreview(owner: preview.owner) }
         designInspectorFailure = nil
         lastDesignInspectorAnnouncement = "Design Inspector draft cancelled; committed appearance is unchanged"
         announcementPoster.post(lastDesignInspectorAnnouncement)
@@ -8606,7 +8945,9 @@ final class WorkspaceShellState: ObservableObject {
             guard resizing || role == .body else {
                 lastTransformAnnouncement = "Header/Footer are page anchors. Edit Height; they cannot be freely moved."; return false
             }
-            pageFlowGesture = .init(nodeID: node.id, identity: identity, frame: frame, resizesHeight: resizing,
+            guard !resizing || layoutInspectorHasCurrentScene else { return false }
+            pageFlowGesture = .init(nodeID: node.id, identity: identity, frame: frame,
+                heightScope: resizing ? layoutInspectorDraftScope : nil,
                 target: resizing ? frame.size.height : frame.minY + frame.size.height / 2)
             return true
         }
@@ -8683,9 +9024,13 @@ final class WorkspaceShellState: ObservableObject {
     func commitPointerTransform() {
         if let gesture = pageFlowGesture {
             pageFlowGesture = nil; pageFlowMarker = nil
-            _ = commitPageStructure(gesture.resizesHeight
-                ? .height(gesture.nodeID, gesture.target, viewportPreset.responsiveBreakpoint)
-                : .reorder(gesture.nodeID, pointerY: gesture.target), identity: gesture.identity)
+            if let scope = gesture.heightScope {
+                // An inherited value is not authored simply by touching its resize handle.
+                guard gesture.target != gesture.frame.size.height else { return }
+                _ = commitPageStructureHeight(gesture.nodeID, value: gesture.target, scope: scope, identity: gesture.identity)
+            } else {
+                _ = commitPageStructure(.reorder(gesture.nodeID, pointerY: gesture.target), identity: gesture.identity)
+            }
             return
         }
         commitTransform(provenance: .pointer)
@@ -10367,8 +10712,9 @@ final class WorkspaceShellState: ObservableObject {
             guard let data = try? lifecycle.projectResourceData(for: asset.resourceID) else { return nil }
             return (asset.id, data)
         })
+        if let preview = designStylePreview, preview.context != responsiveInspectorEditContext { designStylePreview = nil }
         let request = WorkspaceScenePreparationRequest(
-            document: documentSession.document,
+            document: designStylePreview?.document ?? documentSession.document,
             activePageID: effectiveSelectedPageID,
             activeContainerID: selectionState.activeContainerID,
             isolationRootID: isolationRootID,

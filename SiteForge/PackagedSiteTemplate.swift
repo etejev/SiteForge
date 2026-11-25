@@ -4,8 +4,26 @@ import Foundation
 // content-addressed resource readers, not a sample-specific renderer/model.
 enum BundledSiteTemplates {
     static let auroraID = TemplateID(UUID(uuidString: "02040000-0000-4000-8000-000000000201")!)
+    static func auroraCoverURL(in bundle: Bundle = .main) -> URL? {
+        auroraURL(in: bundle).map {
+            ProjectResourceStore.sidecarURL(for: $0)
+                .appendingPathComponent("e9f61a44eae3c9772c10632b89d31e44cf5c26c26627a52912b4bfcf6c1925fb.blob")
+        }
+    }
+
     static func auroraURL(in bundle: Bundle = .main) -> URL? {
         bundle.url(forResource: "Aurora", withExtension: "siteforge", subdirectory: "AuroraTemplate")
+    }
+
+    // SF-0204-002/004/005/006: Aurora Flow is a second ordinary packaged
+    // example in the same bundled folder, loaded by the same validating
+    // loader. Its bytes come from the reviewed showcase recipe and are copied
+    // into Samples only after native/browser acceptance. Until then the Start
+    // choice stays hidden rather than offering a card that cannot load.
+    static let auroraFlowID = TemplateID(UUID(uuidString: "02040000-0000-4000-8000-000000000222")!)
+
+    static func auroraFlowURL(in bundle: Bundle = .main) -> URL? {
+        bundle.url(forResource: "AuroraFlow", withExtension: "siteforge", subdirectory: "AuroraTemplate")
     }
 }
 

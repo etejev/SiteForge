@@ -2,6 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import ImageIO
+import Vision
 import UniformTypeIdentifiers
 
 /// Immutable adapter over the existing package resource index, not another
@@ -746,5 +747,16 @@ extension ProjectPackage {
             projectID: projectID, createdAt: createdAt, modifiedAt: modifiedAt,
             document: document, optionalMembers: members, compatibility: compatibility
         )
+    }
+}
+
+/// SF-0802-004/008: both generation and output verify the actual local bytes.
+/// Production callers perform this bounded decode on their build/resource actor.
+enum ProjectQRCodeVerifier {
+    enum Failure: Error { case payloadMismatch }
+    static func verify(_ bytes: Data, payload: String) throws {
+        let request = VNDetectBarcodesRequest(); request.symbologies = [.qr]
+        try VNImageRequestHandler(data: bytes).perform([request])
+        guard request.results?.contains(where: { $0.payloadStringValue == payload }) == true else { throw Failure.payloadMismatch }
     }
 }

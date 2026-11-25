@@ -103,6 +103,17 @@ struct WorkspaceSceneComposition {
     }
 }
 
+struct UITestTextSizeOverride: ViewModifier {
+    func body(content: Content) -> some View {
+        if DebugTestComposition.current().boolValue(after: "-SiteForgeUITestMode") == true,
+           DebugTestComposition.current().boolValue(after: "-SiteForgeUITestLargerText") == true {
+            content.dynamicTypeSize(.xxxLarge)
+        } else {
+            content
+        }
+    }
+}
+
 struct WorkspaceSceneRoot: View {
     @StateObject private var context: WorkspaceDocumentContext
 
@@ -124,6 +135,7 @@ struct WorkspaceSceneRoot: View {
             WorkspaceWindowConfigurator()
                 .frame(width: 0, height: 0)
         }
+        .modifier(UITestTextSizeOverride())
         .focusedSceneObject(context.shellState)
         .focusedSceneObject(context.launchExperience)
     }

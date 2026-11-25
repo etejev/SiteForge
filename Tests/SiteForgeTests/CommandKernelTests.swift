@@ -990,6 +990,181 @@ final class CommandKernelTests: XCTestCase {
         XCTAssertEqual(Set(changed.map(\.id)), Set(entries.map(\.id)))
     }
 
+    func testComponentUsageNotesNormalizePersistAndKeepExactHistory() async throws {
+        let document = try componentTextFixture()
+        let page = document.websitePages[0], definition = document.componentDefinitions[0]
+        let instance = page.nodes[1]
+        let session = DocumentSession(document: document)
+        func prepare(_ draft: String?) throws -> DocumentCommand {
+            try textCommand(.setUsageNotes(definitionID: definition.id, openingSelection: [instance.id], draft: draft),
+                document: session.document, pageID: page.id, selected: instance.id).command
+        }
+        func rootNote() -> NodeProperty? {
+            session.document.componentDefinitions[0].nodes[0].insertionProperty(CanonicalComponentUsageNotes.key)
+        }
+        func schema19(_ document: CanonicalDocument) throws -> Data {
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(document)) as? [String: Any])
+            json["schemaVersion"] = 19
+            return try JSONSerialization.data(withJSONObject: json)
+        }
+        XCTAssertEqual(try DocumentSerializer.decode(schema19(document)), document)
+        XCTAssertNil(CanonicalComponentUsageNotes.text(in: definition))
+        XCTAssertFalse(String(decoding: try DocumentSerializer.encode(document), as: UTF8.self)
+            .contains(CanonicalComponentUsageNotes.key))
+        XCTAssertEqual(try prepare(" \t\r\n "), .batch([]))
+        XCTAssertFalse(session.canUndo)
+        try session.execute(prepare("  Cafe\u{301}\r\n\tDraft <b>literally</b>  "))
+        let created = try XCTUnwrap(rootNote())
+        let firstPages = session.document.pages
+        XCTAssertEqual(created.origin, .authored)
+        XCTAssertEqual(created.value, .string("Café\n\tDraft <b>literally</b>"))
+        XCTAssertEqual(try prepare("Café\n\tDraft <b>literally</b>"), .batch([]))
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        XCTAssertEqual(session.document.websitePages, document.websitePages)
+        XCTAssertEqual(session.document.componentDefinitions[0].rootNodeIDs, definition.rootNodeIDs)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        XCTAssertThrowsError(try DocumentSerializer.decode(schema19(session.document))) {
+            XCTAssertEqual($0 as? DocumentSerializationError, .malformedInput)
+        }
+
+        try session.execute(prepare("New note"))
+        XCTAssertEqual(rootNote()?.id, created.id)
+        let updated = session.document
+        let store = ProjectPackageStore()
+        let timestamp = ProjectTimestamp("2026-11-15T12:00:00.000Z")
+        try session.execute(prepare(nil))
+        XCTAssertNil(rootNote())
+        XCTAssertEqual(try prepare(nil), .batch([]))
+        XCTAssertEqual(session.historySnapshot().undoEntries.map(\.commandName), [.setProperty, .setProperty, .removeProperty])
+        try session.undo(); XCTAssertEqual(session.document.pages, updated.pages)
+
+        let history = PersistedHistoryStore()
+        let snapshot = session.historySnapshot()
+        let retained = try await history.encodeRetained(snapshot)
+        let package = ProjectPackage(createdAt: timestamp, document: session.document,
+            optionalMembers: [.init(path: PersistedHistoryStore.memberPath, data: retained)])
+        let reopened = try await store.decode(store.encode(package))
+        XCTAssertEqual(reopened.document, session.document)
+        let loaded = try await history.load(from: reopened)
+        XCTAssertEqual(loaded, .restored(snapshot))
+        let reopenedSession = DocumentSession(document: reopened.document)
+        try reopenedSession.installValidatedHistory(snapshot)
+        try reopenedSession.redo()
+        XCTAssertNil(CanonicalComponentUsageNotes.text(in: reopenedSession.document.componentDefinitions[0]))
+        try reopenedSession.undo()
+        XCTAssertEqual(reopenedSession.document.pages, updated.pages)
+        try session.undo(); XCTAssertEqual(session.document.pages, firstPages)
+        try session.undo(); XCTAssertEqual(session.document.pages, document.pages)
+        try session.redo(); XCTAssertEqual(rootNote(), created)
+        try session.redo(); XCTAssertEqual(session.document.pages, updated.pages)
+        try session.redo(); XCTAssertNil(rootNote())
+        XCTAssertEqual(session.document.pages, document.pages)
+    }
+
+    func testComponentUsageNotesRejectInvalidOwnershipAndStaleOrCancelledEdits() throws {
+        let document = try componentTextFixture()
+        let page = document.websitePages[0], definition = document.componentDefinitions[0]
+        let instance = page.nodes[1], scene = CanvasViewportSceneID()
+        let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: page.id,
+            revision: document.revision, sceneID: scene, rendererGeneration: document.revision)
+        let context = TransformValidationContext(activePageID: page.id, currentSceneID: scene,
+            rendererGeneration: document.revision, selectedNodeIDs: [instance.id], availableNodeIDs: [instance.id],
+            isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+        let session = DocumentSession(document: document), registry = ComponentCommandRegistry()
+        let edit = ComponentEdit.setUsageNotes(definitionID: definition.id, openingSelection: [instance.id], draft: "Notes")
+        XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: document, context: context, cancelled: true)) {
+            XCTAssertEqual($0 as? TransformError, .cancelled)
+        }
+        XCTAssertThrowsError(try registry.prepare(.setUsageNotes(definitionID: definition.id,
+            openingSelection: [], draft: "Notes"), identity: identity, in: document, context: context)) {
+            XCTAssertEqual($0 as? TransformError, .selectionMismatch)
+        }
+        var stale = document
+        stale.revision += 1
+        XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: stale, context: context)) {
+            XCTAssertEqual($0 as? TransformError, .staleRevision)
+        }
+        stale = CanonicalDocument(pages: document.pages)
+        XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: stale, context: context)) {
+            XCTAssertEqual($0 as? TransformError, .staleDocument)
+        }
+        XCTAssertThrowsError(try registry.prepare(.setUsageNotes(definitionID: PageID(),
+            openingSelection: [instance.id], draft: "Notes"), identity: identity, in: document, context: context))
+        let maximum = String(repeating: "é", count: CanonicalComponentUsageNotes.maximumBytes / 2)
+        XCTAssertEqual(try CanonicalComponentUsageNotes.normalized(maximum), maximum)
+        for invalid in ["bad\u{0}draft", "bad\u{7}draft", String(repeating: "é", count: 2_049)] {
+            XCTAssertThrowsError(try registry.prepare(.setUsageNotes(definitionID: definition.id,
+                openingSelection: [instance.id], draft: invalid), identity: identity, in: document, context: context)) {
+                XCTAssertEqual($0 as? ModelValidationError, .invalidComponentUsageNotes)
+            }
+        }
+        let definitionIndex = try XCTUnwrap(document.pages.firstIndex { $0.id == definition.id })
+        var invalid = document
+        invalid.pages[definitionIndex].nodes[0].properties.append(.init(key: .init(rawValue: "locked"), value: .boolean(true)))
+        XCTAssertThrowsError(try registry.prepare(edit, identity: identity, in: invalid, context: context))
+        for (pageIndex, nodeIndex, key, value, origin) in [
+            (definitionIndex, 1, CanonicalComponentUsageNotes.key, PropertyValue.string("Child note"), PropertyOrigin.authored),
+            (0, 0, CanonicalComponentUsageNotes.key, .string("Page content"), .authored),
+            (definitionIndex, 0, CanonicalComponentUsageNotes.key, .string(""), .authored),
+            (definitionIndex, 0, CanonicalComponentUsageNotes.key, .string("Notes"), .defaulted),
+            (definitionIndex, 0, CanonicalComponentUsageNotes.namespace + "v2.usageNotes", .string("Notes"), .authored),
+            (definitionIndex, 0, CanonicalComponentUsageNotes.key, .string("Cafe\u{301}"), .authored)
+        ] {
+            invalid = document
+            invalid.pages[pageIndex].nodes[nodeIndex].properties.append(
+                .init(key: .init(rawValue: key), value: value, origin: origin))
+            XCTAssertThrowsError(try DocumentSerializer.encode(invalid))
+        }
+        XCTAssertEqual(session.document, document)
+        XCTAssertFalse(session.canUndo)
+    }
+
+    func testComponentUsageNotesDuplicateAndProjectNoVisitorContent() async throws {
+        let document = try componentTextFixture()
+        let page = document.websitePages[0], definition = document.componentDefinitions[0], instance = page.nodes[1]
+        let session = DocumentSession(document: document)
+        let note = "Author-only usage note <section> \(AssetID())"
+        try session.execute(textCommand(.setUsageNotes(definitionID: definition.id,
+            openingSelection: [instance.id], draft: note), document: document, pageID: page.id, selected: instance.id).command)
+        let documented = session.document
+        for breakpoint in ResponsiveBreakpoint.allCases {
+            let before = try ComponentGraphResolver.resolvedPage(page, in: document, breakpoint: breakpoint)
+            let after = try ComponentGraphResolver.resolvedPage(page, in: documented, breakpoint: breakpoint)
+            XCTAssertEqual(after, before)
+        }
+        let viewport = try CanvasViewportState(worldOrigin: .init(x: 0, y: 0),
+            viewportSize: .init(width: 1_000, height: 700),
+            contentBounds: .init(origin: .init(x: 0, y: 0), size: .init(width: 1_440, height: 900)), pixelRatio: .init(2))
+        let worker = WorkspaceScenePreparationWorker(), surface = CanvasRenderSurfaceID()
+        for activePageID in [page.id, definition.id] {
+            let before = try await worker.prepare(.init(document: document, activePageID: activePageID,
+                activeContainerID: nil, viewport: viewport, surfaceID: surface))
+            let after = try await worker.prepare(.init(document: documented, activePageID: activePageID,
+                activeContainerID: nil, viewport: viewport, surfaceID: surface))
+            XCTAssertEqual(before.renderScene.objects, after.renderScene.objects)
+        }
+        let before = try MultiPageStaticBuildPlanner.plan(document: document)
+        let after = try MultiPageStaticBuildPlanner.plan(document: documented)
+        XCTAssertEqual(before.files, after.files)
+        XCTAssertEqual(before.binaryFiles, after.binaryFiles)
+        XCTAssertFalse(after.files.contains { $0.contents.contains(note) })
+
+        let duplicate = try textCommand(.duplicateDefinition(definition.id), document: documented,
+            pageID: page.id, selected: instance.id)
+        try session.execute(duplicate.command)
+        let copy = try XCTUnwrap(session.document.componentDefinitions.first { $0.id == duplicate.definitionID })
+        XCTAssertNotEqual(copy.id, definition.id)
+        XCTAssertEqual(copy.name, definition.name + " Copy 2")
+        XCTAssertEqual(CanonicalComponentUsageNotes.text(in: copy), note)
+        XCTAssertTrue(Set(copy.nodes.map(\.id)).isDisjoint(with: definition.nodes.map(\.id)))
+        XCTAssertNotEqual(copy.nodes[0].insertionProperty(CanonicalComponentUsageNotes.key)?.id,
+            documented.componentDefinitions[0].nodes[0].insertionProperty(CanonicalComponentUsageNotes.key)?.id)
+        XCTAssertEqual(session.document.websitePages, document.websitePages)
+        let duplicated = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, documented.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, duplicated)
+    }
+
     func testComponentPropertyOrganizationAtomicHistoryResetRemovalAndSchemaRoundTrip() throws {
         let document = try organizedComponentFixture(), definition = document.componentDefinitions[0]
         let entry = try XCTUnwrap(CanonicalComponentOrganization.entries(in: definition).first { $0.id.organizationKind == "text" })

@@ -6,6 +6,83 @@ import XCTest
 
 @MainActor
 final class TransformModelTests: XCTestCase {
+    // SF-0508-001/002/004/005/008, SF-1101-001/004/005: closed configuration,
+    // normal command history and strict backward-compatible envelope policy.
+    func testDecorativeEffectsTypedValidationHistoryAndHistoricalSchema() throws {
+        var fixture = try formattingFixture()
+        let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        fixture.document.pages[0].nodes[index].properties.removeAll { $0.key.rawValue.hasPrefix("style.fill.layers.") }
+        let gradient = CanonicalFillLayer.linearGradient(angleDegrees: 35, stops: [
+            .init(id: .init(), position: 0, color: .init(red: 1, green: 0, blue: 0, alpha: 1)),
+            .init(id: .init(), position: 1, color: .init(red: 0, green: 0, blue: 1, alpha: 0.4))])
+        fixture.document.pages[0].nodes[index].properties += CanonicalFillLayerCodec.propertyValues(for: [gradient]).map {
+            .init(key: .init(rawValue: $0.key), value: $0.value) }
+        try fixture.document.validate()
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, revision: UInt64? = nil) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: revision ?? document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: [fixture.frame], document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: [fixture.frame], availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        let before = session.document.pages
+        try session.execute(prepare(.flow(.defaults)).documentCommand)
+        let after = session.document.pages
+        XCTAssertEqual(try CanonicalFlowGradient.resolve(session.document.pages[0].nodes[index]), .defaults)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+        let propertyIDs = session.document.pages[0].nodes[index].properties.filter { $0.key.rawValue.hasPrefix(CanonicalFlowGradient.namespace) }.map(\.id)
+        var changed = CanonicalFlowGradient.defaults; changed.radius = 360
+        try session.execute(prepare(.flow(changed)).documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[index].properties.filter { $0.key.rawValue.hasPrefix(CanonicalFlowGradient.namespace) }.map(\.id), propertyIDs)
+        XCTAssertThrowsError(try prepare(.flow(.defaults), revision: 0))
+        for invalid in [Double.nan, .infinity, -1, 1_201] {
+            var bad = changed; bad.radius = invalid
+            XCTAssertThrowsError(try prepare(.flow(bad)))
+        }
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        old["schemaVersion"] = 20
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: old)))
+        var unknown = session.document
+        unknown.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: "style.flow.v2.radius"), value: .number(240)))
+        XCTAssertThrowsError(try unknown.validate())
+        var wrong = session.document.pages[0].nodes[index]; wrong.kind = .text
+        XCTAssertThrowsError(try CanonicalFlowGradient.resolve(wrong))
+        try session.execute(prepare(.flow(nil)).documentCommand)
+        XCTAssertNil(try CanonicalFlowGradient.resolve(session.document.pages[0].nodes[index]))
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(fixture.document)) as? [String: Any])
+        legacy["schemaVersion"] = 20
+        XCTAssertEqual(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacy)).pages, fixture.document.pages)
+    }
+
+    func testDecorativeEffectsOutputRetainsStaticFallbackAndReportsUnsupportedIntent() throws {
+        var fixture = try formattingFixture()
+        let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        fixture.document.pages[0].nodes[index].properties += CanonicalFlowGradient.defaults.properties.map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        // Multiple enabled layers are retained as authored, with an actionable
+        // build finding rather than silently exporting an unrelated effect.
+        let invalid = StaticBuildCompiler.compile(document: fixture.document, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        XCTAssertFalse(invalid.canWrite)
+        XCTAssertTrue(invalid.findings.contains { $0.code == "flow-configuration-unavailable" })
+        let gradient = try XCTUnwrap(DesignInspectorCommandRegistry.resolvedLayers(for: fixture.document.pages[0].nodes[index]).last)
+        fixture.document.pages[0].nodes[index].properties.removeAll { $0.key.rawValue.hasPrefix("style.fill.layers.") }
+        fixture.document.pages[0].nodes[index].properties += CanonicalFillLayerCodec.propertyValues(for: [gradient]).map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        let plan = try MultiPageStaticBuildPlanner.plan(document: fixture.document)
+        let html = try XCTUnwrap(plan.files.first { $0.path.hasSuffix(".html") }?.contents)
+        XCTAssertTrue(html.contains("data-siteforge-flow=")); XCTAssertTrue(html.contains("siteforge-effects.js"))
+        XCTAssertTrue(plan.files.contains { $0.path == "siteforge-effects.js" && $0.contents == DecorativeEffectRuntime.javascript })
+        XCTAssertTrue(plan.files.contains { $0.path == "styles.css" && $0.contents.contains("linear-gradient(") })
+        let config = try XCTUnwrap(DecorativeEffectOutput.configuration(fixture.document.pages[0].nodes[index]))
+        XCTAssertEqual(try JSONDecoder().decode(FlowOutputConfiguration.self, from: Data(config.json.utf8)), config)
+    }
+
     // SF-LOCAL-BUILDER-016 / SF-0702-003, SF-0302-004.
     func testLegacyDesignTextDraftCleanDefaultsMixedAndDisplayRefreshDoNotBlockNavigation() {
         let context = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank())).responsiveInspectorEditContext
@@ -3216,6 +3293,30 @@ final class TransformModelTests: XCTestCase {
     // SF-0508-004/005 — Inspector numeric drafts must fail visibly instead of
     // silently disappearing on Return or focus loss, while valid values are
     // normalized before the transactional command is prepared.
+    func testGradientStopInsertionPreservesRampAndIdentityWithoutRepeatedMidpoints() throws {
+        let first = CanonicalGradientStop(id: GradientStopID(), position: 0, color: .init(red: 1, green: 0, blue: 0, alpha: 0.2))
+        let last = CanonicalGradientStop(id: GradientStopID(), position: 1, color: .init(red: 0, green: 0, blue: 1, alpha: 0.8))
+        let layer = CanonicalFillLayer.linearGradient(angleDegrees: 45, stops: [last, first])
+        let inserted = try XCTUnwrap(GradientAuthoringInsertion.stop(in: layer))
+        XCTAssertEqual(inserted.position, 0.5)
+        XCTAssertEqual(inserted.color, .init(red: 0.2, green: 0, blue: 0.8, alpha: 0.5))
+        let next = CanonicalFillLayer.linearGradient(id: layer.id, angleDegrees: 45, stops: [last, first, inserted])
+        XCTAssertEqual(next.stops.map(\.id), [last.id, first.id, inserted.id])
+        let second = try XCTUnwrap(GradientAuthoringInsertion.stop(in: next))
+        XCTAssertTrue(second.position == 0.25 || second.position == 0.75)
+        XCTAssertNotEqual(second.id, inserted.id)
+        func snapshot(_ value: CanonicalFillLayer) -> CanvasAuthoredFillLayer {
+            .init(id: value.id.rawValue, kind: .linearGradient, isEnabled: true, rgba: nil, angleDegrees: 0,
+                stops: value.stops.map { .init(id: $0.id.rawValue, position: $0.position,
+                    rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha]) })
+        }
+        for x in stride(from: 0.0, through: 1.0, by: 0.01) {
+            let a = try XCTUnwrap(CanvasAuthoredFillCompositor.color(for: snapshot(layer), atNormalizedPoint: (x, 0.5)))
+            let b = try XCTUnwrap(CanvasAuthoredFillCompositor.color(for: snapshot(next), atNormalizedPoint: (x, 0.5)))
+            for index in 0..<4 { XCTAssertEqual(a[index], b[index], accuracy: 0.000001) }
+        }
+    }
+
     func testFillLayerNumericDraftValidationIsExplicitAndCanonical() throws {
         XCTAssertEqual(try FillLayerNumericDraftValidator.angle(" 495 ").get(), 135)
         XCTAssertEqual(try FillLayerNumericDraftValidator.angle("-180").get(), 180)
@@ -3296,14 +3397,26 @@ final class TransformModelTests: XCTestCase {
             .filter { $0.key.rawValue.hasPrefix(DesignBoxStyleCommandRegistry.namespace) }.map(\.id)
         XCTAssertEqual(propertyIDs, reopenedIDs)
 
+        let beforeZero = session.document
+        let zero = try registry.prepare(command(session.document, ids: [fixture.nodeID],
+            edit: .border(.init(color: border.color, width: 0, style: .solid))),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))
+        _ = try session.execute(zero.documentCommand)
+        XCTAssertEqual(try currentStyle().border?.width, 0)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, beforeZero.pages)
+        try session.redo()
+        XCTAssertEqual(try currentStyle().border?.width, 0)
+
         let invalid = CanonicalShadow(color: shadow.color, offsetX: 0, offsetY: 0, blur: -.infinity, spread: 0)
         XCTAssertThrowsError(try registry.prepare(
             command(session.document, ids: [fixture.nodeID], edit: .shadow(invalid)),
             in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
         )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
-        let zeroBorder = CanonicalBorder(color: border.color, width: 0, style: .solid)
+        let invalidBorder = CanonicalBorder(color: border.color, width: -1, style: .solid)
         XCTAssertThrowsError(try registry.prepare(
-            command(session.document, ids: [fixture.nodeID], edit: .border(zeroBorder)),
+            command(session.document, ids: [fixture.nodeID], edit: .border(invalidBorder)),
             in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
         )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
         XCTAssertThrowsError(try registry.prepare(

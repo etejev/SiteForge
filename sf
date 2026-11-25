@@ -2,6 +2,16 @@
 set -euo pipefail
 
 ROOT=${0:A:h}
+# Hosted runs retain the direct xcodebuild entry point. Local invocations
+# prepare a scope in the native Testing window; its Start buttons launch runs.
+if [[ "${SITEFORGE_MONITOR_CHILD:-0}" != 1 && "${SITEFORGE_TEST_MONITOR:-1}" != 0 &&
+      "${GITHUB_ACTIONS:-false}" != true && "${CI:-false}" != true &&
+      -z "${SSH_CONNECTION:-}" && -z "${SITEFORGE_TEST_PLAN:-}" &&
+      -O /dev/console &&
+      ( "${1:-}" == test || "${1:-}" == verify || "${1:-}" == testing ) ]]; then
+  exec /usr/bin/python3 "$ROOT/scripts/open-testing-window.py" "$@"
+fi
+
 DERIVED_DATA=${SITEFORGE_DERIVED_DATA:-${TMPDIR%/}/SiteForge/DerivedData}
 SCHEME=${SITEFORGE_SCHEME:-SiteForge}
 DESTINATION=${SITEFORGE_DESTINATION:-platform=macOS}
@@ -101,14 +111,14 @@ test_app() {
       level=changed
       local selection
       selection=$("$TEST_SCOPE_SELECTOR" --root "$ROOT" --base "$base")
-      if [[ "$selection" != FULL ]]; then
-        local selector
-        for selector in "${(@f)selection}"; do
-          [[ -n "$selector" ]] && test_arguments+=("-only-testing:$selector")
-        done
-      else
-        level="changed → full"
+      if [[ "$selection" == FULL ]]; then
+        print -u2 "No bounded test scope could be inferred. Use './sf test focused <selector>' or explicitly run './sf verify' for full verification."
+        return 2
       fi
+      local selector
+      for selector in "${(@f)selection}"; do
+        [[ -n "$selector" ]] && test_arguments+=("-only-testing:$selector")
+      done
       ;;
     focused|exact)
       [[ -n "$base" ]] || { print -u2 "Provide one or more exact XCTest selectors after 'focused'."; return 2; }
@@ -126,6 +136,22 @@ test_app() {
       return 2
       ;;
   esac
+
+  if [[ -n ${SITEFORGE_TEST_PLAN:-} ]]; then
+    resolve_container
+    /usr/bin/python3 - "$SITEFORGE_TEST_PLAN" xcodebuild "${CONTAINER_ARGS[@]}" -scheme "$SCHEME" -destination "$DESTINATION" -derivedDataPath "$DERIVED_DATA" -resultBundlePath "$TEST_RESULTS_ROOT/planned.xcresult" "${TEST_BUILD_IDENTITY_ARGS[@]}" test "${test_arguments[@]}" <<'PYTHON'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]))
+PYTHON
+    return 0
+  fi
+
+  if [[ "$level" == changed ]]; then
+    # Non-GUI changed-scope callers need the same fresh-inventory guard as
+    # native Start. Keep plan-only APIs above and the full hosted gate intact.
+    exec /usr/bin/python3 "$ROOT/scripts/testing-foreground.py" --headless test focused "${(@f)selection}"
+  fi
 
   print "Running SiteForge test level: $level"
   resolve_container
@@ -241,11 +267,11 @@ SiteForge local commands
 
   ./sf dev             Build and launch SiteForge locally
   ./sf build           Build the macOS app
-  ./sf test [level]    Run quick, changed, half, focused, or full tests
+  ./sf test [level]    Review quick, changed, half, focused, or full scope in Testing
   ./sf test focused <XCTest selector> [selector...]
-  ./sf verify          Run repository checks, build, and tests
-  ./sf testing [full|ui]  Start one detached local testing collector
-  ./sf watch           Re-run verification when source files change
+  ./sf verify          Open Testing for explicit full verification
+  ./sf testing [full|ui|code]  Open the native Testing window
+  ./sf watch           Rebuild when source files change
   ./sf next            Ask Codex to complete the next ready queue item
   ./sf loop [count]    Let Codex process up to count items (default 5)
   ./sf status          Show project, queue, and git status

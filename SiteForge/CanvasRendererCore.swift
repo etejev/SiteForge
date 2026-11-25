@@ -35,7 +35,7 @@ struct CanvasAuthoredBorder: Codable, Hashable, Sendable {
     let rgba: [Double]
     let width: Double
     let style: CanvasBorderStyle
-    var isValid: Bool { rgba.count == 4 && rgba.allSatisfy { $0.isFinite && (0...1).contains($0) } && width.isFinite && width > 0 && width <= 100 }
+    var isValid: Bool { rgba.count == 4 && rgba.allSatisfy { $0.isFinite && (0...1).contains($0) } && width.isFinite && width >= 0 && width <= 100 }
 }
 
 struct CanvasAuthoredShadow: Codable, Hashable, Sendable {
@@ -149,13 +149,17 @@ enum CanvasAuthoredFillCompositor {
     /// top-to-bottom. Native paint and deterministic sampling use this one
     /// conversion rather than applying independent Core Graphics flips.
     static func normalizedGradientLine(angleDegrees: Double) -> (start: (x: Double, y: Double), end: (x: Double, y: Double)) {
+        gradientLine(angleDegrees: angleDegrees, width: 1, height: 1)
+    }
+
+    /// CSS magic-corner geometry in physical box coordinates. Scaling a
+    /// unit-square direction changes its angle on rectangular boxes.
+    static func gradientLine(angleDegrees: Double, width: Double, height: Double) -> (start: (x: Double, y: Double), end: (x: Double, y: Double)) {
         let radians = angleDegrees * .pi / 180
         let dx = cos(radians), dy = sin(radians)
-        let extent = max(Double.leastNonzeroMagnitude, abs(dx) + abs(dy))
-        return (
-            start: (x: 0.5 - dx / (2 * extent), y: 0.5 - dy / (2 * extent)),
-            end: (x: 0.5 + dx / (2 * extent), y: 0.5 + dy / (2 * extent))
-        )
+        let length = abs(dx) * width + abs(dy) * height
+        return (start: (width / 2 - dx * length / 2, height / 2 - dy * length / 2),
+                end: (width / 2 + dx * length / 2, height / 2 + dy * length / 2))
     }
 
     /// Object opacity is applied once after the complete authored layer
@@ -192,16 +196,25 @@ enum CanvasAuthoredFillCompositor {
             guard denominator > 0 else { return nil }
             let projection = ((point.x - line.start.x) * dx + (point.y - line.start.y) * dy) / denominator
             let ordered = interpolationStops(for: layer)
-            guard let first = ordered.first, let last = ordered.last else { return nil }
-            if projection <= first.position { return first.rgba }
-            if projection >= last.position { return last.rgba }
-            for pair in zip(ordered, ordered.dropFirst()) where projection <= pair.1.position {
-                let span = pair.1.position - pair.0.position
-                let t = span == 0 ? 1 : (projection - pair.0.position) / span
-                return zip(pair.0.rgba, pair.1.rgba).map { $0 + ($1 - $0) * t }
-            }
-            return last.rgba
+            return gradientRGBA(orderedStops: ordered, at: projection)
         }
+    }
+
+    static func gradientRGBA(orderedStops: [CanvasGradientStop], at position: Double) -> [Double]? {
+        guard position.isFinite, let first = orderedStops.first, let last = orderedStops.last else { return nil }
+        if position < first.position { return first.rgba }
+        if position >= last.position { return last.rgba }
+        for pair in zip(orderedStops, orderedStops.dropFirst()) where position < pair.1.position {
+            let span = pair.1.position - pair.0.position
+            guard span > 0 else { continue }
+            let a = pair.0.rgba, b = pair.1.rgba
+            guard a.count == 4, b.count == 4,
+                  let color = CanonicalSolidColor.premultipliedInterpolation(
+                    .init(red: a[0], green: a[1], blue: a[2], alpha: a[3]),
+                    .init(red: b[0], green: b[1], blue: b[2], alpha: b[3]), fraction: (position - pair.0.position) / span) else { return nil }
+            return [color.red, color.green, color.blue, color.alpha]
+        }
+        return last.rgba
     }
 
     private static func composite(source: [Double], over destination: [Double]?) -> [Double] {
@@ -249,6 +262,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
     let shadow: CanvasAuthoredShadow?
     let typography: CanvasTypography?
     let imageAssetID: AssetID?
+    let imageIsPixelated: Bool?
     let imageData: Data?
     let imagePixelWidth: Int?
     let imagePixelHeight: Int?
@@ -294,6 +308,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         shadow: CanvasAuthoredShadow? = nil,
         typography: CanvasTypography? = nil,
         imageAssetID: AssetID? = nil,
+        imageIsPixelated: Bool? = nil,
         imageData: Data? = nil,
         imagePixelWidth: Int? = nil,
         imagePixelHeight: Int? = nil,
@@ -327,6 +342,7 @@ struct CanvasRenderObject: Codable, Hashable, Sendable {
         self.shadow = shadow
         self.typography = typography
         self.imageAssetID = imageAssetID
+        self.imageIsPixelated = imageIsPixelated
         self.imageData = imageData
         self.imagePixelWidth = imagePixelWidth
         self.imagePixelHeight = imagePixelHeight
@@ -668,6 +684,7 @@ struct InternalStaticControl: Equatable, Sendable {
 /// verified content-addressed asset planner; it is never a Finder path or a
 /// user-authored URL.
 struct InternalStaticImage: Equatable, Sendable {
+    var isPixelated = false
     let assetID: AssetID
     let outputPath: String?
     /// Verified resource metadata is a sizing hint only. Canonical layout and
@@ -844,6 +861,7 @@ enum InternalDocumentRenderTreeCompiler {
             (1...ImageAsset.maximumPixelDimension).contains($0.pixelHeight)
         } == true
         return .init(
+            isPixelated: (try? CanonicalQRCode.resolve(node)) != nil,
             assetID: style.assetID,
             outputPath: outputPaths[style.assetID],
             intrinsicWidth: hasSafeDimensions ? asset?.pixelWidth : nil,
@@ -869,7 +887,7 @@ enum InternalDocumentRenderTreeCompiler {
     /// editor-supported layer model until those node kinds have explicit
     /// static-output acceptance.
     private static func staticFillLayers(for node: DocumentNode, colorTokens: [LocalColorToken]) -> [CanonicalFillLayer] {
-        guard [.frame, .section].contains(node.kind) else { return [] }
+        guard DesignInspectorCommandRegistry.fillKinds.contains(node.kind) else { return [] }
         return LocalColorTokenResolver.resolvedLayers(for: node, tokens: colorTokens)
     }
 
@@ -1130,7 +1148,7 @@ enum StaticImageStyleOutputEmitter {
         case .stretch: "fill"
         }
         let focal = "\(number(image.focalX * 100))% \(number(image.focalY * 100))%"
-        return "\(node.cssSelector) { object-fit: \(fit); object-position: \(focal); }"
+        return "\(node.cssSelector) { object-fit: \(fit); object-position: \(focal);\(image.isPixelated ? " image-rendering:pixelated;" : "") }"
     }
 
     private static func number(_ value: Double) -> String {
@@ -1514,7 +1532,11 @@ enum MultiPageStaticBuildPlanner {
         var paths = Set<String>()
         var staticNodes: [InternalRenderTreeNode] = []
         var staticTrees: [InternalRenderTreeSnapshot] = []
+        var darkNodes: [InternalRenderTreeNode] = []
+        let hasDarkVariants = document.colorTokens.contains { $0.darkColor != nil }
+        let darkTokens = document.colorTokens.map { token in var copy = token; copy.color = token.darkColor ?? token.color; return copy }
         var needsNavigationScript = false
+        var needsEffectsRuntime = false
         for page in pages.sorted(by: { $0.route.rawValue < $1.route.rawValue }) {
             let output = try outputPath(for: page)
             guard paths.insert(output).inserted else { throw MultiPageStaticBuildError.collision }
@@ -1535,13 +1557,22 @@ enum MultiPageStaticBuildPlanner {
             )
             staticNodes += tree.nodes
             staticTrees.append(tree)
-            let body = try SafeHTMLEmitter.emit(tree, layoutContainers: ConnectedFluidOutputPolicy.wrapperIDs(page))
+            if hasDarkVariants {
+                let darkTree = try InternalDocumentRenderTreeCompiler.compile(page: page, documentID: document.id, revision: document.revision,
+                    staticRoutes: staticRoutes, sectionIDs: sectionIDs, imageOutputPaths: imageOutputPaths, imageAssets: imageAssets,
+                    colorTokens: darkTokens, reusableStyleIndex: reusableStyleIndex)
+                darkNodes += darkTree.nodes
+            }
+            let effectConfigurations = try DecorativeEffectOutput.configurations(page)
+            needsEffectsRuntime = needsEffectsRuntime || !effectConfigurations.isEmpty
+            let body = try SafeHTMLEmitter.emit(tree, layoutContainers: ConnectedFluidOutputPolicy.wrapperIDs(page), flowConfigurations: effectConfigurations)
             let hasFlow = page.usesConnectedOutput
             let hasMenu = tree.nodes.contains { $0.navigation?.hamburgerEnabled == true }
             needsNavigationScript = needsNavigationScript || hasMenu
             let prefix = String(repeating: "../", count: max(0, output.split(separator: "/").count - 1))
-            let stylesheetLink = hasFlow ? "<link rel=\"stylesheet\" href=\"\(prefix)styles.css\">" : ""
-            let script = hasMenu ? "<script src=\"\(prefix)siteforge-navigation.js\" defer></script>" : ""
+            let stylesheetLink = hasFlow || !effectConfigurations.isEmpty || page.nodes.contains(where: { (try? CanonicalGlassSurface.resolve($0)) != nil }) ? "<link rel=\"stylesheet\" href=\"\(prefix)styles.css\">" : ""
+            let script = (hasMenu ? "<script src=\"\(prefix)siteforge-navigation.js\" defer></script>" : "")
+                + (effectConfigurations.isEmpty ? "" : "<script src=\"\(prefix)siteforge-effects.js\" defer></script>")
             let metadata = WebsiteMetadataResolver.resolve(page: page, document: document)
             guard let metadataHead = StaticSEOEmitter.head(.init(siteName: metadata.siteName,
                 title: metadata.title, description: metadata.description, language: "en",
@@ -1582,11 +1613,22 @@ enum MultiPageStaticBuildPlanner {
         // Fluid typography deliberately follows fixed typography. Geometry
         // and spacing fluid rules live inside layout output before explicit
         // breakpoint rules so authored breakpoint literals retain precedence.
-        let stylesheet = [layout.css, typography, fluidTypography, images, fills, boxStyles, sizing, advancedStyles, ConnectedPageOutput.css(pages: pages, colorTokens: document.colorTokens)]
+        let glass = try DecorativeEffectOutput.glassCSS(pages.flatMap(\.nodes))
+        let stylesheet = [glass, layout.css, typography, fluidTypography, images, fills, boxStyles, sizing, advancedStyles, ConnectedPageOutput.css(pages: pages, colorTokens: document.colorTokens)]
             .filter { !$0.isEmpty }.joined(separator: "\n")
-        if !stylesheet.isEmpty {
+        let darkStyles = hasDarkVariants ? "@media (prefers-color-scheme:dark) {\n" + [
+            StaticTypographyOutputEmitter.emit(nodes: darkNodes), StaticFillLayerStyleOutputEmitter.emit(nodes: darkNodes),
+            StaticBoxStyleOutputEmitter.emit(nodes: darkNodes), ConnectedPageOutput.css(pages: pages, colorTokens: darkTokens)
+        ].filter { !$0.isEmpty }.joined(separator: "\n") + "\n}" : ""
+        let themedStylesheet = stylesheet + (darkStyles.isEmpty ? "" : "\n:root { color-scheme:light dark; }\n" + darkStyles)
+        let effectStylesheet = needsEffectsRuntime ? themedStylesheet + "\n" + DecorativeEffectRuntime.css : themedStylesheet
+        if !effectStylesheet.isEmpty {
             guard paths.insert("styles.css").inserted else { throw MultiPageStaticBuildError.collision }
-            files.append(.init(path: "styles.css", contents: stylesheet))
+            files.append(.init(path: "styles.css", contents: effectStylesheet))
+        }
+        if needsEffectsRuntime {
+            guard paths.insert("siteforge-effects.js").inserted else { throw MultiPageStaticBuildError.collision }
+            files.append(.init(path: "siteforge-effects.js", contents: DecorativeEffectRuntime.javascript))
         }
         if needsNavigationScript {
             guard paths.insert("siteforge-navigation.js").inserted else { throw MultiPageStaticBuildError.collision }
@@ -2000,6 +2042,14 @@ enum StaticBuildCompiler {
                 profile: profileSelection.profile, plan: nil, report: nil, findings: findings)
         }
         let nodes = document.pages.flatMap { $0.canonicalDepthFirstNodes() }
+        for page in document.websitePages {
+            do { _ = try DecorativeEffectOutput.configurations(page) }
+            catch {
+                findings.append(.init(severity: .error, code: "flow-configuration-unavailable",
+                    requirementID: "SF-1101-004", explanation: error.localizedDescription,
+                    repair: "Restore a supported single gradient fill or disable Flow. Use at most four enabled effects per page."))
+            }
+        }
         for original in document.websitePages {
             let page = (try? ComponentGraphResolver.resolvedPage(original, in: document, breakpoint: .desktop)) ?? original
             let failures = CanonicalPageFlow.outputFailures(page,
@@ -2060,6 +2110,16 @@ enum StaticBuildCompiler {
                     explanation: "A referenced image resource is unavailable.",
                     repair: "Locate, replace, or detach the missing image in Assets."))
                 continue
+            }
+            if let qrNode = nodes.first(where: { CanonicalImageStyle.resolve($0)?.assetID == asset.id && (try? CanonicalQRCode.resolve($0)) != nil }),
+               let code = try? CanonicalQRCode.resolve(qrNode) {
+                do { try ProjectQRCodeVerifier.verify(bytes, payload: code.payload) }
+                catch {
+                    findings.append(.init(severity: .error, code: "qr-payload-mismatch", requirementID: "SF-0802-004", affectedNodeID: qrNode.id,
+                        explanation: "Generated QR image bytes do not decode to their retained destination.",
+                        repair: "Select the QR Image and regenerate its destination, or convert it to an ordinary Image."))
+                    continue
+                }
             }
             do {
                 let planned = try StaticAssetExportPlanner.plan(
@@ -2125,7 +2185,7 @@ enum StaticBuildCompiler {
 enum SafeHTMLEmissionError: Error, Equatable, Sendable { case unsupportedTag, invalidIdentity, invalidFormField, invalidControl }
 
 enum SafeHTMLEmitter {
-    static func emit(_ tree: InternalRenderTreeSnapshot, layoutContainers: Set<NodeID> = []) throws -> String {
+    static func emit(_ tree: InternalRenderTreeSnapshot, layoutContainers: Set<NodeID> = [], flowConfigurations: [NodeID: FlowOutputConfiguration] = [:]) throws -> String {
         let ordered = tree.nodes.sorted { $0.paintOrder < $1.paintOrder }
         let structured = ordered.contains(where: \.usesConnectedLayout)
         guard Set(ordered.map(\.id)).count == ordered.count else { throw SafeHTMLEmissionError.invalidIdentity }
@@ -2165,7 +2225,7 @@ enum SafeHTMLEmitter {
                 let accessibility = accessibilityAttributes(node)
                 return "<form data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\"\(accessibility)>\(fields)</form>"
             }
-            var markup = try emitNode(node, formIDs: formIDs)
+            var markup = try emitNode(node, formIDs: formIDs, flow: flowConfigurations[node.id])
             if (structured || node.pageFlowRole != nil || nested), node.semanticElement != "img", node.control == nil {
                 let content = try (children[node.id] ?? []).filter { $0.navigationOwnerID == nil && $0.formField == nil }
                     .map { try render($0, nested: true, depth: depth + 1) }.joined()
@@ -2206,7 +2266,7 @@ enum SafeHTMLEmitter {
         return "<div class=\"sf-page-navigation sf-page-navigation-\(owner)\">\(inline)\(menu)</div>"
     }
 
-    private static func emitNode(_ node: InternalRenderTreeNode, formIDs: Set<NodeID>) throws -> String {
+    private static func emitNode(_ node: InternalRenderTreeNode, formIDs: Set<NodeID>, flow: FlowOutputConfiguration? = nil) throws -> String {
         let allowed = Set(["div", "section", "main", "header", "footer", "nav", "article", "aside", "p", "h1", "h2", "h3", "h4", "h5", "h6", "img", "button", "a", "form"])
         guard allowed.contains(node.semanticElement) else { throw SafeHTMLEmissionError.unsupportedTag }
         let identifier = try validatedIdentifier(node)
@@ -2214,7 +2274,8 @@ enum SafeHTMLEmitter {
             return try emitField(node, formIDs: formIDs)
         }
         let anchor = node.anchorID.map { " id=\"\(escape($0))\"" } ?? ""
-        let attributes = " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\"\(anchor)\(accessibilityAttributes(node))"
+        let flowAttribute = flow.map { " data-siteforge-flow=\"\(escape($0.json))\"" } ?? ""
+        let attributes = flowAttribute + " data-siteforge-node=\"\(identifier)\" class=\"sf-node-\(identifier)\"\(anchor)\(accessibilityAttributes(node))"
         if let control = node.control {
             let label = escape(control.label)
             if control.isLink {

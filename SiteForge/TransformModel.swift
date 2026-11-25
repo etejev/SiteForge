@@ -15,7 +15,7 @@ struct CanonicalBorder: Equatable, Sendable {
     let color: CanonicalSolidColor
     let width: Double
     let style: CanonicalBorderStyle
-    var isValid: Bool { color.isValid && width.isFinite && width > 0 && width <= 100 }
+    var isValid: Bool { color.isValid && width.isFinite && width >= 0 && width <= 100 }
 }
 
 struct CanonicalShadow: Equatable, Sendable {
@@ -137,7 +137,7 @@ struct DesignBoxStyleCommandRegistry: Sendable {
             return value.isValid ? value : nil
         }
         let border: CanonicalBorder? = {
-            guard let width = number("border.width"), width > 0,
+            guard let width = number("border.width"), width >= 0,
                   let value = color("border.color"),
                   let raw = node.insertionStringProperty(namespace + "border.style"),
                   let style = CanonicalBorderStyle(rawValue: raw) else { return nil }
@@ -893,6 +893,7 @@ enum DesignFillLayerEdit: Sendable {
     /// Explicit None removes all fill layers and fill-token binding atomically;
     /// an authored empty order prevents legacy/default surface resurrection.
     case clearAll
+    case replaceLayer(CanonicalFillLayer)
     case addSolid(id: FillLayerID, color: CanonicalSolidColor)
     case addLinearGradient(id: FillLayerID, angleDegrees: Double, stops: [CanonicalGradientStop])
     case remove(FillLayerID)
@@ -919,6 +920,9 @@ extension Array where Element == CanonicalFillLayer {
         }
         switch edit {
         case .clearAll: result = []
+        case .replaceLayer(let layer):
+            guard layer.isValid else { throw DesignFillLayerEditError.invalidLayer }
+            result[try layerIndex(layer.id)] = layer
         case .replaceSolid(let color):
             if let color {
                 guard color.isValid else { throw DesignFillLayerEditError.invalidLayer }
@@ -1081,6 +1085,8 @@ enum ComponentEdit: Sendable {
     case create(NodeID)
     case createNamed(NodeID, name: String)
     case rename(definitionID: PageID, name: String)
+    case duplicateDefinition(PageID)
+    case setUsageNotes(definitionID: PageID, openingSelection: [NodeID], draft: String?)
     case insert(definitionID: PageID, parentID: NodeID, geometry: InsertionGeometry)
     case detach(NodeID)
     case delete(definitionID: PageID, detachUses: Bool)
@@ -1287,6 +1293,11 @@ struct PageStructureCommandRegistry {
             }
         case .automaticLayout:
             let content = try chromeNode(CanonicalPageChrome.contentKey)
+            if CanonicalPageFlow.role(owner) == .footer,
+               [CanonicalPageChrome.titleKey, CanonicalPageChrome.navigationKey].contains(where: { key in
+                   guard let id = CanonicalPageChrome.reference(key, on: owner), let node = page.nodes.first(where: { $0.id == id }) else { return false }
+                   return node.parent != .node(content.id)
+               }) { throw DesignInspectorError.unavailable("This Footer uses editable columns. Adjust its groups with Layout controls; automatic title/navigation layout would change that structure.") }
             set(content, "layout.axis", .string("horizontal"), origin: .defaulted)
             set(content, "layout.padding", .number(0), origin: .defaulted)
             set(content, "layout.gap", .number(24), origin: .defaulted)
@@ -1390,6 +1401,177 @@ struct PageStructureCommandRegistry {
     }
 }
 
+/// The same identity remapping applies to local duplication and transfer.
+/// Dependency reconciliation and envelope validation stay with the caller.
+enum ComponentDefinitionGraphCopy {
+    enum Failure: LocalizedError {
+        case invalidGraph
+        case missingDependency
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidGraph: "The component graph is unavailable. Refresh Details and try again."
+            case .missingDependency: "Restore the missing component dependency before copying the original."
+            }
+        }
+    }
+
+    static func duplicate(_ source: DocumentPage, in document: CanonicalDocument) throws -> DocumentPage {
+        let names = Set(document.componentDefinitions.map { $0.name.lowercased() })
+        let name = uniqueCopyName(source.name, reserved: names)
+        let styles = try CanonicalReusableStyleIndex(document: document).orderedDefinitions.map(\.id)
+        let styleMap = Dictionary(uniqueKeysWithValues: styles.map { ($0, $0) })
+        var text: [ComponentTextPropertyID: ComponentTextPropertyID] = [:]
+        var visibility: [ComponentVisibilityPropertyID: ComponentVisibilityPropertyID] = [:]
+        var choice: [ComponentChoicePropertyID: ComponentChoicePropertyID] = [:]
+        var media: [ComponentMediaPropertyID: ComponentMediaPropertyID] = [:]
+        var action: [ComponentActionPropertyID: ComponentActionPropertyID] = [:]
+        var nodes: [NodeID: NodeID] = [:]
+        return try remap(source, destinationID: PageID(), name: name,
+            assetMap: [:], tokenMap: [:], styleMap: styleMap,
+            textMap: &text, visibilityMap: &visibility, choiceMap: &choice,
+            mediaMap: &media, actionMap: &action, definitionNodes: &nodes,
+            pageReferenceMap: [:], nodeReferenceMap: [:])
+    }
+
+    static func uniqueCopyName(_ name: String, reserved: Set<String>) -> String {
+        var suffix = 2
+        while true {
+            // Retain a complete UTF-8 prefix even for non-ASCII component names.
+            let ending = " Copy \(suffix)"
+            var prefix = String(name.prefix(112))
+            while prefix.utf8.count + ending.utf8.count > 256 { prefix.removeLast() }
+            let candidate = prefix + ending
+            if !reserved.contains(candidate.lowercased()) { return candidate }
+            suffix += 1
+        }
+    }
+
+    static func remap(
+        _ source: DocumentPage,
+        destinationID: PageID,
+        name: String,
+        assetMap: [AssetID: AssetID],
+        tokenMap: [ColorTokenID: ColorTokenID],
+        styleMap: [ReusableStyleID: ReusableStyleID],
+        textMap: inout [ComponentTextPropertyID: ComponentTextPropertyID],
+        visibilityMap: inout [ComponentVisibilityPropertyID: ComponentVisibilityPropertyID],
+        choiceMap: inout [ComponentChoicePropertyID: ComponentChoicePropertyID],
+        mediaMap: inout [ComponentMediaPropertyID: ComponentMediaPropertyID],
+        actionMap: inout [ComponentActionPropertyID: ComponentActionPropertyID],
+        definitionNodes: inout [NodeID: NodeID],
+        pageReferenceMap: [PageID: PageID], nodeReferenceMap: [NodeID: NodeID]
+    ) throws -> DocumentPage {
+        let nodeMap = Dictionary(uniqueKeysWithValues: source.nodes.map { ($0.id, NodeID()) })
+        definitionNodes.merge(nodeMap, uniquingKeysWith: { first, _ in first })
+        let slotMap = Dictionary(uniqueKeysWithValues: CanonicalComponentSlot.properties(in: source).map { ($0.id, ComponentSlotPropertyID()) })
+        let propertyMap = Dictionary(uniqueKeysWithValues: source.nodes.flatMap(\.properties).map { ($0.id, PropertyID()) })
+        for node in source.nodes {
+            if let old = CanonicalComponentText.property(on: node)?.id { textMap[old] = ComponentTextPropertyID() }
+            if let old = CanonicalComponentVisibility.property(on: node)?.id { visibilityMap[old] = ComponentVisibilityPropertyID() }
+            if let old = CanonicalComponentChoice.property(on: node)?.id { choiceMap[old] = ComponentChoicePropertyID() }
+            if let old = CanonicalComponentMedia.property(on: node)?.id { mediaMap[old] = ComponentMediaPropertyID() }
+            if let old = CanonicalComponentAction.property(on: node)?.id { actionMap[old] = ComponentActionPropertyID() }
+        }
+        let nodes = try source.nodes.map { node -> DocumentNode in
+            guard let id = nodeMap[node.id] else { throw Failure.invalidGraph }
+            let parent: NodeParent = switch node.parent {
+            case .page: .page(destinationID)
+            case .node(let old): nodeMap[old].map(NodeParent.node) ?? .page(destinationID)
+            }
+            let properties = try node.properties.compactMap { property -> NodeProperty? in
+                let key = property.key.rawValue
+                if key.hasPrefix(CanonicalReusableStyleIndex.namespace + "definition.") { return nil }
+                guard let propertyID = propertyMap[property.id] else { throw Failure.invalidGraph }
+                var outputKey = key, value = property.value
+                if CanonicalPageChrome.referenceKeys.contains(key), case .string(let raw) = value,
+                   let old = NodeID(uuidString: raw), let mapped = nodeMap[old] {
+                    value = .string(mapped.description)
+                }
+                if [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].contains(key),
+                   case .string(let raw) = value, let old = AssetID(uuidString: raw), let mapped = assetMap[old] {
+                    value = .string(mapped.description)
+                } else if key.hasPrefix(LocalColorTokenBinding.prefix), case .string(let raw) = value,
+                          let old = ColorTokenID(uuidString: raw), let mapped = tokenMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalReusableStyleIndex.appliedKey, case .string(let raw) = value {
+                    value = .string(try raw.split(separator: ",", omittingEmptySubsequences: false).map { part in
+                        guard let old = ReusableStyleID(uuidString: String(part)), let mapped = styleMap[old] else {
+                            throw Failure.missingDependency
+                        }
+                        return mapped.description
+                    }.joined(separator: ","))
+                } else if key == CanonicalComponentText.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentTextPropertyID(uuidString: raw), let mapped = textMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentVisibility.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentVisibilityPropertyID(uuidString: raw), let mapped = visibilityMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentChoice.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentChoicePropertyID(uuidString: raw), let mapped = choiceMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentMedia.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentMediaPropertyID(uuidString: raw), let mapped = mediaMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentAction.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentActionPropertyID(uuidString: raw), let mapped = actionMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentSlot.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentSlotPropertyID(uuidString: raw), let mapped = slotMap[old] {
+                    value = .string(mapped.description)
+                } else if key.hasPrefix(CanonicalComponentOrganization.namespace), key.hasSuffix(".binding"),
+                          case .string(let raw) = value, let identity = ComponentOverridePropertyIdentity.reference(raw) {
+                    let mapped: ComponentOverridePropertyIdentity
+                    switch identity {
+                    case .text(let id): guard let id = textMap[id] else { throw Failure.missingDependency }; mapped = .text(id)
+                    case .visibility(let id): guard let id = visibilityMap[id] else { throw Failure.missingDependency }; mapped = .visibility(id)
+                    case .choice(let id): guard let id = choiceMap[id] else { throw Failure.missingDependency }; mapped = .choice(id)
+                    case .media(let id): guard let id = mediaMap[id] else { throw Failure.missingDependency }; mapped = .media(id)
+                    case .action(let id): guard let id = actionMap[id] else { throw Failure.missingDependency }; mapped = .action(id)
+                    case .slot(let id): guard let id = slotMap[id] else { throw Failure.missingDependency }; mapped = .slot(id)
+                    }
+                    value = .string(mapped.stableDescription)
+                } else if key == CanonicalLinkTarget.namespace + "nodeID", case .string(let raw) = value,
+                          let old = NodeID(uuidString: raw), let mapped = nodeMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalLinkTarget.namespace + "pageID", case .string(let raw) = value,
+                          PageID(uuidString: raw) == source.id { value = .string(destinationID.description)
+                } else if key == CanonicalLinkTarget.namespace + "pageID", case .string(let raw) = value,
+                          let old = PageID(uuidString: raw), let mapped = pageReferenceMap[old] { value = .string(mapped.description)
+                } else if key == CanonicalLinkTarget.namespace + "nodeID", case .string(let raw) = value,
+                          let old = NodeID(uuidString: raw), let mapped = nodeReferenceMap[old] { value = .string(mapped.description)
+                } else if key == CanonicalFormField.optionsKey, case .string(let encoded) = value {
+                    value = .string(try CanonicalFormSelectOptions.remappingStableIDs(in: encoded))
+                } else if key.hasPrefix(CanonicalFluidValueCodec.namespace + "."), case .string(let encoded) = value,
+                          let target = FluidValueTarget(rawValue: String(key.dropFirst(CanonicalFluidValueCodec.namespace.count + 1))) {
+                    value = .string(try CanonicalFluidValueCodec.remappingStableID(in: encoded, target: target))
+                } else if let old = CanonicalComponentText.overrideID(key) {
+                    guard let mapped = textMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentText.overrideKey(mapped)
+                } else if let old = CanonicalComponentVisibility.overrideID(key) {
+                    guard let mapped = visibilityMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentVisibility.overrideKey(mapped)
+                } else if let old = CanonicalComponentChoice.overrideID(key) {
+                    guard let mapped = choiceMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentChoice.overrideKey(mapped)
+                } else if let old = CanonicalComponentMedia.overrideID(key) {
+                    guard let mapped = mediaMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentMedia.overrideKey(mapped)
+                    if case .string(let raw) = value, let asset = AssetID(uuidString: raw), let remapped = assetMap[asset] {
+                        value = .string(remapped.description)
+                    }
+                }
+                return NodeProperty(id: propertyID, key: .init(rawValue: outputKey), value: value, origin: property.origin)
+            }
+            return DocumentNode(id: id, kind: node.kind, name: node.name, parent: parent,
+                                childIDs: node.childIDs.compactMap { nodeMap[$0] }, properties: properties)
+        }
+        return DocumentPage(id: destinationID, name: name, route: .init(rawValue: ""),
+                            role: .componentDefinition, provenance: .authored,
+                            rootNodeIDs: source.rootNodeIDs.compactMap { nodeMap[$0] }, nodes: nodes)
+    }
+}
+
 struct ComponentCommandRegistry {
     /// Shared preflight for native eligibility and the canonical create command.
     /// It allocates no new identities and never changes the selected graph.
@@ -1441,6 +1623,22 @@ struct ComponentCommandRegistry {
                      sceneID: renderer.sceneID, rendererGeneration: renderer.sceneGeneration)
     }
 
+    static func editableDefinition(_ id: PageID, activePageID: PageID,
+                                   document: CanonicalDocument) throws -> (DocumentPage, DocumentNode) {
+        guard let definition = document.componentDefinitions.first(where: { $0.id == id }),
+              let rootID = definition.rootNodeIDs.first,
+              let root = definition.nodes.first(where: { $0.id == rootID }) else {
+            throw CommandExecutionError.disabled("The original component is unavailable. Close Details and reopen the current definition.")
+        }
+        guard !document.componentDefinitions.contains(where: { $0.id == activePageID && $0.id != id }) else {
+            throw CommandExecutionError.disabled("Return to the page before editing a different definition.")
+        }
+        guard !root.selectionBooleanProperty("locked"), !root.selectionBooleanProperty("hidden") else {
+            throw CommandExecutionError.disabled("Unlock and show the original component before editing its details.")
+        }
+        return (definition, root)
+    }
+
     func prepare(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity,
                  in document: CanonicalDocument, context: TransformValidationContext,
                  cancelled: Bool = false) throws -> PreparedComponentEdit {
@@ -1456,6 +1654,7 @@ struct ComponentCommandRegistry {
               let index = document.pages.firstIndex(where: { $0.id == identity.pageID }) else { throw TransformError.pageUnavailable }
         var page = document.pages[index]
         switch edit {
+        case .setUsageNotes: break
         case .exposeText, .removeTextProperty, .exposeVisibility, .removeVisibilityProperty,
              .exposeChoice, .removeChoiceProperty, .exposeMedia, .removeMediaProperty,
              .exposeAction, .removeActionProperty, .exposeSlot, .removeSlotProperty,
@@ -1517,6 +1716,27 @@ struct ComponentCommandRegistry {
                          definitionID: page.role == .componentDefinition ? page.id : CanonicalComponentReference.definitionID(for: node))
         }
         switch edit {
+        case .setUsageNotes(let definitionID, let openingSelection, let draft):
+            guard openingSelection == context.selectedNodeIDs else { throw TransformError.selectionMismatch }
+            let (_, root) = try Self.editableDefinition(definitionID, activePageID: page.id, document: document)
+            let text = try draft.flatMap(CanonicalComponentUsageNotes.normalized)
+            let prior = root.insertionProperty(CanonicalComponentUsageNotes.key)
+            let command: DocumentCommand
+            if let text, prior?.value != .string(text) {
+                let property = NodeProperty(id: prior?.id ?? PropertyID(),
+                    key: .init(rawValue: CanonicalComponentUsageNotes.key), value: .string(text), origin: .authored)
+                command = .setProperty(.init(pageID: definitionID, nodeID: root.id, property: property))
+            } else if text == nil, let prior {
+                command = .removeProperty(.init(pageID: definitionID, nodeID: root.id, propertyID: prior.id))
+            } else {
+                command = .batch([])
+            }
+            return .init(command: command, selectedNodeID: nil, definitionID: definitionID)
+        case .duplicateDefinition(let id):
+            let (definition, _) = try Self.editableDefinition(id, activePageID: page.id, document: document)
+            let copy = try ComponentDefinitionGraphCopy.duplicate(definition, in: document)
+            return .init(command: .insertPage(.init(page: copy, index: document.pages.count)),
+                selectedNodeID: nil, definitionID: copy.id)
         case .organizeProperty(let id, let binding, let group, let position):
             _ = try selected(id)
             var entries = CanonicalComponentOrganization.entries(in: page)
@@ -2743,6 +2963,7 @@ enum LocalColorTokenEdit: Sendable {
     case update(ColorTokenID, name: String, color: CanonicalSolidColor)
     case rename(ColorTokenID, String)
     case recolor(ColorTokenID, CanonicalSolidColor)
+    case darkVariant(ColorTokenID, CanonicalSolidColor?)
     case delete(ColorTokenID)
     case bind(ColorTokenID)
     case unbind
@@ -2795,6 +3016,9 @@ struct LocalColorTokenCommandRegistry {
             guard let index = tokens.firstIndex(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
             guard color.isValid else { throw LocalColorTokenCommandError.invalid }
             tokens[index].color = color
+        case .darkVariant(let id, let color):
+            guard let index = tokens.firstIndex(where: { $0.id == id }), color?.isValid ?? true else { throw LocalColorTokenCommandError.invalid }
+            tokens[index].darkColor = color
         case .delete(let id):
             guard tokens.contains(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
             let uses = document.pages.flatMap(\.nodes).reduce(0) { count, node in
@@ -6599,5 +6823,30 @@ struct ImageInspectorCommandRegistry: Sendable {
             if let alt { try validate(.altText(alt), document: document) }
         case .fit, .decorative: break
         }
+    }
+}
+
+/// Choose an unoccupied midpoint of the largest gap. Interpolating its color
+/// preserves the authored ramp rather than inserting a repeated opaque spike.
+enum GradientAuthoringInsertion {
+    static func stop(in layer: CanonicalFillLayer) -> CanonicalGradientStop? {
+        guard layer.kind == .linearGradient, layer.isValid else { return nil }
+        let ordered = layer.stops.enumerated().sorted {
+            $0.element.position == $1.element.position ? $0.offset < $1.offset : $0.element.position < $1.element.position
+        }.map(\.element)
+        let positions = Array(Set([0.0, 1.0] + ordered.map(\.position))).sorted()
+        guard let gap = zip(positions, positions.dropFirst()).max(by: { $0.1 - $0.0 < $1.1 - $1.0 }), gap.1 > gap.0 else { return nil }
+        let position = (gap.0 + gap.1) / 2
+        let color: CanonicalSolidColor
+        if position < ordered[0].position { color = ordered[0].color }
+        else if position > ordered[ordered.count - 1].position { color = ordered[ordered.count - 1].color }
+        else {
+            guard let pair = zip(ordered, ordered.dropFirst()).first(where: { $0.0.position <= position && position < $0.1.position }) else { return nil }
+            let t = (position - pair.0.position) / (pair.1.position - pair.0.position)
+            let a = pair.0.color, b = pair.1.color
+            guard let interpolated = CanonicalSolidColor.premultipliedInterpolation(a, b, fraction: t) else { return nil }
+            color = interpolated
+        }
+        return .init(id: GradientStopID(), position: position, color: color)
     }
 }

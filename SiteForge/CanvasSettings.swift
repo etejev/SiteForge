@@ -207,8 +207,7 @@ struct CanvasSettingsView: View {
             SiteForgeSettingsHeader(
                 title: "Canvas",
                 scope: AuthoringLanguage.appPreferencesScope,
-                detail: "Choose how new workspaces begin. Each open workspace keeps its own Grid state.",
-                systemImage: "square.grid.3x3"
+                detail: "Choose how new workspaces begin. Each open workspace keeps its own Grid state."
             )
             GroupBox("New workspace") {
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
@@ -240,7 +239,6 @@ struct CanvasSettingsView: View {
                     .accessibilityIdentifier("settings.canvas.apply")
             }
         }
-        .padding(SiteForgeVisualSystem.settingsFormPadding)
         .frame(maxWidth: SiteForgeVisualSystem.settingsContentMaxWidth, alignment: .topLeading)
         .background(CanvasSettingsWindowHost(store: store).frame(width: 0, height: 0))
         .onChange(of: store.status) { _, status in
@@ -447,8 +445,7 @@ struct ApplicationSettingsGroupView: View {
             SiteForgeSettingsHeader(
                 title: "Application Defaults",
                 scope: AuthoringLanguage.appPreferencesScope,
-                detail: "Review or reset the Appearance and new-workspace Grid defaults together.",
-                systemImage: "gearshape.2"
+                detail: "Review or reset the Appearance and new-workspace Grid defaults together."
             )
             GroupBox("Current defaults") {
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
@@ -478,7 +475,6 @@ struct ApplicationSettingsGroupView: View {
                 }
             }
         }
-        .padding(SiteForgeVisualSystem.settingsFormPadding)
         .frame(maxWidth: SiteForgeVisualSystem.settingsContentMaxWidth, alignment: .topLeading)
         .onChange(of: store.status) { _, status in
             NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,

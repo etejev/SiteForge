@@ -1416,6 +1416,14 @@ final class CommandDiagnostics {
             durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
             failureCategory: succeeded ? nil : .validation))
     }
+    func recordComponentUsageNotesOperation(definitionID: PageID, command: CommandName,
+                                           result: DiagnosticResult, durationMilliseconds: Double) {
+        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0907-001", "SF-0907-002", "SF-0907-003", "SF-0907-004", "SF-0907-005", "SF-0907-006", "SF-0907-008"],
+            commandName: command, sanitizedIdentifiers: [sanitize(definitionID.commandTarget)],
+            durationMilliseconds: max(0, durationMilliseconds), result: result,
+            failureCategory: result == .success ? nil : (result == .cancelled ? .cancellation : .validation)))
+    }
+
     func recordPageStructureOperation(pageID: PageID, nodeIDs: [NodeID], succeeded: Bool, durationMilliseconds: Double) {
         buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0501-008", "SF-0502-005", "SF-0806-008", "SF-0304-005"],
             commandName: .batch, sanitizedIdentifiers: ([pageID.commandTarget] + nodeIDs.map(\.commandTarget)).map(sanitize),

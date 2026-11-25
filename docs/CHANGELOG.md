@@ -1,5 +1,124 @@
 # SiteForge Development Changelog
 
+## November 22 — fast styling candidate (acceptance in progress)
+
+- Fill, border, radius and opacity controls are brought forward, with visible
+  native sliders and precise fields. Shared color editors provide hex, Alpha
+  sliders and owned preview/commit/cancel across quick and advanced targets.
+- Gradients have a visual stop ramp. Corrected physical diagonal geometry,
+  native device-Preview spatial painting, inside border width and grouped opacity.
+- Native gesture, history, pixel and browser receipts are retained. An unchanged hex reconciliation
+  was found creating a hidden preview; its native opacity/ordered Undo/Redo
+  replay passed. Colors order-out lifecycle cleanup is in focused replay. This candidate is not installed yet (bounded
+  SF-0506-001–008, SF-0508-001–008, SF-0701-001–008).
+- The authorized interactive gradient/footer/QR/Aurora Flow expansion now has native configuration controls, a local bounded displacement
+  runtime, responsive ordinary footer groups, local decoded QR authoring and
+  optional dark website color variants in the candidate. Focused model/footer/
+  resource checks passed at their exact source; actual runtime/visual and fresh
+  showcase acceptance remain pending. It is not yet a shipped feature. Final full gate,
+  verified installation and reviewed local commit remain required.
+
+## November 22 — native UI consistency and system grays
+
+- Native surfaces use macOS system grays and semantic labels/separators while
+  website paper and authored website colors keep their project values.
+- Testing has equal Start peers, stable Pause/Resume/Cancel geometry, concise
+  scope and outcome text, readable selected history and live paused status.
+  Full run IDs/selectors remain in details and exact report routing is preserved.
+- Testing and its monitor follow app appearance, including Light preview and
+  Cancel. Thin rounded native blue progress remains readable when inactive.
+- Main windows fill the usable desktop; auxiliary ownership and supported
+  compact Testing sizes are independently verified. Local reports reopen from
+  the installed Settings/CLI entry points (bounded SF-0201-003/006/008,
+  SF-0206-003/006/008, SF-1607-006/008).
+
+## November 21 — deleted and renamed test scope fixed
+
+- Affected testing includes deleted files and both paths of a rename, including
+  identical contents. Missing classes/methods block before execution.
+- CLI and Testing show the same affected base and unresolved choices. Headless
+  changed scope validates fresh products without opening a viewer.
+- Regular Testing retains a named tooling ledger/log alongside its XCTest report;
+  prepared inputs avoid a separate test-host Documents prompt (SF-1902-007/008).
+
+## November 21 — native Testing window installed
+
+- Settings → Advanced → Open Testing opens a native window before a run exists.
+  It previews regular, UI, exact/affected and full scopes, and reconnects retained
+  reports. Local test commands open this same window for review and Start.
+- Preparation shows the current operation once and real compiler activity.
+  Compatible measured timings support labelled estimates; discovered inventory
+  supplies case counts. Missing timing evidence stays explicitly unavailable.
+- Local test commands share the app's floating progress and run ownership.
+  Pause retains completed cases; Resume selects unresolved prepared methods.
+  Cancel also works while paused. Native journeys and safe resume pass;
+  native controls, retained reports and verified installation pass (SF-0206-002/003/004/006/008,
+  SF-1607-002/004/008, SF-1902-007/008).
+- Run Details uses one accessible native button; paused activity stops and
+  confirmation labels fit equal fixed controls.
+- `./sf watch` builds after edits. Unmapped `./sf test changed` asks for an
+  explicit scope instead of automatically starting the full suite.
+
+## November 21 — native interface redesign installed
+
+- Start presents Blank, Starter, and Aurora with a sidebar for Open Project,
+  authorized recents, Recovery History, and App Settings. Project opening,
+  failure, and recovery use the same layout. Recovery discard asks for confirmation.
+- The workspace has a left tool rail, matching Navigator and Inspector tabs,
+  and one toolbar action for Website Settings. Page rows reveal actions on
+  hover or keyboard focus. Design shows the current Page Background with no
+  object selected. Actual Size and Fit Document are available in View.
+- App Settings shares its layout with the project’s Website Settings. Website
+  Settings has a sidebar for shared defaults and individual page metadata.
+
+## November 15 — local component usage notes
+
+- Component Details shows and edits optional plain-text usage notes.
+  Open the same Details sheet from Components or a selected linked copy.
+  Apply and Clear use document history. Cancel or Escape discards the draft.
+- Duplicate creates an independent definition with the same notes.
+  Compatible local transfer preserves notes and reuses a definition only
+  when its notes and the other definition content match (SF-0907-001/002/003/004/005/006/008).
+
+## November 14 — native keyboard closeout
+
+- Page Editor invalidates Edit → Select All for the exact focused page
+  draft. AppKit still owns the selection action (SF-0203-006,
+  SF-0303-006, SF-1503-006).
+- Navigator and Inspector tabs, page rows, and standard viewport controls
+  use one native focus target per control to avoid extra Tab stops
+  (SF-1505-006).
+
+## November 14 — connected spacing editing
+
+- Connected Inner Spacing and Link Spacing keep unsubmitted values tied to
+  the screen size where editing began. Switching widths shows current
+  committed values in clean fields, preserves title and Contents drafts,
+  and explains when a spacing draft needs to be canceled and re-entered.
+
+## November 14 — connected height editing
+
+- Connected Header and Footer height edits stay with the screen size where
+  they started. The Height field shows the current screen size and explains
+  calculated height. A drag back to the starting height leaves the inherited
+  value and history intact.
+
+## November 14 — local verification recovery
+
+- Page Editor publishes focused page-name and route draft context to the
+  scene for native Edit → Select All validation. Exact UI replay is pending
+  (SF-0203-006, SF-0303-006, SF-1503-006).
+
+- An unreadable in-scope directory now produces a redacted scanner finding
+  and fails repository verification (SF-1902-007/008).
+- The Inspector UI journey uses the native Window > Fill command to restore
+  its original width after the 1280-point pointer resize. The full-width and
+  minimum-width checks passed on replay (SF-0201-006/008).
+
+- The repository credential scanner prunes its existing generated-directory
+  exclusions before traversal. Seeded checks exercise every exclusion and
+  verify that nested in-scope files are still scanned (SF-1902-007/008).
+
 ## November 9 — targeted closeout checkpoint
 
 - UI acceptance now resolves the live Selection menu action after verifying
