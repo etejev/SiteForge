@@ -1,6 +1,9 @@
 # Remaining SiteForge development — 2026-10-13
 
-## Current delivery policy — cohesive packages, cycle Prompt 2/10
+This dated roadmap is planning history. Use the active
+[work queue](CODEX_QUEUE.md) for current delivery order.
+
+## October delivery policy — cohesive packages, cycle Prompt 2/10
 
 Owner priority: a polished native **local website builder** first, advanced
 specification expansion second. This changes packaging/prioritization, not any

@@ -5,7 +5,47 @@ import Foundation
 // They are never part of the canonical document or project package; only the
 // validated result is compiled into the existing document command registry.
 struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
-    static let currentVersion = 2
+    private static let versionWithoutUsageNotes = 2
+    private static let versionWithDecorativeData = 4
+    /// Version 5 carries reusable styles with linked box appearance (SF-0510)
+    /// and component definitions that contain instances (OD-034).
+    static let versionWithLinkedBoxStyles = 5
+    /// Version 6 carries instance-owned slot contents, the empty slot state
+    /// and slot rules (OD-018).
+    static let versionWithSlotContent = 6
+    /// Version 7 carries component variants and copies' variant choices (OD-033).
+    static let versionWithVariants = 7
+    /// Version 8 carries query containers and container-query rules (SF-0605)
+    /// and suppressed responsive-audit findings (SF-0606).
+    static let versionWithContainerQueries = 8
+    static let currentVersion = versionWithContainerQueries
+
+    /// SF-0605: any container name or container-query rule.
+    static func carriesContainerQueries(_ nodes: [DocumentNode]) -> Bool {
+        nodes.contains { node in node.properties.contains {
+            $0.key.rawValue.hasPrefix(CanonicalContainerQueries.namespace)
+                || $0.key.rawValue.hasPrefix(CanonicalResponsiveAuditSuppression.namespace)
+        } }
+    }
+
+    /// OD-033: any variant metadata, override or copy choice.
+    static func carriesVariantData(_ nodes: [DocumentNode]) -> Bool {
+        nodes.contains { node in node.properties.contains { property in
+            property.key.rawValue.hasPrefix(CanonicalComponentVariants.namespace)
+                || CanonicalComponentVariants.isChoiceKey(property.key.rawValue)
+        } }
+    }
+
+    /// OD-018: any instance child, slot marker, slot membership or slot rule.
+    static func carriesSlotContent(_ nodes: [DocumentNode]) -> Bool {
+        nodes.contains { node in
+            (node.kind == .component && !node.childIDs.isEmpty) || node.properties.contains { property in
+                let key = property.key.rawValue
+                return key.hasPrefix(CanonicalComponentSlot.overrideNamespace) || key == CanonicalComponentSlot.supplyKey
+                    || CanonicalComponentSlot.ruleKeys.contains(key)
+            }
+        }
+    }
     static let maximumEncodedBytes = 64 * 1_024 * 1_024
     static let maximumNodes = 10_000
     static let maximumRoots = 1_000
@@ -24,7 +64,7 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
     let componentDefinitions: [DocumentPage]
 
     init(
-        version: Int = Self.currentVersion,
+        version: Int? = nil,
         sourceDocumentID: DocumentID,
         sourcePageID: PageID,
         roots: [NodeID],
@@ -34,7 +74,28 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
         reusableStyleDependencies: [ClipboardReusableStyleDependency] = [],
         componentDefinitions: [DocumentPage] = []
     ) {
-        self.version = version
+        let containsUsageNotes = componentDefinitions.contains { definition in
+            definition.nodes.contains { $0.properties.contains(where: CanonicalComponentUsageNotes.owns) }
+        }
+        let usesDecorativeData = colorTokenDependencies.contains { $0.darkColor != nil }
+            || (nodes + componentDefinitions.flatMap(\.nodes)).contains { node in node.properties.contains {
+                $0.key.rawValue.hasPrefix("style.flow.") || $0.key.rawValue.hasPrefix("style.glass.") || $0.key.rawValue.hasPrefix("content.qr.")
+            } }
+        // Each format is the oldest reader that keeps everything: variants
+        // (OD-033) need v7; slot contents (OD-018) need v6; linked box styles
+        // (SF-0510) and nested definitions (OD-034) need v5. Older readers
+        // refuse or would drop them.
+        let requiresV5 = reusableStyleDependencies.contains { !$0.box.isEmpty }
+            || componentDefinitions.contains { $0.nodes.contains { $0.kind == .component } }
+        let requiresV6 = Self.carriesSlotContent(nodes + componentDefinitions.flatMap(\.nodes))
+        let requiresV7 = Self.carriesVariantData(nodes + componentDefinitions.flatMap(\.nodes))
+        let requiresV8 = Self.carriesContainerQueries(nodes + componentDefinitions.flatMap(\.nodes))
+        self.version = version ?? (requiresV8 ? Self.versionWithContainerQueries
+            : requiresV7 ? Self.versionWithVariants
+            : requiresV6 ? Self.versionWithSlotContent
+            : requiresV5 ? Self.versionWithLinkedBoxStyles
+            : usesDecorativeData ? Self.versionWithDecorativeData
+            : containsUsageNotes ? 3 : Self.versionWithoutUsageNotes)
         self.sourceDocumentID = sourceDocumentID
         self.sourcePageID = sourcePageID
         self.roots = roots
@@ -66,7 +127,9 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
     }
 
     func validate() throws {
-        guard version == Self.currentVersion else { throw ClipboardTransferError.unsupportedVersion }
+        guard (Self.versionWithoutUsageNotes...Self.currentVersion).contains(version) else {
+            throw ClipboardTransferError.unsupportedVersion
+        }
         let properties = nodes.flatMap(\.properties)
         guard !roots.isEmpty, roots.count <= Self.maximumRoots,
               Set(roots).count == roots.count,
@@ -110,15 +173,47 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
         guard reusableStyleDependencies.allSatisfy(\.isValid) else {
             throw ClipboardTransferError.invalidDependency
         }
+        // An older reader would drop linked box values: they require v5.
+        if version < Self.versionWithLinkedBoxStyles, reusableStyleDependencies.contains(where: { !$0.box.isEmpty }) {
+            throw ClipboardTransferError.unsupportedVersion
+        }
         let definitionNodes = componentDefinitions.flatMap(\.nodes)
+        // OD-034: nested definitions first appear in v5; earlier writers never
+        // produced them, so an older header carrying them is malformed.
+        if version < Self.versionWithLinkedBoxStyles, definitionNodes.contains(where: { $0.kind == .component }) {
+            throw ClipboardTransferError.unsupportedVersion
+        }
         let allNodes = nodes + definitionNodes
         guard !allNodes.contains(where: CanonicalPageFlow.isManaged) else { throw ClipboardTransferError.unsupportedPageStructure }
-        guard !allNodes.contains(where: { node in
-            (node.kind == .component && !node.childIDs.isEmpty) || node.properties.contains {
-                $0.key.rawValue.hasPrefix(CanonicalComponentSlot.unsupportedOverrideNamespace)
-            }
-        }) else { throw ClipboardTransferError.unsupportedSlotContent }
+        // OD-033: variants first appear in v7; older writers never produced them.
+        if version < Self.versionWithVariants, Self.carriesVariantData(allNodes) {
+            throw ClipboardTransferError.unsupportedVersion
+        }
+        // SF-0605: container queries first appear in v8.
+        if version < Self.versionWithContainerQueries, Self.carriesContainerQueries(allNodes) {
+            throw ClipboardTransferError.unsupportedVersion
+        }
+        // OD-018: slot contents travel with v6 and obey the same structure
+        // and rules as in a document (copied definitions supply the rules).
+        if Self.carriesSlotContent(allNodes) {
+            guard version >= Self.versionWithSlotContent else { throw ClipboardTransferError.unsupportedVersion }
+            let slots = CanonicalComponentSlot.slotsByDefinition(componentDefinitions)
+            do {
+                try CanonicalComponentSlot.validateNodes(nodes, inDefinition: false, slotsByDefinition: slots)
+                for definition in componentDefinitions {
+                    try CanonicalComponentSlot.validateNodes(definition.nodes, inDefinition: true, slotsByDefinition: slots)
+                }
+            } catch { throw ClipboardTransferError.unsupportedSlotContent }
+        }
+        if version < 4, colorTokenDependencies.contains(where: { $0.darkColor != nil }) || allNodes.contains(where: { node in node.properties.contains {
+            $0.key.rawValue.hasPrefix("style.flow.") || $0.key.rawValue.hasPrefix("style.glass.") || $0.key.rawValue.hasPrefix("content.qr.")
+        } }) { throw ClipboardTransferError.unsupportedVersion }
         let definitionNodeIDs = Set(definitionNodes.map(\.id))
+        let definitionRootIDs = Set(componentDefinitions.compactMap { $0.rootNodeIDs.first })
+        if version < 3,
+           allNodes.contains(where: { $0.properties.contains(where: CanonicalComponentUsageNotes.owns) }) {
+            throw ClipboardTransferError.unsupportedVersion
+        }
         do {
             for node in allNodes {
                 guard Set(node.properties.map(\.key)).count == node.properties.count else {
@@ -127,7 +222,11 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
                 try CanonicalComponentAction.validate(node, inDefinition: definitionNodeIDs.contains(node.id))
                 try CanonicalComponentSlot.validate(node, inDefinition: definitionNodeIDs.contains(node.id))
                 try CanonicalComponentOrganization.validate(node, inDefinition: definitionNodeIDs.contains(node.id))
+                try CanonicalComponentUsageNotes.validate(node, isDefinitionRoot: definitionRootIDs.contains(node.id))
                 try CanonicalLinkTarget.validate(node)
+                _ = try CanonicalFlowGradient.resolve(node)
+                _ = try CanonicalGlassSurface.resolve(node)
+                _ = try CanonicalQRCode.resolve(node)
             }
         } catch { throw ClipboardTransferError.invalidEnvelope }
         let allProperties = allNodes.flatMap(\.properties)
@@ -148,18 +247,14 @@ struct SiteForgeClipboardEnvelope: Codable, Equatable, Sendable {
         try Self.validateDefinitionDependencies(componentDefinitions)
         let actionBindings = componentDefinitions.flatMap(CanonicalComponentAction.properties).map(\.id)
         guard Set(actionBindings).count == actionBindings.count else { throw ClipboardTransferError.invalidDependency }
-        guard !definitionNodes.contains(where: { $0.kind == .component }) else {
-            throw ClipboardTransferError.unsupportedComponentDependency
+        // OD-034: definitions may contain instances of other carried
+        // definitions; the dependency check above keeps them acyclic and
+        // closed, and the destination document validation bounds depth/size.
+        guard CanonicalComponentGraph(definitions: componentDefinitions).violation == nil else {
+            throw ClipboardTransferError.componentCycle
         }
-        let referencedAssets = Set(allNodes.flatMap { node in
-            [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].compactMap {
-                node.insertionStringProperty($0).flatMap(AssetID.init(uuidString:))
-            } + node.properties.compactMap { property in
-                guard CanonicalComponentMedia.overrideID(property.key.rawValue) != nil,
-                      case .string(let raw) = property.value else { return nil }
-                return AssetID(uuidString: raw)
-            }
-        })
+        // The same references copying collects (translated images included).
+        let referencedAssets = Set(allNodes.flatMap(CanonicalGraphReferences.assets))
         let referencedTokens = Set(allNodes.flatMap { node in
             LocalColorTarget.allCases.compactMap { LocalColorTokenBinding.id(for: node, target: $0) }
         })
@@ -231,11 +326,55 @@ struct ClipboardReusableStyleDependency: Codable, Equatable, Sendable {
     let name: String
     let fill: CanonicalSolidColor?
     let opacity: Double?
+    /// SF-0510 (clipboard v5): linked border, corner radius and shadow, in the
+    /// same field codec the document uses. Omitted when empty.
+    let box: CanonicalReusableBoxAppearance
+
+    init(id: ReusableStyleID, name: String, fill: CanonicalSolidColor?, opacity: Double?,
+         box: CanonicalReusableBoxAppearance = .init()) {
+        self.id = id; self.name = name; self.fill = fill; self.opacity = opacity; self.box = box
+    }
 
     var isValid: Bool {
         CanonicalReusableStyleIndex.validName(name) && (fill?.isValid ?? true)
             && (opacity.map { $0.isFinite && (0...1).contains($0) } ?? true)
-            && (fill != nil || opacity != nil)
+            && box.isValid && box == box.quantized
+            && (fill != nil || opacity != nil || !box.isEmpty)
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, name, fill, opacity, box }
+
+    init(from decoder: Decoder) throws {
+        try requireKnownKeys(CodingKeys.self, in: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(ReusableStyleID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        fill = try values.decodeIfPresent(CanonicalSolidColor.self, forKey: .fill)
+        opacity = try values.decodeIfPresent(Double.self, forKey: .opacity)
+        if let fields = try values.decodeIfPresent([String: PropertyValue].self, forKey: .box) {
+            // An explicit empty box is not a canonical encoding.
+            guard !fields.isEmpty else {
+                throw DecodingError.dataCorruptedError(forKey: .box, in: values,
+                    debugDescription: "Omit an empty linked box appearance.")
+            }
+            do { box = try CanonicalReusableBoxAppearance.decode(fields) } catch {
+                throw DecodingError.dataCorruptedError(forKey: .box, in: values,
+                    debugDescription: "Invalid linked box appearance.")
+            }
+        } else {
+            box = .init()
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(name, forKey: .name)
+        try values.encodeIfPresent(fill, forKey: .fill)
+        try values.encodeIfPresent(opacity, forKey: .opacity)
+        if !box.isEmpty {
+            try values.encode(Dictionary(uniqueKeysWithValues: box.fieldValues.map { ($0.field, $0.value) }), forKey: .box)
+        }
     }
 }
 
@@ -279,6 +418,9 @@ struct ClipboardValidationContext: Equatable, Sendable {
     let activeContainerID: NodeID?
     let lifecycleAvailable: Bool
     let disabledReason: String?
+    /// OD-018: when set, `activeContainerID` is a component copy and the
+    /// pasted objects become top-level items of this slot of that copy.
+    var slotID: ComponentSlotPropertyID? = nil
 }
 
 struct PreparedClipboardTransfer: Sendable {
@@ -320,6 +462,8 @@ private struct ClipboardComponentImportPlan {
     let definitionNodeMap: [NodeID: NodeID]
     let importedDefinitions: [DocumentPage]
     let summary: ClipboardComponentTransferSummary?
+    /// OD-018: carried slot identities → destination slot identities.
+    var slotPropertyMap: [ComponentSlotPropertyID: ComponentSlotPropertyID] = [:]
 }
 
 enum ClipboardTransferError: Error, Equatable, LocalizedError, Sendable {
@@ -339,6 +483,9 @@ enum ClipboardTransferError: Error, Equatable, LocalizedError, Sendable {
     case unresolvedComponentOverride
     case unsupportedPageStructure
     case componentCycle
+    /// OD-034: the paste would place a component inside itself or past the
+    /// nesting limits of the definition being edited.
+    case componentNesting(ComponentGraphViolation)
     case clipboardUnavailable
 
     var errorDescription: String? {
@@ -355,10 +502,11 @@ enum ClipboardTransferError: Error, Equatable, LocalizedError, Sendable {
         case .invalidDependency: "A required local dependency is missing or corrupt. Reimport it and copy again."
         case .unsupportedComponentDependency: "This component contains a dependency that cannot be transferred safely. Remove the unsupported construct or detach the instance."
         case .unmappedActionDestination: "An action destination is outside this transfer. Copy its target section with the instance, or reset/change the destination before pasting into another project. No content was changed."
-        case .unsupportedSlotContent: "Supplied or nested slot content cannot be transferred in this version. Use definition content or detach supported content before copying. Nothing was changed."
+        case .unsupportedSlotContent: "The copied slot contents are incomplete or break the slot's rules. Copy them again from SiteForge. Nothing was changed."
         case .unresolvedComponentOverride: "An original component definition or retained override is unresolved. Inspect/restore the original definition or explicitly reset retained conflicts before transferring. Nothing was changed."
         case .unsupportedPageStructure: "Connected page structure and navigation cannot be transferred as isolated objects in this version. Duplicate the complete page or recreate the structure at the destination. Nothing was changed."
         case .componentCycle: "The component dependency graph contains a cycle. Repair the component definitions before copying."
+        case .componentNesting(let violation): (violation.errorDescription ?? "") + " Nothing was pasted."
         case .clipboardUnavailable: "The macOS clipboard could not accept or provide SiteForge objects. Try Copy again."
         }
     }
@@ -381,6 +529,7 @@ enum ClipboardTransferError: Error, Equatable, LocalizedError, Sendable {
         case .unresolvedComponentOverride: "component-override-conflict"
         case .unsupportedPageStructure: "unsupported-page-structure"
         case .componentCycle: "component-cycle"
+        case .componentNesting(let violation): violation.category
         case .clipboardUnavailable: "clipboard-unavailable"
         }
     }
@@ -410,6 +559,33 @@ struct ClipboardTransferRegistry {
     static let requirementIDs: Set<String> = [
         "SF-0308-001", "SF-0308-002", "SF-0308-003", "SF-0308-004",
         "SF-0308-005", "SF-0308-006", "SF-0308-007", "SF-0308-008",
+    ]
+
+    /// The pasted objects that arrive in world positions: the roots and their
+    /// descendants, but not a pasted copy's own slot contents, which stay
+    /// slot-local to that copy (OD-018).
+    static func worldPositionedNodeIDs(_ nodes: [DocumentNode], roots: Set<NodeID>) -> Set<NodeID> {
+        let byID = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // Prepared paste nodes intentionally have empty childIDs until their
+        // insertion commands run. Parent references already describe the tree.
+        let children = Dictionary(grouping: nodes.compactMap { node -> (NodeID, NodeID)? in
+            guard case .node(let parent) = node.parent else { return nil }
+            return (parent, node.id)
+        }, by: { $0.0 })
+        var result = Set<NodeID>()
+        var pending = Array(roots)
+        while let id = pending.popLast() {
+            guard let node = byID[id], result.insert(id).inserted else { continue }
+            if node.kind != .component { pending += children[id, default: []].map { $0.1 } }
+        }
+        return result
+    }
+
+    /// Definition-owned metadata, never instance values (OD-034 copy rule).
+    static let definitionOwnedPrefixes = [
+        CanonicalComponentText.namespace, CanonicalComponentVisibility.namespace, CanonicalComponentChoice.namespace,
+        CanonicalComponentMedia.namespace, CanonicalComponentAction.namespace, CanonicalComponentSlot.namespace,
+        CanonicalComponentOrganization.namespace, CanonicalComponentVariants.namespace,
     ]
 
     func prepareCopy(
@@ -446,6 +622,43 @@ struct ClipboardTransferRegistry {
             pending.append(contentsOf: node.childIDs.reversed())
         }
         guard ordered.count <= SiteForgeClipboardEnvelope.maximumNodes else { throw ClipboardTransferError.oversized }
+        // OD-018: content copied from a copy's slot is carried in world
+        // coordinates (as the canvas shows it) without slot membership, so it
+        // pastes anywhere; pasting into slot contents converts it back.
+        // A copy that comes along with its owning instance keeps its slot
+        // storage (the instance travels too).
+        let slotOffsets = CanonicalSlotGeometry.offsetsByBreakpoint(in: page, document: document)
+        if !slotOffsets.isEmpty {
+            let zero = WorldVector(dx: 0, dy: 0)
+            let copied = Set(ordered.map(\.id))
+            func ownerIsCopied(_ node: DocumentNode) -> Bool {
+                var parent = node.parent
+                while case .node(let id) = parent, let ancestor = byID[id] {
+                    if ancestor.kind == .component { return copied.contains(id) }
+                    parent = ancestor.parent
+                }
+                return false
+            }
+            ordered = ordered.map { node in
+                guard slotOffsets[.desktop]?[node.id] != nil, !ownerIsCopied(node) else { return node }
+                var copy = CanonicalSlotGeometry.shifted(node, sign: 1) { slotOffsets[$0]?[node.id] ?? zero }
+                copy.properties.removeAll { $0.key.rawValue == CanonicalComponentSlot.supplyKey }
+                return copy
+            }
+        }
+        if page.role == .componentDefinition {
+            // OD-034: a copy taken inside a definition is ordinary content.
+            // The definition keeps its exposed properties, slots, organization
+            // and notes; the copy carries their current values only.
+            ordered = ordered.map { node in
+                var copy = node
+                copy.properties.removeAll { property in
+                    Self.definitionOwnedPrefixes.contains { property.key.rawValue.hasPrefix($0) }
+                        || CanonicalComponentUsageNotes.owns(property)
+                }
+                return copy
+            }
+        }
         guard !ordered.contains(where: CanonicalPageFlow.isManaged) else { throw ClipboardTransferError.unsupportedPageStructure }
         for instance in ordered where instance.kind == .component {
             guard try !CanonicalComponentOverrides.requiresRecovery(instance: instance, document: document) else {
@@ -461,9 +674,6 @@ struct ClipboardTransferRegistry {
             guard visitedDefinitions.insert(definitionID).inserted else { continue }
             guard let definition = definitionsByID[definitionID] else {
                 throw ClipboardTransferError.invalidDependency
-            }
-            guard !definition.nodes.contains(where: { $0.kind == .component }) else {
-                throw ClipboardTransferError.unsupportedComponentDependency
             }
             componentDefinitions.append(definition)
             pendingDefinitions.append(contentsOf: definition.nodes.compactMap(CanonicalComponentReference.definitionID).reversed())
@@ -489,7 +699,7 @@ struct ClipboardTransferRegistry {
         let styleIDs = Set(try dependencyNodes.flatMap(CanonicalReusableStyleIndex.strictlyDecodedAppliedIDs))
         let styles = try styleIDs.sorted { $0.description < $1.description }.map { id -> ClipboardReusableStyleDependency in
             guard let style = styleIndex.byID[id] else { throw ClipboardTransferError.invalidDependency }
-            return .init(id: style.id, name: style.name, fill: style.fill, opacity: style.opacity)
+            return .init(id: style.id, name: style.name, fill: style.fill, opacity: style.opacity, box: style.box)
         }
         let rootSet = Set(roots)
         let transferableNodes = ordered.map { node -> DocumentNode in
@@ -574,13 +784,32 @@ struct ClipboardTransferRegistry {
         let insertionIndex: Int
         guard let containerID = context.activeContainerID,
               let container = page.nodes.first(where: { $0.id == containerID }),
-              container.kind.acceptsAuthoredChildren,
+              container.kind.acceptsAuthoredChildren || (context.slotID != nil && container.kind == .component),
               !container.selectionBooleanProperty("locked"),
               !container.selectionBooleanProperty("hidden") else {
             throw ClipboardTransferError.invalidTarget
         }
         destination = .node(containerID)
-        insertionIndex = container.childIDs.count
+        // OD-018: a slot target appends after the slot's last top-level item.
+        var slotTarget: (slot: ExposedComponentSlotProperty, existing: [DocumentNode], marker: NodeProperty?)?
+        if let slotID = context.slotID {
+            guard container.kind == .component,
+                  let definitionID = CanonicalComponentReference.definitionID(for: container),
+                  let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+                  let slot = CanonicalComponentSlot.properties(in: definition).first(where: { $0.id == slotID }) else {
+                throw ClipboardTransferError.invalidTarget
+            }
+            let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            guard CanonicalComponentSlot.state(of: slotID, on: container, nodesByID: byID) != .inherited else {
+                throw ClipboardTransferError.unavailable("This copy uses the slot's default contents. Choose Customize or Make Empty first. Nothing was pasted.")
+            }
+            let existing = CanonicalComponentSlot.suppliedRoots(of: container, nodesByID: byID)[slotID] ?? []
+            slotTarget = (slot, existing, CanonicalComponentSlot.markers(on: container)[slotID])
+            insertionIndex = container.childIDs.lastIndex { id in existing.contains { $0.id == id } }.map { $0 + 1 }
+                ?? container.childIDs.count
+        } else {
+            insertionIndex = container.childIDs.count
+        }
 
         var assetMap: [AssetID: AssetID] = [:]
         var resourceDependencies: [ClipboardImageDependency] = []
@@ -615,7 +844,7 @@ struct ClipboardTransferRegistry {
         var tokenMap: [ColorTokenID: ColorTokenID] = [:]
         var resultingTokens = document.colorTokens
         for token in envelope.colorTokenDependencies {
-            if let existing = resultingTokens.first(where: { $0.name == token.name && $0.color == token.color }) {
+            if let existing = resultingTokens.first(where: { $0.name == token.name && $0.color == token.color && $0.darkColor == token.darkColor }) {
                 tokenMap[token.id] = existing.id
             } else {
                 let newID = ColorTokenID()
@@ -626,7 +855,7 @@ struct ClipboardTransferRegistry {
                     name = String(base.prefix(112)) + " Copy \(suffix)"; suffix += 1
                 }
                 tokenMap[token.id] = newID
-                resultingTokens.append(.init(id: newID, name: name, color: token.color))
+                resultingTokens.append(.init(id: newID, name: name, color: token.color, darkColor: token.darkColor))
             }
         }
 
@@ -637,7 +866,7 @@ struct ClipboardTransferRegistry {
         for style in envelope.reusableStyleDependencies {
             guard style.isValid else { throw ClipboardTransferError.invalidDependency }
             if let existing = destinationStyleIndex.orderedDefinitions.first(where: {
-                $0.name == style.name && $0.fill == style.fill && $0.opacity == style.opacity
+                $0.name == style.name && $0.fill == style.fill && $0.opacity == style.opacity && $0.box == style.box
             }) {
                 styleMap[style.id] = existing.id
             } else {
@@ -648,7 +877,7 @@ struct ClipboardTransferRegistry {
                 }
                 reservedStyleNames.insert(name.lowercased())
                 styleMap[style.id] = id
-                importedStyles.append(.init(id: id, name: name, fill: style.fill, opacity: style.opacity))
+                importedStyles.append(.init(id: id, name: name, fill: style.fill, opacity: style.opacity, box: style.box))
             }
         }
 
@@ -665,19 +894,22 @@ struct ClipboardTransferRegistry {
         let sourceIDByNodeID = Dictionary(uniqueKeysWithValues: nodeMap.map { ($0.value, $0.key) })
         let propertyMap = Dictionary(uniqueKeysWithValues: envelope.nodes.flatMap(\.properties).map { ($0.id, PropertyID()) })
         let rootSet = Set(envelope.roots)
-        let translated = try envelope.nodes.map { source -> DocumentNode in
+        var translated = try envelope.nodes.map { source -> DocumentNode in
             guard let nodeID = nodeMap[source.id] else { throw ClipboardTransferError.invalidEnvelope }
             let parent: NodeParent
             if rootSet.contains(source.id) { parent = destination }
             else if case .node(let oldParent) = source.parent, let newParent = nodeMap[oldParent] { parent = .node(newParent) }
             else { throw ClipboardTransferError.invalidEnvelope }
-            let properties = try source.properties.map { property in
+            // OD-045 / SF-0803: playback whose file this project lacks is dropped.
+            let properties = try CanonicalMediaPlayback.keepingAvailable(source.properties,
+                mediaIDs: Set(document.mediaAssets.map(\.id))).map { property in
                 guard let propertyID = propertyMap[property.id] else {
                     throw ClipboardTransferError.invalidEnvelope
                 }
                 var value = property.value
                 let key = property.key.rawValue
-                if [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].contains(key),
+                if [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].contains(key)
+                    || SiteTranslationKey(rawValue: key)?.field == .imageAssetID,
                    case .string(let raw) = value, let old = AssetID(uuidString: raw), let mapped = assetMap[old] {
                     value = .string(mapped.description)
                 } else if key.hasPrefix(LocalColorTokenBinding.prefix), case .string(let raw) = value,
@@ -693,6 +925,15 @@ struct ClipboardTransferRegistry {
                     value = .string(remapped.joined(separator: ","))
                 } else if key == CanonicalComponentReference.key, case .string(let raw) = value,
                           let old = PageID(uuidString: raw), let mapped = componentPlan.definitionMap[old] {
+                    value = .string(mapped.description)
+                } else if let old = CanonicalComponentSlot.overrideID(key) {
+                    // OD-018: slot state and membership follow the destination slot.
+                    guard let mapped = componentPlan.slotPropertyMap[old] else { throw ClipboardTransferError.invalidDependency }
+                    return NodeProperty(id: propertyID, key: .init(rawValue: CanonicalComponentSlot.overrideKey(mapped)),
+                                        value: value, origin: property.origin)
+                } else if key == CanonicalComponentSlot.supplyKey, case .string(let raw) = value,
+                          let old = ComponentSlotPropertyID(uuidString: raw) {
+                    guard let mapped = componentPlan.slotPropertyMap[old] else { throw ClipboardTransferError.invalidDependency }
                     value = .string(mapped.description)
                 } else if let old = CanonicalComponentText.overrideID(key) {
                     guard let mapped = componentPlan.textPropertyMap[old] else {
@@ -749,6 +990,8 @@ struct ClipboardTransferRegistry {
                 } else if key.hasPrefix(CanonicalFluidValueCodec.namespace + "."), case .string(let encoded) = value,
                           let target = FluidValueTarget(rawValue: String(key.dropFirst(CanonicalFluidValueCodec.namespace.count + 1))) {
                     value = .string(try CanonicalFluidValueCodec.remappingStableID(in: encoded, target: target))
+                } else if key == CanonicalEventGraph.interactionsKey {
+                    value = CanonicalEventGraph.remappingTargets(value, nodeMap: nodeMap, pageMap: pageReferenceMap)
                 }
                 if rootSet.contains(source.id), placement == .offset,
                    [GeometryInspectorField.x.propertyKey, GeometryInspectorField.y.propertyKey].contains(key),
@@ -762,12 +1005,65 @@ struct ClipboardTransferRegistry {
                 // InsertNodeCommand establishes ownership as each child enters
                 // the batch. Starting empty avoids predeclaring the same child
                 // identity twice while preserving source sibling indices.
-                childIDs: [], properties: properties
+                // OD-038 (ADR-0087): no translation keyed to this project's default language.
+                childIDs: [], properties: SiteTranslationEditing.pastableProperties(properties, into: document.localization)
             )
         }
 
+        if let target = slotTarget {
+            // OD-018: pasted roots become this slot's top-level items, stored
+            // slot-local, within the slot's rules; the slot is marked supplied.
+            let rootIDs = Set(envelope.roots.compactMap { nodeMap[$0] })
+            let worldNodeIDs = Self.worldPositionedNodeIDs(translated, roots: rootIDs)
+            let origins = Dictionary(uniqueKeysWithValues: ResponsiveBreakpoint.allCases.map { breakpoint in
+                (breakpoint, CanonicalSlotGeometry.slotOffset(instance: container, slot: target.slot.id, page: page,
+                                                              document: document, breakpoint: breakpoint))
+            })
+            let zero = WorldVector(dx: 0, dy: 0)
+            translated = translated.map { node in
+                // Every pasted object outside a pasted copy's own slot
+                // contents arrives in world positions and becomes slot-local;
+                // a pasted copy's own contents are already slot-local.
+                guard worldNodeIDs.contains(node.id) else { return node }
+                var item = CanonicalSlotGeometry.shifted(node, sign: -1) { origins[$0] ?? zero }
+                guard rootIDs.contains(node.id) else { return item }
+                item.properties.removeAll { $0.key.rawValue == CanonicalComponentSlot.supplyKey }
+                item.properties.append(.init(key: .init(rawValue: CanonicalComponentSlot.supplyKey),
+                                             value: .string(target.slot.id.description), origin: .authored))
+                return item
+            }
+            let roots = target.existing + translated.filter { rootIDs.contains($0.id) }
+            if let violation = target.slot.rules.violation(for: roots) {
+                throw ClipboardTransferError.unavailable("This slot does not accept that: \(violation.summary). Nothing was pasted.")
+            }
+        } else if CanonicalComponentSlot.suppliedNodeIDs(in: page).contains(containerID) {
+            // OD-018: pasting into a copy's slot contents stores slot-local
+            // geometry, so the content appears where it was placed.
+            let offsets = CanonicalSlotGeometry.offsetsByBreakpoint(in: page, document: document)
+            let zero = WorldVector(dx: 0, dy: 0)
+            let worldNodeIDs = Self.worldPositionedNodeIDs(
+                translated, roots: Set(envelope.roots.compactMap { nodeMap[$0] }))
+            translated = translated.map { node in
+                guard worldNodeIDs.contains(node.id) else { return node }
+                return CanonicalSlotGeometry.shifted(node, sign: -1) { offsets[$0]?[containerID] ?? zero }
+            }
+        }
+        if page.role == .componentDefinition {
+            // OD-034: pasting into the definition being edited must not make
+            // it contain itself or exceed the nesting limits; name the chain.
+            let pasted = translated.compactMap(CanonicalComponentReference.definitionID)
+            if let violation = CanonicalComponentGraph.violation(adding: pasted, into: page.id,
+                definitions: document.componentDefinitions + componentPlan.importedDefinitions) {
+                throw ClipboardTransferError.componentNesting(violation)
+            }
+        }
         var commands: [DocumentCommand] = []
         if resultingTokens != document.colorTokens { commands.append(.setColorTokens(.init(tokens: resultingTokens))) }
+        if let target = slotTarget {
+            commands.append(.setProperty(.init(pageID: page.id, nodeID: containerID, property: .init(
+                id: target.marker?.id ?? PropertyID(), key: .init(rawValue: CanonicalComponentSlot.overrideKey(target.slot.id)),
+                value: .string(CanonicalComponentSlot.suppliedValue), origin: .authored))))
+        }
         commands.append(contentsOf: assetCommands)
         commands.append(contentsOf: componentPlan.importedDefinitions.enumerated().map { offset, definition in
             .insertPage(.init(page: Self.installing(styles: importedStyles, into: definition,
@@ -823,9 +1119,22 @@ struct ClipboardTransferRegistry {
               }) else {
             throw ClipboardTransferError.stale
         }
-        return .batch(envelope.nodes.reversed().map {
+        var commands: [DocumentCommand] = envelope.nodes.reversed().map {
             .removeNode(.init(pageID: identity.pageID, nodeID: $0.id))
-        })
+        }
+        // OD-018: cutting every top-level item of a copy's slot leaves the
+        // slot authored empty (never "supplied" with nothing).
+        let removed = Set(envelope.nodes.map(\.id))
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        for owner in page.nodes where owner.kind == .component && !removed.contains(owner.id) {
+            for (slot, roots) in CanonicalComponentSlot.suppliedRoots(of: owner, nodesByID: byID)
+                where roots.allSatisfy({ removed.contains($0.id) }) {
+                guard let marker = CanonicalComponentSlot.markers(on: owner)[slot] else { continue }
+                commands.append(.setProperty(.init(pageID: page.id, nodeID: owner.id, property: .init(
+                    id: marker.id, key: marker.key, value: .string(CanonicalComponentSlot.emptyValue), origin: .authored))))
+            }
+        }
+        return .batch(commands)
     }
 
     private static func transferredActionTarget(_ target: CanonicalLinkTarget, isCrossProject: Bool,
@@ -893,27 +1202,29 @@ struct ClipboardTransferRegistry {
                 CanonicalComponentMedia.properties(in: definition).forEach { media[$0.id] = $0.id }
                 CanonicalComponentAction.properties(in: definition).forEach { action[$0.id] = $0.id }
             }
+            let slots = Dictionary(envelope.componentDefinitions.flatMap(CanonicalComponentSlot.properties).map { ($0.id, $0.id) },
+                                   uniquingKeysWith: { first, _ in first })
             return .init(definitionMap: Dictionary(uniqueKeysWithValues: envelope.componentDefinitions.map { ($0.id, $0.id) }),
                          definitionNameMap: Dictionary(uniqueKeysWithValues: envelope.componentDefinitions.map { ($0.id, $0.name) }),
                          textPropertyMap: text, visibilityPropertyMap: visibility, choicePropertyMap: choice, mediaPropertyMap: media, actionPropertyMap: action,
                          definitionNodeMap: Dictionary(uniqueKeysWithValues: envelope.componentDefinitions.flatMap(\.nodes).map { ($0.id, $0.id) }),
-                         importedDefinitions: [], summary: nil)
+                         importedDefinitions: [], summary: nil, slotPropertyMap: slots)
         }
 
         let sourceAssets = Dictionary(uniqueKeysWithValues: envelope.imageDependencies.map { ($0.asset.id, $0.asset.contentHash) })
         let destinationAssets = Dictionary(uniqueKeysWithValues: document.imageAssets.map { ($0.id, $0.contentHash) })
         let sourceTokens = Dictionary(uniqueKeysWithValues: envelope.colorTokenDependencies.map {
-            ($0.id, "\($0.name)|\($0.color.hexadecimalRGBA)")
+            ($0.id, "\($0.name)|\($0.color.hexadecimalRGBA)|\($0.darkColor?.hexadecimalRGBA ?? "no-dark-variant")")
         })
         let destinationTokens = Dictionary(uniqueKeysWithValues: document.colorTokens.map {
-            ($0.id, "\($0.name)|\($0.color.hexadecimalRGBA)")
+            ($0.id, "\($0.name)|\($0.color.hexadecimalRGBA)|\($0.darkColor?.hexadecimalRGBA ?? "no-dark-variant")")
         })
         let sourceStyles = Dictionary(uniqueKeysWithValues: envelope.reusableStyleDependencies.map {
-            ($0.id, styleSemantic(name: $0.name, fill: $0.fill, opacity: $0.opacity))
+            ($0.id, styleSemantic(name: $0.name, fill: $0.fill, opacity: $0.opacity, box: $0.box))
         })
         let destinationStyleIndex = try CanonicalReusableStyleIndex(document: document)
         let destinationStyles = Dictionary(uniqueKeysWithValues: destinationStyleIndex.orderedDefinitions.map {
-            ($0.id, styleSemantic(name: $0.name, fill: $0.fill, opacity: $0.opacity))
+            ($0.id, styleSemantic(name: $0.name, fill: $0.fill, opacity: $0.opacity, box: $0.box))
         })
         var destinationFingerprints: [String: [DocumentPage]] = [:]
         for definition in document.componentDefinitions {
@@ -930,12 +1241,29 @@ struct ClipboardTransferRegistry {
         var mediaMap: [ComponentMediaPropertyID: ComponentMediaPropertyID] = [:]
         var actionMap: [ComponentActionPropertyID: ComponentActionPropertyID] = [:]
         var definitionNodes: [NodeID: NodeID] = [:]
+        var slotMap: [ComponentSlotPropertyID: ComponentSlotPropertyID] = [:]
         var imported: [DocumentPage] = []
         var importedByFingerprint: [String: DocumentPage] = [:]
         var entries: [ClipboardComponentTransferSummary.Entry] = []
         var reservedNames = Set(document.componentDefinitions.map { $0.name.lowercased() })
 
-        for source in envelope.componentDefinitions {
+        // OD-034: import inner definitions before the definitions that contain
+        // them, so each inner link and its authored values map to the
+        // destination definition. A destination stored inside an inner
+        // instance's action value cannot be translated between projects yet.
+        let importGraph = CanonicalComponentGraph(definitions: envelope.componentDefinitions)
+        let importOrder = importGraph.dependenciesFirst()
+        let sourcesByID = Dictionary(uniqueKeysWithValues: envelope.componentDefinitions.map { ($0.id, $0) })
+        guard !envelope.componentDefinitions.flatMap(\.nodes).contains(where: { node in
+            node.kind == .component && node.properties.contains { CanonicalComponentAction.overrideID($0.key.rawValue) != nil }
+        }) else { throw ClipboardTransferError.unsupportedComponentDependency }
+        for source in importOrder.compactMap({ sourcesByID[$0] }) {
+            var nestedKeys: [String: String] = [:]
+            textMap.forEach { nestedKeys[CanonicalComponentText.overrideKey($0.key)] = CanonicalComponentText.overrideKey($0.value) }
+            visibilityMap.forEach { nestedKeys[CanonicalComponentVisibility.overrideKey($0.key)] = CanonicalComponentVisibility.overrideKey($0.value) }
+            choiceMap.forEach { nestedKeys[CanonicalComponentChoice.overrideKey($0.key)] = CanonicalComponentChoice.overrideKey($0.value) }
+            mediaMap.forEach { nestedKeys[CanonicalComponentMedia.overrideKey($0.key)] = CanonicalComponentMedia.overrideKey($0.value) }
+            slotMap.forEach { nestedKeys[CanonicalComponentSlot.overrideKey($0.key)] = CanonicalComponentSlot.overrideKey($0.value) }
             for node in source.nodes where node.kind.isLinkControl {
                 let target = try CanonicalLinkTarget.resolve(node)
                 _ = try transferredActionTarget(target, isCrossProject: true,
@@ -944,13 +1272,15 @@ struct ClipboardTransferRegistry {
                     sourcePageID: envelope.sourcePageID, destinationPageID: pageReferenceMap[envelope.sourcePageID] ?? envelope.sourcePageID)
             }
             let fingerprint = try definitionFingerprint(source, assets: sourceAssets, tokens: sourceTokens, styles: sourceStyles,
-                pageReferenceMap: pageReferenceMap, nodeReferenceMap: nodeReferenceMap)
+                pageReferenceMap: pageReferenceMap, nodeReferenceMap: nodeReferenceMap,
+                definitionMap: definitionMap, overrideKeyMap: nestedKeys, slotMap: slotMap)
             if let destination = destinationFingerprints[fingerprint]?.sorted(by: { $0.id.description < $1.id.description }).first {
                 definitionMap[source.id] = destination.id
                 definitionNameMap[source.id] = destination.name
                 try mapEquivalentBindings(source: source, destination: destination,
                                           text: &textMap, visibility: &visibilityMap, choice: &choiceMap, media: &mediaMap,
                                           action: &actionMap, nodes: &definitionNodes)
+                try mapEquivalentSlots(source: source, destination: destination, slots: &slotMap)
                 entries.append(.init(sourceDefinitionID: source.id, destinationDefinitionID: destination.id,
                                      displayName: destination.name, resolution: .reused))
                 continue
@@ -961,38 +1291,46 @@ struct ClipboardTransferRegistry {
                 try mapEquivalentBindings(source: source, destination: destination,
                                           text: &textMap, visibility: &visibilityMap, choice: &choiceMap, media: &mediaMap,
                                           action: &actionMap, nodes: &definitionNodes)
+                try mapEquivalentSlots(source: source, destination: destination, slots: &slotMap)
                 entries.append(.init(sourceDefinitionID: source.id, destinationDefinitionID: destination.id,
                                      displayName: destination.name, resolution: .reused))
                 continue
             }
             let destinationID = PageID()
-            var name = source.name, suffix = 2
-            let renamed: Bool
-            if reservedNames.contains(name.lowercased()) {
-                repeat {
-                    name = String(source.name.prefix(112)) + " Copy \(suffix)"; suffix += 1
-                } while reservedNames.contains(name.lowercased())
-                renamed = true
-            } else { renamed = false }
+            let renamed = reservedNames.contains(source.name.lowercased())
+            let name = renamed
+                ? ComponentDefinitionGraphCopy.uniqueCopyName(source.name, reserved: reservedNames)
+                : source.name
             reservedNames.insert(name.lowercased())
-            let translated = try translatedDefinition(
-                source, destinationID: destinationID, name: name,
-                assetMap: assetMap, tokenMap: tokenMap, styleMap: styleMap,
-                textMap: &textMap, visibilityMap: &visibilityMap, choiceMap: &choiceMap, mediaMap: &mediaMap,
-                actionMap: &actionMap, definitionNodes: &definitionNodes,
-                pageReferenceMap: pageReferenceMap, nodeReferenceMap: nodeReferenceMap
-            )
+            let translated: DocumentPage
+            do {
+                translated = try ComponentDefinitionGraphCopy.remap(
+                    source, destinationID: destinationID, name: name,
+                    assetMap: assetMap, tokenMap: tokenMap, styleMap: styleMap,
+                    textMap: &textMap, visibilityMap: &visibilityMap, choiceMap: &choiceMap, mediaMap: &mediaMap,
+                    actionMap: &actionMap, slotMap: &slotMap, definitionNodes: &definitionNodes,
+                    pageReferenceMap: pageReferenceMap, nodeReferenceMap: nodeReferenceMap,
+                    definitionMap: definitionMap
+                )
+            } catch ComponentDefinitionGraphCopy.Failure.invalidGraph {
+                throw ClipboardTransferError.invalidEnvelope
+            } catch ComponentDefinitionGraphCopy.Failure.missingDependency {
+                throw ClipboardTransferError.invalidDependency
+            }
             definitionMap[source.id] = destinationID
             definitionNameMap[source.id] = name
-            imported.append(translated)
-            importedByFingerprint[fingerprint] = translated
+            // OD-038 (ADR-0087): like pasted elements, an imported definition keeps
+            // no translation keyed to this project's default language.
+            let pastable = SiteTranslationEditing.pastablePage(translated, into: document.localization)
+            imported.append(pastable)
+            importedByFingerprint[fingerprint] = pastable
             entries.append(.init(sourceDefinitionID: source.id, destinationDefinitionID: destinationID,
                                  displayName: name, resolution: renamed ? .renamed : .imported))
         }
         return .init(definitionMap: definitionMap, definitionNameMap: definitionNameMap, textPropertyMap: textMap,
                      visibilityPropertyMap: visibilityMap, choicePropertyMap: choiceMap, mediaPropertyMap: mediaMap,
                      actionPropertyMap: actionMap, definitionNodeMap: definitionNodes, importedDefinitions: imported,
-                     summary: .init(entries: entries))
+                     summary: .init(entries: entries), slotPropertyMap: slotMap)
     }
 
     private static func orderedNodes(_ definition: DocumentPage) throws -> [DocumentNode] {
@@ -1012,7 +1350,9 @@ struct ClipboardTransferRegistry {
         assets: [AssetID: String],
         tokens: [ColorTokenID: String],
         styles: [ReusableStyleID: String],
-        pageReferenceMap: [PageID: PageID] = [:], nodeReferenceMap: [NodeID: NodeID] = [:]
+        pageReferenceMap: [PageID: PageID] = [:], nodeReferenceMap: [NodeID: NodeID] = [:],
+        definitionMap: [PageID: PageID] = [:], overrideKeyMap: [String: String] = [:],
+        slotMap: [ComponentSlotPropertyID: ComponentSlotPropertyID] = [:]
     ) throws -> String {
         let nodes = try orderedNodes(definition)
         let nodeIndex = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($0.element.id, $0.offset) })
@@ -1023,11 +1363,21 @@ struct ClipboardTransferRegistry {
             case .node(let id): "node:\(nodeIndex[id] ?? -1)"
             }
             material.append("node|\(index)|\(node.kind.rawValue)|\(node.name)|\(parent)|\(node.childIDs.compactMap { nodeIndex[$0] }.map(String.init).joined(separator: ","))")
-            for property in node.properties.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
-                let key = property.key.rawValue
+            // OD-034: an inner instance's link and value keys are compared in
+            // destination terms, so a reused inner definition matches.
+            for property in node.properties.sorted(by: {
+                (overrideKeyMap[$0.key.rawValue] ?? $0.key.rawValue) < (overrideKeyMap[$1.key.rawValue] ?? $1.key.rawValue)
+            }) {
+                let key = overrideKeyMap[property.key.rawValue] ?? property.key.rawValue
                 if key.hasPrefix(CanonicalReusableStyleIndex.namespace + "definition.") { continue }
                 let value: String
-                if key == CanonicalComponentText.namespace + "id" { value = "text-binding:\(index)"
+                if key == CanonicalComponentReference.key, case .string(let raw) = property.value,
+                   let id = PageID(uuidString: raw), let mapped = definitionMap[id] {
+                    value = propertyValueMaterial(.string(mapped.description))
+                } else if key == CanonicalComponentSlot.supplyKey, case .string(let raw) = property.value,
+                          let id = ComponentSlotPropertyID(uuidString: raw), let mapped = slotMap[id] {
+                    value = propertyValueMaterial(.string(mapped.description))
+                } else if key == CanonicalComponentText.namespace + "id" { value = "text-binding:\(index)"
                 } else if key == CanonicalComponentVisibility.namespace + "id" { value = "visibility-binding:\(index)"
                 } else if key == CanonicalComponentChoice.namespace + "id" { value = "choice-binding:\(index)"
                 } else if key == CanonicalComponentMedia.namespace + "id" { value = "media-binding:\(index)"
@@ -1036,7 +1386,8 @@ struct ClipboardTransferRegistry {
                 } else if key.hasPrefix(CanonicalComponentOrganization.namespace), key.hasSuffix(".binding"),
                           case .string(let raw) = property.value, let identity = ComponentOverridePropertyIdentity.reference(raw) {
                     value = "organization-binding:\(index):\(identity.organizationKind)"
-                } else if [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].contains(key),
+                } else if [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].contains(key)
+                            || SiteTranslationKey(rawValue: key)?.field == .imageAssetID,
                           case .string(let raw) = property.value, let id = AssetID(uuidString: raw), let semantic = assets[id] {
                     value = "asset:\(semantic)"
                 } else if key.hasPrefix(LocalColorTokenBinding.prefix), case .string(let raw) = property.value,
@@ -1058,12 +1409,41 @@ struct ClipboardTransferRegistry {
                           let id = PageID(uuidString: raw), let mapped = pageReferenceMap[id] { value = "s:\(mapped.description.utf8.count):\(mapped.description)"
                 } else if key == CanonicalLinkTarget.namespace + "nodeID", case .string(let raw) = property.value,
                           let id = NodeID(uuidString: raw), let mapped = nodeReferenceMap[id] { value = "s:\(mapped.description.utf8.count):\(mapped.description)"
+                } else if key == CanonicalEventGraph.interactionsKey, case .string(let raw) = property.value,
+                          let interactions = try? CanonicalEventGraph.decode(raw) {
+                    // OD-039: every copy has its own interaction identities, so a
+                    // structurally equal definition from another project matches.
+                    value = interactionMaterial(interactions, definitionID: definition.id, nodeIndex: nodeIndex,
+                                                pageReferenceMap: pageReferenceMap, nodeReferenceMap: nodeReferenceMap)
                 } else { value = propertyValueMaterial(property.value) }
                 material.append("property|\(index)|\(key)|\(property.origin.rawValue)|\(value)")
             }
         }
         return SHA256.hash(data: Data(material.joined(separator: "\u{0}").utf8))
             .map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Interactions in fingerprint terms: no identities, and targets inside the
+    /// definition by position (like link targets), so equal graphs compare equal.
+    private static func interactionMaterial(_ interactions: [CanonicalInteraction], definitionID: PageID,
+                                            nodeIndex: [NodeID: Int], pageReferenceMap: [PageID: PageID],
+                                            nodeReferenceMap: [NodeID: NodeID]) -> String {
+        var parts: [String] = []
+        for interaction in interactions {
+            var actions: [String] = []
+            for action in interaction.actions {
+                var target = "-", page = "-", value = "-"
+                if let id = action.target {
+                    if let position = nodeIndex[id] { target = "node:\(position)" } else { target = (nodeReferenceMap[id] ?? id).description }
+                }
+                if let id = action.page { page = id == definitionID ? "page:self" : (pageReferenceMap[id] ?? id).description }
+                if let stored = action.value { value = CanonicalPageState.encode(stored) ?? "-" }
+                let variable = action.variable?.uuidString.lowercased() ?? "-"
+                actions.append("\(action.kind.rawValue)|\(target)|\(page)|\(variable)|\(value)")
+            }
+            parts.append(interaction.trigger.rawValue + "[" + actions.joined(separator: ";") + "]")
+        }
+        return "interactions:" + parts.joined(separator: ",")
     }
 
     private static func propertyValueMaterial(_ value: PropertyValue) -> String {
@@ -1074,8 +1454,20 @@ struct ClipboardTransferRegistry {
         }
     }
 
-    private static func styleSemantic(name: String, fill: CanonicalSolidColor?, opacity: Double?) -> String {
-        "\(name)|\(fill?.hexadecimalRGBA ?? "-")|\(opacity.map { String(format: "%.17g", locale: Locale(identifier: "en_US_POSIX"), $0) } ?? "-")"
+    private static func styleSemantic(name: String, fill: CanonicalSolidColor?, opacity: Double?,
+                                      box: CanonicalReusableBoxAppearance) -> String {
+        "\(name)|\(fill?.hexadecimalRGBA ?? "-")|\(opacity.map { String(format: "%.17g", locale: Locale(identifier: "en_US_POSIX"), $0) } ?? "-")|\(box.semanticFingerprint)"
+    }
+
+    /// OD-018: slot identities of a reused (structurally equal) definition.
+    private static func mapEquivalentSlots(source: DocumentPage, destination: DocumentPage,
+                                           slots: inout [ComponentSlotPropertyID: ComponentSlotPropertyID]) throws {
+        let sourceNodes = try orderedNodes(source), destinationNodes = try orderedNodes(destination)
+        guard sourceNodes.count == destinationNodes.count else { throw ClipboardTransferError.invalidDependency }
+        for (sourceNode, destinationNode) in zip(sourceNodes, destinationNodes) {
+            if let old = CanonicalComponentSlot.property(on: sourceNode)?.id,
+               let new = CanonicalComponentSlot.property(on: destinationNode)?.id { slots[old] = new }
+        }
     }
 
     private static func mapEquivalentBindings(
@@ -1105,130 +1497,6 @@ struct ClipboardTransferRegistry {
         }
     }
 
-    private static func translatedDefinition(
-        _ source: DocumentPage,
-        destinationID: PageID,
-        name: String,
-        assetMap: [AssetID: AssetID],
-        tokenMap: [ColorTokenID: ColorTokenID],
-        styleMap: [ReusableStyleID: ReusableStyleID],
-        textMap: inout [ComponentTextPropertyID: ComponentTextPropertyID],
-        visibilityMap: inout [ComponentVisibilityPropertyID: ComponentVisibilityPropertyID],
-        choiceMap: inout [ComponentChoicePropertyID: ComponentChoicePropertyID],
-        mediaMap: inout [ComponentMediaPropertyID: ComponentMediaPropertyID],
-        actionMap: inout [ComponentActionPropertyID: ComponentActionPropertyID],
-        definitionNodes: inout [NodeID: NodeID],
-        pageReferenceMap: [PageID: PageID], nodeReferenceMap: [NodeID: NodeID]
-    ) throws -> DocumentPage {
-        let nodeMap = Dictionary(uniqueKeysWithValues: source.nodes.map { ($0.id, NodeID()) })
-        definitionNodes.merge(nodeMap, uniquingKeysWith: { first, _ in first })
-        let slotMap = Dictionary(uniqueKeysWithValues: CanonicalComponentSlot.properties(in: source).map { ($0.id, ComponentSlotPropertyID()) })
-        let propertyMap = Dictionary(uniqueKeysWithValues: source.nodes.flatMap(\.properties).map { ($0.id, PropertyID()) })
-        for node in source.nodes {
-            if let old = CanonicalComponentText.property(on: node)?.id { textMap[old] = ComponentTextPropertyID() }
-            if let old = CanonicalComponentVisibility.property(on: node)?.id { visibilityMap[old] = ComponentVisibilityPropertyID() }
-            if let old = CanonicalComponentChoice.property(on: node)?.id { choiceMap[old] = ComponentChoicePropertyID() }
-            if let old = CanonicalComponentMedia.property(on: node)?.id { mediaMap[old] = ComponentMediaPropertyID() }
-            if let old = CanonicalComponentAction.property(on: node)?.id { actionMap[old] = ComponentActionPropertyID() }
-        }
-        let nodes = try source.nodes.map { node -> DocumentNode in
-            guard let id = nodeMap[node.id] else { throw ClipboardTransferError.invalidEnvelope }
-            let parent: NodeParent = switch node.parent {
-            case .page: .page(destinationID)
-            case .node(let old): nodeMap[old].map(NodeParent.node) ?? .page(destinationID)
-            }
-            let properties = try node.properties.compactMap { property -> NodeProperty? in
-                let key = property.key.rawValue
-                if key.hasPrefix(CanonicalReusableStyleIndex.namespace + "definition.") { return nil }
-                guard let propertyID = propertyMap[property.id] else { throw ClipboardTransferError.invalidEnvelope }
-                var outputKey = key, value = property.value
-                if CanonicalPageChrome.referenceKeys.contains(key), case .string(let raw) = value,
-                   let old = NodeID(uuidString: raw), let mapped = nodeMap[old] {
-                    value = .string(mapped.description)
-                }
-                if [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].contains(key),
-                   case .string(let raw) = value, let old = AssetID(uuidString: raw), let mapped = assetMap[old] {
-                    value = .string(mapped.description)
-                } else if key.hasPrefix(LocalColorTokenBinding.prefix), case .string(let raw) = value,
-                          let old = ColorTokenID(uuidString: raw), let mapped = tokenMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalReusableStyleIndex.appliedKey, case .string(let raw) = value {
-                    value = .string(try raw.split(separator: ",", omittingEmptySubsequences: false).map { part in
-                        guard let old = ReusableStyleID(uuidString: String(part)), let mapped = styleMap[old] else {
-                            throw ClipboardTransferError.invalidDependency
-                        }
-                        return mapped.description
-                    }.joined(separator: ","))
-                } else if key == CanonicalComponentText.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentTextPropertyID(uuidString: raw), let mapped = textMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentVisibility.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentVisibilityPropertyID(uuidString: raw), let mapped = visibilityMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentChoice.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentChoicePropertyID(uuidString: raw), let mapped = choiceMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentMedia.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentMediaPropertyID(uuidString: raw), let mapped = mediaMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentAction.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentActionPropertyID(uuidString: raw), let mapped = actionMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalComponentSlot.namespace + "id", case .string(let raw) = value,
-                          let old = ComponentSlotPropertyID(uuidString: raw), let mapped = slotMap[old] {
-                    value = .string(mapped.description)
-                } else if key.hasPrefix(CanonicalComponentOrganization.namespace), key.hasSuffix(".binding"),
-                          case .string(let raw) = value, let identity = ComponentOverridePropertyIdentity.reference(raw) {
-                    let mapped: ComponentOverridePropertyIdentity
-                    switch identity {
-                    case .text(let id): guard let id = textMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .text(id)
-                    case .visibility(let id): guard let id = visibilityMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .visibility(id)
-                    case .choice(let id): guard let id = choiceMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .choice(id)
-                    case .media(let id): guard let id = mediaMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .media(id)
-                    case .action(let id): guard let id = actionMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .action(id)
-                    case .slot(let id): guard let id = slotMap[id] else { throw ClipboardTransferError.invalidDependency }; mapped = .slot(id)
-                    }
-                    value = .string(mapped.stableDescription)
-                } else if key == CanonicalLinkTarget.namespace + "nodeID", case .string(let raw) = value,
-                          let old = NodeID(uuidString: raw), let mapped = nodeMap[old] {
-                    value = .string(mapped.description)
-                } else if key == CanonicalLinkTarget.namespace + "pageID", case .string(let raw) = value,
-                          PageID(uuidString: raw) == source.id { value = .string(destinationID.description)
-                } else if key == CanonicalLinkTarget.namespace + "pageID", case .string(let raw) = value,
-                          let old = PageID(uuidString: raw), let mapped = pageReferenceMap[old] { value = .string(mapped.description)
-                } else if key == CanonicalLinkTarget.namespace + "nodeID", case .string(let raw) = value,
-                          let old = NodeID(uuidString: raw), let mapped = nodeReferenceMap[old] { value = .string(mapped.description)
-                } else if key == CanonicalFormField.optionsKey, case .string(let encoded) = value {
-                    value = .string(try CanonicalFormSelectOptions.remappingStableIDs(in: encoded))
-                } else if key.hasPrefix(CanonicalFluidValueCodec.namespace + "."), case .string(let encoded) = value,
-                          let target = FluidValueTarget(rawValue: String(key.dropFirst(CanonicalFluidValueCodec.namespace.count + 1))) {
-                    value = .string(try CanonicalFluidValueCodec.remappingStableID(in: encoded, target: target))
-                } else if let old = CanonicalComponentText.overrideID(key) {
-                    guard let mapped = textMap[old] else { throw ClipboardTransferError.invalidDependency }
-                    outputKey = CanonicalComponentText.overrideKey(mapped)
-                } else if let old = CanonicalComponentVisibility.overrideID(key) {
-                    guard let mapped = visibilityMap[old] else { throw ClipboardTransferError.invalidDependency }
-                    outputKey = CanonicalComponentVisibility.overrideKey(mapped)
-                } else if let old = CanonicalComponentChoice.overrideID(key) {
-                    guard let mapped = choiceMap[old] else { throw ClipboardTransferError.invalidDependency }
-                    outputKey = CanonicalComponentChoice.overrideKey(mapped)
-                } else if let old = CanonicalComponentMedia.overrideID(key) {
-                    guard let mapped = mediaMap[old] else { throw ClipboardTransferError.invalidDependency }
-                    outputKey = CanonicalComponentMedia.overrideKey(mapped)
-                    if case .string(let raw) = value, let asset = AssetID(uuidString: raw), let remapped = assetMap[asset] {
-                        value = .string(remapped.description)
-                    }
-                }
-                return NodeProperty(id: propertyID, key: .init(rawValue: outputKey), value: value, origin: property.origin)
-            }
-            return DocumentNode(id: id, kind: node.kind, name: node.name, parent: parent,
-                                childIDs: node.childIDs.compactMap { nodeMap[$0] }, properties: properties)
-        }
-        return DocumentPage(id: destinationID, name: name, route: .init(rawValue: ""),
-                            role: .componentDefinition, provenance: .authored,
-                            rootNodeIDs: source.rootNodeIDs.compactMap { nodeMap[$0] }, nodes: nodes)
-    }
-
     private static func styleDefinitionProperties(_ styles: [ClipboardReusableStyleDependency]) -> [NodeProperty] {
         styles.flatMap { style -> [NodeProperty] in
             let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(style.id.description)."
@@ -1238,6 +1506,9 @@ struct ClipboardTransferRegistry {
             }
             if let opacity = style.opacity {
                 result.append(NodeProperty(key: .init(rawValue: prefix + "opacity"), value: .number(opacity), origin: .authored))
+            }
+            for entry in style.box.fieldValues {
+                result.append(NodeProperty(key: .init(rawValue: prefix + entry.field), value: entry.value, origin: .authored))
             }
             return result
         }

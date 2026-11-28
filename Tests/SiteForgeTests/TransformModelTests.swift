@@ -6,6 +6,1944 @@ import XCTest
 
 @MainActor
 final class TransformModelTests: XCTestCase {
+    // SF-0508-001/002/004/005/008, SF-1101-001/004/005: closed configuration,
+    // normal command history and strict backward-compatible envelope policy.
+    func testDecorativeEffectsTypedValidationHistoryAndHistoricalSchema() throws {
+        var fixture = try formattingFixture()
+        let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        fixture.document.pages[0].nodes[index].properties.removeAll { $0.key.rawValue.hasPrefix("style.fill.layers.") }
+        let gradient = CanonicalFillLayer.linearGradient(angleDegrees: 35, stops: [
+            .init(id: .init(), position: 0, color: .init(red: 1, green: 0, blue: 0, alpha: 1)),
+            .init(id: .init(), position: 1, color: .init(red: 0, green: 0, blue: 1, alpha: 0.4))])
+        fixture.document.pages[0].nodes[index].properties += CanonicalFillLayerCodec.propertyValues(for: [gradient]).map {
+            .init(key: .init(rawValue: $0.key), value: $0.value) }
+        try fixture.document.validate()
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, revision: UInt64? = nil) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: revision ?? document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: [fixture.frame], document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: [fixture.frame], availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        let before = session.document.pages
+        try session.execute(prepare(.flow(.defaults)).documentCommand)
+        let after = session.document.pages
+        XCTAssertEqual(try CanonicalFlowGradient.resolve(session.document.pages[0].nodes[index]), .defaults)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+        let propertyIDs = session.document.pages[0].nodes[index].properties.filter { $0.key.rawValue.hasPrefix(CanonicalFlowGradient.namespace) }.map(\.id)
+        var changed = CanonicalFlowGradient.defaults; changed.radius = 360
+        try session.execute(prepare(.flow(changed)).documentCommand)
+        XCTAssertEqual(session.document.pages[0].nodes[index].properties.filter { $0.key.rawValue.hasPrefix(CanonicalFlowGradient.namespace) }.map(\.id), propertyIDs)
+        XCTAssertThrowsError(try prepare(.flow(.defaults), revision: 0))
+        for invalid in [Double.nan, .infinity, -1, 1_201] {
+            var bad = changed; bad.radius = invalid
+            XCTAssertThrowsError(try prepare(.flow(bad)))
+        }
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        old["schemaVersion"] = 20
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: old)))
+        var unknown = session.document
+        unknown.pages[0].nodes[index].properties.append(.init(key: .init(rawValue: "style.flow.v2.radius"), value: .number(240)))
+        XCTAssertThrowsError(try unknown.validate())
+        var wrong = session.document.pages[0].nodes[index]; wrong.kind = .text
+        XCTAssertThrowsError(try CanonicalFlowGradient.resolve(wrong))
+        try session.execute(prepare(.flow(nil)).documentCommand)
+        XCTAssertNil(try CanonicalFlowGradient.resolve(session.document.pages[0].nodes[index]))
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(fixture.document)) as? [String: Any])
+        legacy["schemaVersion"] = 20
+        XCTAssertEqual(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacy)).pages, fixture.document.pages)
+    }
+
+    func testDecorativeEffectsOutputRetainsStaticFallbackAndReportsUnsupportedIntent() throws {
+        var fixture = try formattingFixture()
+        let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        fixture.document.pages[0].nodes[index].properties += CanonicalFlowGradient.defaults.properties.map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        // Multiple enabled layers are retained as authored, with an actionable
+        // build finding rather than silently exporting an unrelated effect.
+        let invalid = StaticBuildCompiler.compile(document: fixture.document, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        XCTAssertFalse(invalid.canWrite)
+        XCTAssertTrue(invalid.findings.contains { $0.code == "flow-configuration-unavailable" })
+        let gradient = try XCTUnwrap(DesignInspectorCommandRegistry.resolvedLayers(for: fixture.document.pages[0].nodes[index]).last)
+        fixture.document.pages[0].nodes[index].properties.removeAll { $0.key.rawValue.hasPrefix("style.fill.layers.") }
+        fixture.document.pages[0].nodes[index].properties += CanonicalFillLayerCodec.propertyValues(for: [gradient]).map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        let plan = try MultiPageStaticBuildPlanner.plan(document: fixture.document)
+        let html = try XCTUnwrap(plan.files.first { $0.path.hasSuffix(".html") }?.contents)
+        XCTAssertTrue(html.contains("data-siteforge-flow=")); XCTAssertTrue(html.contains("siteforge-effects.js"))
+        XCTAssertTrue(plan.files.contains { $0.path == "siteforge-effects.js" && $0.contents == DecorativeEffectRuntime.javascript })
+        XCTAssertTrue(plan.files.contains { $0.path == "styles.css" && $0.contents.contains("linear-gradient(") })
+        let config = try XCTUnwrap(DecorativeEffectOutput.configuration(fixture.document.pages[0].nodes[index]))
+        XCTAssertEqual(try JSONDecoder().decode(FlowOutputConfiguration.self, from: Data(config.json.utf8)), config)
+    }
+
+    // SF-1101-005 (OD-039): copies keep interactions pointed at the copied
+    // objects; targets outside the copy stay as they are; projections keep
+    // their identities so output is deterministic.
+    func testCopiedInteractionsFollowCopiedTargetsAndKeepOutsideTargets() throws {
+        let inside = NodeID(), outside = NodeID(), copy = NodeID()
+        let sourcePage = PageID(), destinationPage = PageID()
+        let original = CanonicalInteraction(id: UUID(), trigger: .click, actions: [
+            .init(kind: .show, target: inside), .init(kind: .hide, target: outside),
+            .init(kind: .navigate, page: sourcePage)])
+        let text = try XCTUnwrap(CanonicalEventGraph.encode([original]))
+        guard case .string(let copied) = CanonicalEventGraph.remappingTargets(.string(text), nodeMap: [inside: copy],
+                                                                             pageMap: [sourcePage: destinationPage]) else {
+            return XCTFail("Interactions stay text")
+        }
+        let decoded = try CanonicalEventGraph.decode(copied)
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertNotEqual(decoded[0].id, original.id, "A copy gets its own interaction identity")
+        XCTAssertEqual(decoded[0].trigger, .click)
+        XCTAssertEqual(decoded[0].actions.map(\.target), [copy, outside, nil], "Only copied targets follow the copy")
+        XCTAssertEqual(decoded[0].actions.last?.page, destinationPage)
+
+        guard case .string(let projected) = CanonicalEventGraph.remappingTargets(.string(text), nodeMap: [inside: copy],
+                                                                                freshIdentity: false) else {
+            return XCTFail("Interactions stay text")
+        }
+        XCTAssertEqual(try CanonicalEventGraph.decode(projected).first?.id, original.id)
+        XCTAssertEqual(CanonicalEventGraph.remappingTargets(.string(text), nodeMap: [inside: copy], freshIdentity: false),
+                       CanonicalEventGraph.remappingTargets(.string(text), nodeMap: [inside: copy], freshIdentity: false),
+                       "A projection is deterministic")
+        XCTAssertEqual(CanonicalEventGraph.remappingTargets(.number(3), nodeMap: [inside: copy]), .number(3))
+        XCTAssertEqual(CanonicalEventGraph.remappingTargets(.string("not interactions"), nodeMap: [inside: copy]),
+                       .string("not interactions"))
+    }
+
+    // SF-0508-001/004/005/008, SF-1204-003/004, SF-0305-001, SF-0306-001:
+    // glass is closed optional typed data with opaque light/dark fallbacks.
+    // Edits use the shared effect registry, skip unsupported kinds truthfully,
+    // retain property identity, undo once, and stay out of schema 20.
+    func testGlassSurfaceTypedValidationHistoryFallbackOutputAndHistoricalSchema() throws {
+        let fixture = try formattingFixture()
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, _ ids: [NodeID], revision: UInt64? = nil) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: revision ?? document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: ids, document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        func node(_ id: NodeID) throws -> DocumentNode { try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == id }) }
+        func glassPropertyIDs() throws -> [PropertyID] {
+            try node(fixture.frame).properties.filter { $0.key.rawValue.hasPrefix(CanonicalGlassSurface.namespace) }.map(\.id)
+        }
+        let white = CanonicalSolidColor(red: 1, green: 1, blue: 1, alpha: 1)
+        let black = CanonicalSolidColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let glass = CanonicalGlassSurface(blur: 18, fallback: white, darkFallback: black)
+        XCTAssertTrue(glass.isValid)
+
+        // A mixed selection edits the supported Frame and names the skipped Text.
+        let before = session.document.pages
+        let mixed = try prepare(.glass(glass), [fixture.text, fixture.frame])
+        XCTAssertEqual(mixed.applicableNodeIDs, [fixture.frame])
+        XCTAssertEqual(mixed.skippedNodeIDs, [fixture.text])
+        XCTAssertNotNil(mixed.skippedReasons[fixture.text])
+        try session.execute(mixed.documentCommand)
+        let after = session.document.pages
+        XCTAssertEqual(try CanonicalGlassSurface.resolve(node(fixture.frame)), glass)
+        XCTAssertNil(try CanonicalGlassSurface.resolve(node(fixture.text)))
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+
+        // One changed value keeps every authored property identity; an
+        // unchanged, stale, unsupported or invalid edit never mutates.
+        let identities = try glassPropertyIDs()
+        XCTAssertEqual(identities.count, glass.properties.count)
+        var softer = glass; softer.blur = 32
+        try session.execute(prepare(.glass(softer), [fixture.frame]).documentCommand)
+        XCTAssertEqual(try glassPropertyIDs(), identities)
+        let edited = session.document
+        XCTAssertThrowsError(try prepare(.glass(softer), [fixture.frame])) { XCTAssertEqual($0 as? DesignInspectorError, .noChanges) }
+        XCTAssertThrowsError(try prepare(.glass(glass), [fixture.frame], revision: 0)) { XCTAssertEqual($0 as? DesignInspectorError, .stale) }
+        XCTAssertThrowsError(try prepare(.glass(glass), [fixture.text]))
+        let invalid: [CanonicalGlassSurface] = [
+            .init(blur: .nan, fallback: white), .init(blur: -1, fallback: white), .init(blur: 61, fallback: white),
+            .init(blur: 12, fallback: .init(red: 1, green: 1, blue: 1, alpha: 0.5)),
+            .init(blur: 12, fallback: white, darkFallback: .init(red: 0, green: 0, blue: 0, alpha: 0.9)),
+            .init(blur: 12, fallback: .init(red: 1.2, green: 1, blue: 1, alpha: 1)),
+        ]
+        for value in invalid {
+            XCTAssertFalse(value.isValid)
+            XCTAssertThrowsError(try prepare(.glass(value), [fixture.frame])) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
+        }
+        XCTAssertEqual(session.document, edited)
+
+        // Closed namespace: unknown versions, partial fallbacks and unsupported
+        // kinds are rejected by canonical validation rather than ignored.
+        let frameIndex = try XCTUnwrap(edited.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        let textIndex = try XCTUnwrap(edited.pages[0].nodes.firstIndex { $0.id == fixture.text })
+        var unknown = edited
+        unknown.pages[0].nodes[frameIndex].properties.append(.init(key: .init(rawValue: "style.glass.v2.blur"), value: .number(8)))
+        XCTAssertThrowsError(try unknown.validate())
+        var partial = edited
+        partial.pages[0].nodes[frameIndex].properties.removeAll { $0.key.rawValue == CanonicalGlassSurface.namespace + "darkFallback.alpha" }
+        XCTAssertThrowsError(try partial.validate())
+        var onText = edited
+        onText.pages[0].nodes[textIndex].properties += glass.properties.map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        XCTAssertThrowsError(try onText.validate())
+        try edited.validate()
+
+        // Output blurs only where backdrop filters are supported and reduced
+        // transparency is not requested; otherwise opaque light/dark fallbacks.
+        let plan = try MultiPageStaticBuildPlanner.plan(document: edited)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        let selector = ".sf-node-" + fixture.frame.description
+        XCTAssertTrue(css.contains("\(selector) { backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px); }"), css)
+        XCTAssertTrue(css.contains("@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) { \(selector) { background:rgb(255 255 255)!important; } }"), css)
+        XCTAssertTrue(css.contains("@media (prefers-reduced-transparency:reduce) { \(selector) { background:rgb(255 255 255)!important;backdrop-filter:none;-webkit-backdrop-filter:none; } }"), css)
+        XCTAssertTrue(css.contains("\(selector) { background:rgb(0 0 0)!important; }"), css)
+        XCTAssertFalse(css.contains(".sf-node-" + fixture.text.description + " { backdrop-filter"), css)
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        XCTAssertTrue(html.contains("styles.css"), html)
+        XCTAssertFalse(plan.files.contains { $0.path == "siteforge-effects.js" })
+
+        // Persistence and the strict historical envelope.
+        let encoded = try DocumentSerializer.encode(edited)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), edited)
+        var historical = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        historical["schemaVersion"] = 20
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: historical)))
+
+        // Removal restores the ordinary appearance with no residual output.
+        try session.execute(prepare(.glass(nil), [fixture.frame]).documentCommand)
+        XCTAssertNil(try CanonicalGlassSurface.resolve(node(fixture.frame)))
+        XCTAssertFalse(try node(fixture.frame).properties.contains { $0.key.rawValue.hasPrefix("style.glass.") })
+        XCTAssertFalse(try MultiPageStaticBuildPlanner.plan(document: session.document).files.contains { $0.contents.contains("backdrop-filter") })
+    }
+
+    // OD-040, SF-1103-001/002/004/005, SF-1104-001/005: motion is closed typed
+    // data in `motion.v1.`. Edits use the shared effect registry, undo once,
+    // keep property identity, refuse invalid values without mutation, reject
+    // unknown or partial data, and stay out of schema 26 documents.
+    func testMotionTypedValidationHistoryPropertyIdentityAndSchemaGate() throws {
+        let fixture = try formattingFixture()
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, _ ids: [NodeID], revision: UInt64? = nil) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: revision ?? document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: ids, document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        func node(_ id: NodeID) throws -> DocumentNode { try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == id }) }
+        func motionPropertyIDs(_ id: NodeID) throws -> [PropertyID] {
+            try node(id).properties.filter { $0.key.rawValue.hasPrefix(CanonicalMotion.prefix) }.map(\.id)
+        }
+        let motion = CanonicalMotion(transition: CanonicalMotion.defaultTransition, entrance: CanonicalMotion.defaultEntrance)
+        XCTAssertTrue(motion.isValid)
+        XCTAssertEqual(motion.properties.count, 8)
+
+        // Text and Frame both support motion; one transaction, one undo entry.
+        let before = session.document.pages
+        let prepared = try prepare(.motion(motion), [fixture.text, fixture.frame])
+        XCTAssertEqual(prepared.applicableNodeIDs, [fixture.text, fixture.frame])
+        XCTAssertTrue(prepared.skippedNodeIDs.isEmpty)
+        try session.execute(prepared.documentCommand)
+        let after = session.document.pages
+        XCTAssertEqual(try CanonicalMotion.resolve(node(fixture.frame)), motion)
+        XCTAssertEqual(try CanonicalMotion.resolve(node(fixture.text)), motion)
+        XCTAssertNil(try CanonicalMotion.resolve(node(fixture.targetFrame)))
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+
+        // One changed value keeps every property identity; unchanged, stale
+        // and invalid edits never mutate the document.
+        let identities = try motionPropertyIDs(fixture.frame)
+        XCTAssertEqual(identities.count, 8)
+        var slower = motion; slower.entrance?.milliseconds = 900
+        try session.execute(prepare(.motion(slower), [fixture.frame]).documentCommand)
+        XCTAssertEqual(try motionPropertyIDs(fixture.frame), identities)
+        let edited = session.document
+        XCTAssertThrowsError(try prepare(.motion(slower), [fixture.frame])) { XCTAssertEqual($0 as? DesignInspectorError, .noChanges) }
+        XCTAssertThrowsError(try prepare(.motion(motion), [fixture.frame], revision: 0)) { XCTAssertEqual($0 as? DesignInspectorError, .stale) }
+        var invalid: [CanonicalMotion] = []
+        for value in [Double.nan, .infinity, 49, 2_001, 120.5] as [Double] { var bad = motion; bad.transition?.milliseconds = value; invalid.append(bad) }
+        for value in [-1, 401, 12.5] as [Double] { var bad = motion; bad.entrance?.distance = value; invalid.append(bad) }
+        for value in [-1, 51, 10.5] as [Double] { var bad = motion; bad.entrance?.offsetPercent = value; invalid.append(bad) }
+        for value in [99, 3_001] as [Double] { var bad = motion; bad.entrance?.milliseconds = value; invalid.append(bad) }
+        var late = motion; late.entrance?.delayMilliseconds = 3_001; invalid.append(late)
+        for value in invalid {
+            XCTAssertFalse(value.isValid)
+            XCTAssertThrowsError(try prepare(.motion(value), [fixture.frame])) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
+        }
+        XCTAssertEqual(session.document, edited)
+
+        // Closed namespace: unknown versions, partial groups, unknown values
+        // and unsupported kinds are rejected rather than ignored. A complete
+        // single group is valid on its own.
+        let frameIndex = try XCTUnwrap(edited.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        var unknown = edited
+        unknown.pages[0].nodes[frameIndex].properties.append(.init(key: .init(rawValue: "motion.v2.entrance.effect"), value: .string("fade")))
+        XCTAssertThrowsError(try unknown.validate())
+        var partial = edited
+        partial.pages[0].nodes[frameIndex].properties.removeAll { $0.key.rawValue == CanonicalMotion.entranceNamespace + "offset" }
+        XCTAssertThrowsError(try partial.validate())
+        var unknownEasing = edited
+        let easingIndex = try XCTUnwrap(unknownEasing.pages[0].nodes[frameIndex].properties.firstIndex {
+            $0.key.rawValue == CanonicalMotion.transitionNamespace + "easing" })
+        unknownEasing.pages[0].nodes[frameIndex].properties[easingIndex].value = .string("bounce")
+        XCTAssertThrowsError(try unknownEasing.validate())
+        var wrongType = edited
+        let durationIndex = try XCTUnwrap(wrongType.pages[0].nodes[frameIndex].properties.firstIndex {
+            $0.key.rawValue == CanonicalMotion.entranceNamespace + "duration" })
+        wrongType.pages[0].nodes[frameIndex].properties[durationIndex].value = .string("600")
+        XCTAssertThrowsError(try wrongType.validate())
+        var transitionOnly = edited
+        transitionOnly.pages[0].nodes[frameIndex].properties.removeAll { $0.key.rawValue.hasPrefix(CanonicalMotion.entranceNamespace) }
+        try transitionOnly.validate()
+        XCTAssertEqual(try CanonicalMotion.resolve(transitionOnly.pages[0].nodes[frameIndex]), CanonicalMotion(transition: CanonicalMotion.defaultTransition))
+        var wrongKind = try node(fixture.frame); wrongKind.kind = .component
+        XCTAssertThrowsError(try CanonicalMotion.resolve(wrongKind)) { XCTAssertEqual($0 as? ModelValidationError, .invalidMotionState) }
+        try edited.validate()
+
+        // Persistence and the strict historical envelope: schema 26 refuses
+        // motion but still reads the same document without it.
+        let encoded = try DocumentSerializer.encode(edited)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), edited)
+        var historical = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        historical["schemaVersion"] = 26
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: historical)))
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(fixture.document)) as? [String: Any])
+        legacy["schemaVersion"] = 26
+        XCTAssertEqual(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacy)).pages, fixture.document.pages)
+
+        // Removal (nil or an empty value) leaves no residual properties.
+        try session.execute(prepare(.motion(nil), [fixture.frame]).documentCommand)
+        XCTAssertNil(try CanonicalMotion.resolve(node(fixture.frame)))
+        XCTAssertNotNil(try CanonicalMotion.resolve(node(fixture.text)))
+        try session.execute(prepare(.motion(CanonicalMotion()), [fixture.text]).documentCommand)
+        XCTAssertFalse(try node(fixture.text).properties.contains { $0.key.rawValue.hasPrefix(CanonicalMotion.prefix) })
+        XCTAssertThrowsError(try prepare(.motion(nil), [fixture.frame])) { XCTAssertEqual($0 as? DesignInspectorError, .noChanges) }
+    }
+
+    // OD-039, SF-1101-001/002/003/004/005/006: the event graph is closed,
+    // canonical, ordered data on the trigger node. Edits undo once; invalid
+    // or forged graphs never enter the document; click needs a button or
+    // link; deleted targets keep their reference; schema 26 refuses it.
+    func testEventGraphTypedValidationHistoryClickPolicyAndSchemaGate() throws {
+        let fixture = try formattingFixture()
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, _ ids: [NodeID], revision: UInt64? = nil) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: revision ?? document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: ids, document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        func node(_ id: NodeID) throws -> DocumentNode { try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == id }) }
+        let reveal = CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [
+            CanonicalInteraction.Action(kind: .show, target: fixture.targetFrame),
+            CanonicalInteraction.Action(kind: .scrollTo, target: fixture.targetFrame)])
+        let leave = CanonicalInteraction(id: UUID(), trigger: .focusOut, actions: [CanonicalInteraction.Action(kind: .hide, target: fixture.targetFrame)])
+        let graph = CanonicalEventGraph(interactions: [reveal, leave])
+        XCTAssertTrue(graph.isValid)
+
+        let before = session.document.pages
+        try session.execute(prepare(.events(graph), [fixture.frame]).documentCommand)
+        let after = session.document.pages
+        XCTAssertEqual(try CanonicalEventGraph.resolve(node(fixture.frame)), graph)
+        XCTAssertEqual(try CanonicalEventGraph.resolve(node(fixture.frame))?.interactions.map(\.id), [reveal.id, leave.id])
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+        let edited = session.document
+
+        // Click is refused on Text (not keyboard-operable) with its reason.
+        let click = CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .click,
+            actions: [CanonicalInteraction.Action(kind: .toggle, target: fixture.frame)])])
+        XCTAssertTrue(click.isValid)
+        XCTAssertFalse(click.isAllowed(on: .text))
+        XCTAssertTrue(click.isAllowed(on: .button))
+        XCTAssertThrowsError(try prepare(.events(click), [fixture.text])) {
+            XCTAssertEqual($0 as? DesignInspectorError, .unavailable(CanonicalEventGraph.clickReason))
+        }
+        XCTAssertThrowsError(try prepare(.events(graph), [fixture.frame], revision: 0)) { XCTAssertEqual($0 as? DesignInspectorError, .stale) }
+        XCTAssertThrowsError(try prepare(.events(graph), [fixture.frame])) { XCTAssertEqual($0 as? DesignInspectorError, .noChanges) }
+        let many = (0..<9).map { _ in CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [CanonicalInteraction.Action(kind: .hide, target: fixture.frame)]) }
+        let invalid: [CanonicalEventGraph] = [
+            CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [])]),
+            CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [CanonicalInteraction.Action(kind: .show)])]),
+            CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn,
+                actions: [CanonicalInteraction.Action(kind: .navigate, target: fixture.frame)])]),
+            CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn,
+                actions: [CanonicalInteraction.Action(kind: .hide, target: fixture.frame, page: session.document.pages[0].id)])]),
+            CanonicalEventGraph(interactions: [reveal, reveal]),
+            CanonicalEventGraph(interactions: many),
+            CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn,
+                actions: Array(repeating: CanonicalInteraction.Action(kind: .hide, target: fixture.frame), count: 9))]),
+        ]
+        for value in invalid {
+            XCTAssertFalse(value.isValid)
+            XCTAssertThrowsError(try prepare(.events(value), [fixture.frame])) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
+        }
+        XCTAssertEqual(session.document, edited)
+
+        // Forged or non-canonical stored text, unknown keys, a false start
+        // flag and click on a Frame are rejected by canonical validation.
+        let frameIndex = try XCTUnwrap(edited.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        let propertyIndex = try XCTUnwrap(edited.pages[0].nodes[frameIndex].properties.firstIndex { $0.key.rawValue == CanonicalEventGraph.interactionsKey })
+        guard case .string(let text) = edited.pages[0].nodes[frameIndex].properties[propertyIndex].value else { return XCTFail("Interactions are stored as text") }
+        XCTAssertEqual(try CanonicalEventGraph.decode(text), graph.interactions)
+        for forged in [text.replacingOccurrences(of: "\"trigger\"", with: "\"script\":\"alert(1)\",\"trigger\""), " " + text, "[]", "{}", "not json",
+                       text.replacingOccurrences(of: "focus-out", with: "keydown")] {
+            var copy = edited
+            copy.pages[0].nodes[frameIndex].properties[propertyIndex].value = .string(forged)
+            XCTAssertThrowsError(try copy.validate(), forged)
+        }
+        var unknown = edited
+        unknown.pages[0].nodes[frameIndex].properties.append(.init(key: .init(rawValue: "event.v1.handler"), value: .string("run()")))
+        XCTAssertThrowsError(try unknown.validate())
+        var falseHidden = edited
+        falseHidden.pages[0].nodes[frameIndex].properties.append(.init(key: .init(rawValue: CanonicalEventGraph.startsHiddenKey), value: .boolean(false)))
+        XCTAssertThrowsError(try falseHidden.validate())
+        var clickOnFrame = edited
+        clickOnFrame.pages[0].nodes[frameIndex].properties[propertyIndex].value = .string(try XCTUnwrap(CanonicalEventGraph.encode(click.interactions)))
+        XCTAssertThrowsError(try clickOnFrame.validate()) { XCTAssertEqual($0 as? ModelValidationError, .invalidInteractionGraphState) }
+
+        // Deleting a target keeps the reference (diagnosed at build time).
+        var orphaned = edited
+        orphaned.pages[0].nodes.removeAll { $0.id == fixture.targetFrame }
+        orphaned.pages[0].nodes[0].childIDs.removeAll { $0 == fixture.targetFrame }
+        try orphaned.validate()
+        XCTAssertEqual(try CanonicalEventGraph.resolve(XCTUnwrap(orphaned.pages[0].nodes.first { $0.id == fixture.frame })), graph)
+
+        // Persistence and the schema 27 gate.
+        let encoded = try DocumentSerializer.encode(edited)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), edited)
+        var historical = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        historical["schemaVersion"] = 26
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: historical)))
+
+        // Removal leaves nothing behind.
+        try session.execute(prepare(.events(nil), [fixture.frame]).documentCommand)
+        XCTAssertFalse(try node(fixture.frame).properties.contains { $0.key.rawValue.hasPrefix(CanonicalEventGraph.prefix) })
+    }
+
+    // OD-039, SF-1101-003/004/006/007/008: output compiles the fixed action set
+    // to escaped data, drops missing targets, starts hidden objects with
+    // `hidden`, ships one fixed runtime, and reports missing targets,
+    // pointer-only interactions and focus loops as warnings.
+    func testEventGraphOutputCompilesFixedActionsStartHiddenAndDiagnostics() throws {
+        var fixture = try formattingFixture()
+        let pageID = fixture.document.pages[0].id
+        let missing = NodeID()
+        func add(_ graph: CanonicalEventGraph, to id: NodeID) throws {
+            let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == id })
+            fixture.document.pages[0].nodes[index].properties += graph.properties.sorted { $0.key < $1.key }
+                .map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        }
+        try add(CanonicalEventGraph(interactions: [
+            CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [
+                CanonicalInteraction.Action(kind: .show, target: fixture.targetFrame),
+                CanonicalInteraction.Action(kind: .focus, target: fixture.targetFrame),
+                CanonicalInteraction.Action(kind: .hide, target: missing)]),
+            CanonicalInteraction(id: UUID(), trigger: .pointerEnter, actions: [CanonicalInteraction.Action(kind: .navigate, page: pageID)]),
+        ]), to: fixture.frame)
+        try add(CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn,
+            actions: [CanonicalInteraction.Action(kind: .focus, target: fixture.frame)])], startsHidden: true), to: fixture.targetFrame)
+        try add(CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .pointerEnter,
+            actions: [CanonicalInteraction.Action(kind: .toggle, target: fixture.targetFrame)])]), to: fixture.text)
+        try fixture.document.validate()
+
+        let plan = try MultiPageStaticBuildPlanner.plan(document: fixture.document)
+        XCTAssertEqual(try MultiPageStaticBuildPlanner.plan(document: fixture.document).integrityDigest, plan.integrityDigest)
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        func events(for id: NodeID) throws -> [EventOutputConfiguration] {
+            let end = try XCTUnwrap(html.range(of: "\" data-siteforge-node=\"\(id.description)\""), html)
+            let start = try XCTUnwrap(html.range(of: "data-siteforge-events=\"", options: .backwards, range: html.startIndex..<end.lowerBound))
+            let json = String(html[start.upperBound..<end.lowerBound]).replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">")
+                .replacingOccurrences(of: "&#39;", with: "'").replacingOccurrences(of: "&amp;", with: "&")
+            return try JSONDecoder().decode([EventOutputConfiguration].self, from: Data(json.utf8))
+        }
+        let frame = fixture.frame.description, target = fixture.targetFrame.description, text = fixture.text.description
+        XCTAssertEqual(try events(for: fixture.frame), [
+            EventOutputConfiguration(trigger: "focus-in", actions: [.init(kind: "show", target: target), .init(kind: "focus", target: target)]),
+            EventOutputConfiguration(trigger: "pointer-enter", actions: [.init(kind: "navigate", href: "index.html")]),
+        ])
+        XCTAssertEqual(try events(for: fixture.targetFrame), [EventOutputConfiguration(trigger: "focus-in", actions: [.init(kind: "focus", target: frame)])])
+        XCTAssertEqual(try events(for: fixture.text), [EventOutputConfiguration(trigger: "pointer-enter", actions: [.init(kind: "toggle", target: target)])])
+        XCTAssertFalse(html.contains(missing.description), html)
+        XCTAssertTrue(html.contains("class=\"sf-node-\(target)\" hidden"), html)
+        XCTAssertFalse(html.contains("class=\"sf-node-\(frame)\" hidden"), html)
+        XCTAssertTrue(html.contains("<script src=\"siteforge-events.js\" defer></script>"), html)
+        XCTAssertTrue(html.contains("styles.css"), html)
+        XCTAssertTrue(plan.files.contains { $0.path == "siteforge-events.js" && $0.contents == EventGraphRuntime.javascript })
+        XCTAssertTrue(css.contains(EventGraphOutput.hiddenCSS), css)
+
+        let compiled = StaticBuildCompiler.compile(document: fixture.document, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        let codes = compiled.findings.map { "\($0.code):\($0.affectedNodeID?.description ?? "")" }
+        XCTAssertTrue(codes.contains("interaction-target-missing:\(frame)"), "\(codes)")
+        XCTAssertFalse(codes.contains("interaction-target-missing:\(text)"), "\(codes)")
+        XCTAssertTrue(codes.contains("interaction-pointer-only:\(text)"), "\(codes)")
+        XCTAssertFalse(codes.contains("interaction-pointer-only:\(frame)"), "\(codes)")
+        XCTAssertTrue(codes.contains("interaction-focus-loop:\(frame)"), "\(codes)")
+        XCTAssertTrue(codes.contains("interaction-focus-loop:\(target)"), "\(codes)")
+        XCTAssertTrue(compiled.findings.filter { $0.code.hasPrefix("interaction-") }.allSatisfy { $0.severity == .warning })
+        XCTAssertFalse(compiled.findings.contains { $0.code.hasPrefix("interaction-") && $0.explanation.contains("Source") })
+
+        // The runtime is fixed SiteForge code with a re-entry guard.
+        let script = EventGraphRuntime.javascript
+        for forbidden in ["eval(", "innerHTML", "new Function", "fetch(", "XMLHttpRequest", "localStorage", "document.write"] {
+            XCTAssertFalse(script.contains(forbidden), forbidden)
+        }
+        XCTAssertTrue(script.contains("if (depth >= 4) return;"))
+        XCTAssertTrue(script.contains("reduce.matches ? 'auto' : 'smooth'"))
+
+        let plain = try MultiPageStaticBuildPlanner.plan(document: formattingFixture().document)
+        XCTAssertFalse(plain.files.contains { $0.path == "siteforge-events.js" || $0.contents.contains("data-siteforge-events")
+            || $0.contents.contains(EventGraphOutput.hiddenCSS) })
+    }
+
+    // OD-039, SF-1105-001/002/004/005, SF-1106-001/002/004/005: page
+    // variables live on the page Root, overlays on containers and visibility
+    // conditions on supported objects. Each edit undoes once; invalid or
+    // forged data never enters the document; removed variables keep their
+    // references; schema 26 refuses all of it.
+    func testRuntimeVariablesOverlaysAndVisibilityTypedValidationHistoryAndSchemaGate() throws {
+        typealias Action = CanonicalInteraction.Action
+        let fixture = try formattingFixture()
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, _ ids: [NodeID]) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: ids, document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        func node(_ id: NodeID) throws -> DocumentNode { try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == id }) }
+        let root = try XCTUnwrap(PageBackgroundPolicy.root(in: session.document.pages[0])).id
+        let open = CanonicalStateVariable(id: UUID(), name: "Menu open", type: .boolean, initial: .boolean(false))
+        let step = CanonicalStateVariable(id: UUID(), name: "Step", type: .number, initial: .number(2))
+
+        // Variables: page Root only, one undoable edit.
+        let before = session.document.pages
+        try session.execute(prepare(.pageVariables([open, step]), [root]).documentCommand)
+        XCTAssertEqual(try CanonicalPageState.storedVariables(node(root)), [open, step])
+        XCTAssertEqual(CanonicalPageState.variables(on: session.document.pages[0]), [open, step])
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo()
+        XCTAssertThrowsError(try prepare(.pageVariables([open]), [fixture.frame])) {
+            XCTAssertEqual($0 as? DesignInspectorError, .unavailable(CanonicalPageState.variablesReason))
+        }
+        var sameName = open; sameName.id = UUID()
+        var wrongType = step; wrongType.initial = .boolean(true)
+        var fractional = step; fractional.initial = .number(1.5)
+        var huge = step; huge.initial = .number(2_000_000_000)
+        var control = open; control.name = "Menu\nopen"
+        var blank = open; blank.name = " "
+        let tooMany = (0..<17).map { CanonicalStateVariable(id: UUID(), name: "V\($0)", type: .boolean, initial: .boolean(false)) }
+        for invalid in [[open, sameName], [open, open], [wrongType], [fractional], [huge], [control], [blank], tooMany] {
+            XCTAssertFalse(CanonicalPageState.isValid(invalid))
+            XCTAssertThrowsError(try prepare(.pageVariables(invalid), [root])) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
+        }
+
+        // Overlays: containers only, never the page Root.
+        let modal = CanonicalOverlay(kind: .modal, dismissesOnOutsideClick: false)
+        try session.execute(prepare(.overlay(modal), [fixture.targetFrame]).documentCommand)
+        XCTAssertEqual(try CanonicalOverlay.resolve(node(fixture.targetFrame)), modal)
+        XCTAssertThrowsError(try prepare(.overlay(modal), [root])) { XCTAssertEqual($0 as? DesignInspectorError, .unavailable(CanonicalPageState.rootReason)) }
+        XCTAssertThrowsError(try prepare(.overlay(modal), [fixture.text])) { XCTAssertEqual($0 as? DesignInspectorError, .unavailable(CanonicalOverlay.unsupportedReason)) }
+
+        // Visibility conditions: typed values, never on the page Root.
+        let condition = CanonicalPageState.Condition(variable: open.id, equals: .boolean(true))
+        try session.execute(prepare(.visibility(condition), [fixture.text]).documentCommand)
+        XCTAssertEqual(try CanonicalPageState.condition(node(fixture.text)), condition)
+        XCTAssertThrowsError(try prepare(.visibility(condition), [root])) { XCTAssertEqual($0 as? DesignInspectorError, .unavailable(CanonicalPageState.rootReason)) }
+        XCTAssertThrowsError(try prepare(.visibility(CanonicalPageState.Condition(variable: open.id, equals: .string(String(repeating: "x", count: 257)))), [fixture.text])) {
+            XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue)
+        }
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 3)
+
+        // Actions carry exactly the fields their kind uses.
+        XCTAssertTrue(Action(kind: .setVariable, variable: open.id, value: .boolean(true)).isValid)
+        XCTAssertTrue(Action(kind: .toggleVariable, variable: open.id).isValid)
+        XCTAssertTrue(Action(kind: .openOverlay, target: fixture.targetFrame).isValid)
+        XCTAssertFalse(Action(kind: .setVariable, variable: open.id).isValid)
+        XCTAssertFalse(Action(kind: .setVariable, variable: step.id, value: .number(0.5)).isValid)
+        XCTAssertFalse(Action(kind: .toggleVariable, variable: open.id, value: .boolean(true)).isValid)
+        XCTAssertFalse(Action(kind: .openOverlay, target: fixture.targetFrame, variable: open.id).isValid)
+        let graph = CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [
+            Action(kind: .setVariable, variable: step.id, value: .number(3)), Action(kind: .openOverlay, target: fixture.targetFrame)])])
+        try session.execute(prepare(.events(graph), [fixture.frame]).documentCommand)
+        XCTAssertEqual(try CanonicalEventGraph.resolve(node(fixture.frame)), graph)
+        let edited = session.document
+
+        // Forged, misplaced, partial or unknown data is refused by validation.
+        let pageNodes = edited.pages[0].nodes
+        let rootIndex = try XCTUnwrap(pageNodes.firstIndex { $0.id == root })
+        let frameIndex = try XCTUnwrap(pageNodes.firstIndex { $0.id == fixture.frame })
+        let overlayIndex = try XCTUnwrap(pageNodes.firstIndex { $0.id == fixture.targetFrame })
+        let variablesIndex = try XCTUnwrap(pageNodes[rootIndex].properties.firstIndex { $0.key.rawValue == CanonicalPageState.variablesKey })
+        guard case .string(let stored) = pageNodes[rootIndex].properties[variablesIndex].value else { return XCTFail("Variables are stored as text") }
+        for forged in [" " + stored, "[]", "{}", "not json", stored.replacingOccurrences(of: "\"name\"", with: "\"script\":1,\"name\""),
+                       stored.replacingOccurrences(of: "\"boolean\"", with: "\"date\"")] {
+            var copy = edited
+            copy.pages[0].nodes[rootIndex].properties[variablesIndex].value = .string(forged)
+            XCTAssertThrowsError(try copy.validate(), forged)
+        }
+        var misplaced = edited
+        misplaced.pages[0].nodes[frameIndex].properties.append(.init(key: .init(rawValue: CanonicalPageState.variablesKey), value: .string(stored)))
+        XCTAssertThrowsError(try misplaced.validate()) { XCTAssertEqual($0 as? ModelValidationError, .invalidRuntimeState) }
+        var unknown = edited
+        unknown.pages[0].nodes[rootIndex].properties.append(.init(key: .init(rawValue: "state.v1.persist"), value: .boolean(true)))
+        XCTAssertThrowsError(try unknown.validate()) { XCTAssertEqual($0 as? ModelValidationError, .invalidRuntimeState) }
+        var rootOverlay = edited
+        rootOverlay.pages[0].nodes[rootIndex].properties += modal.properties.sorted { $0.key < $1.key }
+            .map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        XCTAssertThrowsError(try rootOverlay.validate()) { XCTAssertEqual($0 as? ModelValidationError, .invalidOverlayState) }
+        var partial = edited
+        partial.pages[0].nodes[overlayIndex].properties.removeAll { $0.key.rawValue == CanonicalOverlay.dismissKey }
+        XCTAssertThrowsError(try partial.validate()) { XCTAssertEqual($0 as? ModelValidationError, .invalidOverlayState) }
+        try edited.validate()
+
+        // Removing a variable keeps the condition and action that use it.
+        try session.execute(prepare(.pageVariables([step]), [root]).documentCommand)
+        XCTAssertEqual(try CanonicalPageState.condition(node(fixture.text)), condition)
+        try session.document.validate()
+
+        // Persistence and the schema 27 gate.
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
+        var historical = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        historical["schemaVersion"] = 26
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: historical)))
+
+        // Removal leaves nothing behind.
+        try session.execute(prepare(.overlay(nil), [fixture.targetFrame]).documentCommand)
+        try session.execute(prepare(.visibility(nil), [fixture.text]).documentCommand)
+        try session.execute(prepare(.pageVariables([]), [root]).documentCommand)
+        XCTAssertFalse(session.document.pages[0].nodes.contains { $0.properties.contains {
+            $0.key.rawValue.hasPrefix(CanonicalPageState.prefix) || $0.key.rawValue.hasPrefix(CanonicalOverlay.prefix)
+        } })
+    }
+
+    // OD-039, SF-1105-003/004/006/007, SF-1106-003/004/006/007: output is
+    // hydration-safe (initial `hidden` matches the starting values), drops
+    // actions of the wrong type or target, carries variables as escaped data,
+    // ships one fixed runtime with a modal focus trap and stacking, and
+    // reports invalid conditions and unreachable or unnamed overlays.
+    func testRuntimeVariablesOverlaysOutputHydrationRuntimeAndDiagnostics() throws {
+        typealias Action = CanonicalInteraction.Action
+        var fixture = try formattingFixture()
+        let root = try XCTUnwrap(PageBackgroundPolicy.root(in: fixture.document.pages[0])).id
+        let open = CanonicalStateVariable(id: UUID(), name: "Menu open", type: .boolean, initial: .boolean(false))
+        let label = CanonicalStateVariable(id: UUID(), name: "Label", type: .string, initial: .string("A"))
+        func add(_ values: [String: PropertyValue], to id: NodeID) throws {
+            let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == id })
+            fixture.document.pages[0].nodes[index].properties += values.sorted { $0.key < $1.key }
+                .map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        }
+        try add(CanonicalPageState.properties(variables: [open, label]), to: root)
+        try add(CanonicalOverlay(kind: .modal, dismissesOnOutsideClick: true).properties, to: fixture.targetFrame)
+        try add(CanonicalPageState.properties(condition: .init(variable: open.id, equals: .boolean(true))), to: fixture.text)
+        try add(CanonicalPageState.properties(condition: .init(variable: label.id, equals: .string("A"))), to: fixture.targetText)
+        try add(CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [
+            Action(kind: .toggleVariable, variable: open.id),
+            Action(kind: .openOverlay, target: fixture.targetFrame),
+            Action(kind: .setVariable, variable: label.id, value: .number(1)),
+            Action(kind: .toggleVariable, variable: label.id),
+            Action(kind: .setVariable, variable: UUID(), value: .boolean(true)),
+            Action(kind: .openOverlay, target: fixture.text),
+            Action(kind: .setVariable, variable: label.id, value: .string("B")),
+        ])]).properties, to: fixture.frame)
+        try fixture.document.validate()
+
+        func unescape(_ value: String) -> String {
+            value.replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&lt;", with: "<")
+                .replacingOccurrences(of: "&gt;", with: ">").replacingOccurrences(of: "&amp;", with: "&")
+        }
+        func tag(_ id: NodeID, in html: String) throws -> String {
+            let marker = try XCTUnwrap(html.range(of: "data-siteforge-node=\"\(id.description)\""), html)
+            let start = try XCTUnwrap(html.range(of: "<", options: .backwards, range: html.startIndex..<marker.lowerBound)).lowerBound
+            let end = try XCTUnwrap(html.range(of: ">", range: marker.upperBound..<html.endIndex)).upperBound
+            return String(html[start..<end])
+        }
+        func attribute(_ name: String, in text: String) throws -> String {
+            let start = try XCTUnwrap(text.range(of: name + "=\""), text)
+            let end = try XCTUnwrap(text.range(of: "\"", range: start.upperBound..<text.endIndex))
+            return unescape(String(text[start.upperBound..<end.lowerBound]))
+        }
+        let plan = try MultiPageStaticBuildPlanner.plan(document: fixture.document)
+        XCTAssertEqual(try MultiPageStaticBuildPlanner.plan(document: fixture.document).integrityDigest, plan.integrityDigest)
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        let decoder = JSONDecoder()
+
+        let overlayTag = try tag(fixture.targetFrame, in: html)
+        XCTAssertTrue(overlayTag.hasSuffix(" data-siteforge-overlay=\"modal\" role=\"dialog\" aria-modal=\"true\" data-siteforge-dismiss-outside hidden>"), overlayTag)
+        let hiddenTag = try tag(fixture.text, in: html), shownTag = try tag(fixture.targetText, in: html)
+        XCTAssertTrue(hiddenTag.hasSuffix(" hidden>"), hiddenTag)
+        XCTAssertFalse(shownTag.contains(" hidden"), shownTag)
+        XCTAssertEqual(try decoder.decode(EventGraphOutput.ConditionOutput.self, from: Data(attribute("data-siteforge-visible-when", in: hiddenTag).utf8)),
+                       EventGraphOutput.ConditionOutput(equals: .boolean(true), variable: open.id.uuidString.lowercased()))
+        XCTAssertEqual(try decoder.decode(EventGraphOutput.ConditionOutput.self, from: Data(attribute("data-siteforge-visible-when", in: shownTag).utf8)),
+                       EventGraphOutput.ConditionOutput(equals: .string("A"), variable: label.id.uuidString.lowercased()))
+        XCTAssertEqual(try decoder.decode([EventGraphOutput.VariableOutput].self, from: Data(attribute("data-siteforge-state", in: html).utf8)), [
+            EventGraphOutput.VariableOutput(id: open.id.uuidString.lowercased(), type: "boolean", value: .boolean(false)),
+            EventGraphOutput.VariableOutput(id: label.id.uuidString.lowercased(), type: "string", value: .string("A")),
+        ])
+        XCTAssertTrue(html.contains("<div hidden data-siteforge-state=\""), html)
+        XCTAssertEqual(try decoder.decode([EventOutputConfiguration].self, from: Data(attribute("data-siteforge-events", in: tag(fixture.frame, in: html)).utf8)), [
+            EventOutputConfiguration(trigger: "focus-in", actions: [
+                .init(kind: "toggle-variable", variable: open.id.uuidString.lowercased()),
+                .init(kind: "open-overlay", target: fixture.targetFrame.description),
+                .init(kind: "set-variable", variable: label.id.uuidString.lowercased(), value: .string("B")),
+            ]),
+        ])
+        XCTAssertTrue(html.contains("<script src=\"siteforge-events.js\" defer></script>"), html)
+        XCTAssertTrue(plan.files.contains { $0.path == "siteforge-events.js" && $0.contents == EventGraphRuntime.javascript })
+        XCTAssertTrue(css.contains(EventGraphOutput.hiddenCSS), css)
+        XCTAssertTrue(css.contains(EventGraphOutput.overlayCSS), css)
+        let release = LocalBuildProfileCompiler.compile(plan, profile: .staticRelease).0
+        let releaseCSS = try XCTUnwrap(release.files.first { $0.path == "styles.css" }?.contents)
+        for line in EventGraphOutput.overlayCSS.split(separator: "\n") { XCTAssertTrue(releaseCSS.contains(StaticCSSOptimizer.minify(String(line))), String(line)) }
+
+        let compiled = StaticBuildCompiler.compile(document: fixture.document, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        let codes = compiled.findings.map { "\($0.code):\($0.affectedNodeID?.description ?? "")" }
+        XCTAssertTrue(codes.contains("interaction-target-missing:\(fixture.frame.description)"), "\(codes)")
+        XCTAssertTrue(codes.contains("overlay-unnamed:\(fixture.targetFrame.description)"), "\(codes)")
+        XCTAssertFalse(codes.contains("overlay-unreachable:\(fixture.targetFrame.description)"), "\(codes)")
+        XCTAssertFalse(codes.contains { $0.hasPrefix("state-binding-invalid") }, "\(codes)")
+
+        // Removing a variable and the only opener: the condition is dropped
+        // (the object is shown) and both problems are reported.
+        var changed = fixture.document
+        let rootIndex = try XCTUnwrap(changed.pages[0].nodes.firstIndex { $0.id == root })
+        let frameIndex = try XCTUnwrap(changed.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        let variablesIndex = try XCTUnwrap(changed.pages[0].nodes[rootIndex].properties.firstIndex { $0.key.rawValue == CanonicalPageState.variablesKey })
+        changed.pages[0].nodes[rootIndex].properties[variablesIndex].value = try XCTUnwrap(CanonicalPageState.properties(variables: [open])[CanonicalPageState.variablesKey])
+        changed.pages[0].nodes[frameIndex].properties.removeAll { $0.key.rawValue.hasPrefix(CanonicalEventGraph.prefix) }
+        try changed.validate()
+        let changedCodes = StaticBuildCompiler.compile(document: changed, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+            .findings.map { "\($0.code):\($0.affectedNodeID?.description ?? "")" }
+        XCTAssertTrue(changedCodes.contains("state-binding-invalid:\(fixture.targetText.description)"), "\(changedCodes)")
+        XCTAssertTrue(changedCodes.contains("overlay-unreachable:\(fixture.targetFrame.description)"), "\(changedCodes)")
+        let changedHTML = try XCTUnwrap(MultiPageStaticBuildPlanner.plan(document: changed).files.first { $0.path == "index.html" }?.contents)
+        XCTAssertFalse(try tag(fixture.targetText, in: changedHTML).contains("data-siteforge-visible-when"))
+        XCTAssertTrue(changedHTML.contains("siteforge-events.js"), changedHTML)
+
+        // SF-1101-003: an action after Go To Page in the same interaction never runs.
+        var unreachable = fixture.document
+        let unreachableIndex = try XCTUnwrap(unreachable.pages[0].nodes.firstIndex { $0.id == fixture.text })
+        unreachable.pages[0].nodes[unreachableIndex].properties += CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn,
+            actions: [Action(kind: .navigate, page: unreachable.pages[0].id), Action(kind: .show, target: fixture.frame)])]).properties
+            .sorted { $0.key < $1.key }.map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) }
+        try unreachable.validate()
+        let unreachableCodes = StaticBuildCompiler.compile(document: unreachable, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+            .findings.map { "\($0.code):\($0.affectedNodeID?.description ?? "")" }
+        XCTAssertTrue(unreachableCodes.contains("interaction-action-unreachable:\(fixture.text.description)"), "\(unreachableCodes)")
+        XCTAssertFalse(unreachableCodes.contains("interaction-action-unreachable:\(fixture.frame.description)"), "\(unreachableCodes)")
+
+        // The runtime is fixed SiteForge code: typed writes, Escape, modal
+        // focus trap, nested stacking and focus restore; no author text.
+        let script = EventGraphRuntime.javascript
+        for expected in ["typeOf(value) !== variable.type", "event.key === 'Escape'", "event.key !== 'Tab' || !entry.modal",
+                         "const closing = stack.splice(index);", "restore.focus()", "1000 + stack.length * 2", "if (depth >= 4) return;",
+                         "document.body.appendChild(element);", "entry.home.replaceWith(entry.element);"] {
+            XCTAssertTrue(script.contains(expected), expected)
+        }
+        for forbidden in ["eval(", "innerHTML", "new Function", "fetch(", "XMLHttpRequest", "localStorage", "sessionStorage", "document.cookie", "document.write"] {
+            XCTAssertFalse(script.contains(forbidden), forbidden)
+        }
+    }
+
+    // SF-1101-004, SF-1105-003/004, SF-1106-003 (lane R review): every page
+    // that runs interactions ships the hidden rule (static layout gives each
+    // object an explicit `display`); a visibility condition, not Start
+    // hidden, decides the first render; an overlay ignores a visibility
+    // condition and Show opens it through the overlay stack; containers on a
+    // page without page flow are reported because static layout writes
+    // their contents separately.
+    func testInteractionOutputHiddenRuleFirstRenderOverlayConditionsAndStaticLayoutContainers() throws {
+        typealias Action = CanonicalInteraction.Action
+        var fixture = try formattingFixture()
+        let root = try XCTUnwrap(PageBackgroundPolicy.root(in: fixture.document.pages[0])).id
+        XCTAssertFalse(fixture.document.pages[0].usesConnectedOutput, "The fixture page uses static layout")
+        func add(_ values: [String: PropertyValue], to id: NodeID) throws {
+            let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == id })
+            fixture.document.pages[0].nodes[index].properties += values.sorted { $0.key < $1.key }
+                .map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        }
+        func openingTag(_ id: NodeID, in html: String) throws -> String {
+            let marker = try XCTUnwrap(html.range(of: "data-siteforge-node=\"\(id.description)\""), html)
+            let start = try XCTUnwrap(html.range(of: "<", options: .backwards, range: html.startIndex..<marker.lowerBound)).lowerBound
+            let end = try XCTUnwrap(html.range(of: ">", range: marker.upperBound..<html.endIndex)).upperBound
+            return String(html[start..<end])
+        }
+        func builtPage(_ document: CanonicalDocument) throws -> (html: String, css: String) {
+            let plan = try MultiPageStaticBuildPlanner.plan(document: document)
+            let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+            let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+            return (html, css)
+        }
+
+        // Nothing starts hidden, yet Hide needs the rule to beat `display: block`.
+        try add(CanonicalEventGraph(interactions: [
+            CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [Action(kind: .show, target: fixture.targetFrame)]),
+            CanonicalInteraction(id: UUID(), trigger: .focusOut, actions: [Action(kind: .hide, target: fixture.targetFrame)]),
+        ]).properties, to: fixture.frame)
+        try fixture.document.validate()
+        let hideOnly = try builtPage(fixture.document)
+        XCTAssertFalse(try openingTag(fixture.targetFrame, in: hideOnly.html).hasSuffix(" hidden>"), hideOnly.html)
+        XCTAssertTrue(hideOnly.css.contains(EventGraphOutput.hiddenCSS), hideOnly.css)
+
+        // A condition that is true at the start shows a Start hidden object;
+        // an overlay keeps starting hidden and drops its condition.
+        let open = CanonicalStateVariable(id: UUID(), name: "Panel open", type: .boolean, initial: .boolean(true))
+        try add(CanonicalPageState.properties(variables: [open]), to: root)
+        try add(CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn,
+            actions: [Action(kind: .toggleVariable, variable: open.id)])], startsHidden: true).properties, to: fixture.text)
+        try add(CanonicalPageState.properties(condition: .init(variable: open.id, equals: .boolean(true))), to: fixture.text)
+        try add(CanonicalOverlay(kind: .popover, dismissesOnOutsideClick: false).properties, to: fixture.targetFrame)
+        try add(CanonicalPageState.properties(condition: .init(variable: open.id, equals: .boolean(true))), to: fixture.targetFrame)
+        // Hiding the page Root, a container with separately written contents.
+        try add(CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn,
+            actions: [Action(kind: .hide, target: root)])]).properties, to: fixture.targetText)
+        try fixture.document.validate()
+        let bound = try builtPage(fixture.document)
+        let textTag = try openingTag(fixture.text, in: bound.html)
+        XCTAssertTrue(textTag.contains("data-siteforge-visible-when"), textTag)
+        XCTAssertFalse(textTag.contains(" hidden"), textTag)
+        let overlayTag = try openingTag(fixture.targetFrame, in: bound.html)
+        // ADR-0065: the overlay is also part of the page Root, which an interaction hides.
+        XCTAssertTrue(overlayTag.hasSuffix(" data-siteforge-overlay=\"popover\" role=\"dialog\" data-siteforge-within=\"\(root.description)\" hidden>"), overlayTag)
+        XCTAssertFalse(overlayTag.contains("data-siteforge-visible-when"), overlayTag)
+
+        let codes = StaticBuildCompiler.compile(document: fixture.document, profileSelection: .init(profile: .development),
+                                                resourceDescriptors: [:], resourceData: [:])
+            .findings.map { "\($0.code):\($0.affectedNodeID?.description ?? "")" }
+        XCTAssertTrue(codes.contains("overlay-condition-ignored:\(fixture.targetFrame.description)"), "\(codes)")
+        XCTAssertFalse(codes.contains("overlay-unreachable:\(fixture.targetFrame.description)"), "Show opens the overlay: \(codes)")
+        // ADR-0065: static-layout containers are supported, so nothing is reported;
+        // the Root's contents name it and hide with it.
+        XCTAssertFalse(codes.contains { $0.hasPrefix("interaction-container-flat") }, "\(codes)")
+        XCTAssertTrue(textTag.contains(" data-siteforge-within=\"\(root.description)\""), textTag)
+        XCTAssertTrue(bound.css.contains("[data-siteforge-node=\"\(root.description)\"][hidden] ~ [data-siteforge-within~=\"\(root.description)\"] { display:none !important; }"), bound.css)
+        XCTAssertFalse(codes.contains { $0.hasPrefix("state-binding-invalid") }, "\(codes)")
+
+        // Show, Hide and Show or Hide on an overlay go through the overlay stack.
+        let script = EventGraphRuntime.javascript
+        XCTAssertTrue(script.contains("overlay && target.hidden && (action.kind === 'show' || action.kind === 'toggle')"))
+        XCTAssertTrue(script.contains("overlay && !target.hidden && (action.kind === 'hide' || action.kind === 'toggle')"))
+    }
+
+    // OD-039, SF-1105-002/005/006, SF-1101-004, SF-1104-004 (ADR-0065): a
+    // popover or menu can open next to its trigger (one optional key, one
+    // undoable edit, kept on save, refused on a modal); the runtime places and
+    // flips it, moves through a menu with arrow keys and runs Scrolled Into
+    // View without IntersectionObserver. On a static-layout page a
+    // container's contents name it, hide and reveal with it and count as part
+    // of an overlay. Create Component refuses inbound interaction targets.
+    func testOverlayPlacementMenuKeysAndStaticLayoutContainerContents() throws {
+        typealias Action = CanonicalInteraction.Action
+        var fixture = try formattingFixture()
+        let root = try XCTUnwrap(PageBackgroundPolicy.root(in: fixture.document.pages[0])).id
+        XCTAssertFalse(fixture.document.pages[0].usesConnectedOutput, "The fixture page uses static layout")
+        // The target text moves inside the source Frame, which becomes a container.
+        let rootIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == root })
+        let frameIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        let targetText = fixture.targetText
+        let contentIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == targetText })
+        fixture.document.pages[0].nodes[rootIndex].childIDs.removeAll { $0 == targetText }
+        fixture.document.pages[0].nodes[frameIndex].childIDs = [fixture.targetText]
+        fixture.document.pages[0].nodes[contentIndex].parent = .node(fixture.frame)
+        for (key, value) in [("layout.x", 40.0), ("layout.y", 200.0)] {
+            let index = try XCTUnwrap(fixture.document.pages[0].nodes[contentIndex].properties.firstIndex { $0.key.rawValue == key })
+            fixture.document.pages[0].nodes[contentIndex].properties[index].value = .number(value)
+        }
+        try fixture.document.validate()
+
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, _ ids: [NodeID]) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: ids, document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        func node(_ id: NodeID) throws -> DocumentNode { try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == id }) }
+        func otherOverlayPropertyIDs() throws -> [PropertyID] {
+            try node(fixture.frame).properties.filter {
+                $0.key.rawValue.hasPrefix(CanonicalOverlay.prefix) && $0.key.rawValue != CanonicalOverlay.placementKey
+            }.map(\.id)
+        }
+
+        // Placement: one optional key for a popover or menu, never for a modal.
+        let menu = CanonicalOverlay(kind: .menu, dismissesOnOutsideClick: true, placement: .below)
+        XCTAssertEqual(menu.properties[CanonicalOverlay.placementKey], .string("below"))
+        XCTAssertNil(CanonicalOverlay(kind: .modal, dismissesOnOutsideClick: true, placement: .below).properties[CanonicalOverlay.placementKey],
+                     "A modal is always centred")
+        let before = session.document.pages
+        try session.execute(prepare(.overlay(menu), [fixture.frame]).documentCommand)
+        let after = session.document.pages
+        XCTAssertEqual(try CanonicalOverlay.resolve(node(fixture.frame)), menu)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+        let identities = try otherOverlayPropertyIDs()
+        XCTAssertEqual(identities.count, 2)
+        var beside = menu; beside.placement = .end
+        try session.execute(prepare(.overlay(beside), [fixture.frame]).documentCommand)
+        XCTAssertEqual(try otherOverlayPropertyIDs(), identities, "Changing the placement keeps the other property identities")
+        var drawn = beside; drawn.placement = nil
+        try session.execute(prepare(.overlay(drawn), [fixture.frame]).documentCommand)
+        XCTAssertFalse(try node(fixture.frame).properties.contains { $0.key.rawValue == CanonicalOverlay.placementKey })
+        try session.undo()
+        XCTAssertEqual(try CanonicalOverlay.resolve(node(fixture.frame))?.placement, .end)
+        XCTAssertThrowsError(try prepare(.overlay(beside), [fixture.frame])) { XCTAssertEqual($0 as? DesignInspectorError, .noChanges) }
+        let placed = session.document
+
+        // Unknown, mistyped or modal placements are refused by validation.
+        let placedIndex = try XCTUnwrap(placed.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        let placementIndex = try XCTUnwrap(placed.pages[0].nodes[placedIndex].properties.firstIndex { $0.key.rawValue == CanonicalOverlay.placementKey })
+        let kindIndex = try XCTUnwrap(placed.pages[0].nodes[placedIndex].properties.firstIndex { $0.key.rawValue == CanonicalOverlay.kindKey })
+        for forged in [PropertyValue.string("left"), .string(""), .number(1), .boolean(true)] {
+            var copy = placed
+            copy.pages[0].nodes[placedIndex].properties[placementIndex].value = forged
+            XCTAssertThrowsError(try copy.validate()) { XCTAssertEqual($0 as? ModelValidationError, .invalidOverlayState) }
+        }
+        var modalPlaced = placed
+        modalPlaced.pages[0].nodes[placedIndex].properties[kindIndex].value = .string("modal")
+        XCTAssertThrowsError(try modalPlaced.validate()) { XCTAssertEqual($0 as? ModelValidationError, .invalidOverlayState) }
+        var twice = placed
+        twice.pages[0].nodes[placedIndex].properties.append(.init(key: .init(rawValue: CanonicalOverlay.placementKey), value: .string("above")))
+        XCTAssertThrowsError(try twice.validate())
+        try placed.validate()
+
+        // Persistence and the schema 27 gate.
+        let encoded = try DocumentSerializer.encode(placed)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), placed)
+        var historical = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        historical["schemaVersion"] = 26
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: historical)))
+
+        // Output: the menu opens from the text; the page Root reveals on scroll.
+        var site = placed
+        func add(_ values: [String: PropertyValue], to id: NodeID) throws {
+            let index = try XCTUnwrap(site.pages[0].nodes.firstIndex { $0.id == id })
+            site.pages[0].nodes[index].properties += values.sorted { $0.key < $1.key }
+                .map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        }
+        try add(CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn,
+            actions: [Action(kind: .openOverlay, target: fixture.frame)])]).properties, to: fixture.text)
+        try add(CanonicalMotion(entrance: CanonicalMotion.defaultEntrance).properties, to: root)
+        try site.validate()
+        let plan = try MultiPageStaticBuildPlanner.plan(document: site)
+        XCTAssertEqual(try MultiPageStaticBuildPlanner.plan(document: site).integrityDigest, plan.integrityDigest)
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        func placedTag(_ id: NodeID) throws -> String {
+            let marker = try XCTUnwrap(html.range(of: "data-siteforge-node=\"\(id.description)\""), html)
+            let start = try XCTUnwrap(html.range(of: "<", options: .backwards, range: html.startIndex..<marker.lowerBound)).lowerBound
+            let end = try XCTUnwrap(html.range(of: ">", range: marker.upperBound..<html.endIndex)).upperBound
+            return String(html[start..<end])
+        }
+        let rootName = root.description, frameName = fixture.frame.description
+        let menuTag = try placedTag(fixture.frame)
+        XCTAssertTrue(menuTag.hasSuffix(" data-siteforge-overlay=\"menu\" role=\"dialog\" data-siteforge-dismiss-outside data-siteforge-placement=\"end\" data-siteforge-within=\"\(rootName)\" data-siteforge-flat hidden>"), menuTag)
+        let contentTag = try placedTag(fixture.targetText)
+        XCTAssertTrue(contentTag.hasSuffix(" data-siteforge-within=\"\(rootName) \(frameName)\">"), contentTag)
+        XCTAssertTrue(try placedTag(fixture.text).contains(" data-siteforge-within=\"\(rootName)\""), html)
+        XCTAssertFalse(try placedTag(root).contains("data-siteforge-within"), html)
+        XCTAssertTrue(css.contains("[data-siteforge-node=\"\(frameName)\"][hidden] ~ [data-siteforge-within~=\"\(frameName)\"] { display:none !important; }"), css)
+        XCTAssertFalse(css.contains("[data-siteforge-node=\"\(rootName)\"][hidden] ~"), "Nothing hides the Root: \(css)")
+        XCTAssertTrue(css.contains("@media screen and (prefers-reduced-motion:no-preference) { .sf-motion-ready [data-siteforge-within~=\"\(rootName)\"]:not(.sf-motion-entered) { opacity:0; } }"), css)
+        XCTAssertTrue(css.contains("@media screen and (prefers-reduced-motion:no-preference) { .sf-motion-ready [data-siteforge-within~=\"\(rootName)\"].sf-motion-entered { animation:sf-entrance-\(rootName) 600ms ease-out 0ms both; } }"), css)
+        XCTAssertTrue(css.contains(EventGraphOutput.hiddenCSS), css)
+        let release = LocalBuildProfileCompiler.compile(plan, profile: .staticRelease).0
+        let releaseCSS = try XCTUnwrap(release.files.first { $0.path == "styles.css" }?.contents)
+        for line in css.split(separator: "\n") where line.contains("data-siteforge-within~=") {
+            XCTAssertTrue(releaseCSS.contains(StaticCSSOptimizer.minify(String(line))), String(line))
+        }
+        let codes = StaticBuildCompiler.compile(document: site, profileSelection: .init(profile: .development),
+                                                resourceDescriptors: [:], resourceData: [:])
+            .findings.map { "\($0.code):\($0.affectedNodeID?.description ?? "")" }
+        XCTAssertFalse(codes.contains { $0.hasPrefix("interaction-container-flat") }, "\(codes)")
+        XCTAssertFalse(codes.contains("overlay-unreachable:\(frameName)"), "\(codes)")
+
+        // The runtimes: placement and flipping, menu keys, contents as part of
+        // an overlay, Scrolled Into View without IntersectionObserver, reveal.
+        let script = EventGraphRuntime.javascript
+        for expected in ["entry.element.getAttribute('data-siteforge-placement')", "const prefersRight = (side === 'end') !== rtl;",
+                         "y = side === 'below' ? (fitsBelow || !fitsAbove ? below : above) : (fitsAbove || !fitsBelow ? above : below);",
+                         "for (const part of group) part.style.translate = shift;", "['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)",
+                         "if (modal && !entry.flat) {", "open(target, source.matches(focusable) ? source : document.activeElement, source);",
+                         "else for (const [element, lists] of entering) for (const actions of lists) run(element, actions);"] {
+            XCTAssertTrue(script.contains(expected), expected)
+        }
+        XCTAssertTrue(MotionRuntime.javascript.contains("member.classList.add('sf-motion-entered')"))
+        XCTAssertTrue(EventGraphOutput.overlayCSS.hasPrefix("[data-siteforge-overlay=\"modal\"]:not([hidden]):not([data-siteforge-flat]) {"))
+
+        // Create Component refuses an interaction elsewhere that targets the
+        // container's contents; one on the container itself is kept.
+        var inbound = fixture.document
+        let textIndex = try XCTUnwrap(inbound.pages[0].nodes.firstIndex { $0.id == fixture.text })
+        inbound.pages[0].nodes[textIndex].properties += CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .focusIn,
+            actions: [Action(kind: .show, target: fixture.targetText)])]).properties.sorted { $0.key < $1.key }
+            .map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) }
+        try inbound.validate()
+        XCTAssertThrowsError(try ComponentCommandRegistry.creationSourceIDs(fixture.frame, page: inbound.pages[0], document: inbound)) {
+            XCTAssertEqual($0 as? CommandExecutionError, .disabled(ComponentCommandRegistry.inboundInteractionReason))
+        }
+        let interactionsIndex = try XCTUnwrap(inbound.pages[0].nodes[textIndex].properties.firstIndex {
+            $0.key.rawValue == CanonicalEventGraph.interactionsKey })
+        inbound.pages[0].nodes[textIndex].properties[interactionsIndex].value = try XCTUnwrap(CanonicalEventGraph(interactions: [
+            CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [Action(kind: .show, target: fixture.frame)])])
+            .properties[CanonicalEventGraph.interactionsKey])
+        XCTAssertEqual(try ComponentCommandRegistry.creationSourceIDs(fixture.frame, page: inbound.pages[0], document: inbound),
+                       [fixture.frame, fixture.targetText])
+    }
+
+    // OD-039, SF-1106-001/002/003/004/005 (C6, ADR-0066): a Text shows a page
+    // variable's value. The binding is one undoable edit that keeps its
+    // property identity, names a variable the page has, is refused on other
+    // kinds, keeps the authored text, survives save and reopen, stays out of
+    // schema 26, and forged or misplaced data is rejected. Renaming or removing
+    // the variable keeps the reference; the Inspector status explains it.
+    func testTextValueBindingTypedValidationHistoryPersistenceAndInspectorStatus() throws {
+        let fixture = try formattingFixture()
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, _ ids: [NodeID]) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: ids, document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        func node(_ id: NodeID) throws -> DocumentNode { try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == id }) }
+        let root = try XCTUnwrap(PageBackgroundPolicy.root(in: session.document.pages[0])).id
+        let label = CanonicalStateVariable(id: UUID(), name: "Label", type: .string, initial: .string("Ready"))
+        let count = CanonicalStateVariable(id: UUID(), name: "Count", type: .number, initial: .number(42))
+        try session.execute(prepare(.pageVariables([label, count]), [root]).documentCommand)
+
+        // Refusals change nothing and say why.
+        let unchanged = session.document
+        XCTAssertThrowsError(try prepare(.textBinding(CanonicalTextBinding(variable: UUID())), [fixture.text])) {
+            XCTAssertEqual($0 as? DesignInspectorError, .unavailable(CanonicalTextBinding.missingVariableReason))
+        }
+        XCTAssertThrowsError(try prepare(.textBinding(CanonicalTextBinding(variable: label.id)), [fixture.frame])) {
+            XCTAssertEqual($0 as? DesignInspectorError, .unavailable(CanonicalTextBinding.unsupportedReason))
+        }
+        XCTAssertThrowsError(try prepare(.textBinding(nil), [fixture.text])) { XCTAssertEqual($0 as? DesignInspectorError, .noChanges) }
+        XCTAssertEqual(session.document, unchanged)
+
+        // One undoable transaction; the authored text stays as the fallback.
+        let before = session.document.pages
+        let entries = session.historySnapshot().undoEntries.count
+        try session.execute(prepare(.textBinding(CanonicalTextBinding(variable: label.id)), [fixture.text]).documentCommand)
+        XCTAssertEqual(try CanonicalTextBinding.resolve(node(fixture.text)), CanonicalTextBinding(variable: label.id))
+        XCTAssertEqual(try node(fixture.text).insertionStringProperty("content.text"), "Source stays unchanged")
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, entries + 1)
+        let bound = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, bound)
+        // Re-pointing keeps the property identity; the same value again is no change.
+        let propertyID = try XCTUnwrap(node(fixture.text).insertionProperty(CanonicalTextBinding.key)?.id)
+        try session.execute(prepare(.textBinding(CanonicalTextBinding(variable: count.id)), [fixture.text]).documentCommand)
+        XCTAssertEqual(try node(fixture.text).insertionProperty(CanonicalTextBinding.key)?.id, propertyID)
+        XCTAssertThrowsError(try prepare(.textBinding(CanonicalTextBinding(variable: count.id)), [fixture.text])) {
+            XCTAssertEqual($0 as? DesignInspectorError, .noChanges)
+        }
+
+        // Canonical stored text; forged, misplaced or mistyped data is refused.
+        let edited = session.document
+        let textIndex = try XCTUnwrap(edited.pages[0].nodes.firstIndex { $0.id == fixture.text })
+        let frameIndex = try XCTUnwrap(edited.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        let propertyIndex = try XCTUnwrap(edited.pages[0].nodes[textIndex].properties.firstIndex { $0.key.rawValue == CanonicalTextBinding.key })
+        guard case .string(let stored) = edited.pages[0].nodes[textIndex].properties[propertyIndex].value else {
+            return XCTFail("A text binding is stored as text")
+        }
+        XCTAssertEqual(stored, "{\"variable\":\"\(count.id.uuidString)\"}")
+        for forged in [" " + stored, "{}", "[]", "not json", stored.lowercased(),
+                       stored.replacingOccurrences(of: "{", with: "{\"format\":\"currency\",")] {
+            var copy = edited
+            copy.pages[0].nodes[textIndex].properties[propertyIndex].value = .string(forged)
+            XCTAssertThrowsError(try copy.validate(), forged) { XCTAssertEqual($0 as? ModelValidationError, .invalidRuntimeState) }
+        }
+        var numeric = edited
+        numeric.pages[0].nodes[textIndex].properties[propertyIndex].value = .number(1)
+        XCTAssertThrowsError(try numeric.validate()) { XCTAssertEqual($0 as? ModelValidationError, .invalidRuntimeState) }
+        var misplaced = edited
+        misplaced.pages[0].nodes[frameIndex].properties.append(.init(key: .init(rawValue: CanonicalTextBinding.key), value: .string(stored)))
+        XCTAssertThrowsError(try misplaced.validate()) { XCTAssertEqual($0 as? ModelValidationError, .invalidRuntimeState) }
+        try edited.validate()
+
+        // Formatting follows the variables' canonical text in every language.
+        XCTAssertEqual([CanonicalTextBinding.displayText(.number(1_000_000)), CanonicalTextBinding.displayText(.number(-7)),
+                        CanonicalTextBinding.displayText(.boolean(true)), CanonicalTextBinding.displayText(.string("A & B"))],
+                       ["1000000", "-7", "true", "A & B"])
+        // Inspector status: the variable, its type and starting value, or why the own text is shown.
+        let status = CanonicalTextBinding.status(CanonicalTextBinding(variable: count.id), variables: [label, count])
+        XCTAssertTrue(status.contains("Count (Whole Number)") && status.contains("\u{201C}42\u{201D}"), status)
+        XCTAssertEqual(CanonicalTextBinding.status(CanonicalTextBinding(variable: UUID()), variables: [label, count]),
+                       CanonicalTextBinding.missingStatus)
+
+        // Renaming keeps the binding; removing the variable keeps the reference
+        // (reported at build time) and only removal is offered for it.
+        var renamed = count; renamed.name = "Items"
+        try session.execute(prepare(.pageVariables([label, renamed]), [root]).documentCommand)
+        XCTAssertEqual(try CanonicalTextBinding.resolve(node(fixture.text))?.variable, count.id)
+        XCTAssertTrue(CanonicalTextBinding.status(CanonicalTextBinding(variable: count.id), variables: [label, renamed]).contains("Items"))
+        try session.execute(prepare(.pageVariables([label]), [root]).documentCommand)
+        XCTAssertEqual(try CanonicalTextBinding.resolve(node(fixture.text))?.variable, count.id)
+        try session.document.validate()
+        XCTAssertThrowsError(try prepare(.textBinding(CanonicalTextBinding(variable: count.id)), [fixture.text])) {
+            XCTAssertEqual($0 as? DesignInspectorError, .unavailable(CanonicalTextBinding.missingVariableReason))
+        }
+
+        // Persistence and the schema 27 gate.
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
+        var historical = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        historical["schemaVersion"] = 26
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: historical)))
+
+        // Removal leaves nothing behind.
+        try session.execute(prepare(.textBinding(nil), [fixture.text]).documentCommand)
+        XCTAssertNil(try node(fixture.text).insertionProperty(CanonicalTextBinding.key))
+    }
+
+    // SF-1106-002/003/004/006 (C6, ADR-0066): bound text is hydration-safe.
+    // The static HTML already shows the variable's starting value (so the page
+    // reads correctly without scripts) and names the variable for the runtime
+    // with a polite live region. The variable wins over translations in every
+    // language tree and over collection fields on item pages; when the page
+    // has no such variable the text's own (or translated) content is written,
+    // the binding is left out and Check Website reports it.
+    func testTextValueBindingOutputIsHydrationSafeAcrossLanguagesItemPagesAndMissingVariables() throws {
+        var fixture = try formattingFixture()
+        let root = try XCTUnwrap(PageBackgroundPolicy.root(in: fixture.document.pages[0])).id
+        let label = CanonicalStateVariable(id: UUID(), name: "Label", type: .string, initial: .string("Ready <now>"))
+        let count = CanonicalStateVariable(id: UUID(), name: "Count", type: .number, initial: .number(-42))
+        func add(_ values: [String: PropertyValue], to id: NodeID) throws {
+            let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == id })
+            fixture.document.pages[0].nodes[index].properties += values.sorted { $0.key < $1.key }
+                .map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        }
+        try add(CanonicalPageState.properties(variables: [label, count]), to: root)
+        try add(CanonicalTextBinding.properties(.init(variable: label.id)), to: fixture.text)
+        try add(CanonicalTextBinding.properties(.init(variable: count.id)), to: fixture.targetText)
+        var localization = try SiteLocalizationEditing.start(code: "en", name: "English")
+        let french = try SiteLocalizationEditing.addLocale(code: "fr", name: "Français", to: &localization)
+        fixture.document.localization = localization
+        let frenchKey = PropertyKey(rawValue: SiteTranslationKey(localeID: french.id, field: .text).rawValue)
+        for id in [fixture.text, fixture.targetText] {
+            let index = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == id })
+            fixture.document.pages[0].nodes[index].properties.append(NodeProperty(key: frenchKey, value: .string("Texte traduit"), origin: .authored))
+        }
+        try fixture.document.validate()
+        func openingTag(_ id: NodeID, in html: String) throws -> String {
+            let marker = try XCTUnwrap(html.range(of: "data-siteforge-node=\"\(id.description)\""), html)
+            let start = try XCTUnwrap(html.range(of: "<", options: .backwards, range: html.startIndex..<marker.lowerBound)).lowerBound
+            let end = try XCTUnwrap(html.range(of: ">", range: marker.upperBound..<html.endIndex)).upperBound
+            return String(html[start..<end])
+        }
+        /// The opening tag and the text up to the next tag.
+        func element(_ id: NodeID, in html: String) throws -> String {
+            let tag = try openingTag(id, in: html)
+            let start = try XCTUnwrap(html.range(of: tag))
+            let end = try XCTUnwrap(html.range(of: "<", range: start.upperBound..<html.endIndex))
+            return String(html[start.lowerBound..<end.lowerBound])
+        }
+
+        let plan = try MultiPageStaticBuildPlanner.plan(document: fixture.document)
+        XCTAssertEqual(try MultiPageStaticBuildPlanner.plan(document: fixture.document).integrityDigest, plan.integrityDigest)
+        for path in ["index.html", "fr/index.html"] {
+            let html = try XCTUnwrap(plan.files.first { $0.path == path }?.contents, path)
+            let labelElement = try element(fixture.text, in: html), countElement = try element(fixture.targetText, in: html)
+            XCTAssertTrue(labelElement.hasSuffix(">Ready &lt;now&gt;"), "\(path): \(labelElement)")
+            XCTAssertTrue(countElement.hasSuffix(">-42"), "\(path): \(countElement)")
+            XCTAssertTrue(labelElement.contains(" data-siteforge-text-variable=\"\(label.id.uuidString.lowercased())\" aria-live=\"polite\" aria-atomic=\"true\""), labelElement)
+            XCTAssertFalse(html.contains("Texte traduit") || html.contains("Source stays unchanged") || html.contains("Target content retained"),
+                           "\(path): the variable wins over the translation and the own text")
+            XCTAssertTrue(html.contains("<div hidden data-siteforge-state=\""), path)
+            XCTAssertTrue(html.contains("siteforge-events.js\" defer></script>"), path)
+        }
+        let script = EventGraphRuntime.javascript
+        for expected in ["[data-siteforge-text-variable]", "element.textContent = text", "querySelector('[data-siteforge-text]') || element"] {
+            XCTAssertTrue(script.contains(expected), expected)
+        }
+        let codes = StaticBuildCompiler.compile(document: fixture.document, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+            .findings.map { "\($0.code):\($0.affectedNodeID?.description ?? "")" }
+        XCTAssertFalse(codes.contains { $0.hasPrefix("state-text-binding-missing") }, "\(codes)")
+
+        // Collection item pages: the template is a duplicate of the page (its
+        // variables keep their identities) and the item's field fills both
+        // texts first; the bound one still shows the variable, the other the field.
+        var site = fixture.document
+        let templateID = PageID()
+        let clone = try CanonicalPageGraphClone.prepare(page: site.pages[0], destinationPageID: templateID)
+        site.pages.append(DocumentPage(id: templateID, name: "Post", route: .init(rawValue: "/post"), role: .standard,
+            rootNodeIDs: try site.pages[0].rootNodeIDs.map { try XCTUnwrap(clone.nodeIDs[$0]) }, nodes: clone.nodes))
+        let copiedLabel = try XCTUnwrap(clone.nodeIDs[fixture.text]), copiedCount = try XCTUnwrap(clone.nodeIDs[fixture.targetText])
+        let templateIndex = try XCTUnwrap(site.pages.firstIndex { $0.id == templateID })
+        let copiedCountIndex = try XCTUnwrap(site.pages[templateIndex].nodes.firstIndex { $0.id == copiedCount })
+        site.pages[templateIndex].nodes[copiedCountIndex].properties.removeAll { $0.key.rawValue == CanonicalTextBinding.key }
+        var posts = CollectionEditing.newCollection(in: [], name: "Posts")
+        let title = try XCTUnwrap(posts.fields.first)
+        var first = CollectionItem(slug: "first", status: .published)
+        first.setValue(.text("From the item"), for: title.id)
+        posts.items = [first]
+        CollectionEditing.setTemplatePage(templateID, in: &posts)
+        XCTAssertTrue(CollectionEditing.setTextBinding("title", node: copiedLabel, in: &posts))
+        XCTAssertTrue(CollectionEditing.setTextBinding("title", node: copiedCount, in: &posts))
+        site.collections = [posts]
+        try site.validate()
+        let itemHTML = try XCTUnwrap(MultiPageStaticBuildPlanner.plan(document: site).files.first { $0.path == "posts/first.html" }?.contents)
+        XCTAssertTrue(try element(copiedLabel, in: itemHTML).hasSuffix(">Ready &lt;now&gt;"), itemHTML)
+        XCTAssertTrue(try element(copiedCount, in: itemHTML).hasSuffix(">From the item"), itemHTML)
+
+        // Without the variable: the own text (and its translation) is written,
+        // the binding is left out and Check Website names the object.
+        var missing = fixture.document
+        let rootIndex = try XCTUnwrap(missing.pages[0].nodes.firstIndex { $0.id == root })
+        let variablesIndex = try XCTUnwrap(missing.pages[0].nodes[rootIndex].properties.firstIndex { $0.key.rawValue == CanonicalPageState.variablesKey })
+        missing.pages[0].nodes[rootIndex].properties[variablesIndex].value = try XCTUnwrap(CanonicalPageState.properties(variables: [count])[CanonicalPageState.variablesKey])
+        try missing.validate()
+        let missingPlan = try MultiPageStaticBuildPlanner.plan(document: missing)
+        let english = try XCTUnwrap(missingPlan.files.first { $0.path == "index.html" }?.contents)
+        let translated = try XCTUnwrap(missingPlan.files.first { $0.path == "fr/index.html" }?.contents)
+        XCTAssertTrue(try element(fixture.text, in: english).hasSuffix(">Source stays unchanged"), english)
+        XCTAssertTrue(try element(fixture.text, in: translated).hasSuffix(">Texte traduit"), translated)
+        XCTAssertFalse(try openingTag(fixture.text, in: english).contains("data-siteforge-text-variable"))
+        XCTAssertTrue(try element(fixture.targetText, in: english).hasSuffix(">-42"), english)
+        let missingCodes = StaticBuildCompiler.compile(document: missing, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+            .findings.map { "\($0.code):\($0.affectedNodeID?.description ?? "")" }
+        XCTAssertTrue(missingCodes.contains("state-text-binding-missing:\(fixture.text.description)"), "\(missingCodes)")
+        XCTAssertFalse(missingCodes.contains("state-text-binding-missing:\(fixture.targetText.description)"), "\(missingCodes)")
+    }
+
+    // SF-1106-002/005 (C6, ADR-0066): copies keep the binding valid where its
+    // variable exists. A duplicated page copies its variables with their
+    // identities, so its bound text shows the variable; Create Component keeps
+    // the binding inside the definition and the instance on the same page
+    // still shows the variable. Paste: ClipboardTransferTests.
+    func testTextValueBindingStaysValidThroughPageDuplicateAndCreateComponent() throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id, root = document.pages[0].rootNodeIDs[0]
+        let label = CanonicalStateVariable(id: UUID(), name: "Label", type: .string, initial: .string("Ready"))
+        let rootIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == root })
+        document.pages[0].nodes[rootIndex].properties += CanonicalPageState.properties(variables: [label])
+            .map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) }
+        func layout(_ x: Double, _ y: Double, _ width: Double, _ height: Double) -> [NodeProperty] {
+            [("layout.x", x), ("layout.y", y), ("layout.width", width), ("layout.height", height)]
+                .map { NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1)) }
+        }
+        var card = DocumentNode(kind: .frame, name: "Card", parent: .node(root), properties: layout(40, 40, 300, 120))
+        let text = DocumentNode(kind: .text, name: "Status", parent: .node(card.id), properties: layout(60, 60, 200, 40)
+            + [NodeProperty(key: .init(rawValue: "content.text"), value: .string("Own text"))]
+            + CanonicalTextBinding.properties(.init(variable: label.id)).map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) })
+        card.childIDs = [text.id]
+        document.pages[0].nodes[rootIndex].childIDs.append(card.id)
+        document.pages[0].nodes += [card, text]
+        try document.validate()
+
+        // Page duplicate (CanonicalPageGraphClone, as Duplicate Page uses it).
+        let copyID = PageID()
+        let clone = try CanonicalPageGraphClone.prepare(page: document.pages[0], destinationPageID: copyID)
+        let copiedText = try XCTUnwrap(clone.nodes.first { $0.id == clone.nodeIDs[text.id] })
+        XCTAssertEqual(try CanonicalTextBinding.resolve(copiedText), CanonicalTextBinding(variable: label.id))
+        let copy = DocumentPage(id: copyID, name: "Copy", route: .init(rawValue: "/copy"), role: .standard,
+            rootNodeIDs: try document.pages[0].rootNodeIDs.map { try XCTUnwrap(clone.nodeIDs[$0]) }, nodes: clone.nodes)
+        XCTAssertEqual(CanonicalPageState.variables(on: copy), [label], "The copy's variables keep their identities")
+        XCTAssertFalse(EventGraphOutput.findings(copy, availablePageIDs: [copyID]).contains { $0.code == "state-text-binding-missing" })
+        XCTAssertEqual(CanonicalTextBinding.outputPage(copy).nodes.first { $0.id == copiedText.id }?.insertionStringProperty("content.text"), "Ready")
+
+        // Create Component on the same page, then component expansion.
+        let session = DocumentSession(document: document), scene = CanvasViewportSceneID()
+        let prepared = try ComponentCommandRegistry().prepare(.create(card.id), identity: .init(
+            documentID: document.id, pageID: pageID, revision: document.revision,
+            sceneID: scene, rendererGeneration: document.revision), in: document,
+            context: .init(activePageID: pageID, currentSceneID: scene, rendererGeneration: document.revision,
+                selectedNodeIDs: [card.id], availableNodeIDs: [card.id], isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        try session.execute(prepared.command)
+        try session.document.validate()
+        let definition = try XCTUnwrap(session.document.componentDefinitions.first)
+        let source = try XCTUnwrap(definition.nodes.first { $0.kind == .text })
+        XCTAssertEqual(try CanonicalTextBinding.resolve(source), CanonicalTextBinding(variable: label.id), "The definition keeps the binding")
+        let page = try XCTUnwrap(session.document.pages.first { $0.id == pageID })
+        let resolved = try ComponentGraphResolver.resolvedPage(page, in: session.document, breakpoint: .desktop)
+        let expanded = try XCTUnwrap(resolved.nodes.first { $0.kind == .text && (try? CanonicalTextBinding.resolve($0)) != nil })
+        XCTAssertEqual(try CanonicalTextBinding.resolve(expanded)?.variable, label.id)
+        XCTAssertFalse(EventGraphOutput.findings(resolved, availablePageIDs: [pageID]).contains { $0.code == "state-text-binding-missing" })
+        let html = try XCTUnwrap(MultiPageStaticBuildPlanner.plan(document: session.document).files.first { $0.path == "index.html" }?.contents)
+        XCTAssertTrue(html.contains("data-siteforge-text-variable=\"\(label.id.uuidString.lowercased())\""), html)
+        XCTAssertTrue(html.contains(">Ready</"), html)
+        XCTAssertFalse(html.contains("Own text"), html)
+    }
+
+    // OD-039, SF-1101-001/002/003/005/006 (C7, ADR-0066): key-press triggers
+    // (Enter, Escape, arrow keys) are typed triggers of the event graph. They
+    // are one undoable edit, persist, compile to the fixed runtime and run only
+    // while their own object has keyboard focus: buttons and links have it; any
+    // other object is added to the Tab order with a warning. A key press is
+    // keyboard access for pointer interactions. The page overview lists every
+    // trigger and its actions in Layers order, with missing targets counted.
+    func testKeyPressTriggersFocusabilityOutputAndPageInteractionsOverview() throws {
+        typealias Action = CanonicalInteraction.Action
+        let fixture = try formattingFixture()
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, _ ids: [NodeID]) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: ids, document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        func node(_ id: NodeID) throws -> DocumentNode { try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == id }) }
+        XCTAssertEqual(CanonicalInteraction.Trigger.allCases.compactMap(\.keyboardKey), ["Enter", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"])
+        XCTAssertEqual(CanonicalInteraction.Trigger.keyArrowDown.rawValue, "key-arrow-down")
+        let enter = CanonicalInteraction(id: UUID(), trigger: .keyEnter, actions: [Action(kind: .show, target: fixture.targetFrame)])
+        let escape = CanonicalInteraction(id: UUID(), trigger: .keyEscape, actions: [Action(kind: .hide, target: fixture.targetFrame)])
+        let pointer = CanonicalInteraction(id: UUID(), trigger: .pointerEnter, actions: [Action(kind: .toggle, target: fixture.targetFrame)])
+        let graph = CanonicalEventGraph(interactions: [enter, escape, pointer])
+        XCTAssertTrue(graph.isValid)
+        XCTAssertTrue(graph.isAllowed(on: .frame), "The website makes other objects focusable for key presses")
+
+        // One undoable transaction per edit.
+        let before = session.document.pages
+        try session.execute(prepare(.events(graph), [fixture.frame]).documentCommand)
+        XCTAssertEqual(try CanonicalEventGraph.resolve(node(fixture.frame)), graph)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        let after = session.document.pages
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+        try session.execute(prepare(.events(CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .keyArrowDown,
+            actions: [Action(kind: .focus, target: fixture.frame)])])), [fixture.text]).documentCommand)
+
+        // An unknown key is not a trigger; persistence keeps the key triggers.
+        let frameIndex = try XCTUnwrap(session.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        let propertyIndex = try XCTUnwrap(session.document.pages[0].nodes[frameIndex].properties.firstIndex { $0.key.rawValue == CanonicalEventGraph.interactionsKey })
+        guard case .string(let stored) = session.document.pages[0].nodes[frameIndex].properties[propertyIndex].value else {
+            return XCTFail("Interactions are stored as text")
+        }
+        XCTAssertTrue(stored.contains("\"trigger\":\"key-enter\""), stored)
+        for forged in [stored.replacingOccurrences(of: "key-enter", with: "key-space"), stored.replacingOccurrences(of: "key-escape", with: "keydown")] {
+            var copy = session.document
+            copy.pages[0].nodes[frameIndex].properties[propertyIndex].value = .string(forged)
+            XCTAssertThrowsError(try copy.validate(), forged) { XCTAssertEqual($0 as? ModelValidationError, .invalidInteractionGraphState) }
+        }
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
+
+        // Output: a button keeps its own focus; a frame and a text join the Tab order.
+        var document = session.document
+        let root = try XCTUnwrap(PageBackgroundPolicy.root(in: document.pages[0])).id
+        let buttonValues: [String: PropertyValue] = ["layout.x": .number(20), "layout.y": .number(400), "layout.width": .number(120),
+                                                     "layout.height": .number(40), CanonicalLinkTarget.labelKey: .string("Go")]
+        let buttonGraph = CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .keyEnter,
+            actions: [Action(kind: .show, target: fixture.targetFrame)])])
+        let button = DocumentNode(kind: .button, name: "Go", parent: .node(root),
+            properties: buttonValues.merging(buttonGraph.properties) { first, _ in first }.sorted { $0.key < $1.key }
+                .map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) })
+        let rootIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == root })
+        document.pages[0].nodes[rootIndex].childIDs.append(button.id)
+        document.pages[0].nodes.append(button)
+        try document.validate()
+        let output = try EventGraphOutput.page(document.pages[0], staticRoutes: [:], prefix: "")
+        XCTAssertEqual(output.attributes[fixture.frame], " tabindex=\"0\"")
+        XCTAssertEqual(output.attributes[fixture.text], " tabindex=\"0\"")
+        XCTAssertNil(output.attributes[button.id], "A button already has keyboard focus")
+        let configurations = try JSONDecoder().decode([EventOutputConfiguration].self,
+            from: Data(try XCTUnwrap(output.configurations[fixture.frame]).utf8))
+        XCTAssertEqual(configurations.map(\.trigger), ["key-enter", "key-escape", "pointer-enter"])
+        XCTAssertEqual(configurations.first?.actions, [EventOutputConfiguration.Action(kind: "show", target: fixture.targetFrame.description)])
+        let html = try XCTUnwrap(MultiPageStaticBuildPlanner.plan(document: document).files.first { $0.path == "index.html" }?.contents)
+        XCTAssertTrue(html.contains("class=\"sf-node-\(fixture.frame.description)\" tabindex=\"0\""), html)
+        XCTAssertTrue(html.contains("<script src=\"siteforge-events.js\" defer></script>"), html)
+        let codes = StaticBuildCompiler.compile(document: document, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+            .findings.map { "\($0.code):\($0.affectedNodeID?.description ?? "")" }
+        XCTAssertTrue(codes.contains("interaction-key-focus-added:\(fixture.frame.description)"), "\(codes)")
+        XCTAssertTrue(codes.contains("interaction-key-focus-added:\(fixture.text.description)"), "\(codes)")
+        XCTAssertFalse(codes.contains("interaction-key-focus-added:\(button.id.description)"), "\(codes)")
+        XCTAssertFalse(codes.contains("interaction-pointer-only:\(fixture.frame.description)"), "A key press is keyboard access: \(codes)")
+        let script = EventGraphRuntime.javascript
+        for expected in ["'key-enter': 'Enter'", "'key-arrow-right': 'ArrowRight'", "event.target !== element", "event.isComposing",
+                         "if (key.startsWith('Arrow')) event.preventDefault();", "!event.defaultPrevented",
+                         "element.setAttribute('aria-haspopup', 'dialog');", "entry.backdrop.setAttribute('aria-hidden', 'true');",
+                         "opener.tagName === 'A'"] {
+            XCTAssertTrue(script.contains(expected), expected)
+        }
+
+        // Page overview: Layers order, then each object's order; names authors see.
+        let summaries = PageInteractionOverview.summaries(document.pages[0], websitePages: document.websitePages)
+        XCTAssertEqual(summaries.map(\.nodeID), [fixture.text, fixture.frame, fixture.frame, fixture.frame, button.id])
+        XCTAssertEqual(summaries.map(\.trigger), [.keyArrowDown, .keyEnter, .keyEscape, .pointerEnter, .keyEnter])
+        XCTAssertEqual(summaries[0].actions, ["Move Focus To Source appearance"])
+        XCTAssertEqual(summaries[1].actions, ["Show Target appearance"])
+        XCTAssertEqual(summaries[1].accessibilityLabel, "Source appearance, Enter Key Pressed: Show Target appearance")
+        XCTAssertEqual(Set(summaries.map(\.id)).count, summaries.count)
+        XCTAssertEqual(summaries.map(\.unavailableActions), [0, 0, 0, 0, 0])
+        var orphaned = document
+        orphaned.pages[0].nodes.removeAll { $0.id == fixture.targetFrame }
+        let orphanedRoot = try XCTUnwrap(orphaned.pages[0].nodes.firstIndex { $0.id == root })
+        orphaned.pages[0].nodes[orphanedRoot].childIDs.removeAll { $0 == fixture.targetFrame }
+        let orphanedSummaries = PageInteractionOverview.summaries(orphaned.pages[0], websitePages: orphaned.websitePages)
+        XCTAssertEqual(orphanedSummaries.map(\.unavailableActions), [0, 1, 1, 1, 1])
+        XCTAssertEqual(orphanedSummaries[1].actions, ["Show (missing object)"])
+        XCTAssertTrue(orphanedSummaries[1].accessibilityLabel.hasSuffix(". 1 action cannot run"), orphanedSummaries[1].accessibilityLabel)
+        XCTAssertEqual(PageInteractionOverview.describe(Action(kind: .navigate, page: PageID()), names: [:], pageNames: [:], variables: [:]),
+                       "Go To Page (missing page)")
+        XCTAssertEqual(PageInteractionOverview.describe(Action(kind: .setVariable, variable: UUID(), value: .number(3)), names: [:],
+                                                        pageNames: [:], variables: [:]), "Set (missing variable) to 3")
+        XCTAssertTrue(PageInteractionOverview.summaries(try formattingFixture().document.pages[0], websitePages: []).isEmpty)
+    }
+
+    // SF-1101-007, SF-1103-007, SF-1104-007, SF-1105-007, SF-1106-007 (lane C
+    // 007, ADR-0066): validation, one Inspector edit, interaction and motion
+    // output, Check Website findings, the page overview and a full build stay
+    // within generous safety bounds on the standard (100) and large (10,000
+    // objects) fixtures with motion, interactions, key presses, a page-long
+    // focus loop, visibility conditions, text bindings and overlays. The bounds
+    // catch accidental quadratic work (focus-loop detection is linear), not
+    // machine speed.
+    func testMotionAndInteractionChecksAndOutputStayWithinBoundsOnStandardAndLargeFixtures() throws {
+        executionTimeAllowance = 180
+        continueAfterFailure = false
+        typealias Action = CanonicalInteraction.Action
+        let clock = ContinuousClock()
+        for (count, bound) in [(100, Duration.seconds(10)), (10_000, .seconds(120))] {
+            var document = ProjectCreation.blank()
+            let root = document.pages[0].rootNodeIDs[0]
+            let rootIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == root })
+            let open = CanonicalStateVariable(id: UUID(), name: "Open", type: .boolean, initial: .boolean(false))
+            let label = CanonicalStateVariable(id: UUID(), name: "Label", type: .string, initial: .string("Ready"))
+            document.pages[0].nodes[rootIndex].properties += CanonicalPageState.properties(variables: [open, label])
+                .map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) }
+            let ids = (0..<count).map { _ in NodeID() }
+            // Every tenth object is a popover; the others are texts in one page-long Focus In loop.
+            let texts = ids.indices.filter { !$0.isMultiple(of: 10) }
+            let positions = Dictionary(uniqueKeysWithValues: texts.enumerated().map { ($0.element, $0.offset) })
+            var nodes: [DocumentNode] = []
+            for index in ids.indices {
+                var values: [String: PropertyValue] = ["layout.x": .number(Double(index % 40) * 30), "layout.y": .number(Double(index / 40) * 30),
+                                                       "layout.width": .number(28), "layout.height": .number(28)]
+                if index.isMultiple(of: 3) {
+                    values.merge(CanonicalMotion(transition: CanonicalMotion.defaultTransition, entrance: CanonicalMotion.defaultEntrance).properties) { first, _ in first }
+                }
+                if index.isMultiple(of: 10) {
+                    values.merge(CanonicalOverlay(kind: .popover, dismissesOnOutsideClick: true, placement: .below).properties) { first, _ in first }
+                } else {
+                    let position = try XCTUnwrap(positions[index])
+                    let next = ids[texts[(position + 1) % texts.count]]
+                    var pressed = [Action(kind: .setVariable, variable: label.id, value: .string("Go"))]
+                    if (index + 1).isMultiple(of: 10), index + 1 < count { pressed.append(Action(kind: .openOverlay, target: ids[index + 1])) }
+                    values.merge(CanonicalEventGraph(interactions: [
+                        CanonicalInteraction(id: UUID(), trigger: .focusIn, actions: [Action(kind: .show, target: next), Action(kind: .focus, target: next)]),
+                        CanonicalInteraction(id: UUID(), trigger: .keyEnter, actions: pressed),
+                        CanonicalInteraction(id: UUID(), trigger: .keyEscape, actions: [Action(kind: .toggleVariable, variable: open.id)]),
+                    ]).properties) { first, _ in first }
+                    values["content.text"] = .string("Item \(index)")
+                    if index.isMultiple(of: 5) { values.merge(CanonicalTextBinding.properties(.init(variable: label.id))) { first, _ in first } }
+                    if index.isMultiple(of: 7) {
+                        values.merge(CanonicalPageState.properties(condition: .init(variable: open.id, equals: .boolean(false)))) { first, _ in first }
+                    }
+                }
+                nodes.append(DocumentNode(id: ids[index], kind: index.isMultiple(of: 10) ? .frame : .text, name: "Item \(index)", parent: .node(root),
+                    properties: values.sorted { $0.key < $1.key }.map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) }))
+            }
+            document.pages[0].nodes[rootIndex].childIDs += ids
+            document.pages[0].nodes += nodes
+            let boundTexts = texts.filter { $0.isMultiple(of: 5) }.count
+
+            let started = clock.now
+            try document.validate()
+            let page = document.pages[0]
+            let output = try EventGraphOutput.page(page, staticRoutes: [:], prefix: "")
+            let findings = EventGraphOutput.findings(page, availablePageIDs: [page.id])
+            let motion = try MotionOutput.css(page.nodes) + FlatContainerOutput.css([page])
+            let summaries = PageInteractionOverview.summaries(page, websitePages: document.websitePages)
+            let written = CanonicalTextBinding.outputPage(page)
+            let identity = DesignInspectorOperationIdentity(documentID: document.id, pageID: page.id, revision: document.revision,
+                sceneID: CanvasViewportSceneID(), rendererGeneration: document.revision)
+            let edit = try DecorativeEffectCommandRegistry.prepare(.textBinding(nil), identity: identity, orderedNodeIDs: [ids[5]], document: document,
+                context: .init(activePageID: page.id, currentSceneID: identity.sceneID, rendererGeneration: document.revision,
+                    selectedNodeIDs: [ids[5]], availableNodeIDs: Set(page.nodes.map(\.id)), isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+            let plan = try MultiPageStaticBuildPlanner.plan(document: document)
+            XCTAssertLessThan(started.duration(to: clock.now), bound, "\(count) objects: safety bound only")
+
+            XCTAssertEqual(output.configurations.count, texts.count)
+            XCTAssertEqual(output.attributes.values.filter { $0.contains("data-siteforge-text-variable") }.count, boundTexts)
+            XCTAssertEqual(output.attributes.values.filter { $0.contains("tabindex=\"0\"") }.count, texts.count)
+            XCTAssertEqual(findings.filter { $0.code == "interaction-focus-loop" }.count, texts.count, "\(count): one page-long loop")
+            XCTAssertEqual(findings.filter { $0.code == "interaction-key-focus-added" }.count, texts.count)
+            XCTAssertFalse(findings.contains { $0.code == "interaction-target-missing" || $0.code == "state-text-binding-missing" })
+            XCTAssertEqual(summaries.count, texts.count * 3)
+            XCTAssertEqual(written.nodes.filter { $0.insertionStringProperty("content.text") == "Ready" }.count, boundTexts)
+            XCTAssertFalse(motion.isEmpty)
+            XCTAssertEqual(edit.applicableNodeIDs, [ids[5]])
+            XCTAssertTrue(plan.files.contains { $0.path == "siteforge-events.js" })
+        }
+    }
+
+    // SF-1101-008, SF-1104-004/006/008, SF-1105-002/006/008 (C10, ADR-0065):
+    // the interaction and motion runtimes run in an owned headless browser
+    // against actual compiled output (Tests/Tooling/interaction_runtime_browser.py,
+    // which reuses the Flow harness's owned Chrome, loopback DevTools client and
+    // loopback server). Pure helper checks run first so a helper defect cannot
+    // pass as a browser result. The ledger and captures attach.
+    func testInteractionAndMotionRuntimesActualBrowserFocusTrapEscapePlacementAndReveal() throws {
+        let root = interactionBrowserToolingRoot
+        let files = FileManager.default
+        let folder = files.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: folder) }
+        let sites = folder.appendingPathComponent("sites", isDirectory: true)
+        let captures = folder.appendingPathComponent("captures", isDirectory: true)
+        let report = folder.appendingPathComponent("interaction-runtime-browser-report.json")
+        let plan = try MultiPageStaticBuildPlanner.plan(document: interactionBrowserFixture())
+        XCTAssertTrue(plan.files.contains { $0.path == "siteforge-events.js" && $0.contents == EventGraphRuntime.javascript })
+        XCTAssertTrue(plan.files.contains { $0.path == "siteforge-motion.js" && $0.contents == MotionRuntime.javascript })
+        XCTAssertTrue(plan.binaryFiles.isEmpty)
+        for file in plan.files {
+            let components = file.path.split(separator: "/")
+            guard !file.path.isEmpty, !file.path.hasPrefix("/"), !components.contains(".."), !components.contains(".") else {
+                throw CocoaError(.fileWriteInvalidFileName)
+            }
+            let destination = sites.appendingPathComponent("interactions/" + file.path)
+            try files.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(file.contents.utf8).write(to: destination)
+        }
+        func python(_ arguments: [String]) throws -> (status: Int32, output: Data) {
+            let process = Process(), pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.currentDirectoryURL = root
+            process.arguments = arguments
+            process.standardOutput = pipe; process.standardError = pipe
+            try process.run()
+            let output = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (process.terminationStatus, output)
+        }
+        let helpers = try python([root.appendingPathComponent("Tests/Tooling/test_interaction_runtime_browser.py").path])
+        let helperLog = XCTAttachment(data: helpers.output, uniformTypeIdentifier: "public.plain-text")
+        helperLog.name = "Interaction runtime harness helper checks"; helperLog.lifetime = .keepAlways; add(helperLog)
+        XCTAssertEqual(helpers.status, 0, String(data: helpers.output, encoding: .utf8) ?? "Helper checks failed")
+        let browser = try python([root.appendingPathComponent("Tests/Tooling/interaction_runtime_browser.py").path,
+            "--root", sites.path, "--report", report.path, "--captures", captures.path])
+        let log = XCTAttachment(data: browser.output, uniformTypeIdentifier: "public.plain-text")
+        log.name = "Interaction runtime actual browser log"; log.lifetime = .keepAlways; add(log)
+        if let data = try? Data(contentsOf: report) {
+            let receipt = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            receipt.name = "Interaction runtime actual browser case ledger"; receipt.lifetime = .keepAlways; add(receipt)
+        }
+        let images = (try? files.contentsOfDirectory(at: captures, includingPropertiesForKeys: nil)) ?? []
+        for image in images.filter({ $0.pathExtension == "png" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let attachment = XCTAttachment(data: try Data(contentsOf: image), uniformTypeIdentifier: "public.png")
+            attachment.name = "Interaction runtime capture " + image.lastPathComponent; attachment.lifetime = .keepAlways; add(attachment)
+        }
+        XCTAssertEqual(browser.status, 0, String(data: browser.output, encoding: .utf8) ?? "Browser checks failed")
+        let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: report)) as? [String: Any])
+        let cases = try XCTUnwrap(result["cases"] as? [[String: Any]])
+        XCTAssertEqual(cases.compactMap { $0["case"] as? String }, Self.interactionBrowserCases)
+        for entry in cases where entry["outcome"] as? String != "passed" {
+            XCTFail("\(entry["case"] ?? "case"): \(entry["detail"] ?? "failed")")
+        }
+        XCTAssertEqual(result["failed"] as? Int, 0)
+        XCTAssertEqual(result["passed"] as? Int, Self.interactionBrowserCases.count)
+    }
+
+    /// Case names of Tests/Tooling/interaction_runtime_browser.py, in order.
+    private static let interactionBrowserCases = [
+        "runtimes-load-from-the-site", "modal-opens-centred-with-backdrop-and-focus", "modal-keeps-tab-focus-inside",
+        "escape-closes-modal-and-restores-focus", "menu-opens-below-trigger-and-arrow-keys-move",
+        "menu-flips-above-at-viewport-edge", "reveal-on-scroll-includes-container-contents",
+        "reduced-motion-and-no-javascript-keep-content-visible",
+        "key-press-runs-only-on-the-focused-object", "bound-text-starts-with-value-and-follows-variable",
+        "openers-announce-popup-and-expanded-state",
+    ]
+
+    /// Tooling inputs prepared beside the products (owner-local testing), else
+    /// the checkout (hosted or direct XCTest), as for the Flow browser test.
+    private var interactionBrowserToolingRoot: URL {
+        if let prepared = Bundle.main.object(forInfoDictionaryKey: "SiteForgeTestToolingRoot") as? String {
+            return URL(fileURLWithPath: prepared, isDirectory: true)
+        }
+        return URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    /// C10 fixture on a static-layout page: "Open dialog" opens a modal whose
+    /// two buttons are its contents; "Open menu" opens a menu placed below it
+    /// with three buttons; a container far down the page reveals on scroll
+    /// with its text. C6/C7 (ADR-0066): a "Key panel" frame (added to the Tab
+    /// order by the website) sets variables on Enter, Down Arrow and Escape, and
+    /// two texts show those variables. Labels and values match
+    /// Tests/Tooling/interaction_runtime_browser.py.
+    private func interactionBrowserFixture() throws -> CanonicalDocument {
+        typealias Action = CanonicalInteraction.Action
+        var document = ProjectCreation.blank()
+        let root = document.pages[0].rootNodeIDs[0]
+        func node(_ kind: NodeKind, _ name: String, parent: NodeID, _ box: (Double, Double, Double, Double),
+                  _ values: [String: PropertyValue] = [:]) -> DocumentNode {
+            var all = values
+            all["layout.x"] = .number(box.0); all["layout.y"] = .number(box.1)
+            all["layout.width"] = .number(box.2); all["layout.height"] = .number(box.3)
+            if kind == .button { all[CanonicalLinkTarget.labelKey] = .string(name) }
+            return DocumentNode(kind: kind, name: name, parent: .node(parent),
+                                properties: all.sorted { $0.key < $1.key }.map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) })
+        }
+        func opener(_ label: String, _ box: (Double, Double, Double, Double), opens target: NodeID) -> DocumentNode {
+            node(.button, label, parent: root, box, CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .click,
+                actions: [Action(kind: .openOverlay, target: target)])]).properties)
+        }
+        func dismissButton(_ label: String, _ box: (Double, Double, Double, Double), overlay: NodeID) -> DocumentNode {
+            node(.button, label, parent: overlay, box, CanonicalEventGraph(interactions: [CanonicalInteraction(id: UUID(), trigger: .click,
+                actions: [Action(kind: .closeOverlay, target: overlay)])]).properties)
+        }
+        var modal = node(.frame, "Dialog", parent: root, (520, 300, 400, 200), CanonicalOverlay(kind: .modal, dismissesOnOutsideClick: true).properties)
+        let confirm = dismissButton("Confirm", (560, 420, 140, 40), overlay: modal.id)
+        let cancel = dismissButton("Cancel", (740, 420, 140, 40), overlay: modal.id)
+        modal.childIDs = [confirm.id, cancel.id]
+        var menu = node(.frame, "Menu", parent: root, (900, 100, 200, 150),
+                        CanonicalOverlay(kind: .menu, dismissesOnOutsideClick: true, placement: .below).properties)
+        let items = [("First", 110.0), ("Second", 155.0), ("Third", 200.0)].map {
+            dismissButton($0.0, (920, $0.1, 160, 36), overlay: menu.id)
+        }
+        menu.childIDs = items.map(\.id)
+        var reveal = node(.frame, "Reveal", parent: root, (40, 2000, 600, 200), CanonicalMotion(entrance: CanonicalMotion.defaultEntrance).properties)
+        let revealText = node(.text, "Revealed text", parent: reveal.id, (60, 2040, 400, 80), ["content.text": .string("Revealed with its container")])
+        reveal.childIDs = [revealText.id]
+        let openDialog = opener("Open dialog", (40, 40, 160, 40), opens: modal.id)
+        let openMenu = opener("Open menu", (40, 560, 160, 40), opens: menu.id)
+        let status = CanonicalStateVariable(id: UUID(), name: "Status", type: .string, initial: .string("Ready"))
+        let step = CanonicalStateVariable(id: UUID(), name: "Step", type: .number, initial: .number(0))
+        let rootIndex = try XCTUnwrap(document.pages[0].nodes.firstIndex { $0.id == root })
+        document.pages[0].nodes[rootIndex].properties += CanonicalPageState.properties(variables: [status, step])
+            .map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) }
+        let keyPanel = node(.frame, "Key panel", parent: root, (40, 120, 300, 60), CanonicalEventGraph(interactions: [
+            CanonicalInteraction(id: UUID(), trigger: .keyEnter, actions: [Action(kind: .setVariable, variable: status.id, value: .string("Entered"))]),
+            CanonicalInteraction(id: UUID(), trigger: .keyArrowDown, actions: [Action(kind: .setVariable, variable: step.id, value: .number(2))]),
+            CanonicalInteraction(id: UUID(), trigger: .keyEscape, actions: [Action(kind: .setVariable, variable: status.id, value: .string("Escaped"))]),
+        ]).properties)
+        let statusText = node(.text, "Status text", parent: root, (40, 200, 300, 40),
+            ["content.text": PropertyValue.string("Status")].merging(CanonicalTextBinding.properties(.init(variable: status.id))) { first, _ in first })
+        let stepText = node(.text, "Step text", parent: root, (40, 260, 300, 40),
+            ["content.text": PropertyValue.string("Step")].merging(CanonicalTextBinding.properties(.init(variable: step.id))) { first, _ in first })
+        document.pages[0].nodes[0].childIDs += [openDialog.id, modal.id, openMenu.id, menu.id, reveal.id, keyPanel.id, statusText.id, stepText.id]
+        document.pages[0].nodes += [openDialog, modal, confirm, cancel, openMenu, menu] + items + [reveal, revealText, keyPanel, statusText, stepText]
+        try document.validate()
+        XCTAssertFalse(document.pages[0].usesConnectedOutput, "The browser fixture uses static layout")
+        return document
+    }
+
+    // OD-040, SF-1103-003/006/007, SF-1104-003/004/006/007: output is CSS-first
+    // and deterministic, sits behind prefers-reduced-motion, hides content only
+    // once the runtime marks the page ready, ships the runtime only for reveal
+    // nodes, and every motion CSS line survives the release profile.
+    func testMotionOutputIsReducedMotionSafeProgressiveDeterministicAndReleaseStable() throws {
+        var fixture = try formattingFixture()
+        let frameIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.frame })
+        let textIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.text })
+        var entrance = CanonicalMotion.defaultEntrance
+        entrance.offsetPercent = 20; entrance.delayMilliseconds = 150
+        let reveal = CanonicalMotion(entrance: entrance)
+        let hover = CanonicalMotion(transition: CanonicalMotion.Transition(milliseconds: 250, easing: .easeInOut))
+        fixture.document.pages[0].nodes[frameIndex].properties += reveal.properties.sorted { $0.key < $1.key }
+            .map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        fixture.document.pages[0].nodes[textIndex].properties += hover.properties.sorted { $0.key < $1.key }
+            .map { .init(key: .init(rawValue: $0.key), value: $0.value) }
+        try fixture.document.validate()
+
+        let plan = try MultiPageStaticBuildPlanner.plan(document: fixture.document)
+        XCTAssertEqual(try MultiPageStaticBuildPlanner.plan(document: fixture.document).integrityDigest, plan.integrityDigest)
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        let frame = fixture.frame.description, text = fixture.text.description
+        XCTAssertTrue(html.contains(" data-siteforge-entrance=\"20\" data-siteforge-node=\"\(frame)\""), html)
+        XCTAssertEqual(html.components(separatedBy: "data-siteforge-entrance=").count, 2, html)
+        XCTAssertTrue(html.contains("<script src=\"siteforge-motion.js\" defer></script>"), html)
+        XCTAssertTrue(html.contains("styles.css"), html)
+        XCTAssertTrue(plan.files.contains { $0.path == "siteforge-motion.js" && $0.contents == MotionRuntime.javascript })
+        XCTAssertTrue(css.contains("@keyframes sf-entrance-\(frame) { from { opacity:0;transform:translate3d(0,24px,0); } }"), css)
+        XCTAssertTrue(css.contains("@media screen and (prefers-reduced-motion:no-preference) { .sf-motion-ready .sf-node-\(frame)[data-siteforge-entrance]:not(.sf-motion-entered) { opacity:0; } }"), css)
+        XCTAssertTrue(css.contains("{ .sf-motion-ready .sf-node-\(frame).sf-motion-entered { animation:sf-entrance-\(frame) 600ms ease-out 150ms both; } }"), css)
+        XCTAssertTrue(css.contains("@media (prefers-reduced-motion:no-preference) { .sf-node-\(text) { transition-property:background-color,opacity; transition-duration:250ms; transition-timing-function:ease-in-out; } }"), css)
+        XCTAssertFalse(css.contains("sf-entrance-\(text)"), css)
+        // Every motion rule is a single gated line, so nothing hides content
+        // outside `prefers-reduced-motion:no-preference`, and Static Release,
+        // which minifies whole rules (ADR-0120), keeps each line's minified form.
+        let motionLines = css.split(separator: "\n").filter { $0.contains("sf-motion") || $0.contains("sf-entrance") || $0.contains("transition-property") }
+        XCTAssertEqual(motionLines.count, 4)
+        for line in motionLines {
+            XCTAssertTrue(line.hasPrefix("@media") || line.hasPrefix("@keyframes"), String(line))
+            XCTAssertTrue(line.hasPrefix("@keyframes") || line.contains("prefers-reduced-motion:no-preference"), String(line))
+            XCTAssertEqual(line.filter { $0 == "{" }.count, line.filter { $0 == "}" }.count, String(line))
+        }
+        let release = LocalBuildProfileCompiler.compile(plan, profile: .staticRelease).0
+        let releaseCSS = try XCTUnwrap(release.files.first { $0.path == "styles.css" }?.contents)
+        for line in motionLines { XCTAssertTrue(releaseCSS.contains(StaticCSSOptimizer.minify(String(line))), String(line)) }
+
+        // The runtime is fixed SiteForge code: it reveals immediately with
+        // Reduce Motion or without IntersectionObserver, on keyboard focus and
+        // at the end of the page; it has no author text or network access.
+        let script = MotionRuntime.javascript
+        XCTAssertTrue(script.contains("matchMedia('(prefers-reduced-motion: reduce)')"))
+        XCTAssertTrue(script.contains("typeof IntersectionObserver !== 'function'"))
+        XCTAssertTrue(script.contains("document.addEventListener('focusin', focus, true)"))
+        XCTAssertTrue(script.contains("document.documentElement.scrollHeight - 2"))
+        for forbidden in ["eval(", "innerHTML", "fetch(", "XMLHttpRequest", "localStorage"] { XCTAssertFalse(script.contains(forbidden), forbidden) }
+
+        // A transition alone links the stylesheet without the runtime; no
+        // motion at all leaves no motion output.
+        var hoverOnly = fixture.document
+        hoverOnly.pages[0].nodes[frameIndex].properties.removeAll { $0.key.rawValue.hasPrefix(CanonicalMotion.prefix) }
+        let hoverPlan = try MultiPageStaticBuildPlanner.plan(document: hoverOnly)
+        let hoverHTML = try XCTUnwrap(hoverPlan.files.first { $0.path == "index.html" }?.contents)
+        XCTAssertTrue(hoverHTML.contains("styles.css"), hoverHTML)
+        XCTAssertFalse(hoverHTML.contains("siteforge-motion.js"), hoverHTML)
+        XCTAssertFalse(hoverPlan.files.contains { $0.path == "siteforge-motion.js" })
+        var still = hoverOnly
+        still.pages[0].nodes[textIndex].properties.removeAll { $0.key.rawValue.hasPrefix(CanonicalMotion.prefix) }
+        let plain = try MultiPageStaticBuildPlanner.plan(document: still)
+        XCTAssertFalse(plain.files.contains { $0.path == "siteforge-motion.js" || $0.contents.contains("sf-entrance")
+            || $0.contents.contains("data-siteforge-entrance") || $0.contents.contains("transition-property") })
+    }
+
+    // SF-0508-004, SF-1101-003/004, SF-1204-003/004: Flow eligibility follows
+    // the resolved enabled fill stack (disabled layers ignored, at most 64
+    // stops); disabled intent is retained without runtime output; preflight
+    // enforces four enabled flows per page; and the emitted configuration is
+    // escaped numeric data whose angle matches the static CSS gradient.
+    func testFlowEligibilityDisabledIntentPageBudgetAndEscapedOutputConfiguration() throws {
+        let fixture = try formattingFixture()
+        let root = fixture.document.pages[0].rootNodeIDs[0]
+        let red = CanonicalSolidColor(red: 1, green: 0, blue: 0, alpha: 1)
+        let blue = CanonicalSolidColor(red: 0, green: 0, blue: 1, alpha: 1)
+        func gradient(angle: Double, stops count: Int = 2) -> CanonicalFillLayer {
+            .linearGradient(angleDegrees: angle, stops: (0..<count).map {
+                CanonicalGradientStop(id: .init(), position: Double($0) / Double(count - 1), color: $0.isMultiple(of: 2) ? red : blue)
+            })
+        }
+        func properties(_ values: [String: PropertyValue]) -> [NodeProperty] {
+            values.sorted { $0.key < $1.key }.map { NodeProperty(key: .init(rawValue: $0.key), value: $0.value) }
+        }
+        func replacingFill(_ node: DocumentNode, _ layers: [CanonicalFillLayer]) -> DocumentNode {
+            var copy = node
+            copy.properties.removeAll { $0.key.rawValue.hasPrefix(CanonicalFillLayerCodec.namespaceRoot) }
+            copy.properties += properties(CanonicalFillLayerCodec.propertyValues(for: layers))
+            return copy
+        }
+        let source = try XCTUnwrap(fixture.document.pages[0].nodes.first { $0.id == fixture.frame })
+        XCTAssertNil(CanonicalFlowGradient.gradient(on: source), "Two enabled layers are not one flowing gradient")
+        let diagonal = gradient(angle: -45)
+        let withDisabled = replacingFill(source, [.solid(color: .init(red: 0.1, green: 0.2, blue: 0.3, alpha: 1), isEnabled: false), diagonal])
+        XCTAssertEqual(CanonicalFlowGradient.gradient(on: withDisabled)?.id, diagonal.id)
+        XCTAssertNotNil(CanonicalFlowGradient.gradient(on: replacingFill(source, [gradient(angle: 0, stops: 64)])))
+        XCTAssertNil(CanonicalFlowGradient.gradient(on: replacingFill(source, [gradient(angle: 0, stops: 65)])))
+        XCTAssertNil(CanonicalFlowGradient.gradient(on: replacingFill(source, [.solid(color: red)])))
+
+        // Enabling on an ineligible fill is refused; disabled intent is kept
+        // as authored data and produces no runtime, attribute or finding.
+        let session = DocumentSession(document: fixture.document)
+        func prepare(_ edit: DecorativeEffectEdit, _ ids: [NodeID]) throws -> PreparedDesignInspectorEdit {
+            let document = session.document, page = document.pages[0]
+            return try DecorativeEffectCommandRegistry.prepare(edit,
+                identity: .init(documentID: document.id, pageID: page.id, revision: document.revision,
+                    sceneID: fixture.scene, rendererGeneration: document.revision),
+                orderedNodeIDs: ids, document: document,
+                context: .init(activePageID: page.id, currentSceneID: fixture.scene, rendererGeneration: document.revision,
+                    selectedNodeIDs: ids, availableNodeIDs: Set(page.nodes.map(\.id)),
+                    isLifecycleAvailable: true, lifecycleDisabledReason: nil))
+        }
+        let unchanged = session.document
+        XCTAssertThrowsError(try prepare(.flow(.defaults), [fixture.frame])) {
+            XCTAssertEqual($0 as? DesignInspectorError, .unavailable(CanonicalFlowGradient.unavailableReason))
+        }
+        XCTAssertEqual(session.document, unchanged)
+        var disabled = CanonicalFlowGradient.defaults; disabled.enabled = false
+        try session.execute(prepare(.flow(disabled), [fixture.frame]).documentCommand)
+        let frame = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == fixture.frame })
+        XCTAssertEqual(try CanonicalFlowGradient.resolve(frame), disabled)
+        XCTAssertNil(try DecorativeEffectOutput.configuration(frame))
+        let retained = try MultiPageStaticBuildPlanner.plan(document: session.document)
+        XCTAssertFalse(retained.files.contains { $0.path == "siteforge-effects.js" })
+        XCTAssertFalse(retained.files.contains { $0.contents.contains("data-siteforge-flow") })
+        XCTAssertFalse(StaticBuildCompiler.compile(document: session.document, profileSelection: .init(profile: .development),
+            resourceDescriptors: [:], resourceData: [:]).findings.contains { $0.code == "flow-configuration-unavailable" })
+
+        // Page budget: four enabled flows compile; a fifth is an actionable
+        // preflight error rather than a silently dropped effect.
+        var budget = fixture.document
+        var flowIDs: [NodeID] = []
+        for offset in 0..<5 {
+            var values = CanonicalFillLayerCodec.propertyValues(for: [gradient(angle: offset == 0 ? -45 : 90)])
+            for (key, value) in CanonicalFlowGradient.defaults.properties { values[key] = value }
+            values["layout.x"] = .number(20 + Double(offset) * 130); values["layout.y"] = .number(420)
+            values["layout.width"] = .number(120); values["layout.height"] = .number(80)
+            let node = DocumentNode(kind: .frame, name: "Flow \(offset)", parent: .node(root), properties: properties(values))
+            budget.pages[0].nodes.append(node)
+            budget.pages[0].nodes[0].childIDs.append(node.id)
+            flowIDs.append(node.id)
+        }
+        try budget.validate()
+        let over = StaticBuildCompiler.compile(document: budget, profileSelection: .init(profile: .development), resourceDescriptors: [:], resourceData: [:])
+        XCTAssertFalse(over.canWrite)
+        XCTAssertTrue(over.findings.contains { $0.code == "flow-configuration-unavailable" })
+        XCTAssertThrowsError(try MultiPageStaticBuildPlanner.plan(document: budget))
+        let fifth = try XCTUnwrap(budget.pages[0].nodes.firstIndex { $0.id == flowIDs[4] })
+        budget.pages[0].nodes[fifth].properties.removeAll { $0.key.rawValue.hasPrefix(CanonicalFlowGradient.namespace) }
+        try budget.validate()
+        XCTAssertFalse(StaticBuildCompiler.compile(document: budget, profileSelection: .init(profile: .development),
+            resourceDescriptors: [:], resourceData: [:]).findings.contains { $0.code == "flow-configuration-unavailable" })
+        let plan = try MultiPageStaticBuildPlanner.plan(document: budget)
+        let html = try XCTUnwrap(plan.files.first { $0.path == "index.html" }?.contents)
+        XCTAssertEqual(html.components(separatedBy: "data-siteforge-flow=").count - 1, 4)
+        XCTAssertEqual(html.components(separatedBy: "siteforge-effects.js").count - 1, 1)
+        XCTAssertTrue(plan.files.contains { $0.path == "siteforge-effects.js" && $0.contents == DecorativeEffectRuntime.javascript })
+
+        // The attribute carries escaped validated numbers; the runtime angle is
+        // the canonical normalized angle that the static CSS gradient uses.
+        let first = try XCTUnwrap(budget.pages[0].nodes.first { $0.id == flowIDs[0] })
+        let config = try XCTUnwrap(DecorativeEffectOutput.configuration(first))
+        XCTAssertEqual(config.version, 1)
+        XCTAssertEqual(config.angle, 315)
+        XCTAssertEqual(config.radius, CanonicalFlowGradient.defaults.radius)
+        XCTAssertEqual(config.returnSeconds, CanonicalFlowGradient.defaults.returnSeconds)
+        XCTAssertEqual(config.stops.map(\.position), [0, 1])
+        let escaped = config.json.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+        XCTAssertTrue(html.contains("data-siteforge-flow=\"\(escaped)\""), html)
+        XCTAssertFalse(html.contains("data-siteforge-flow=\"{\""), html)
+        let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
+        XCTAssertTrue(css.contains("linear-gradient(45.0deg"), css)
+        XCTAssertTrue(css.contains(DecorativeEffectRuntime.css), "The decorative canvas rules ship with the runtime")
+        XCTAssertTrue(DecorativeEffectRuntime.css.contains("pointer-events:none"))
+    }
+
+    // SF-0508-001/004/005/008, SF-1204-003/004, SF-0305-001, SF-0306-001: an
+    // optional dark website variant is project data. It edits through the
+    // token registry with one undo, survives light recolor and rename, stays
+    // out of schema 20, and compiles to a prefers-color-scheme override only
+    // when a variant exists. The native app appearance is never consulted.
+    func testLocalColorTokenDarkVariantHistorySchemaGateAndThemedStaticOutput() throws {
+        var document = ProjectCreation.blank()
+        let pageID = document.pages[0].id
+        let rootID = document.pages[0].rootNodeIDs[0]
+        let light = CanonicalSolidColor(red: 0, green: 0.5, blue: 1, alpha: 1)
+        let dark = CanonicalSolidColor(red: 1, green: 0, blue: 0, alpha: 1)
+        document.pages[0].nodes[0].properties += CanonicalFillLayerCodec.propertyValues(for: [
+            .solid(color: .init(red: 0.2, green: 0.2, blue: 0.2, alpha: 1))]).map {
+            NodeProperty(key: .init(rawValue: $0.key), value: $0.value, origin: .authored)
+        }
+        try document.validate()
+        let session = DocumentSession(document: document)
+        func prepare(_ edit: LocalColorTokenEdit, ids: [NodeID] = []) throws -> DocumentCommand {
+            try LocalColorTokenCommandRegistry.prepare(edit, in: session.document, expectedDocumentID: session.document.id,
+                expectedRevision: session.document.revision, pageID: pageID, selectedNodeIDs: ids)
+        }
+        func stylesheet() throws -> String {
+            try XCTUnwrap(MultiPageStaticBuildPlanner.plan(document: session.document).files.first { $0.path == "styles.css" }?.contents)
+        }
+        func failure(_ error: Error) -> LocalColorTokenCommandError? { error as? LocalColorTokenCommandError }
+        try session.execute(prepare(.create(name: "Brand", color: light)))
+        let tokenID = try XCTUnwrap(session.document.colorTokens.first?.id)
+        try session.execute(prepare(.bindTarget(tokenID, .fill), ids: [rootID]))
+        XCTAssertNil(session.document.colorTokens.first?.darkColor)
+        let unthemed = try stylesheet()
+        XCTAssertTrue(unthemed.contains("rgba(0.0, 127.5, 255.0, 1.0)"), unthemed)
+        XCTAssertFalse(unthemed.contains("prefers-color-scheme"), unthemed)
+        XCTAssertFalse(unthemed.contains("color-scheme:light dark"), unthemed)
+
+        // One transaction adds only the variant; bindings and light color stay.
+        let beforeVariant = session.document
+        let undoCount = session.historySnapshot().undoEntries.count
+        try session.execute(prepare(.darkVariant(tokenID, dark)))
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, undoCount + 1)
+        XCTAssertEqual(session.document.colorTokens.first?.darkColor, dark)
+        XCTAssertEqual(session.document.colorTokens.first?.color, light)
+        XCTAssertEqual(session.document.pages, beforeVariant.pages)
+        let themedDocument = session.document
+        XCTAssertThrowsError(try prepare(.darkVariant(tokenID, dark))) {
+            guard case .unchanged? = failure($0) else { return XCTFail("\($0)") }
+        }
+        XCTAssertThrowsError(try prepare(.darkVariant(tokenID, .init(red: 1.5, green: 0, blue: 0, alpha: 1)))) {
+            guard case .invalid? = failure($0) else { return XCTFail("\($0)") }
+        }
+        XCTAssertThrowsError(try prepare(.darkVariant(ColorTokenID(), dark))) {
+            guard case .invalid? = failure($0) else { return XCTFail("\($0)") }
+        }
+        XCTAssertEqual(session.document, themedDocument)
+
+        // Output: light values stay first; the variant is a scoped dark override.
+        let themed = try stylesheet()
+        let parts = themed.components(separatedBy: "@media (prefers-color-scheme:dark) {")
+        XCTAssertEqual(parts.count, 2, themed)
+        XCTAssertTrue(parts[0].contains("rgba(0.0, 127.5, 255.0, 1.0)"), themed)
+        XCTAssertFalse(parts[0].contains("rgba(255.0, 0.0, 0.0, 1.0)"), themed)
+        XCTAssertTrue(parts[0].contains(":root { color-scheme:light dark; }"), themed)
+        XCTAssertTrue(parts[1].contains("rgba(255.0, 0.0, 0.0, 1.0)"), themed)
+        XCTAssertTrue(parts[1].contains(CanonicalCSSRule.selector(for: rootID)), themed)
+
+        try session.undo()
+        XCTAssertEqual(session.document.colorTokens, beforeVariant.colorTokens)
+        XCTAssertFalse(try stylesheet().contains("prefers-color-scheme"))
+        try session.redo()
+        XCTAssertEqual(session.document.colorTokens, themedDocument.colorTokens)
+
+        // Editing the light color or name never drops the dark variant.
+        let recolored = CanonicalSolidColor(red: 0, green: 0.25, blue: 0.5, alpha: 1)
+        try session.execute(prepare(.recolor(tokenID, recolored)))
+        try session.execute(prepare(.rename(tokenID, "Accent")))
+        try session.execute(prepare(.update(tokenID, name: "Accent Ink", color: light)))
+        XCTAssertEqual(session.document.colorTokens.first?.darkColor, dark)
+        XCTAssertEqual(session.document.colorTokens.first?.name, "Accent Ink")
+
+        // Canonical validation and the strict historical envelope.
+        var invalid = session.document
+        invalid.colorTokens[0].darkColor = .init(red: 0, green: -0.1, blue: 0, alpha: 1)
+        XCTAssertThrowsError(try invalid.validate())
+        let encoded = try DocumentSerializer.encode(session.document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), session.document)
+        var historical = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        historical["schemaVersion"] = 20
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: historical)))
+
+        // Removing the variant returns to schema-20-compatible, unthemed output.
+        try session.execute(prepare(.darkVariant(tokenID, nil)))
+        XCTAssertNil(session.document.colorTokens.first?.darkColor)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(session.document)) as? [String: Any])
+        legacy["schemaVersion"] = 20
+        let reopened = try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(reopened.colorTokens, session.document.colorTokens)
+        XCTAssertEqual(reopened.pages, session.document.pages)
+        XCTAssertFalse(try stylesheet().contains("prefers-color-scheme"))
+    }
+
     // SF-LOCAL-BUILDER-016 / SF-0702-003, SF-0302-004.
     func testLegacyDesignTextDraftCleanDefaultsMixedAndDisplayRefreshDoNotBlockNavigation() {
         let context = WorkspaceShellState(documentSession: DocumentSession(document: ProjectCreation.blank())).responsiveInspectorEditContext
@@ -1590,6 +3528,51 @@ final class TransformModelTests: XCTestCase {
         XCTAssertEqual(session.document.pages, original)
         try session.undo()
         XCTAssertEqual(session.document.pages, committed.pages)
+    }
+
+    // SF-0703-001/002/005: "+=" / "-=" changes every selected object by the
+    // same amount from its own value in one transaction; objects whose result
+    // would be out of range are skipped and reported, never clamped; when
+    // nothing applies the edit is refused; Undo restores every object.
+    func testRelativeGeometryEditChangesEachObjectFromItsOwnValueInOneTransaction() throws {
+        let fixture = makeFixture()
+        let ids = [fixture.nodeID, fixture.secondNodeID]
+        let session = DocumentSession(document: fixture.document)
+        let registry = GeometryInspectorCommandRegistry()
+        func command(_ field: GeometryInspectorField, delta: Double) -> GeometryInspectorCommand {
+            .init(identity: .init(editID: GeometryInspectorEditID(), documentID: session.document.id, pageID: fixture.pageID,
+                revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: ids, field: field, value: 0, provenance: .automation, relativeDelta: delta)
+        }
+        XCTAssertEqual(registry.value(for: .x, in: session.document, context: fixture.context(selectedIDs: ids)), .mixed,
+                       "Different X values show as Mixed")
+        let moved = try registry.prepare(command(.x, delta: 15), in: session.document, context: fixture.context(selectedIDs: ids))
+        XCTAssertTrue(moved.skippedNodeIDs.isEmpty)
+        try session.execute(moved.documentCommand)
+        XCTAssertEqual(session.document.nodeGeometry(fixture.nodeID)?.origin.x, 25)
+        XCTAssertEqual(session.document.nodeGeometry(fixture.secondNodeID)?.origin.x, 215)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1, "One transaction for the whole selection")
+
+        let narrowed = try registry.prepare(command(.width, delta: -100), in: session.document,
+                                            context: fixture.context(selectedIDs: ids))
+        XCTAssertEqual(narrowed.skippedNodeIDs, [fixture.secondNodeID], "90 − 100 is out of range: skipped, not clamped")
+        try session.execute(narrowed.documentCommand)
+        XCTAssertEqual(session.document.nodeGeometry(fixture.nodeID)?.size.width, 20)
+        XCTAssertEqual(session.document.nodeGeometry(fixture.secondNodeID)?.size.width, 90)
+        XCTAssertThrowsError(try registry.prepare(command(.width, delta: -1_000), in: session.document,
+                                                  context: fixture.context(selectedIDs: ids))) {
+            XCTAssertEqual($0 as? GeometryInspectorError, .noApplicableTargets)
+        }
+        try session.undo(); try session.undo()
+        XCTAssertEqual(session.document.pages, fixture.document.pages)
+
+        let posix = Locale(identifier: "en_US_POSIX")
+        XCTAssertEqual(GeometryInspectorRelativeInput.delta("+=10", locale: posix), 10)
+        XCTAssertEqual(GeometryInspectorRelativeInput.delta(" -= 4 ", locale: posix), -4)
+        XCTAssertEqual(GeometryInspectorRelativeInput.delta("−=2.5", locale: posix), -2.5)
+        for input in ["10", "+=", "+=-3", "+=0", "=+5", "+=abc", "+=5.", "*=2"] {
+            XCTAssertNil(GeometryInspectorRelativeInput.delta(input, locale: posix), input)
+        }
     }
 
     func testSizingConstraintsSetClampAspectResetAndExactHistory() throws {
@@ -3216,6 +5199,30 @@ final class TransformModelTests: XCTestCase {
     // SF-0508-004/005 — Inspector numeric drafts must fail visibly instead of
     // silently disappearing on Return or focus loss, while valid values are
     // normalized before the transactional command is prepared.
+    func testGradientStopInsertionPreservesRampAndIdentityWithoutRepeatedMidpoints() throws {
+        let first = CanonicalGradientStop(id: GradientStopID(), position: 0, color: .init(red: 1, green: 0, blue: 0, alpha: 0.2))
+        let last = CanonicalGradientStop(id: GradientStopID(), position: 1, color: .init(red: 0, green: 0, blue: 1, alpha: 0.8))
+        let layer = CanonicalFillLayer.linearGradient(angleDegrees: 45, stops: [last, first])
+        let inserted = try XCTUnwrap(GradientAuthoringInsertion.stop(in: layer))
+        XCTAssertEqual(inserted.position, 0.5)
+        XCTAssertEqual(inserted.color, .init(red: 0.2, green: 0, blue: 0.8, alpha: 0.5))
+        let next = CanonicalFillLayer.linearGradient(id: layer.id, angleDegrees: 45, stops: [last, first, inserted])
+        XCTAssertEqual(next.stops.map(\.id), [last.id, first.id, inserted.id])
+        let second = try XCTUnwrap(GradientAuthoringInsertion.stop(in: next))
+        XCTAssertTrue(second.position == 0.25 || second.position == 0.75)
+        XCTAssertNotEqual(second.id, inserted.id)
+        func snapshot(_ value: CanonicalFillLayer) -> CanvasAuthoredFillLayer {
+            .init(id: value.id.rawValue, kind: .linearGradient, isEnabled: true, rgba: nil, angleDegrees: 0,
+                stops: value.stops.map { .init(id: $0.id.rawValue, position: $0.position,
+                    rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha]) })
+        }
+        for x in stride(from: 0.0, through: 1.0, by: 0.01) {
+            let a = try XCTUnwrap(CanvasAuthoredFillCompositor.color(for: snapshot(layer), atNormalizedPoint: (x, 0.5)))
+            let b = try XCTUnwrap(CanvasAuthoredFillCompositor.color(for: snapshot(next), atNormalizedPoint: (x, 0.5)))
+            for index in 0..<4 { XCTAssertEqual(a[index], b[index], accuracy: 0.000001) }
+        }
+    }
+
     func testFillLayerNumericDraftValidationIsExplicitAndCanonical() throws {
         XCTAssertEqual(try FillLayerNumericDraftValidator.angle(" 495 ").get(), 135)
         XCTAssertEqual(try FillLayerNumericDraftValidator.angle("-180").get(), 180)
@@ -3296,14 +5303,26 @@ final class TransformModelTests: XCTestCase {
             .filter { $0.key.rawValue.hasPrefix(DesignBoxStyleCommandRegistry.namespace) }.map(\.id)
         XCTAssertEqual(propertyIDs, reopenedIDs)
 
+        let beforeZero = session.document
+        let zero = try registry.prepare(command(session.document, ids: [fixture.nodeID],
+            edit: .border(.init(color: border.color, width: 0, style: .solid))),
+            in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID]))
+        _ = try session.execute(zero.documentCommand)
+        XCTAssertEqual(try currentStyle().border?.width, 0)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, beforeZero.pages)
+        try session.redo()
+        XCTAssertEqual(try currentStyle().border?.width, 0)
+
         let invalid = CanonicalShadow(color: shadow.color, offsetX: 0, offsetY: 0, blur: -.infinity, spread: 0)
         XCTAssertThrowsError(try registry.prepare(
             command(session.document, ids: [fixture.nodeID], edit: .shadow(invalid)),
             in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
         )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
-        let zeroBorder = CanonicalBorder(color: border.color, width: 0, style: .solid)
+        let invalidBorder = CanonicalBorder(color: border.color, width: -1, style: .solid)
         XCTAssertThrowsError(try registry.prepare(
-            command(session.document, ids: [fixture.nodeID], edit: .border(zeroBorder)),
+            command(session.document, ids: [fixture.nodeID], edit: .border(invalidBorder)),
             in: session.document, context: fixture.context(selectedIDs: [fixture.nodeID])
         )) { XCTAssertEqual($0 as? DesignBoxStyleError, .invalidValue) }
         XCTAssertThrowsError(try registry.prepare(
@@ -4945,6 +6964,919 @@ final class TransformModelTests: XCTestCase {
         }
         XCTAssertEqual(diagnostic(a), diagnostic(b), "Style values/names/targets must not enter diagnostic payloads")
         XCTAssertEqual(diagnostic(a).operationType, "reusable.link")
+    }
+
+    // SF-0510-001/004: linked box appearance uses one strict, grouped field
+    // codec. A partial group, non-canonical color, wrong type, out-of-range
+    // value or unknown field is invalid instead of silently dropped.
+    func testReusableStyleLinkedBoxAppearanceUsesOneStrictGroupedCodec() throws {
+        let border = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#204060FF")),
+                                     width: 2, style: .dashed)
+        let shadow = CanonicalShadow(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#00000040")),
+                                     offsetX: 0, offsetY: 4, blur: 12, spread: -2)
+        let box = CanonicalReusableBoxAppearance(border: border, cornerRadius: 8, shadow: shadow)
+        XCTAssertTrue(box.isValid)
+        XCTAssertFalse(box.isEmpty)
+        XCTAssertTrue(CanonicalReusableBoxAppearance().isEmpty)
+        let map = Dictionary(uniqueKeysWithValues: box.fieldValues.map { ($0.field, $0.value) })
+        XCTAssertEqual(Set(map.keys), CanonicalReusableBoxAppearance.fields)
+        XCTAssertEqual(box.fieldValues.map { $0.field }, CanonicalReusableBoxAppearance.borderFields
+            + CanonicalReusableBoxAppearance.cornerRadiusFields + CanonicalReusableBoxAppearance.shadowFields)
+        XCTAssertEqual(map["borderColor"], .string("#204060FF"))
+        XCTAssertEqual(map["borderStyle"], .string("dashed"))
+        XCTAssertEqual(map["shadowSpread"], .number(-2))
+        XCTAssertEqual(try CanonicalReusableBoxAppearance.decode(map), box)
+        XCTAssertEqual(try CanonicalReusableBoxAppearance.decode([:]), CanonicalReusableBoxAppearance())
+        XCTAssertEqual(CanonicalReusableBoxAppearance(cornerRadius: 6).fieldValues.map { $0.field }, ["cornerRadius"])
+
+        var invalid: [[String: PropertyValue]] = []
+        for field in CanonicalReusableBoxAppearance.borderFields + CanonicalReusableBoxAppearance.shadowFields {
+            var partial = map
+            partial.removeValue(forKey: field)
+            invalid.append(partial)
+        }
+        let replacements: [(String, PropertyValue)] = [
+            ("borderColor", .string("#204060ff")), ("shadowColor", .string("#000000")),
+            ("borderStyle", .string("double")), ("borderWidth", .number(101)), ("cornerRadius", .number(-1)),
+            ("cornerRadius", .number(10_001)), ("shadowBlur", .number(.nan)), ("shadowOffsetX", .number(.infinity)),
+            ("cornerRadius", .string("8")), ("borderWidth", .boolean(true)), ("borderGlow", .number(1)),
+        ]
+        for (field, value) in replacements {
+            var changed = map
+            changed[field] = value
+            invalid.append(changed)
+        }
+        for values in invalid {
+            XCTAssertThrowsError(try CanonicalReusableBoxAppearance.decode(values)) {
+                XCTAssertEqual($0 as? ModelValidationError, .invalidReusableStyleState)
+            }
+        }
+
+        // Off-grid colors are stored as RGBA8, like linked fills; storing twice is stable.
+        let fine = CanonicalReusableBoxAppearance(border: CanonicalBorder(
+            color: CanonicalSolidColor(red: 0.1234, green: 0.5, blue: 0.75, alpha: 1), width: 1, style: .solid))
+        let stored = try CanonicalReusableBoxAppearance.decode(
+            Dictionary(uniqueKeysWithValues: fine.fieldValues.map { ($0.field, $0.value) }))
+        XCTAssertEqual(stored, fine.quantized)
+        XCTAssertNotEqual(stored, fine)
+        XCTAssertEqual(fine.quantized.quantized, fine.quantized)
+        XCTAssertEqual(box.semanticFingerprint, box.quantized.semanticFingerprint)
+        XCTAssertNotEqual(box.semanticFingerprint, CanonicalReusableBoxAppearance(border: border).semanticFingerprint)
+    }
+
+    // SF-0510-001/004/005: linked box values validate as part of the document,
+    // need document schema 23, and a schema-22 project reopens unchanged.
+    func testLinkedBoxStylesValidateInTheDocumentAndRequireSchemaTwentyThree() throws {
+        let border = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#336699FF")),
+                                     width: 3, style: .solid)
+        let box = CanonicalReusableBoxAppearance(border: border, cornerRadius: 12)
+        let styleID = ReusableStyleID()
+        var document = CanonicalDocument()
+        document.pages[0].nodes[0].properties += linkedBoxStyleProperties(styleID, name: "Rounded card", box: box)
+        try document.validate()
+        let index = try CanonicalReusableStyleIndex(document: document)
+        XCTAssertEqual(index.byID[styleID]?.box, box)
+        XCTAssertNil(index.byID[styleID]?.fill, "A box-only style needs no fill or opacity")
+        XCTAssertNil(index.byID[styleID]?.opacity)
+        XCTAssertEqual(index.byID[styleID]?.hasAppearance, true)
+
+        XCTAssertEqual(CanonicalReusableBoxAppearance.documentSchema, 23)
+        XCTAssertGreaterThanOrEqual(DocumentSerializer.currentSchemaVersion, CanonicalReusableBoxAppearance.documentSchema)
+        let encoded = try DocumentSerializer.encode(document)
+        XCTAssertEqual(try DocumentSerializer.decode(encoded), document)
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(envelope["schemaVersion"] as? Int, DocumentSerializer.currentSchemaVersion)
+        for older in [22, 21, 18] {
+            envelope["schemaVersion"] = older
+            XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: envelope)), "\(older)")
+        }
+
+        var plain = CanonicalDocument()
+        plain.pages[0].nodes[0].properties += linkedBoxStyleProperties(ReusableStyleID(), name: "Fill only",
+            box: .init(), fill: "#FF0000FF")
+        try plain.validate()
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(plain)) as? [String: Any])
+        legacy["schemaVersion"] = 22
+        XCTAssertEqual(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: legacy)), plain)
+
+        let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(styleID.description)."
+        var partial = document
+        partial.pages[0].nodes[0].properties.removeAll { $0.key.rawValue == prefix + "borderStyle" }
+        XCTAssertThrowsError(try partial.validate()) {
+            XCTAssertEqual($0 as? ModelValidationError, .invalidReusableStyleState)
+        }
+        var repeated = document
+        repeated.pages[0].nodes[0].properties.append(.init(key: .init(rawValue: prefix + "cornerRadius"), value: .number(4)))
+        XCTAssertThrowsError(try repeated.validate())
+        var nameOnly = CanonicalDocument()
+        nameOnly.pages[0].nodes[0].properties += linkedBoxStyleProperties(ReusableStyleID(), name: "Empty", box: .init())
+        XCTAssertThrowsError(try nameOnly.validate(), "A style must supply at least one appearance value")
+        var unknown = document
+        unknown.pages[0].nodes[0].properties.append(.init(key: .init(rawValue: prefix + "borderGlow"), value: .number(1)))
+        XCTAssertThrowsError(try unknown.validate())
+    }
+
+    // SF-0510-003: group by group, the object's own value wins, then the last
+    // applied style that supplies the group, then nothing; each value reports
+    // the rule that supplied it. Tokens, shadow enable and padding stay local.
+    func testLinkedBoxResolutionIsLocalFirstThenLastLinkedStyleWithProvenance() throws {
+        let thin = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#111111FF")), width: 1, style: .solid)
+        let thick = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#222222FF")), width: 4, style: .dotted)
+        let soft = CanonicalShadow(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#00000033")),
+                                   offsetX: 0, offsetY: 2, blur: 6, spread: 0)
+        let a = ReusableStyleID(), b = ReusableStyleID()
+        var document = CanonicalDocument()
+        let rootID = document.pages[0].rootNodeIDs[0]
+        document.pages[0].nodes[0].properties += linkedBoxStyleProperties(a, name: "Base",
+            box: .init(border: thin, cornerRadius: 6, shadow: soft))
+            + linkedBoxStyleProperties(b, name: "Emphasis", box: .init(border: thick))
+        var card = DocumentNode(kind: .frame, name: "Card", parent: .node(rootID), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(20)), .init(key: .init(rawValue: "layout.y"), value: .number(20)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(200)), .init(key: .init(rawValue: "layout.height"), value: .number(120)),
+            .init(key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string("\(a.description),\(b.description)")),
+        ])
+        document.pages[0].nodes[0].childIDs.append(card.id)
+        document.pages[0].nodes.append(card)
+        try document.validate()
+        let index = try CanonicalReusableStyleIndex(document: document)
+        func resolve(_ node: DocumentNode, tokens: [LocalColorToken] = []) throws -> CanonicalBoxStyleResolution {
+            try XCTUnwrap(CanonicalLinkedBoxStyleResolver.resolve(node: node, tokens: tokens, index: index))
+        }
+
+        let linked = try resolve(card)
+        XCTAssertEqual(linked.style.border, thick, "The later applied style wins its group")
+        XCTAssertEqual(linked.borderSource, .linked(b))
+        XCTAssertEqual(linked.style.cornerRadius, 6, "An earlier style still supplies groups the later one omits")
+        XCTAssertEqual(linked.cornerRadiusSource, .linked(a))
+        XCTAssertEqual(linked.style.shadow, soft)
+        XCTAssertEqual(linked.shadowSource, .linked(a))
+        XCTAssertNil(linked.style.shadowEnabled, "A linked shadow is always enabled")
+        XCTAssertEqual(LocalColorTokenResolver.resolvedBoxStyle(for: card, tokens: [], reusableStyles: index), linked.style)
+
+        card.properties = card.properties.map { property in
+            guard property.key.rawValue == CanonicalReusableStyleIndex.appliedKey else { return property }
+            return NodeProperty(id: property.id, key: property.key, value: .string("\(b.description),\(a.description)"),
+                                origin: property.origin)
+        }
+        XCTAssertEqual(try resolve(card).style.border, thin)
+        XCTAssertEqual(try resolve(card).borderSource, .linked(a))
+
+        // Local values win group by group, including an authored zero radius
+        // and a zero-width border; local tokens and a disabled local shadow apply.
+        let token = LocalColorToken(name: "Brand", color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF8800FF")))
+        var local = card
+        local.properties += localBoxProperties(border: CanonicalBorder(color: thin.color, width: 0, style: .solid),
+                                               radius: 0, shadow: soft, shadowEnabled: false)
+        local.properties.append(.init(key: .init(rawValue: LocalColorTokenBinding.key(for: .border)), value: .string(token.id.description)))
+        let overridden = try resolve(local, tokens: [token])
+        XCTAssertEqual(overridden.borderSource, .local)
+        XCTAssertEqual(overridden.style.border?.width, 0)
+        XCTAssertEqual(overridden.style.border?.color, token.color)
+        XCTAssertEqual(overridden.cornerRadiusSource, .local)
+        XCTAssertEqual(overridden.style.cornerRadius, 0)
+        XCTAssertEqual(overridden.shadowSource, .local)
+        XCTAssertEqual(overridden.style.shadowEnabled, false)
+
+        // No applied styles, or no index: nothing linked is resolved.
+        var unlinked = card
+        unlinked.properties.removeAll { $0.key.rawValue == CanonicalReusableStyleIndex.appliedKey }
+        let none = try resolve(unlinked)
+        XCTAssertEqual([none.borderSource, none.cornerRadiusSource, none.shadowSource], [.unset, .unset, .unset])
+        XCTAssertNil(none.style.border)
+        XCTAssertEqual(CanonicalLinkedBoxStyleResolver.resolve(node: card, tokens: [], index: nil)?.style,
+                       LocalColorTokenResolver.resolvedBoxStyle(for: card, tokens: []))
+        XCTAssertNil(CanonicalLinkedBoxStyleResolver.resolve(node: card, tokens: [], index: nil)?.style.border)
+
+        // Box appearance applies only to box kinds.
+        let text = DocumentNode(kind: .text, name: "Label", parent: .node(rootID), properties: [
+            .init(key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(a.description))])
+        XCTAssertNil(CanonicalLinkedBoxStyleResolver.resolve(node: text, tokens: [], index: index))
+    }
+
+    // SF-0510-002/004/005: a style's linked border, corners and shadow are set,
+    // replaced and removed as one exact, undoable transaction; colors store as
+    // RGBA8; every linked object picks the change up; diagnostics are value-free.
+    func testSetReusableStyleBoxReplacesLinkedValuesInOneUndoableTransaction() throws {
+        var fixture = makeFixture()
+        let styleID = ReusableStyleID()
+        let red = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF0000FF"))
+        fixture.document.pages[0].nodes[0].properties += linkedBoxStyleProperties(styleID, name: "Card",
+            box: .init(), fill: red.hexadecimalRGBA)
+        for index in [1, 2] {
+            fixture.document.pages[0].nodes[index].properties.append(.init(
+                key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(styleID.description)))
+        }
+        try fixture.document.validate()
+        let session = DocumentSession(document: fixture.document)
+        func set(_ box: CanonicalReusableBoxAppearance, id: ReusableStyleID? = nil, cancelled: Bool = false) throws -> DocumentCommand {
+            try preparedReusableEdit(.setReusableStyleBox(id: id ?? styleID, box: box), session: session,
+                                     fixture: fixture, cancelled: cancelled).documentCommand
+        }
+        func resolved(_ nodeIndex: Int) throws -> CanonicalBoxStyleResolution {
+            try XCTUnwrap(CanonicalLinkedBoxStyleResolver.resolve(node: session.document.pages[0].nodes[nodeIndex],
+                tokens: [], index: CanonicalReusableStyleIndex(document: session.document)))
+        }
+        func storedBox() throws -> CanonicalReusableBoxAppearance {
+            try XCTUnwrap(CanonicalReusableStyleIndex(document: session.document).byID[styleID]?.box)
+        }
+
+        let offGrid = CanonicalBorder(color: CanonicalSolidColor(red: 0.1234, green: 0.5, blue: 0.75, alpha: 1),
+                                      width: 2, style: .dashed)
+        let shadow = CanonicalShadow(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#00000040")),
+                                     offsetX: 0, offsetY: 4, blur: 10, spread: 0)
+        let first = CanonicalReusableBoxAppearance(border: offGrid, cornerRadius: 8, shadow: shadow)
+        try session.execute(set(first))
+        XCTAssertEqual(try storedBox(), first.quantized, "Colors are stored as RGBA8, like linked fills")
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        for nodeIndex in [1, 2] {
+            XCTAssertEqual(try resolved(nodeIndex).style.border, first.quantized.border)
+            XCTAssertEqual(try resolved(nodeIndex).borderSource, .linked(styleID))
+            XCTAssertEqual(try resolved(nodeIndex).style.cornerRadius, 8)
+        }
+        let afterFirst = session.document.pages
+        XCTAssertThrowsError(try set(first)) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .noChanges, "An off-grid source equal once stored is no change")
+        }
+
+        // Replace: keep the radius, drop border and shadow; name and fill untouched.
+        try session.execute(set(.init(cornerRadius: 12)))
+        XCTAssertEqual(try storedBox(), .init(cornerRadius: 12))
+        XCTAssertNil(try resolved(1).style.border)
+        XCTAssertEqual(try resolved(1).borderSource, .unset)
+        let definition = try XCTUnwrap(CanonicalReusableStyleIndex(document: session.document).byID[styleID])
+        XCTAssertEqual(definition.name, "Card")
+        XCTAssertEqual(definition.fill, red)
+        let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(styleID.description)."
+        XCTAssertFalse(session.document.pages[0].nodes[0].properties.contains {
+            $0.key.rawValue.hasPrefix(prefix + "border") || $0.key.rawValue.hasPrefix(prefix + "shadow")
+        }, "Removed groups leave no partial fields")
+        try session.undo()
+        XCTAssertEqual(session.document.pages, afterFirst)
+        try session.redo()
+        XCTAssertEqual(try storedBox(), .init(cornerRadius: 12))
+
+        // Removing every box value is allowed while the fill remains.
+        try session.execute(set(.init()))
+        XCTAssertEqual(try storedBox(), .init())
+        XCTAssertEqual(CanonicalReusableStyleIndex.appliedIDs(session.document.pages[0].nodes[1]), [styleID],
+                       "Objects stay linked")
+        try session.undo()
+
+        // Rejections leave the document unchanged.
+        let before = session.document
+        let invalid = CanonicalReusableBoxAppearance(cornerRadius: -1)
+        XCTAssertThrowsError(try set(invalid)) { XCTAssertEqual($0 as? AdvancedStyleCommandError, .invalidValue) }
+        XCTAssertThrowsError(try set(.init(border: .init(color: red, width: 101, style: .solid)))) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .invalidValue)
+        }
+        XCTAssertThrowsError(try set(first, id: ReusableStyleID())) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .unavailable("The reusable style no longer exists."))
+        }
+        XCTAssertThrowsError(try set(first, cancelled: true)) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .cancelled)
+        }
+        let stale = AdvancedStyleCommand(identity: .init(documentID: session.document.id, pageID: fixture.pageID,
+            revision: session.document.revision + 1, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: [fixture.nodeID], edit: .setReusableStyleBox(id: styleID, box: first), provenance: .keyboard,
+            cancelled: false)
+        XCTAssertThrowsError(try AdvancedStyleCommandRegistry().prepare(stale, in: session.document,
+            context: fixture.with(document: session.document).context(selectedIDs: [fixture.nodeID]))) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .stale)
+        }
+        XCTAssertEqual(session.document, before)
+
+        // A box-only style cannot drop its last value.
+        let boxOnly = ReusableStyleID()
+        var boxOnlyDocument = session.document
+        boxOnlyDocument.pages[0].nodes[0].properties += linkedBoxStyleProperties(boxOnly, name: "Corners",
+            box: .init(cornerRadius: 4))
+        try boxOnlyDocument.validate()
+        let boxOnlySession = DocumentSession(document: boxOnlyDocument)
+        XCTAssertThrowsError(try preparedReusableEdit(.setReusableStyleBox(id: boxOnly, box: .init()),
+            session: boxOnlySession, fixture: fixture)) {
+            guard case .unavailable(let reason)? = $0 as? AdvancedStyleCommandError else { return XCTFail("\($0)") }
+            XCTAssertTrue(reason.contains("at least one value"))
+        }
+        XCTAssertEqual(boxOnlySession.document, boxOnlyDocument)
+
+        // Diagnostics name the operation only, never the values.
+        func diagnostic(_ box: CanonicalReusableBoxAppearance) -> AdvancedStyleDiagnosticRecord {
+            let command = AdvancedStyleCommand(identity: .init(documentID: session.document.id, pageID: fixture.pageID,
+                revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: [fixture.nodeID], edit: .setReusableStyleBox(id: styleID, box: box), provenance: .keyboard,
+                cancelled: false)
+            return AdvancedStyleDiagnosticFactory.make(command: command, resultRevision: nil, result: .stale, failure: .stale)
+        }
+        XCTAssertEqual(diagnostic(first), diagnostic(.init(cornerRadius: 99)))
+        XCTAssertEqual(diagnostic(first).operationType, "reusable.box.set")
+
+        // Deleting the style (after unlinking) removes its box fields too.
+        try session.execute(try preparedReusableEdit(.applyReusableStyles([]), session: session, fixture: fixture,
+            ids: [fixture.nodeID, fixture.secondNodeID]).documentCommand)
+        try session.execute(try preparedReusableEdit(.removeReusableStyle(styleID), session: session,
+            fixture: fixture).documentCommand)
+        XCTAssertFalse(session.document.pages[0].nodes[0].properties.contains { $0.key.rawValue.hasPrefix(prefix) })
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    // SF-0510-003/004/005: Use Linked Border / Corners / Shadow removes only
+    // the objects' own value for that group, as one transaction with an exact
+    // inverse. It is refused for the whole selection when any object has no
+    // linked style supplying the group, or a token is bound to its own color.
+    func testUseLinkedBoxHandsEachGroupBackToLinkedStylesAtomically() throws {
+        var fixture = makeFixture()
+        let styleID = ReusableStyleID()
+        let linkedBorder = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#336699FF")),
+                                           width: 2, style: .solid)
+        let linkedShadow = CanonicalShadow(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#00000040")),
+                                           offsetX: 0, offsetY: 4, blur: 10, spread: 0)
+        fixture.document.pages[0].nodes[0].properties += linkedBoxStyleProperties(styleID, name: "Card",
+            box: .init(border: linkedBorder, cornerRadius: 8, shadow: linkedShadow))
+        let localBorder = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF0000FF")),
+                                          width: 5, style: .dotted)
+        let localShadow = CanonicalShadow(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF000080")),
+                                          offsetX: 2, offsetY: 2, blur: 0, spread: 1)
+        for index in [1, 2] {
+            fixture.document.pages[0].nodes[index].properties.append(.init(
+                key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(styleID.description)))
+        }
+        fixture.document.pages[0].nodes[1].properties += localBoxProperties(border: localBorder, radius: 0,
+            shadow: localShadow, shadowEnabled: false)
+        try fixture.document.validate()
+        let session = DocumentSession(document: fixture.document)
+        let both = [fixture.nodeID, fixture.secondNodeID]
+        func useLinked(_ property: ReusableBoxProperty, ids: [NodeID]) throws -> PreparedDesignInspectorEdit {
+            try preparedReusableEdit(.useLinkedBox(property), session: session, fixture: fixture, ids: ids)
+        }
+        func resolved(_ nodeIndex: Int) throws -> CanonicalBoxStyleResolution {
+            try XCTUnwrap(CanonicalLinkedBoxStyleResolver.resolve(node: session.document.pages[0].nodes[nodeIndex],
+                tokens: [], index: CanonicalReusableStyleIndex(document: session.document)))
+        }
+        XCTAssertEqual(try resolved(1).borderSource, .local)
+        XCTAssertEqual(try resolved(1).style.cornerRadius, 0)
+
+        let original = session.document.pages
+        try session.execute(useLinked(.border, ids: both).documentCommand)
+        XCTAssertEqual(try resolved(1).style.border, linkedBorder)
+        XCTAssertEqual(try resolved(1).borderSource, .linked(styleID))
+        XCTAssertEqual(try resolved(1).cornerRadiusSource, .local, "Other groups keep their own values")
+        XCTAssertEqual(try resolved(1).shadowSource, .local)
+        XCTAssertFalse(session.document.pages[0].nodes[1].properties.contains {
+            $0.key.rawValue.hasPrefix(DesignBoxStyleCommandRegistry.namespace + "border.")
+        })
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, original, "Undo restores the exact local border properties")
+        try session.redo()
+
+        try session.execute(useLinked(.cornerRadius, ids: both).documentCommand)
+        XCTAssertEqual(try resolved(1).style.cornerRadius, 8)
+        try session.execute(useLinked(.shadow, ids: both).documentCommand)
+        XCTAssertEqual(try resolved(1).style.shadow, linkedShadow)
+        XCTAssertNil(try resolved(1).style.shadowEnabled, "The local disabled flag goes with the local shadow")
+        XCTAssertNil(session.document.pages[0].nodes[1].insertionProperty(DesignBoxStyleCommandRegistry.namespace + "shadow.enabled"))
+        XCTAssertThrowsError(try useLinked(.shadow, ids: both)) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .noChanges)
+        }
+        let allLinked = session.document.pages
+        try session.undo(); try session.undo(); try session.undo()
+        XCTAssertEqual(session.document.pages, original)
+        try session.redo(); try session.redo(); try session.redo()
+        XCTAssertEqual(session.document.pages, allLinked)
+
+        // Refused for the whole selection when one object has no linked supply.
+        var mixedDocument = fixture.document
+        mixedDocument.pages[0].nodes[2].properties.removeAll { $0.key.rawValue == CanonicalReusableStyleIndex.appliedKey }
+        try mixedDocument.validate()
+        let mixedSession = DocumentSession(document: mixedDocument)
+        XCTAssertThrowsError(try preparedReusableEdit(.useLinkedBox(.border), session: mixedSession,
+            fixture: fixture, ids: both)) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .unavailable("Link a reusable style with a border first."))
+        }
+        XCTAssertEqual(mixedSession.document, mixedDocument)
+
+        // A token bound to the object's own border color is kept, not detached silently.
+        let token = LocalColorToken(name: "Brand", color: localBorder.color)
+        var tokenDocument = fixture.document
+        tokenDocument.colorTokens = [token]
+        tokenDocument.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: LocalColorTokenBinding.key(for: .border)),
+            value: .string(token.id.description)))
+        try tokenDocument.validate()
+        let tokenSession = DocumentSession(document: tokenDocument)
+        XCTAssertThrowsError(try preparedReusableEdit(.useLinkedBox(.border), session: tokenSession, fixture: fixture)) {
+            guard case .unavailable(let reason)? = $0 as? AdvancedStyleCommandError else { return XCTFail("\($0)") }
+            XCTAssertTrue(reason.contains("token binding is retained"))
+        }
+        XCTAssertEqual(tokenSession.document, tokenDocument)
+        XCTAssertNoThrow(try preparedReusableEdit(.useLinkedBox(.cornerRadius), session: tokenSession, fixture: fixture),
+                         "Groups without a bound token are unaffected")
+
+        // Incompatible kinds are skipped and reported, not changed.
+        var withText = fixture.document
+        let text = DocumentNode(kind: .text, name: "Caption", parent: .node(fixture.rootID), properties: [
+            .init(key: .init(rawValue: "layout.x"), value: .number(0)), .init(key: .init(rawValue: "layout.y"), value: .number(0)),
+            .init(key: .init(rawValue: "layout.width"), value: .number(120)), .init(key: .init(rawValue: "layout.height"), value: .number(24))])
+        withText.pages[0].nodes[0].childIDs.append(text.id)
+        withText.pages[0].nodes.append(text)
+        let textSession = DocumentSession(document: withText)
+        let skipped = try preparedReusableEdit(.useLinkedBox(.border), session: textSession,
+            fixture: fixture.with(document: withText), ids: [fixture.nodeID, text.id])
+        XCTAssertEqual(skipped.applicableNodeIDs, [fixture.nodeID])
+        XCTAssertEqual(skipped.skippedNodeIDs, [text.id])
+
+        let command = AdvancedStyleCommand(identity: .init(documentID: session.document.id, pageID: fixture.pageID,
+            revision: session.document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+            orderedNodeIDs: both, edit: .useLinkedBox(.cornerRadius), provenance: .keyboard, cancelled: false)
+        XCTAssertEqual(AdvancedStyleDiagnosticFactory.make(command: command, resultRevision: nil, result: .stale,
+            failure: .stale).operationType, "reusable.inherit.corner-radius")
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    // SF-0510-002/003: capture stores what the selection actually shows (own
+    // value first, then linked styles), reports groups that differ instead of
+    // guessing, ignores a disabled shadow and snapshots token colors.
+    func testCaptureBoxSelectionStoresWhatTheSelectionShows() throws {
+        var fixture = makeFixture()
+        let styleID = ReusableStyleID()
+        let border = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#336699FF")),
+                                     width: 2, style: .solid)
+        let shadowA = CanonicalShadow(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#00000040")),
+                                      offsetX: 0, offsetY: 4, blur: 10, spread: 0)
+        let shadowB = CanonicalShadow(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#00000040")),
+                                      offsetX: 0, offsetY: 8, blur: 20, spread: 0)
+        fixture.document.pages[0].nodes[0].properties += linkedBoxStyleProperties(styleID, name: "Outline", box: .init(border: border))
+        for index in [1, 2] {
+            fixture.document.pages[0].nodes[index].properties.append(.init(
+                key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(styleID.description)))
+        }
+        fixture.document.pages[0].nodes[1].properties += localBoxProperties(radius: 6, shadow: shadowA)
+        fixture.document.pages[0].nodes[2].properties += localBoxProperties(radius: 6, shadow: shadowB)
+        try fixture.document.validate()
+        let nodes = Array(fixture.document.pages[0].nodes[1...2])
+
+        let capture = try AdvancedStyleCommandRegistry.captureBoxSelection(nodes, in: fixture.document)
+        XCTAssertEqual(capture.box, .init(border: border, cornerRadius: 6), "Linked border and shared local radius")
+        XCTAssertEqual(capture.mixed, [.shadow])
+        XCTAssertEqual(capture.applicableCount, 2)
+        XCTAssertEqual(capture.skippedCount, 0)
+        XCTAssertEqual(capture.tokenColorCount, 0)
+
+        // A disabled shadow shows nothing, so it is not captured.
+        var disabled = fixture.document
+        disabled.pages[0].nodes[2].properties.removeAll { $0.key.rawValue.hasPrefix(DesignBoxStyleCommandRegistry.namespace + "shadow.") }
+        disabled.pages[0].nodes[2].properties += localBoxProperties(shadow: shadowA, shadowEnabled: false)
+        try disabled.validate()
+        let disabledCapture = try AdvancedStyleCommandRegistry.captureBoxSelection(
+            Array(disabled.pages[0].nodes[1...2]), in: disabled)
+        XCTAssertEqual(disabledCapture.mixed, [.shadow], "Shown shadow vs. hidden shadow differ")
+        let onlyHidden = try AdvancedStyleCommandRegistry.captureBoxSelection([disabled.pages[0].nodes[2]], in: disabled)
+        XCTAssertNil(onlyHidden.box.shadow)
+
+        // Token colors are captured as plain values and counted.
+        let token = LocalColorToken(name: "Brand", color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF8800FF")))
+        var tokenDocument = fixture.document
+        tokenDocument.colorTokens = [token]
+        tokenDocument.pages[0].nodes[1].properties += localBoxProperties(
+            border: .init(color: border.color, width: 3, style: .solid))
+        tokenDocument.pages[0].nodes[1].properties.append(.init(key: .init(rawValue: LocalColorTokenBinding.key(for: .border)),
+            value: .string(token.id.description)))
+        try tokenDocument.validate()
+        let tokenCapture = try AdvancedStyleCommandRegistry.captureBoxSelection([tokenDocument.pages[0].nodes[1]], in: tokenDocument)
+        XCTAssertEqual(tokenCapture.box.border, .init(color: token.color, width: 3, style: .solid))
+        XCTAssertEqual(tokenCapture.tokenColorCount, 1)
+
+        // Skipped kinds, nothing applicable, and nothing to store.
+        let text = DocumentNode(kind: .text, name: "Caption", parent: .node(fixture.rootID))
+        XCTAssertEqual(try AdvancedStyleCommandRegistry.captureBoxSelection(nodes + [text], in: fixture.document).skippedCount, 1)
+        XCTAssertThrowsError(try AdvancedStyleCommandRegistry.captureBoxSelection([text], in: fixture.document)) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .noSelection)
+        }
+        let plain = ProjectCreation.blank()
+        XCTAssertThrowsError(try AdvancedStyleCommandRegistry.captureBoxSelection([plain.pages[0].nodes[0]], in: plain)) {
+            guard case .unavailable(let reason)? = $0 as? AdvancedStyleCommandError else { return XCTFail("\($0)") }
+            XCTAssertTrue(reason.contains("no border, corner radius or shadow"))
+        }
+
+        // Storing the capture in a new style reproduces it on a plain object.
+        let session = DocumentSession(document: fixture.document)
+        let copyID = ReusableStyleID()
+        let undoCount = session.historySnapshot().undoEntries.count
+        try session.execute(try preparedReusableEdit(.createReusableStyle(id: copyID, name: "Captured",
+            fill: nil, opacity: nil, box: capture.box), session: session, fixture: fixture).documentCommand)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, undoCount + 1,
+                       "A box-only style is created from the capture in one step")
+        var probe = DocumentNode(kind: .frame, name: "Probe", parent: .node(fixture.rootID))
+        probe.properties.append(.init(key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(copyID.description)))
+        let reproduced = try XCTUnwrap(CanonicalLinkedBoxStyleResolver.resolve(node: probe, tokens: [],
+            index: CanonicalReusableStyleIndex(document: session.document)))
+        XCTAssertEqual(reproduced.style.border, border)
+        XCTAssertEqual(reproduced.style.cornerRadius, 6)
+    }
+
+    // SF-0510-002/004/005: Create and Update carry
+    // border, corners and shadow in the same transaction as name, fill and
+    // opacity, so a box-only style can be created and Update from Selection is
+    // one undo step. Update without box values keeps the style's existing ones.
+    func testCreateAndUpdateReusableStyleCarryBoxValuesInOneTransaction() throws {
+        let fixture = makeFixture()
+        let session = DocumentSession(document: fixture.document)
+        let border = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#336699FF")),
+                                     width: 2, style: .solid)
+        let red = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF0000FF"))
+        func definition(_ id: ReusableStyleID) throws -> CanonicalReusableStyleDefinition {
+            try XCTUnwrap(CanonicalReusableStyleIndex(document: session.document).byID[id])
+        }
+        func run(_ edit: AdvancedStyleEdit) throws {
+            try session.execute(try preparedReusableEdit(edit, session: session, fixture: fixture).documentCommand)
+        }
+
+        let boxOnly = ReusableStyleID()
+        try run(.createReusableStyle(id: boxOnly, name: "Outline", fill: nil, opacity: nil,
+                                     box: .init(border: border, cornerRadius: 6)))
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 1)
+        XCTAssertEqual(try definition(boxOnly).box, .init(border: border, cornerRadius: 6))
+        XCTAssertNil(try definition(boxOnly).fill)
+
+        let card = ReusableStyleID()
+        try run(.createReusableStyle(id: card, name: "Card", fill: red, opacity: 0.9, box: .init(cornerRadius: 12)))
+        XCTAssertEqual(try definition(card).fill, red)
+        XCTAssertEqual(try definition(card).opacity, 0.9)
+        XCTAssertEqual(try definition(card).box, .init(cornerRadius: 12))
+        let afterCreate = session.document.pages
+
+        // Update with new box values: one transaction replacing fill and box.
+        let blue = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#0000FFFF"))
+        try run(.updateReusableStyle(id: card, name: "Card", fill: blue, opacity: 0.9, box: .init(border: border)))
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, 3)
+        XCTAssertEqual(try definition(card).fill, blue)
+        XCTAssertEqual(try definition(card).box, .init(border: border), "The radius is replaced, not merged")
+        try session.undo()
+        XCTAssertEqual(session.document.pages, afterCreate, "One undo restores fill and box together")
+        try session.redo()
+
+        // Update without box values keeps them; a same-value update is no change.
+        try run(.updateReusableStyle(id: card, name: "Card Renamed", fill: blue, opacity: 0.9))
+        XCTAssertEqual(try definition(card).box, .init(border: border))
+        for unchanged in [AdvancedStyleEdit.updateReusableStyle(id: card, name: "Card Renamed", fill: blue, opacity: 0.9),
+                          .updateReusableStyle(id: card, name: "Card Renamed", fill: blue, opacity: 0.9, box: .init(border: border))] {
+            XCTAssertThrowsError(try preparedReusableEdit(unchanged, session: session, fixture: fixture)) {
+                XCTAssertEqual($0 as? AdvancedStyleCommandError, .noChanges)
+            }
+        }
+
+        // Clearing the box is allowed while a fill remains; never for a style
+        // that would be left with nothing.
+        try run(.updateReusableStyle(id: card, name: "Card Renamed", fill: blue, opacity: 0.9, box: .init()))
+        XCTAssertTrue(try definition(card).box.isEmpty)
+        let before = session.document
+        let refused: [AdvancedStyleEdit] = [
+            .updateReusableStyle(id: boxOnly, name: "Outline", fill: nil, opacity: nil, box: .init()),
+            .createReusableStyle(id: ReusableStyleID(), name: "Nothing", fill: nil, opacity: nil, box: .init()),
+            .createReusableStyle(id: ReusableStyleID(), name: "Bad radius", fill: nil, opacity: nil, box: .init(cornerRadius: -4)),
+            .updateReusableStyle(id: boxOnly, name: "Outline", fill: nil, opacity: nil,
+                                 box: .init(shadow: .init(color: red, offsetX: 0, offsetY: 0, blur: -1, spread: 0))),
+        ]
+        for edit in refused {
+            XCTAssertThrowsError(try preparedReusableEdit(edit, session: session, fixture: fixture)) {
+                XCTAssertEqual($0 as? AdvancedStyleCommandError, .invalidValue)
+            }
+        }
+        XCTAssertEqual(session.document, before)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    // SF-0510-007: linked border/corners/shadow resolve for every object, and
+    // one style edit propagates as one transaction, within bounds on the
+    // standard (100), large (10,000) and stress (20,000-node) fixtures. The
+    // index is built once per resolution pass, in one pass over properties.
+    func testLinkedBoxStylesStayResponsiveOnStandardLargeAndStressFixtures() throws {
+        let clock = ContinuousClock()
+        let styleID = ReusableStyleID()
+        let border = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#336699FF")),
+                                     width: 2, style: .solid)
+        let box = CanonicalReusableBoxAppearance(border: border, cornerRadius: 8)
+        let scene = CanvasViewportSceneID()
+        for scale in [WorkspaceFixtureScale.standard, .large, .stress] {
+            var document = scale.document()
+            document.pages[0].nodes[0].properties += linkedBoxStyleProperties(styleID, name: "Card", box: box)
+            for pageIndex in document.pages.indices {
+                for nodeIndex in document.pages[pageIndex].nodes.indices {
+                    document.pages[pageIndex].nodes[nodeIndex].properties.append(.init(
+                        key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(styleID.description)))
+                }
+            }
+            try document.validate()
+            let nodes = document.pages.flatMap(\.nodes)
+            XCTAssertEqual(nodes.count, scale == .stress ? InsertionPolicy.maximumNodeCount : scale.pageCount)
+
+            var index: CanonicalReusableStyleIndex?
+            let build = try clock.measure { index = try CanonicalReusableStyleIndex(document: document) }
+            var linkedCount = 0
+            let resolution = clock.measure {
+                for node in nodes where CanonicalLinkedBoxStyleResolver.resolve(node: node, tokens: [],
+                    index: index)?.borderSource == .linked(styleID) { linkedCount += 1 }
+            }
+            XCTAssertEqual(linkedCount, nodes.count, "Every linked object resolves the style's border")
+
+            let session = DocumentSession(document: document)
+            let page = document.pages[0], root = page.nodes[0]
+            let command = AdvancedStyleCommand(identity: .init(documentID: document.id, pageID: page.id,
+                revision: document.revision, sceneID: scene, rendererGeneration: document.revision),
+                orderedNodeIDs: [root.id], edit: .setReusableStyleBox(id: styleID, box: .init(cornerRadius: 12)),
+                provenance: .keyboard, cancelled: false)
+            let context = TransformValidationContext(activePageID: page.id, currentSceneID: scene,
+                rendererGeneration: document.revision, selectedNodeIDs: [root.id], availableNodeIDs: [root.id],
+                isLifecycleAvailable: true, lifecycleDisabledReason: nil)
+            let update = try clock.measure {
+                let prepared = try AdvancedStyleCommandRegistry().prepare(command, in: session.document, context: context)
+                try session.execute(prepared.documentCommand)
+                try session.undo()
+                try session.redo()
+            }
+            XCTAssertEqual(session.historySnapshot().undoEntries.count, 1, "One style edit is one transaction for every linked object")
+            XCTAssertEqual(try CanonicalReusableStyleIndex(document: session.document).byID[styleID]?.box, .init(cornerRadius: 12))
+
+            // Safety bounds only; named-hardware timings belong in retained evidence.
+            let (indexBound, resolveBound, updateBound): (Duration, Duration, Duration) = switch scale {
+            case .standard: (.seconds(1), .seconds(1), .seconds(2))
+            case .large: (.seconds(5), .seconds(5), .seconds(20))
+            case .stress: (.seconds(10), .seconds(10), .seconds(40))
+            }
+            XCTAssertLessThan(build, indexBound, "\(scale)")
+            XCTAssertLessThan(resolution, resolveBound, "\(scale)")
+            XCTAssertLessThan(update, updateBound, "\(scale)")
+        }
+    }
+
+    // SF-0510-007 (index cost): many styles on one owner still build an
+    // identical index, so grouping definition fields cannot change results.
+    func testReusableStyleIndexGroupsManyDefinitionsOnOneOwnerIdentically() throws {
+        var document = CanonicalDocument()
+        let ids = (0..<300).map { _ in ReusableStyleID() }
+        for (offset, id) in ids.enumerated() {
+            let box: CanonicalReusableBoxAppearance = offset.isMultiple(of: 3)
+                ? .init(cornerRadius: Double(offset % 50)) : .init()
+            document.pages[0].nodes[0].properties += linkedBoxStyleProperties(id, name: "Style \(offset)", box: box,
+                fill: offset.isMultiple(of: 3) ? nil : "#102030FF")
+        }
+        try document.validate()
+        let clock = ContinuousClock()
+        var index: CanonicalReusableStyleIndex?
+        let elapsed = try clock.measure { index = try CanonicalReusableStyleIndex(document: document) }
+        let built = try XCTUnwrap(index)
+        XCTAssertEqual(built.orderedDefinitions.map(\.id), ids, "Definition order is the stored order")
+        for (offset, id) in ids.enumerated() {
+            let definition = try XCTUnwrap(built.byID[id])
+            XCTAssertEqual(definition.name, "Style \(offset)")
+            if offset.isMultiple(of: 3) {
+                XCTAssertEqual(definition.box, .init(cornerRadius: Double(offset % 50)))
+                XCTAssertNil(definition.fill)
+            } else {
+                XCTAssertTrue(definition.box.isEmpty)
+                XCTAssertEqual(definition.fill?.hexadecimalRGBA, "#102030FF")
+            }
+        }
+        XCTAssertLessThan(elapsed, .seconds(1), "Safety bound only")
+    }
+
+    // SF-0510-003/004/006: the Design Inspector shows
+    // what the canvas draws, names the rule that supplies each border, corner
+    // and shadow value, enables "Use Linked …" only when it would succeed, and
+    // never offers Remove for a value that only a linked style supplies.
+    func testInspectorReportsLinkedBoxSourcesAndGuardsLinkedOnlyRemoval() async throws {
+        var fixture = makeFixture()
+        let styleID = ReusableStyleID()
+        let linkedBorder = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#336699FF")),
+                                           width: 2, style: .solid)
+        let localBorder = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF0000FF")),
+                                          width: 5, style: .dotted)
+        fixture.document.pages[0].nodes[0].properties += linkedBoxStyleProperties(styleID, name: "Card",
+            box: .init(border: linkedBorder, cornerRadius: 8))
+        for index in [1, 2] {
+            fixture.document.pages[0].nodes[index].properties.append(.init(
+                key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(styleID.description)))
+        }
+        fixture.document.pages[0].nodes[2].properties += localBoxProperties(border: localBorder)
+        try fixture.document.validate()
+        let session = DocumentSession(document: fixture.document)
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        func adopt() async {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while (state.canvasRenderPlan?.identity.revision != session.document.revision
+                || state.canvasRenderPlan?.identity.viewportGeneration != state.viewportState.generation),
+                  ContinuousClock.now < deadline { await Task.yield() }
+            XCTAssertEqual(state.canvasRenderPlan?.identity.revision, session.document.revision)
+        }
+        func shownStyle() -> CanonicalBoxStyle? {
+            if case .single(let style, _) = state.designInspectorBoxStyleValue() { return style }
+            return nil
+        }
+        await adopt()
+
+        // Linked-only object: Inspector value equals the canvas; sources name the style.
+        state.selectLayer(fixture.nodeID)
+        XCTAssertEqual(shownStyle()?.border, linkedBorder)
+        XCTAssertEqual(shownStyle()?.cornerRadius, 8)
+        let drawn = try XCTUnwrap(state.canvasRenderPlan?.authoredObjects.first { $0.id == fixture.nodeID })
+        XCTAssertEqual(drawn.border?.width, shownStyle()?.border?.width)
+        XCTAssertEqual(drawn.cornerRadius, shownStyle()?.cornerRadius)
+        XCTAssertEqual(state.reusableBoxSource(.border), "Base linked border: Card")
+        XCTAssertEqual(state.reusableBoxSource(.cornerRadius), "Base linked corner radius: Card")
+        XCTAssertEqual(state.reusableBoxSource(.shadow), "Default / omitted shadow")
+        XCTAssertTrue(state.selectionBoxGroupIsLinked(.border))
+        XCTAssertTrue(state.selectionBoxGroupIsLinked(.cornerRadius))
+        XCTAssertFalse(state.selectionBoxGroupIsLinked(.shadow), "Nothing supplies a shadow")
+        XCTAssertFalse(state.linkedBoxAvailability(.border).isEnabled)
+        XCTAssertEqual(state.linkedBoxAvailability(.border).disabledReason, "No local border override remains to reset.")
+        XCTAssertFalse(state.linkedBoxAvailability(.shadow).isEnabled)
+
+        // Overriding object: own border wins; Use Linked Border is available.
+        state.selectLayer(fixture.secondNodeID)
+        XCTAssertEqual(shownStyle()?.border, localBorder)
+        XCTAssertEqual(shownStyle()?.cornerRadius, 8, "Other groups still come from the style")
+        XCTAssertEqual(state.reusableBoxSource(.border), "Base local border")
+        XCTAssertFalse(state.selectionBoxGroupIsLinked(.border))
+        XCTAssertTrue(state.linkedBoxAvailability(.border).isEnabled)
+
+        // Mixed selection: sources say so.
+        state.selectLayer(fixture.nodeID, modifier: .add)
+        XCTAssertEqual(state.reusableBoxSource(.border), "Mixed border sources")
+        XCTAssertEqual(state.reusableBoxSource(.cornerRadius), "Base linked corner radius: Card")
+        XCTAssertFalse(state.selectionBoxGroupIsLinked(.border), "Remove stays available while an own border exists")
+        if case .mixed = state.designInspectorBoxStyleValue() {} else { XCTFail("Different borders are mixed") }
+
+        // Use Linked Border through the shell: one transaction, canvas follows.
+        state.selectLayer(fixture.secondNodeID)
+        let before = session.historySnapshot().undoEntries.count
+        XCTAssertTrue(state.commitAdvancedStyle(.useLinkedBox(.border), operation: "Use Linked Border",
+                                                expectedContext: state.responsiveInspectorEditContext))
+        await adopt()
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, before + 1)
+        XCTAssertEqual(state.reusableBoxSource(.border), "Base linked border: Card")
+        XCTAssertEqual(state.canvasRenderPlan?.authoredObjects.first { $0.id == fixture.secondNodeID }?.border?.width, 2)
+        try session.undo()
+        await adopt()
+        XCTAssertEqual(state.reusableBoxSource(.border), "Base local border")
+
+        // Capture and Create Box Style from the selection.
+        let capture = try XCTUnwrap(try? state.reusableBoxCapture.get())
+        XCTAssertEqual(capture.box, .init(border: localBorder, cornerRadius: 8))
+        let created = ReusableStyleID()
+        XCTAssertTrue(state.commitAdvancedStyle(.createReusableStyle(id: created, name: "Dotted", fill: nil, opacity: nil,
+            box: capture.box), operation: "Reusable box style creation", expectedContext: state.responsiveInspectorEditContext))
+        let definition = try XCTUnwrap(state.reusableStyleDefinitions.first { $0.id == created })
+        XCTAssertEqual(definition.box, capture.box)
+        XCTAssertEqual(ReusableStyleSummary.definition(definition), "5 pt dotted border #FF0000FF · 8 pt corners")
+        XCTAssertNotNil(state.currentReusableStyleIndex()?.byID[created], "The cached index follows the new document value")
+        try session.undo()
+        XCTAssertNil(state.currentReusableStyleIndex()?.byID[created], "Undo also refreshes the cached index")
+        XCTAssertEqual(ReusableStyleSummary.box(.init()), "no border, corners or shadow")
+        XCTAssertEqual(WorkspaceShellState.boxPropertyTitle(.cornerRadius), "corner radius")
+    }
+
+    // SF-0510-007: passing a prebuilt style index to the
+    // registry and to capture gives exactly the same result as building it
+    // there, and an invalid document still fails the same way.
+    func testPrebuiltStyleIndexGivesIdenticalRegistryAndCaptureResults() throws {
+        var fixture = makeFixture()
+        let styleID = ReusableStyleID()
+        let border = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#336699FF")),
+                                     width: 2, style: .solid)
+        fixture.document.pages[0].nodes[0].properties += linkedBoxStyleProperties(styleID, name: "Card",
+            box: .init(border: border, cornerRadius: 8))
+        fixture.document.pages[0].nodes[1].properties.append(.init(
+            key: .init(rawValue: CanonicalReusableStyleIndex.appliedKey), value: .string(styleID.description)))
+        fixture.document.pages[0].nodes[1].properties += localBoxProperties(radius: 2)
+        try fixture.document.validate()
+        let document = fixture.document
+        let index = try CanonicalReusableStyleIndex(document: document)
+        let registry = AdvancedStyleCommandRegistry()
+        for edit in [AdvancedStyleEdit.useLinkedBox(.cornerRadius), .setReusableStyleBox(id: styleID, box: .init(cornerRadius: 4)),
+                     .useLinkedBox(.shadow)] {
+            let command = AdvancedStyleCommand(identity: .init(documentID: document.id, pageID: fixture.pageID,
+                revision: document.revision, sceneID: fixture.sceneID, rendererGeneration: fixture.rendererGeneration),
+                orderedNodeIDs: [fixture.nodeID], edit: edit, provenance: .keyboard, cancelled: false)
+            let context = fixture.context(selectedIDs: [fixture.nodeID])
+            let built = Result { try registry.prepare(command, in: document, context: context) }
+            let cached = Result { try registry.prepare(command, in: document, context: context, styleIndex: index) }
+            switch (built, cached) {
+            case (.success(let a), .success(let b)):
+                XCTAssertEqual(a.documentCommand, b.documentCommand)
+                XCTAssertEqual(a.applicableNodeIDs, b.applicableNodeIDs)
+            case (.failure(let a), .failure(let b)):
+                XCTAssertEqual(a as? AdvancedStyleCommandError, b as? AdvancedStyleCommandError)
+            default:
+                XCTFail("Prebuilt and built indexes disagree for \(edit)")
+            }
+        }
+        let nodes = [document.pages[0].nodes[1]]
+        XCTAssertEqual(try AdvancedStyleCommandRegistry.captureBoxSelection(nodes, in: document),
+                       try AdvancedStyleCommandRegistry.captureBoxSelection(nodes, in: document, styleIndex: index))
+
+        // No prebuilt index for an invalid document: the registry still rejects it.
+        var invalid = document
+        invalid.pages[0].nodes[0].properties.append(.init(key: .init(rawValue:
+            CanonicalReusableStyleIndex.namespace + "definition.\(styleID.description).borderGlow"), value: .number(1)))
+        XCTAssertThrowsError(try CanonicalReusableStyleIndex(document: invalid))
+        XCTAssertThrowsError(try AdvancedStyleCommandRegistry.captureBoxSelection([invalid.pages[0].nodes[1]], in: invalid,
+                                                                                  styleIndex: nil))
+    }
+
+    private func linkedBoxStyleProperties(_ id: ReusableStyleID, name: String, box: CanonicalReusableBoxAppearance,
+                                          fill: String? = nil) -> [NodeProperty] {
+        let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(id.description)."
+        var result = [NodeProperty(key: .init(rawValue: prefix + "name"), value: .string(name), origin: .authored)]
+        if let fill { result.append(.init(key: .init(rawValue: prefix + "fill"), value: .string(fill), origin: .authored)) }
+        result += box.fieldValues.map { NodeProperty(key: .init(rawValue: prefix + $0.field), value: $0.value, origin: .authored) }
+        return result
+    }
+
+    private func localBoxProperties(border: CanonicalBorder? = nil, radius: Double? = nil,
+                                    shadow: CanonicalShadow? = nil, shadowEnabled: Bool? = nil) -> [NodeProperty] {
+        let ns = DesignBoxStyleCommandRegistry.namespace
+        func color(_ prefix: String, _ value: CanonicalSolidColor) -> [NodeProperty] {
+            [("red", value.red), ("green", value.green), ("blue", value.blue), ("alpha", value.alpha)].map {
+                NodeProperty(key: .init(rawValue: ns + prefix + "." + $0.0), value: .number($0.1), origin: .authored)
+            }
+        }
+        var result: [NodeProperty] = []
+        if let border {
+            result.append(.init(key: .init(rawValue: ns + "border.width"), value: .number(border.width), origin: .authored))
+            result.append(.init(key: .init(rawValue: ns + "border.style"), value: .string(border.style.rawValue), origin: .authored))
+            result += color("border.color", border.color)
+        }
+        if let radius { result.append(.init(key: .init(rawValue: ns + "radius.uniform"), value: .number(radius), origin: .authored)) }
+        if let shadow {
+            result += [("shadow.offsetX", shadow.offsetX), ("shadow.offsetY", shadow.offsetY),
+                       ("shadow.blur", shadow.blur), ("shadow.spread", shadow.spread)].map {
+                NodeProperty(key: .init(rawValue: ns + $0.0), value: .number($0.1), origin: .authored)
+            }
+            result += color("shadow.color", shadow.color)
+        }
+        if let shadowEnabled {
+            result.append(.init(key: .init(rawValue: ns + "shadow.enabled"), value: .boolean(shadowEnabled), origin: .authored))
+        }
+        return result
+    }
+
+    // SF-0510-002/004: updating a style that supplies
+    // only border, corners or shadow keeps those values and no longer needs a
+    // fill or opacity. A new style, or one with nothing else, still needs one.
+    func testUpdatingABoxOnlyReusableStyleKeepsItsLinkedBoxValues() throws {
+        var fixture = makeFixture()
+        let styleID = ReusableStyleID()
+        let border = CanonicalBorder(color: try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#336699FF")),
+                                     width: 2, style: .solid)
+        let box = CanonicalReusableBoxAppearance(border: border, cornerRadius: 8)
+        fixture.document.pages[0].nodes[0].properties += linkedBoxStyleProperties(styleID, name: "Card", box: box)
+        try fixture.document.validate()
+        let session = DocumentSession(document: fixture.document)
+        func definition(_ id: ReusableStyleID) throws -> CanonicalReusableStyleDefinition {
+            try XCTUnwrap(CanonicalReusableStyleIndex(document: session.document).byID[id])
+        }
+        func update(_ id: ReusableStyleID, name: String, fill: CanonicalSolidColor?) throws -> DocumentCommand {
+            try preparedReusableEdit(.updateReusableStyle(id: id, name: name, fill: fill, opacity: nil),
+                                     session: session, fixture: fixture).documentCommand
+        }
+
+        try session.execute(update(styleID, name: "Rounded card", fill: nil))
+        XCTAssertEqual(try definition(styleID).name, "Rounded card")
+        XCTAssertEqual(try definition(styleID).box, box)
+        XCTAssertNil(try definition(styleID).fill)
+        let red = try XCTUnwrap(CanonicalSolidColor.parse(hexadecimal: "#FF0000FF"))
+        try session.execute(update(styleID, name: "Rounded card", fill: red))
+        XCTAssertEqual(try definition(styleID).fill, red)
+        XCTAssertEqual(try definition(styleID).box, box)
+        try session.execute(update(styleID, name: "Rounded card", fill: nil))
+        XCTAssertNil(try definition(styleID).fill)
+        XCTAssertEqual(try definition(styleID).box, box, "Removing the fill never removes linked box values")
+        XCTAssertThrowsError(try update(styleID, name: "Rounded card", fill: nil)) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .noChanges)
+        }
+
+        try session.undo()
+        XCTAssertEqual(try definition(styleID).fill, red)
+        try session.undo()
+        XCTAssertNil(try definition(styleID).fill)
+        XCTAssertEqual(try definition(styleID).name, "Rounded card")
+        try session.undo()
+        XCTAssertEqual(session.document.pages, fixture.document.pages)
+
+        XCTAssertThrowsError(try preparedReusableEdit(.createReusableStyle(id: ReusableStyleID(), name: "Empty",
+            fill: nil, opacity: nil), session: session, fixture: fixture)) {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .invalidValue)
+        }
+        let fillOnly = ReusableStyleID()
+        try session.execute(try preparedReusableEdit(.createReusableStyle(id: fillOnly, name: "Fill only",
+            fill: red, opacity: nil), session: session, fixture: fixture).documentCommand)
+        let beforeInvalid = session.document
+        XCTAssertThrowsError(try update(fillOnly, name: "Fill only", fill: nil),
+                             "A style with nothing else to supply still needs a fill or opacity") {
+            XCTAssertEqual($0 as? AdvancedStyleCommandError, .invalidValue)
+        }
+        XCTAssertEqual(session.document, beforeInvalid)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
     }
 
     // SF-0508-003/005, SF-0509-003/005, SF-0510-003/005: reset is

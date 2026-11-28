@@ -15,7 +15,7 @@ struct CanonicalBorder: Equatable, Sendable {
     let color: CanonicalSolidColor
     let width: Double
     let style: CanonicalBorderStyle
-    var isValid: Bool { color.isValid && width.isFinite && width > 0 && width <= 100 }
+    var isValid: Bool { color.isValid && width.isFinite && width >= 0 && width <= 100 }
 }
 
 struct CanonicalShadow: Equatable, Sendable {
@@ -137,7 +137,7 @@ struct DesignBoxStyleCommandRegistry: Sendable {
             return value.isValid ? value : nil
         }
         let border: CanonicalBorder? = {
-            guard let width = number("border.width"), width > 0,
+            guard let width = number("border.width"), width >= 0,
                   let value = color("border.color"),
                   let raw = node.insertionStringProperty(namespace + "border.style"),
                   let style = CanonicalBorderStyle(rawValue: raw) else { return nil }
@@ -893,6 +893,7 @@ enum DesignFillLayerEdit: Sendable {
     /// Explicit None removes all fill layers and fill-token binding atomically;
     /// an authored empty order prevents legacy/default surface resurrection.
     case clearAll
+    case replaceLayer(CanonicalFillLayer)
     case addSolid(id: FillLayerID, color: CanonicalSolidColor)
     case addLinearGradient(id: FillLayerID, angleDegrees: Double, stops: [CanonicalGradientStop])
     case remove(FillLayerID)
@@ -919,6 +920,9 @@ extension Array where Element == CanonicalFillLayer {
         }
         switch edit {
         case .clearAll: result = []
+        case .replaceLayer(let layer):
+            guard layer.isValid else { throw DesignFillLayerEditError.invalidLayer }
+            result[try layerIndex(layer.id)] = layer
         case .replaceSolid(let color):
             if let color {
                 guard color.isValid else { throw DesignFillLayerEditError.invalidLayer }
@@ -1077,10 +1081,47 @@ struct ComponentInstanceTextDraft: Equatable, Sendable {
     }
 }
 
+/// OD-018: what Add puts at the top level of a copy's slot.
+enum SlotItemKind: String, CaseIterable, Sendable {
+    case frame, text
+
+    var nodeKind: NodeKind { self == .frame ? .frame : .text }
+
+    /// The same canonical defaults as Insert Frame / Insert Text, at
+    /// slot-local (0, y), marked as a top-level item of `slotID`.
+    func node(parentID: NodeID, slotID: ComponentSlotPropertyID, y: Double) -> DocumentNode {
+        let size = InsertionGeometry.defaultValue(for: self == .frame ? .frame : .text, at: .init(x: 0, y: y)).size
+        var properties: [NodeProperty] = [
+            .init(key: .init(rawValue: "layout.x"), value: .number(0), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.y"), value: .number(y), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.width"), value: .number(size.width), origin: .defaulted),
+            .init(key: .init(rawValue: "layout.height"), value: .number(size.height), origin: .defaulted),
+            .init(key: .init(rawValue: "style.fill"), value: .string(self == .text ? "text-placeholder" : "surface"), origin: .defaulted),
+            .init(key: .init(rawValue: "style.border"), value: .string(self == .text ? "none" : "subtle"), origin: .defaulted),
+            .init(key: .init(rawValue: CanonicalComponentSlot.supplyKey), value: .string(slotID.description), origin: .authored),
+        ]
+        if self == .text {
+            let typography = CanonicalTypography.defaultValue
+            properties += [
+                .init(key: .init(rawValue: "content.text"), value: .string(InsertionPolicy.defaultText), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalTypography.namespace + "family"), value: .string(typography.family), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalTypography.namespace + "weight"), value: .string(typography.weight.rawValue), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalTypography.namespace + "size"), value: .number(typography.size), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalTypography.namespace + "lineHeight"), value: .number(typography.lineHeight), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalTypography.namespace + "tracking"), value: .number(typography.tracking), origin: .defaulted),
+                .init(key: .init(rawValue: CanonicalTypography.namespace + "alignment"), value: .string(typography.alignment.rawValue), origin: .defaulted),
+            ]
+        }
+        return DocumentNode(kind: nodeKind, name: self == .frame ? "Frame" : "Text", parent: .node(parentID), properties: properties)
+    }
+}
+
 enum ComponentEdit: Sendable {
     case create(NodeID)
     case createNamed(NodeID, name: String)
     case rename(definitionID: PageID, name: String)
+    case duplicateDefinition(PageID)
+    case setUsageNotes(definitionID: PageID, openingSelection: [NodeID], draft: String?)
     case insert(definitionID: PageID, parentID: NodeID, geometry: InsertionGeometry)
     case detach(NodeID)
     case delete(definitionID: PageID, detachUses: Bool)
@@ -1108,10 +1149,34 @@ enum ComponentEdit: Sendable {
     case resetActionOverride(instanceID: NodeID, propertyID: ComponentActionPropertyID)
     case exposeSlot(nodeID: NodeID, label: String)
     case removeSlotProperty(NodeID)
+    /// OD-018: allowed top-level kinds and item limit for a slot.
+    case setSlotRules(nodeID: NodeID, rules: CanonicalSlotRules)
+    /// OD-018: the copy takes its own copy of the slot's current default
+    /// contents (as it shows them) to edit from there.
+    case customizeSlot(instanceID: NodeID, slotID: ComponentSlotPropertyID)
+    /// OD-018: the copy shows nothing in this slot (authored empty).
+    case makeSlotEmpty(instanceID: NodeID, slotID: ComponentSlotPropertyID)
+    /// OD-018: the copy shows the slot's default contents again; its own
+    /// contents for that slot are removed.
+    case useSlotDefault(instanceID: NodeID, slotID: ComponentSlotPropertyID)
+    /// OD-018: append a new top-level Frame or Text to the copy's slot.
+    case addToSlot(instanceID: NodeID, slotID: ComponentSlotPropertyID, kind: SlotItemKind)
+    /// OD-018: move a top-level slot item earlier (-1) or later (+1) within its slot.
+    case moveSlotItem(nodeID: NodeID, offset: Int)
     case organizeProperty(nodeID: NodeID, property: ComponentOverridePropertyIdentity, group: String?, position: Int)
     case resetPropertyOrganization(nodeID: NodeID, property: ComponentOverridePropertyIdentity)
     case resetAllOverrides(NodeID)
     case resetOverrideConflicts(instanceID: NodeID, expectedPropertyIDs: [PropertyID], confirmed: Bool)
+
+    /// SF-0903-008: slot edits are also recorded under the slot module's
+    /// requirement, so diagnostics name the capability that changed.
+    var isSlotEdit: Bool {
+        switch self {
+        case .exposeSlot, .removeSlotProperty, .setSlotRules, .customizeSlot, .makeSlotEmpty,
+             .useSlotDefault, .addToSlot, .moveSlotItem: true
+        default: false
+        }
+    }
 }
 
 struct PreparedComponentEdit: Sendable {
@@ -1287,6 +1352,11 @@ struct PageStructureCommandRegistry {
             }
         case .automaticLayout:
             let content = try chromeNode(CanonicalPageChrome.contentKey)
+            if CanonicalPageFlow.role(owner) == .footer,
+               [CanonicalPageChrome.titleKey, CanonicalPageChrome.navigationKey].contains(where: { key in
+                   guard let id = CanonicalPageChrome.reference(key, on: owner), let node = page.nodes.first(where: { $0.id == id }) else { return false }
+                   return node.parent != .node(content.id)
+               }) { throw DesignInspectorError.unavailable("This Footer uses editable columns. Adjust its groups with Layout controls; automatic title/navigation layout would change that structure.") }
             set(content, "layout.axis", .string("horizontal"), origin: .defaulted)
             set(content, "layout.padding", .number(0), origin: .defaulted)
             set(content, "layout.gap", .number(24), origin: .defaulted)
@@ -1390,7 +1460,219 @@ struct PageStructureCommandRegistry {
     }
 }
 
+/// The same identity remapping applies to local duplication and transfer.
+/// Dependency reconciliation and envelope validation stay with the caller.
+enum ComponentDefinitionGraphCopy {
+    enum Failure: LocalizedError {
+        case invalidGraph
+        case missingDependency
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidGraph: "The component graph is unavailable. Refresh Details and try again."
+            case .missingDependency: "Restore the missing component dependency before copying the original."
+            }
+        }
+    }
+
+    static func duplicate(_ source: DocumentPage, in document: CanonicalDocument) throws -> DocumentPage {
+        let names = Set(document.componentDefinitions.map { $0.name.lowercased() })
+        let name = uniqueCopyName(source.name, reserved: names)
+        let styles = try CanonicalReusableStyleIndex(document: document).orderedDefinitions.map(\.id)
+        let styleMap = Dictionary(uniqueKeysWithValues: styles.map { ($0, $0) })
+        var text: [ComponentTextPropertyID: ComponentTextPropertyID] = [:]
+        var visibility: [ComponentVisibilityPropertyID: ComponentVisibilityPropertyID] = [:]
+        var choice: [ComponentChoicePropertyID: ComponentChoicePropertyID] = [:]
+        var media: [ComponentMediaPropertyID: ComponentMediaPropertyID] = [:]
+        var action: [ComponentActionPropertyID: ComponentActionPropertyID] = [:]
+        var nodes: [NodeID: NodeID] = [:]
+        var slots: [ComponentSlotPropertyID: ComponentSlotPropertyID] = [:]
+        // OD-034: an inner instance keeps linking the same definitions, so the
+        // values (and, OD-018, slot states and contents) authored on it keep
+        // their property identities.
+        let inner = Set(source.nodes.compactMap(CanonicalComponentReference.definitionID))
+        for definition in document.componentDefinitions where inner.contains(definition.id) {
+            CanonicalComponentText.properties(in: definition).forEach { text[$0.id] = $0.id }
+            CanonicalComponentVisibility.properties(in: definition).forEach { visibility[$0.id] = $0.id }
+            CanonicalComponentChoice.properties(in: definition).forEach { choice[$0.id] = $0.id }
+            CanonicalComponentMedia.properties(in: definition).forEach { media[$0.id] = $0.id }
+            CanonicalComponentAction.properties(in: definition).forEach { action[$0.id] = $0.id }
+            CanonicalComponentSlot.properties(in: definition).forEach { slots[$0.id] = $0.id }
+        }
+        return try remap(source, destinationID: PageID(), name: name,
+            assetMap: [:], tokenMap: [:], styleMap: styleMap,
+            textMap: &text, visibilityMap: &visibility, choiceMap: &choice,
+            mediaMap: &media, actionMap: &action, slotMap: &slots, definitionNodes: &nodes,
+            pageReferenceMap: [:], nodeReferenceMap: [:])
+    }
+
+    static func uniqueCopyName(_ name: String, reserved: Set<String>) -> String {
+        var suffix = 2
+        while true {
+            // Retain a complete UTF-8 prefix even for non-ASCII component names.
+            let ending = " Copy \(suffix)"
+            var prefix = String(name.prefix(112))
+            while prefix.utf8.count + ending.utf8.count > 256 { prefix.removeLast() }
+            let candidate = prefix + ending
+            if !reserved.contains(candidate.lowercased()) { return candidate }
+            suffix += 1
+        }
+    }
+
+    static func remap(
+        _ source: DocumentPage,
+        destinationID: PageID,
+        name: String,
+        assetMap: [AssetID: AssetID],
+        tokenMap: [ColorTokenID: ColorTokenID],
+        styleMap: [ReusableStyleID: ReusableStyleID],
+        textMap: inout [ComponentTextPropertyID: ComponentTextPropertyID],
+        visibilityMap: inout [ComponentVisibilityPropertyID: ComponentVisibilityPropertyID],
+        choiceMap: inout [ComponentChoicePropertyID: ComponentChoicePropertyID],
+        mediaMap: inout [ComponentMediaPropertyID: ComponentMediaPropertyID],
+        actionMap: inout [ComponentActionPropertyID: ComponentActionPropertyID],
+        slotMap: inout [ComponentSlotPropertyID: ComponentSlotPropertyID],
+        definitionNodes: inout [NodeID: NodeID],
+        pageReferenceMap: [PageID: PageID], nodeReferenceMap: [NodeID: NodeID],
+        definitionMap: [PageID: PageID] = [:]
+    ) throws -> DocumentPage {
+        let nodeMap = Dictionary(uniqueKeysWithValues: source.nodes.map { ($0.id, NodeID()) })
+        definitionNodes.merge(nodeMap, uniquingKeysWith: { first, _ in first })
+        // The copy's own slots get new identities; slot keys on its inner
+        // instances map through entries callers add for inner definitions.
+        for slot in CanonicalComponentSlot.properties(in: source) { slotMap[slot.id] = ComponentSlotPropertyID() }
+        let propertyMap = Dictionary(uniqueKeysWithValues: source.nodes.flatMap(\.properties).map { ($0.id, PropertyID()) })
+        for node in source.nodes {
+            if let old = CanonicalComponentText.property(on: node)?.id { textMap[old] = ComponentTextPropertyID() }
+            if let old = CanonicalComponentVisibility.property(on: node)?.id { visibilityMap[old] = ComponentVisibilityPropertyID() }
+            if let old = CanonicalComponentChoice.property(on: node)?.id { choiceMap[old] = ComponentChoicePropertyID() }
+            if let old = CanonicalComponentMedia.property(on: node)?.id { mediaMap[old] = ComponentMediaPropertyID() }
+            if let old = CanonicalComponentAction.property(on: node)?.id { actionMap[old] = ComponentActionPropertyID() }
+        }
+        let nodes = try source.nodes.map { node -> DocumentNode in
+            guard let id = nodeMap[node.id] else { throw Failure.invalidGraph }
+            let parent: NodeParent = switch node.parent {
+            case .page: .page(destinationID)
+            case .node(let old): nodeMap[old].map(NodeParent.node) ?? .page(destinationID)
+            }
+            let properties = try node.properties.compactMap { property -> NodeProperty? in
+                let key = property.key.rawValue
+                if key.hasPrefix(CanonicalReusableStyleIndex.namespace + "definition.") { return nil }
+                guard let propertyID = propertyMap[property.id] else { throw Failure.invalidGraph }
+                var outputKey = key, value = property.value
+                if CanonicalPageChrome.referenceKeys.contains(key), case .string(let raw) = value,
+                   let old = NodeID(uuidString: raw), let mapped = nodeMap[old] {
+                    value = .string(mapped.description)
+                }
+                // OD-038 (ADR-0081/0087): an image a translation shows follows the asset map too.
+                if [CanonicalImageStyle.namespace + "assetID", CanonicalImageFill.assetKey].contains(key)
+                    || SiteTranslationKey(rawValue: key)?.field == .imageAssetID,
+                   case .string(let raw) = value, let old = AssetID(uuidString: raw), let mapped = assetMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentReference.key, case .string(let raw) = value,
+                          let old = PageID(uuidString: raw), let mapped = definitionMap[old] {
+                    // OD-034: an inner instance follows its definition's import.
+                    value = .string(mapped.description)
+                } else if key.hasPrefix(LocalColorTokenBinding.prefix), case .string(let raw) = value,
+                          let old = ColorTokenID(uuidString: raw), let mapped = tokenMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalReusableStyleIndex.appliedKey, case .string(let raw) = value {
+                    value = .string(try raw.split(separator: ",", omittingEmptySubsequences: false).map { part in
+                        guard let old = ReusableStyleID(uuidString: String(part)), let mapped = styleMap[old] else {
+                            throw Failure.missingDependency
+                        }
+                        return mapped.description
+                    }.joined(separator: ","))
+                } else if key == CanonicalComponentText.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentTextPropertyID(uuidString: raw), let mapped = textMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentVisibility.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentVisibilityPropertyID(uuidString: raw), let mapped = visibilityMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentChoice.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentChoicePropertyID(uuidString: raw), let mapped = choiceMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentMedia.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentMediaPropertyID(uuidString: raw), let mapped = mediaMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentAction.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentActionPropertyID(uuidString: raw), let mapped = actionMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalComponentSlot.namespace + "id", case .string(let raw) = value,
+                          let old = ComponentSlotPropertyID(uuidString: raw), let mapped = slotMap[old] {
+                    value = .string(mapped.description)
+                } else if key.hasPrefix(CanonicalComponentOrganization.namespace), key.hasSuffix(".binding"),
+                          case .string(let raw) = value, let identity = ComponentOverridePropertyIdentity.reference(raw) {
+                    let mapped: ComponentOverridePropertyIdentity
+                    switch identity {
+                    case .text(let id): guard let id = textMap[id] else { throw Failure.missingDependency }; mapped = .text(id)
+                    case .visibility(let id): guard let id = visibilityMap[id] else { throw Failure.missingDependency }; mapped = .visibility(id)
+                    case .choice(let id): guard let id = choiceMap[id] else { throw Failure.missingDependency }; mapped = .choice(id)
+                    case .media(let id): guard let id = mediaMap[id] else { throw Failure.missingDependency }; mapped = .media(id)
+                    case .action(let id): guard let id = actionMap[id] else { throw Failure.missingDependency }; mapped = .action(id)
+                    case .slot(let id): guard let id = slotMap[id] else { throw Failure.missingDependency }; mapped = .slot(id)
+                    }
+                    value = .string(mapped.stableDescription)
+                } else if key == CanonicalLinkTarget.namespace + "nodeID", case .string(let raw) = value,
+                          let old = NodeID(uuidString: raw), let mapped = nodeMap[old] {
+                    value = .string(mapped.description)
+                } else if key == CanonicalLinkTarget.namespace + "pageID", case .string(let raw) = value,
+                          PageID(uuidString: raw) == source.id { value = .string(destinationID.description)
+                } else if key == CanonicalLinkTarget.namespace + "pageID", case .string(let raw) = value,
+                          let old = PageID(uuidString: raw), let mapped = pageReferenceMap[old] { value = .string(mapped.description)
+                } else if key == CanonicalLinkTarget.namespace + "nodeID", case .string(let raw) = value,
+                          let old = NodeID(uuidString: raw), let mapped = nodeReferenceMap[old] { value = .string(mapped.description)
+                } else if key == CanonicalEventGraph.interactionsKey {
+                    value = CanonicalEventGraph.remappingTargets(value,
+                        nodeMap: nodeMap.merging(nodeReferenceMap, uniquingKeysWith: { first, _ in first }),
+                        pageMap: pageReferenceMap.merging([source.id: destinationID], uniquingKeysWith: { first, _ in first }))
+                } else if key == CanonicalFormField.optionsKey, case .string(let encoded) = value {
+                    value = .string(try CanonicalFormSelectOptions.remappingStableIDs(in: encoded))
+                } else if key.hasPrefix(CanonicalFluidValueCodec.namespace + "."), case .string(let encoded) = value,
+                          let target = FluidValueTarget(rawValue: String(key.dropFirst(CanonicalFluidValueCodec.namespace.count + 1))) {
+                    value = .string(try CanonicalFluidValueCodec.remappingStableID(in: encoded, target: target))
+                } else if let old = CanonicalComponentText.overrideID(key) {
+                    guard let mapped = textMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentText.overrideKey(mapped)
+                } else if let old = CanonicalComponentVisibility.overrideID(key) {
+                    guard let mapped = visibilityMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentVisibility.overrideKey(mapped)
+                } else if let old = CanonicalComponentChoice.overrideID(key) {
+                    guard let mapped = choiceMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentChoice.overrideKey(mapped)
+                } else if let old = CanonicalComponentMedia.overrideID(key) {
+                    guard let mapped = mediaMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentMedia.overrideKey(mapped)
+                    if case .string(let raw) = value, let asset = AssetID(uuidString: raw), let remapped = assetMap[asset] {
+                        value = .string(remapped.description)
+                    }
+                } else if let old = CanonicalComponentAction.overrideID(key) {
+                    // The destination value is kept as authored; callers that
+                    // change projects refuse inner action values first.
+                    guard let mapped = actionMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentAction.overrideKey(mapped)
+                } else if let old = CanonicalComponentSlot.overrideID(key) {
+                    // OD-018: an inner instance's slot state follows its definition's slot.
+                    guard let mapped = slotMap[old] else { throw Failure.missingDependency }
+                    outputKey = CanonicalComponentSlot.overrideKey(mapped)
+                } else if key == CanonicalComponentSlot.supplyKey, case .string(let raw) = value,
+                          let old = ComponentSlotPropertyID(uuidString: raw) {
+                    guard let mapped = slotMap[old] else { throw Failure.missingDependency }
+                    value = .string(mapped.description)
+                }
+                return NodeProperty(id: propertyID, key: .init(rawValue: outputKey), value: value, origin: property.origin)
+            }
+            return DocumentNode(id: id, kind: node.kind, name: node.name, parent: parent,
+                                childIDs: node.childIDs.compactMap { nodeMap[$0] }, properties: properties)
+        }
+        return DocumentPage(id: destinationID, name: name, route: .init(rawValue: ""),
+                            role: .componentDefinition, provenance: .authored,
+                            rootNodeIDs: source.rootNodeIDs.compactMap { nodeMap[$0] }, nodes: nodes)
+    }
+}
+
 struct ComponentCommandRegistry {
+    static let inboundInteractionReason = "Remove or retarget interactions on other objects that point at objects inside this container before creating this component."
     /// Shared preflight for native eligibility and the canonical create command.
     /// It allocates no new identities and never changes the selected graph.
     static func creationSourceIDs(_ id: NodeID, page: DocumentPage,
@@ -1406,8 +1688,10 @@ struct ComponentCommandRegistry {
         let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
         var included = Set<NodeID>(), pending = [id]
         while let next = pending.popLast() {
-            guard included.insert(next).inserted, let node = byID[next], node.kind != .component else {
-                throw CommandExecutionError.disabled("Nested component authoring is unavailable.")
+            // OD-034: linked instances inside the selection stay linked inside
+            // the new definition; the graph check in `prepare` bounds depth/size.
+            guard included.insert(next).inserted, let node = byID[next] else {
+                throw CommandExecutionError.disabled("The selected container's structure changed. Select it again and retry.")
             }
             guard !CanonicalPageFlow.isManaged(node) else {
                 throw CommandExecutionError.disabled("Connected page structure/navigation must remain page-owned; it cannot become component content in this version.")
@@ -1427,6 +1711,15 @@ struct ComponentCommandRegistry {
                    let targetID = NodeID(uuidString: target), descendants.contains(targetID) {
                     throw CommandExecutionError.disabled("Remove inbound links to child sections before creating this component.")
                 }
+                // OD-039: the contents get new identities in the definition, so an
+                // interaction elsewhere that targets one would lose its target.
+                if case .string(let text)? = node.insertionProperty(CanonicalEventGraph.interactionsKey)?.value,
+                   let interactions = try? CanonicalEventGraph.decode(text),
+                   interactions.contains(where: { interaction in
+                       interaction.actions.contains { action in action.target.map { descendants.contains($0) } ?? false }
+                   }) {
+                    throw CommandExecutionError.disabled(Self.inboundInteractionReason)
+                }
             }
         }
         return included
@@ -1439,6 +1732,173 @@ struct ComponentCommandRegistry {
               renderer.sceneGeneration == document.revision else { return nil }
         return .init(documentID: document.id, pageID: pageID, revision: document.revision,
                      sceneID: renderer.sceneID, rendererGeneration: renderer.sceneGeneration)
+    }
+
+    /// OD-034: the graph rule an instance of `definitionID` placed in `page`
+    /// would break, or `nil`. Pages that are not definitions never nest.
+    /// Shared by the Insert Component availability and the insert command.
+    static func nestingViolation(inserting definitionID: PageID, into page: DocumentPage,
+                                 document: CanonicalDocument) -> ComponentGraphViolation? {
+        guard page.role == .componentDefinition else { return nil }
+        return CanonicalComponentGraph.violation(adding: [definitionID], into: page.id,
+                                                 definitions: document.componentDefinitions)
+    }
+
+    /// The specific nesting message for a candidate document, so a refused
+    /// edit names the chain instead of the generic validation text.
+    static func requireValidNesting(_ candidate: CanonicalDocument) throws {
+        if let violation = CanonicalComponentGraph(document: candidate).violation {
+            throw CommandExecutionError.disabled(violation.localizedDescription)
+        }
+    }
+
+    /// Detach: the instance's node becomes `expanded`, whose projected slot
+    /// contents keep their canonical identities, so their stored originals
+    /// are removed (OD-018). Contents of supplied inner instances stay.
+    static func replacingInstance(_ id: NodeID, with expanded: [DocumentNode], in page: DocumentPage) -> [DocumentNode] {
+        guard let instance = page.nodes.first(where: { $0.id == id }) else { return page.nodes }
+        let replaced = ComponentGraphResolver.detachedSuppliedNodeIDs(instance, page: page)
+        return page.nodes.filter { !replaced.contains($0.id) }.flatMap { $0.id == id ? expanded : [$0] }
+    }
+
+    /// OD-018: the instance's supplied subtree for `slot` (top-level items and
+    /// their contents, including the contents of supplied inner instances).
+    static func suppliedSubtree(of instance: DocumentNode, slot: ComponentSlotPropertyID,
+                                page: DocumentPage) -> Set<NodeID> {
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        var result = Set<NodeID>()
+        var pending = CanonicalComponentSlot.suppliedRoots(of: instance, nodesByID: byID)[slot]?.map(\.id) ?? []
+        while let id = pending.popLast() {
+            guard result.insert(id).inserted else { continue }
+            pending += byID[id]?.childIDs ?? []
+        }
+        return result
+    }
+
+    /// The instance's existing slot `slot` (definition available and exposing it).
+    static func exposedSlot(_ slot: ComponentSlotPropertyID, of instance: DocumentNode,
+                            document: CanonicalDocument) throws -> (DocumentPage, ExposedComponentSlotProperty) {
+        guard let definitionID = CanonicalComponentReference.definitionID(for: instance),
+              let definition = document.componentDefinitions.first(where: { $0.id == definitionID }) else {
+            throw CommandExecutionError.disabled("The original component is unavailable. Restore it before editing this copy's slots.")
+        }
+        guard let exposed = CanonicalComponentSlot.properties(in: definition).first(where: { $0.id == slot }) else {
+            throw CommandExecutionError.disabled("The component no longer has this slot. Resolve the kept contents in the Inspector first.")
+        }
+        return (definition, exposed)
+    }
+
+    /// OD-018 Customize: the slot's default contents exactly as this copy
+    /// shows them (its own values applied, nested instances linked), as new
+    /// instance-owned nodes with slot-local geometry that reproduces every
+    /// breakpoint. Definition-owned metadata never travels.
+    static func customizedSlotContents(instance: DocumentNode, definition: DocumentPage,
+                                       slot: ExposedComponentSlotProperty, page: DocumentPage) throws -> [DocumentNode] {
+        var levels: [ResponsiveBreakpoint: [NodeID: DocumentNode]] = [:]
+        var desktop: [DocumentNode] = []
+        for breakpoint in ResponsiveBreakpoint.allCases {
+            guard let placement = page.resolvedStructuralGeometry(breakpoint: breakpoint)[instance.id],
+                  let level = ComponentGraphResolver.expand(instance, definition: definition, pageID: page.id,
+                                                            geometry: placement, breakpoint: breakpoint) else {
+                throw CommandExecutionError.disabled("This copy's slot cannot be resolved. Check its placement and the original component.")
+            }
+            levels[breakpoint] = Dictionary(uniqueKeysWithValues: level.map { ($0.id, $0) })
+            if breakpoint == .desktop { desktop = level }
+        }
+        let containerID = ComponentGraphResolver.derivedID(slot.sourceNodeID, in: instance)
+        let byID = Dictionary(uniqueKeysWithValues: desktop.map { ($0.id, $0) })
+        guard let container = byID[containerID] else { throw TransformError.missingTarget }
+        // Walk the default contents; nodes inside an inner instance are that
+        // instance's slot contents (already slot-local) and are copied as is.
+        var ordered: [(DocumentNode, Bool)] = []
+        var pending = container.childIDs.reversed().map { ($0, true) }
+        while let (id, domain) = pending.popLast() {
+            guard let node = byID[id] else { continue }
+            ordered.append((node, domain))
+            pending += node.childIDs.reversed().map { ($0, domain && node.kind != .component) }
+        }
+        guard ordered.count <= CanonicalComponentSlot.maximumRoots * 64 else {
+            throw CommandExecutionError.disabled("The default contents are too large to customize.")
+        }
+        let ids = Dictionary(uniqueKeysWithValues: ordered.map { ($0.0.id, NodeID()) })
+        let topLevel = Set(container.childIDs)
+        let geometryKeys = Set(GeometryInspectorField.allCases.map(\.propertyKey))
+        return try ordered.map { node, domain in
+            guard let copyID = ids[node.id] else { throw TransformError.missingTarget }
+            // `expand` already removed definition-owned metadata (exposed
+            // bindings, slot metadata and rules, organization, notes); its
+            // responsive geometry is resolved, so it is rebuilt below.
+            var properties = node.properties.filter {
+                !$0.key.rawValue.hasPrefix(ResponsiveGeometryResolver.namespace + ".")
+            }.map { NodeProperty(key: $0.key, value: $0.value, origin: $0.origin) }
+            do {
+                // Local = resolved frame − slot container frame, per breakpoint.
+                // An inner copy's own contents are already slot-local to that
+                // copy, so only their responsive geometry is rebuilt.
+                func local(_ breakpoint: ResponsiveBreakpoint) -> InsertionGeometry? {
+                    guard let source = levels[breakpoint]?[node.id]?.insertionGeometry else { return nil }
+                    guard domain else { return source }
+                    guard let slotFrame = levels[breakpoint]?[containerID]?.insertionGeometry else { return nil }
+                    return .init(origin: .init(x: source.origin.x - slotFrame.origin.x, y: source.origin.y - slotFrame.origin.y),
+                                 size: source.size)
+                }
+                if let base = local(.desktop) {
+                    let values = ["layout.x": base.origin.x, "layout.y": base.origin.y,
+                                  "layout.width": base.size.width, "layout.height": base.size.height]
+                    for index in properties.indices where geometryKeys.contains(properties[index].key.rawValue) {
+                        if let value = values[properties[index].key.rawValue] { properties[index].value = .number(value) }
+                    }
+                    for breakpoint in ResponsiveBreakpoint.allCases where breakpoint != .desktop {
+                        guard let other = local(breakpoint) else { continue }
+                        for (field, value, baseValue) in [(GeometryInspectorField.x, other.origin.x, base.origin.x),
+                                                          (.y, other.origin.y, base.origin.y),
+                                                          (.width, other.size.width, base.size.width),
+                                                          (.height, other.size.height, base.size.height)] where value != baseValue {
+                            properties.append(.init(key: .init(rawValue: ResponsiveGeometryResolver.key(field, breakpoint: breakpoint)),
+                                                    value: .number(value), origin: .authored))
+                        }
+                    }
+                }
+            }
+            // Links between copied objects follow the copies.
+            for index in properties.indices {
+                let key = properties[index].key.rawValue
+                if key == CanonicalEventGraph.interactionsKey {
+                    properties[index].value = CanonicalEventGraph.remappingTargets(properties[index].value, nodeMap: ids)
+                }
+                if key == CanonicalLinkTarget.namespace + "nodeID" || CanonicalPageChrome.referenceKeys.contains(key),
+                   case .string(let raw) = properties[index].value, let old = NodeID(uuidString: raw), let mapped = ids[old] {
+                    properties[index].value = .string(mapped.description)
+                }
+            }
+            if topLevel.contains(node.id) {
+                properties.removeAll { $0.key.rawValue == CanonicalComponentSlot.supplyKey }
+                properties.append(.init(key: .init(rawValue: CanonicalComponentSlot.supplyKey),
+                                        value: .string(slot.id.description), origin: .authored))
+            }
+            let parent: NodeParent
+            if topLevel.contains(node.id) { parent = .node(instance.id) }
+            else if case .node(let old) = node.parent, let mapped = ids[old] { parent = .node(mapped) }
+            else { parent = .node(instance.id) }
+            return DocumentNode(id: copyID, kind: node.kind, name: node.name, parent: parent,
+                                childIDs: node.childIDs.compactMap { ids[$0] }, properties: properties)
+        }
+    }
+
+    static func editableDefinition(_ id: PageID, activePageID: PageID,
+                                   document: CanonicalDocument) throws -> (DocumentPage, DocumentNode) {
+        guard let definition = document.componentDefinitions.first(where: { $0.id == id }),
+              let rootID = definition.rootNodeIDs.first,
+              let root = definition.nodes.first(where: { $0.id == rootID }) else {
+            throw CommandExecutionError.disabled("The original component is unavailable. Close Details and reopen the current definition.")
+        }
+        guard !document.componentDefinitions.contains(where: { $0.id == activePageID && $0.id != id }) else {
+            throw CommandExecutionError.disabled("Return to the page before editing a different definition.")
+        }
+        guard !root.selectionBooleanProperty("locked"), !root.selectionBooleanProperty("hidden") else {
+            throw CommandExecutionError.disabled("Unlock and show the original component before editing its details.")
+        }
+        return (definition, root)
     }
 
     func prepare(_ edit: ComponentEdit, identity: DesignInspectorOperationIdentity,
@@ -1456,11 +1916,21 @@ struct ComponentCommandRegistry {
               let index = document.pages.firstIndex(where: { $0.id == identity.pageID }) else { throw TransformError.pageUnavailable }
         var page = document.pages[index]
         switch edit {
+        case .setUsageNotes: break
         case .exposeText, .removeTextProperty, .exposeVisibility, .removeVisibilityProperty,
              .exposeChoice, .removeChoiceProperty, .exposeMedia, .removeMediaProperty,
-             .exposeAction, .removeActionProperty, .exposeSlot, .removeSlotProperty,
+             .exposeAction, .removeActionProperty, .exposeSlot, .removeSlotProperty, .setSlotRules,
              .organizeProperty, .resetPropertyOrganization:
             guard page.role == .componentDefinition else { throw TransformError.incompatibleGeometry }
+        case .insert, .detach,
+             .setTextOverride, .resetTextOverride, .resetAllTextOverrides,
+             .setVisibilityOverride, .resetVisibilityOverride, .resetAllVisibilityOverrides,
+             .setChoiceOverride, .resetChoiceOverride, .setMediaOverride, .resetMediaOverride,
+             .setActionOverride, .resetActionOverride, .resetAllOverrides, .resetOverrideConflicts,
+             .customizeSlot, .makeSlotEmpty, .useSlotDefault, .addToSlot, .moveSlotItem:
+            // OD-034: instances may be placed, detached and given values on a
+            // page or inside a definition. Insertion checks the graph below.
+            break
         default:
             guard page.role != .componentDefinition else {
                 throw CommandExecutionError.disabled("Exit definition editing before editing an instance.")
@@ -1517,6 +1987,27 @@ struct ComponentCommandRegistry {
                          definitionID: page.role == .componentDefinition ? page.id : CanonicalComponentReference.definitionID(for: node))
         }
         switch edit {
+        case .setUsageNotes(let definitionID, let openingSelection, let draft):
+            guard openingSelection == context.selectedNodeIDs else { throw TransformError.selectionMismatch }
+            let (_, root) = try Self.editableDefinition(definitionID, activePageID: page.id, document: document)
+            let text = try draft.flatMap(CanonicalComponentUsageNotes.normalized)
+            let prior = root.insertionProperty(CanonicalComponentUsageNotes.key)
+            let command: DocumentCommand
+            if let text, prior?.value != .string(text) {
+                let property = NodeProperty(id: prior?.id ?? PropertyID(),
+                    key: .init(rawValue: CanonicalComponentUsageNotes.key), value: .string(text), origin: .authored)
+                command = .setProperty(.init(pageID: definitionID, nodeID: root.id, property: property))
+            } else if text == nil, let prior {
+                command = .removeProperty(.init(pageID: definitionID, nodeID: root.id, propertyID: prior.id))
+            } else {
+                command = .batch([])
+            }
+            return .init(command: command, selectedNodeID: nil, definitionID: definitionID)
+        case .duplicateDefinition(let id):
+            let (definition, _) = try Self.editableDefinition(id, activePageID: page.id, document: document)
+            let copy = try ComponentDefinitionGraphCopy.duplicate(definition, in: document)
+            return .init(command: .insertPage(.init(page: copy, index: document.pages.count)),
+                selectedNodeID: nil, definitionID: copy.id)
         case .organizeProperty(let id, let binding, let group, let position):
             _ = try selected(id)
             var entries = CanonicalComponentOrganization.entries(in: page)
@@ -1582,7 +2073,8 @@ struct ComponentCommandRegistry {
                 throw CommandExecutionError.disabled("Use a unique component name.")
             }
             var commands: [DocumentCommand] = []
-            for (pageIndex, original) in document.pages.enumerated() where original.role != .componentDefinition {
+            // OD-034: instances inside other definitions count as uses too.
+            for (pageIndex, original) in document.pages.enumerated() where original.id != definitionID {
                 var graph = original
                 var changed = false
                 for nodeIndex in graph.nodes.indices where
@@ -1767,7 +2259,131 @@ struct ComponentCommandRegistry {
         case .removeSlotProperty(let id):
             let node = try selected(id)
             guard CanonicalComponentSlot.property(on: node) != nil else { throw TransformError.incompatibleGeometry }
-            return try properties(node, removing: CanonicalComponentSlot.metadataKeys)
+            // Copies that supply this slot keep their content as a conflict (OD-018).
+            return try properties(node, removing: CanonicalComponentSlot.metadataKeys.union(CanonicalComponentSlot.ruleKeys))
+        case .setSlotRules(let id, let rules):
+            // OD-018 / SF-0903: allowed top-level kinds and item limit. Refused
+            // with the specific reason when current contents would break them.
+            let node = try selected(id)
+            guard let slot = CanonicalComponentSlot.property(on: node) else {
+                throw CommandExecutionError.disabled("Share this container's contents as a slot before adding rules.")
+            }
+            guard rules.isValid else {
+                throw CommandExecutionError.disabled("Choose at least one allowed type and a limit from 1 to \(CanonicalComponentSlot.maximumRoots) items.")
+            }
+            let conflicts = CanonicalComponentSlot.ruleConflicts(rules, slot: slot, definitionID: page.id, in: document)
+            if let defaults = conflicts.defaults {
+                throw CommandExecutionError.disabled("The default contents break this rule: \(defaults.summary). Change the default contents or the rule.")
+            }
+            if let first = conflicts.firstCopy {
+                let copies = conflicts.copies == 1 ? "One copy of this component breaks" : "\(conflicts.copies) copies of this component break"
+                throw CommandExecutionError.disabled("\(copies) this rule with its own contents (\(first.summary)). Change those copies or the rule.")
+            }
+            var setting: [(String, PropertyValue)] = []
+            var removing = Set<String>()
+            if let kinds = rules.encodedKinds { setting.append((CanonicalComponentSlot.allowedKindsKey, .string(kinds))) }
+            else { removing.insert(CanonicalComponentSlot.allowedKindsKey) }
+            if let maximum = rules.maximumRoots { setting.append((CanonicalComponentSlot.maximumRootsKey, .number(Double(maximum)))) }
+            else { removing.insert(CanonicalComponentSlot.maximumRootsKey) }
+            return try properties(node, setting: setting, removing: removing)
+        case .customizeSlot(let id, let slotID), .makeSlotEmpty(let id, let slotID), .useSlotDefault(let id, let slotID):
+            // OD-018 / SF-0903-002: one transaction replacing this copy's state
+            // for one slot; the copy's other slots are untouched.
+            let instance = try selected(id)
+            guard instance.kind == .component else { throw TransformError.incompatibleGeometry }
+            let (definition, slot) = try Self.exposedSlot(slotID, of: instance, document: document)
+            let removed = Self.suppliedSubtree(of: instance, slot: slotID, page: page)
+            var added: [DocumentNode] = []
+            let marker: String?
+            switch edit {
+            case .customizeSlot:
+                added = try Self.customizedSlotContents(instance: instance, definition: definition, slot: slot, page: page)
+                // Nothing to start from: the copy shows nothing until items are added.
+                marker = added.contains(where: { $0.parent == .node(id) }) ? CanonicalComponentSlot.suppliedValue
+                    : CanonicalComponentSlot.emptyValue
+            case .makeSlotEmpty: marker = CanonicalComponentSlot.emptyValue
+            default: marker = nil
+            }
+            let projectNodeCount = document.pages.reduce(0) { $0 + $1.nodes.count }
+            guard projectNodeCount - removed.count + added.count <= InsertionPolicy.maximumNodeCount else {
+                throw CommandExecutionError.disabled("This project is at its object limit. Remove objects before customizing this slot.")
+            }
+            let key = CanonicalComponentSlot.overrideKey(slotID)
+            var graph = page
+            graph.nodes = graph.nodes.compactMap { node -> DocumentNode? in
+                guard !removed.contains(node.id) else { return nil }
+                guard node.id == id else { return node }
+                var updated = node
+                updated.childIDs.removeAll { removed.contains($0) }
+                updated.childIDs += added.filter { $0.parent == .node(id) }.map(\.id)
+                let prior = updated.properties.first { $0.key.rawValue == key }
+                updated.properties.removeAll { $0.key.rawValue == key }
+                if let marker {
+                    updated.properties.append(.init(id: prior?.id ?? PropertyID(), key: .init(rawValue: key),
+                                                    value: .string(marker), origin: .authored))
+                }
+                return updated
+            }
+            if let at = graph.nodes.firstIndex(where: { $0.id == id }) { graph.nodes.insert(contentsOf: added, at: at + 1) }
+            guard graph != page else { return .init(command: .batch([]), selectedNodeID: id, definitionID: definition.id) }
+            var candidate = document
+            candidate.pages[index] = graph
+            try candidate.validate()
+            return .init(command: .batch(replace(graph, at: index)), selectedNodeID: id, definitionID: definition.id)
+        case .addToSlot(let id, let slotID, let kind):
+            let instance = try selected(id)
+            guard instance.kind == .component else { throw TransformError.incompatibleGeometry }
+            let (definition, slot) = try Self.exposedSlot(slotID, of: instance, document: document)
+            let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            switch CanonicalComponentSlot.state(of: slotID, on: instance, nodesByID: byID) {
+            case .inherited:
+                throw CommandExecutionError.disabled("This copy uses the default contents. Choose Customize or Make Empty first.")
+            case .empty, .supplied: break
+            }
+            let existing = CanonicalComponentSlot.suppliedRoots(of: instance, nodesByID: byID)[slotID] ?? []
+            let item = kind.node(parentID: id, slotID: slotID,
+                                 y: existing.compactMap { $0.insertionGeometry.map { $0.origin.y + $0.size.height } }.max().map { $0 + 8 } ?? 0)
+            if let violation = slot.rules.violation(for: existing + [item]) {
+                throw CommandExecutionError.disabled("This slot does not accept that: \(violation.summary).")
+            }
+            guard document.pages.reduce(0, { $0 + $1.nodes.count }) < InsertionPolicy.maximumNodeCount else {
+                throw CommandExecutionError.disabled("This project is at its object limit.")
+            }
+            let key = CanonicalComponentSlot.overrideKey(slotID)
+            var graph = page
+            guard let at = graph.nodes.firstIndex(where: { $0.id == id }) else { throw TransformError.missingTarget }
+            // Top-level items of one slot stay contiguous in childIDs order.
+            let lastOfSlot = graph.nodes[at].childIDs.lastIndex { existing.map(\.id).contains($0) }
+            graph.nodes[at].childIDs.insert(item.id, at: lastOfSlot.map { $0 + 1 } ?? graph.nodes[at].childIDs.count)
+            let prior = graph.nodes[at].properties.first { $0.key.rawValue == key }
+            graph.nodes[at].properties.removeAll { $0.key.rawValue == key }
+            graph.nodes[at].properties.append(.init(id: prior?.id ?? PropertyID(), key: .init(rawValue: key),
+                                                    value: .string(CanonicalComponentSlot.suppliedValue), origin: .authored))
+            graph.nodes.append(item)
+            var candidate = document
+            candidate.pages[index] = graph
+            try candidate.validate()
+            return .init(command: .batch(replace(graph, at: index)), selectedNodeID: item.id, definitionID: definition.id)
+        case .moveSlotItem(let id, let offset):
+            let item = try selected(id)
+            guard offset == -1 || offset == 1, case .node(let ownerID) = item.parent,
+                  let slotID = CanonicalComponentSlot.suppliedSlotID(item),
+                  let owner = page.nodes.first(where: { $0.id == ownerID }), owner.kind == .component else {
+                throw CommandExecutionError.disabled("Select a top-level item in a copy's slot to reorder it.")
+            }
+            let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            let siblings = CanonicalComponentSlot.suppliedRoots(of: owner, nodesByID: byID)[slotID]?.map(\.id) ?? []
+            guard let position = siblings.firstIndex(of: id), siblings.indices.contains(position + offset) else {
+                throw CommandExecutionError.disabled(offset < 0 ? "This is already the first item in the slot." : "This is already the last item in the slot.")
+            }
+            let other = siblings[position + offset]
+            var graph = page
+            guard let at = graph.nodes.firstIndex(where: { $0.id == ownerID }),
+                  let a = graph.nodes[at].childIDs.firstIndex(of: id),
+                  let b = graph.nodes[at].childIDs.firstIndex(of: other) else { throw TransformError.missingTarget }
+            graph.nodes[at].childIDs.swapAt(a, b)
+            return .init(command: .batch(replace(graph, at: index)), selectedNodeID: id,
+                         definitionID: CanonicalComponentReference.definitionID(for: owner))
         case .resetOverrideConflicts(let id, let expected, let confirmed):
             let node = try selected(id)
             guard confirmed else { throw TransformError.cancelled }
@@ -1781,7 +2397,32 @@ struct ComponentCommandRegistry {
             }
             let keys = Set(node.properties.filter { expected.contains($0.id) }.map(\.key.rawValue))
             guard keys.count == expected.count else { throw TransformError.missingTarget }
-            return try properties(node, removing: keys)
+            // OD-018: resetting a kept slot conflict also removes the content
+            // that copy supplied for that slot, in the same transaction.
+            let slots = Set(keys.compactMap(CanonicalComponentSlot.overrideID))
+            guard !slots.isEmpty else { return try properties(node, removing: keys) }
+            let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            var removedNodes = Set<NodeID>()
+            var pending = CanonicalComponentSlot.suppliedRoots(of: node, nodesByID: byID)
+                .filter { slots.contains($0.key) }.flatMap { $0.value.map(\.id) }
+            while let next = pending.popLast() {
+                guard removedNodes.insert(next).inserted else { continue }
+                pending += byID[next]?.childIDs ?? []
+            }
+            var graph = page
+            graph.nodes = graph.nodes.compactMap { candidate in
+                guard !removedNodes.contains(candidate.id) else { return nil }
+                guard candidate.id == node.id else { return candidate }
+                var updated = candidate
+                updated.childIDs.removeAll { removedNodes.contains($0) }
+                updated.properties.removeAll { keys.contains($0.key.rawValue) }
+                return updated
+            }
+            var candidate = document
+            candidate.pages[index] = graph
+            try candidate.validate()
+            return .init(command: .batch(replace(graph, at: index)), selectedNodeID: node.id,
+                         definitionID: CanonicalComponentReference.definitionID(for: node))
         case .resetAllOverrides(let id):
             let node = try selected(id)
             guard node.kind == .component else { throw TransformError.incompatibleGeometry }
@@ -1810,6 +2451,9 @@ struct ComponentCommandRegistry {
             let nodes = page.nodes.filter { included.contains($0.id) }.map { node in
                 var properties = node.properties.map { NodeProperty(key: $0.key, value: $0.value, origin: $0.origin) }
                 for i in properties.indices {
+                    if properties[i].key.rawValue == CanonicalEventGraph.interactionsKey {
+                        properties[i].value = CanonicalEventGraph.remappingTargets(properties[i].value, nodeMap: ids)
+                    }
                     if properties[i].key.rawValue == CanonicalLinkTarget.namespace + "nodeID",
                        case .string(let value) = properties[i].value,
                        let oldID = NodeID(uuidString: value), let newID = ids[oldID] {
@@ -1835,6 +2479,10 @@ struct ComponentCommandRegistry {
             page.nodes = page.nodes.compactMap { node in
                 node.id == id ? instance : included.contains(node.id) ? nil : node
             }
+            var candidate = document
+            candidate.pages[index] = page
+            candidate.pages.append(definition)
+            try Self.requireValidNesting(candidate)
             return .init(command: .batch(replace(page, at: index) + [.insertPage(.init(page: definition, index: document.pages.count))]),
                          selectedNodeID: id, definitionID: definitionID)
         case .insert(let definitionID, let parentID, let geometry):
@@ -1845,8 +2493,17 @@ struct ComponentCommandRegistry {
                   !page.nodes[parentIndex].selectionBooleanProperty("hidden"),
                   [geometry.origin.x, geometry.origin.y, geometry.size.width, geometry.size.height].allSatisfy(\.isFinite),
                   geometry.size.width > 0, geometry.size.height > 0 else { throw TransformError.incompatibleGeometry }
+            if let violation = Self.nestingViolation(inserting: definitionID, into: page, document: document) {
+                throw CommandExecutionError.disabled(violation.localizedDescription)
+            }
+            // OD-018: placement is in world terms; inside a copy's slot
+            // contents it is stored slot-local.
+            var placement = geometry
+            if let offset = CanonicalSlotGeometry.offsets(in: page, document: document)[parentID] {
+                placement = .init(origin: .init(x: geometry.origin.x - offset.dx, y: geometry.origin.y - offset.dy), size: geometry.size)
+            }
             let instance = Self.instance(id: NodeID(), name: definition.name, parent: .node(parentID),
-                                         definitionID: definitionID, geometry: geometry)
+                                         definitionID: definitionID, geometry: placement)
             page.nodes[parentIndex].childIDs.append(instance.id)
             page.nodes.append(instance)
             return .init(command: .batch(replace(page, at: index)), selectedNodeID: instance.id, definitionID: definitionID)
@@ -1855,14 +2512,15 @@ struct ComponentCommandRegistry {
             guard let definitionID = CanonicalComponentReference.definitionID(for: instance),
                   let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
                   let expanded = ComponentGraphResolver.detachedNodes(instance, definition: definition, page: page) else {
-                throw CommandExecutionError.disabled("The definition or an authored text binding is missing. Restore it or reset unresolved values before detaching.")
+                throw CommandExecutionError.disabled("The definition, an authored text binding or a slot with this copy's own contents is missing. Restore it or reset unresolved values before detaching.")
             }
-            page.nodes = page.nodes.flatMap { $0.id == id ? expanded : [$0] }
+            page.nodes = Self.replacingInstance(id, with: expanded, in: page)
             return .init(command: .batch(replace(page, at: index)), selectedNodeID: id, definitionID: nil)
         case .delete(let definitionID, let detachUses):
             guard let definition = document.componentDefinitions.first(where: { $0.id == definitionID }) else { throw TransformError.missingTarget }
             var commands: [DocumentCommand] = []
-            for (pageIndex, original) in document.pages.enumerated() where original.role != .componentDefinition {
+            // OD-034: instances inside other definitions count as uses too.
+            for (pageIndex, original) in document.pages.enumerated() where original.id != definitionID {
                 var graph = original
                 let uses = graph.nodes.filter { CanonicalComponentReference.definitionID(for: $0) == definitionID }
                 guard uses.isEmpty || detachUses else {
@@ -1872,7 +2530,7 @@ struct ComponentCommandRegistry {
                     guard !instance.selectionBooleanProperty("locked") else { throw TransformError.lockedTarget }
                     guard let expanded = ComponentGraphResolver.detachedNodes(instance, definition: definition,
                         page: graph) else { throw TransformError.incompatibleGeometry }
-                    graph.nodes = graph.nodes.flatMap { $0.id == instance.id ? expanded : [$0] }
+                    graph.nodes = Self.replacingInstance(instance.id, with: expanded, in: graph)
                 }
                 if !uses.isEmpty { commands += replace(graph, at: pageIndex) }
             }
@@ -1933,6 +2591,1225 @@ struct WebsiteMetadataCommandRegistry {
         try candidate.validate()
         guard normalized != document.websiteMetadata else { throw DesignInspectorError.noChanges }
         return .setWebsiteMetadata(.init(documentID: document.id, metadata: normalized))
+    }
+}
+
+/// SF-0206-002: edits the project's own preferences. A whole-draft `replace`
+/// is what Settings applies; the granular cases serve automation and tests.
+enum ProjectPreferencesEdit: Equatable, Sendable {
+    case replace(ProjectPreferences?)
+    case gridVisibleOnOpen(Bool?)
+    case gridSpacing(Double?)
+    case resetAll
+    /// SF-1208-002 (ADR-0122): replaces only the saved build settings; grid preferences are kept.
+    case build(BuildProfileSettings?)
+}
+
+enum ProjectPreferencesError: Error, Equatable, LocalizedError, Sendable {
+    case stale, cancelled, invalidValue, unavailable(String), noChanges
+    /// SF-1208-004 (ADR-0122): a build budget outside its rule.
+    case invalidBuildBudget
+    var errorDescription: String? {
+        switch self {
+        case .stale: "SF-0206-004: the project changed before its preferences could be saved. Cancel and review the current values."
+        case .cancelled: "Project preference changes were cancelled. The project is unchanged."
+        case .invalidValue: "SF-0206-004: grid spacing must be a whole number of points from 4 through 128."
+        case .unavailable(let reason): reason
+        case .noChanges: "Project preferences already have these values."
+        case .invalidBuildBudget: "SF-1208-004: a build budget must be a whole number of kilobytes from 0 (no limit) through 10,485,760. The project is unchanged."
+        }
+    }
+}
+
+/// SF-0206-001/002/004/005: one validated document transaction for the
+/// project's own preferences. Preferences belong to the document, so no page,
+/// selection or canvas scene is required. A stale document identity or
+/// revision, a busy lifecycle, cancellation or an invalid value never
+/// produces a command; an empty result is normalized to `nil`.
+struct ProjectPreferencesCommandRegistry: Sendable {
+    static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-0206-%03d", $0) })
+
+    func prepare(_ edit: ProjectPreferencesEdit, expectedDocumentID: DocumentID, expectedRevision: UInt64,
+                 document: CanonicalDocument, isLifecycleAvailable: Bool,
+                 lifecycleDisabledReason: String? = nil, cancelled: Bool = false) throws -> DocumentCommand {
+        guard !cancelled else { throw ProjectPreferencesError.cancelled }
+        guard isLifecycleAvailable else {
+            throw ProjectPreferencesError.unavailable(lifecycleDisabledReason
+                ?? "Project preferences are unavailable while the document is busy.")
+        }
+        guard expectedDocumentID == document.id, expectedRevision == document.revision,
+              document.revision < UInt64.max - 1 else { throw ProjectPreferencesError.stale }
+        let candidate: ProjectPreferences?
+        switch edit {
+        case .replace(let value):
+            candidate = value
+        case .resetAll:
+            candidate = nil
+        case .gridVisibleOnOpen(let value):
+            var next = document.projectPreferences ?? ProjectPreferences()
+            next.gridVisibleOnOpen = value
+            candidate = next
+        case .gridSpacing(let value):
+            var next = document.projectPreferences ?? ProjectPreferences()
+            next.gridSpacing = value
+            candidate = next
+        case .build(let value):
+            var next = document.projectPreferences ?? ProjectPreferences()
+            next.build = value?.isEmpty == true ? nil : value
+            candidate = next
+        }
+        // A commit may not introduce a value that breaks its rule. A stored
+        // invalid value the edit leaves untouched is retained, so unrelated
+        // preferences stay editable without discarding intent (SF-0206-004).
+        if let spacing = candidate?.gridSpacing, !ProjectPreferences.isValidGridSpacing(spacing),
+           spacing != document.projectPreferences?.gridSpacing {
+            throw ProjectPreferencesError.invalidValue
+        }
+        if let build = candidate?.build, build.introducesInvalidBudget(comparedWith: document.projectPreferences?.build) {
+            throw ProjectPreferencesError.invalidBuildBudget
+        }
+        guard candidate?.isStructurallyValid ?? true else { throw ProjectPreferencesError.invalidValue }
+        let normalized = candidate?.isEmpty == true ? nil : candidate
+        guard normalized != document.projectPreferences else { throw ProjectPreferencesError.noChanges }
+        let command = DocumentCommand.setProjectPreferences(.init(documentID: document.id, preferences: normalized))
+        let availability = CommandRegistry().availability(for: command, in: document)
+        guard availability.isEnabled else {
+            throw ProjectPreferencesError.unavailable(availability.disabledReason ?? "Project preferences cannot be changed now.")
+        }
+        return command
+    }
+}
+
+// MARK: - SF-0704 computed value and provenance
+
+/// The settings whose full resolution can be traced.
+enum ValueTraceSetting: String, CaseIterable, Hashable, Sendable {
+    case x, y, width, height, visibility, opacity
+    case textSize = "text-size"
+    case lineHeight = "line-height"
+
+    var title: String {
+        switch self {
+        case .x: "X"
+        case .y: "Y"
+        case .width: "Width"
+        case .height: "Height"
+        case .visibility: "Visibility"
+        case .opacity: "Opacity"
+        case .textSize: "Text size"
+        case .lineHeight: "Line height"
+        }
+    }
+
+    var geometryField: GeometryInspectorField? {
+        switch self {
+        case .x: .x
+        case .y: .y
+        case .width: .width
+        case .height: .height
+        default: nil
+        }
+    }
+
+    /// The key a container-query rule sets for this setting, if it can.
+    var containerQueryKey: String? {
+        switch self {
+        case .width: "layout.width"
+        case .height: "layout.height"
+        case .visibility: "hidden"
+        case .opacity: "style.opacity"
+        case .textSize: CanonicalTypography.namespace + "size"
+        case .lineHeight: CanonicalTypography.namespace + "lineHeight"
+        case .x, .y: nil
+        }
+    }
+
+    var fluidTarget: FluidValueTarget? {
+        switch self {
+        case .width: .width
+        case .height: .height
+        case .textSize: .fontSize
+        case .lineHeight: .lineHeight
+        default: nil
+        }
+    }
+
+    /// Settings that apply to `node`.
+    static func applicable(to node: DocumentNode) -> [ValueTraceSetting] {
+        var result: [ValueTraceSetting] = []
+        if node.insertionGeometry != nil { result += [.x, .y, .width, .height] }
+        if ResponsiveVisibilityResolver.supports(node) { result.append(.visibility) }
+        if DesignInspectorCommandRegistry.resolvedOpacity(for: node) != nil { result.append(.opacity) }
+        if node.kind.isTextual { result += [.textSize, .lineHeight] }
+        return result
+    }
+}
+
+/// One source in the resolution, lowest precedence first.
+struct ValueTraceStep: Equatable, Sendable {
+    enum Source: Equatable, Sendable {
+        case defaultValue
+        case desktop
+        case linkedStyle(ReusableStyleID, name: String)
+        case local
+        case fluid
+        case breakpoint(ResponsiveBreakpoint)
+        /// Width, height or position placed by layout (Fill, Hug, a Stack or
+        /// Grid) at this breakpoint and width; the title says which.
+        case layout(String)
+        case containerQuery(ContainerQueryRuleID, containerID: NodeID?)
+    }
+    let source: Source
+    let value: PropertyValue
+    /// The stored property that supplies the value, when it is on this object.
+    let propertyID: PropertyID?
+
+    var sourceTitle: String {
+        switch source {
+        case .defaultValue: "SiteForge default"
+        case .desktop: "Set here · Desktop"
+        case .linkedStyle(_, let name): "Linked style: \(name)"
+        case .local: "Set here"
+        case .fluid: "Smooth scaling for this width"
+        case .breakpoint(let breakpoint): "Set here · \(breakpoint.title)"
+        case .layout(let title): title
+        case .containerQuery: "Container query rule"
+        }
+    }
+}
+
+/// SF-0704-001/003: the ordered sources of one setting on one object, using
+/// exactly the precedence the engine applies: the last step wins.
+struct ValueTrace: Equatable, Sendable {
+    let setting: ValueTraceSetting
+    let nodeID: NodeID
+    let breakpoint: ResponsiveBreakpoint
+    let steps: [ValueTraceStep]
+
+    var winner: ValueTraceStep? { steps.last }
+
+    /// The winner can be cleared to reveal the next step: anything stored on
+    /// the object except its required Desktop geometry. Linked styles are
+    /// unlinked in Design; the default cannot be cleared.
+    var canClearWinner: Bool {
+        guard let winner, steps.count > 1 else { return false }
+        switch winner.source {
+        case .defaultValue, .linkedStyle, .desktop, .layout: return false
+        case .local, .fluid, .breakpoint: return winner.propertyID != nil
+        case .containerQuery: return true
+        }
+    }
+}
+
+enum CanonicalValueTrace {
+    static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-0704-%03d", $0) })
+
+    /// The trace for `setting` on the stored `node` at `breakpoint` and
+    /// `viewportWidth`, with container-query results from the same evaluation
+    /// the canvas used. `layout` is the frame value the canvas's layout pass
+    /// placed (Fill, Hug, a Stack or Grid); it wins over every stored
+    /// geometry value, exactly as on the canvas, so the trace never shows a
+    /// stored number the canvas does not draw.
+    static func trace(_ setting: ValueTraceSetting, node: DocumentNode, breakpoint: ResponsiveBreakpoint,
+                      viewportWidth: Double, containerQueries: ContainerQueryEvaluation,
+                      styles: CanonicalReusableStyleIndex?,
+                      layout: (value: Double, source: String)? = nil) -> ValueTrace {
+        var steps: [ValueTraceStep] = []
+        func add(_ source: ValueTraceStep.Source, _ value: PropertyValue, key: String?) {
+            steps.append(.init(source: source, value: value, propertyID: key.flatMap { node.insertionProperty($0)?.id }))
+        }
+        switch setting {
+        case .x, .y, .width, .height:
+            guard let field = setting.geometryField else { break }
+            if let base = node.insertionProperty(field.propertyKey), case .number = base.value {
+                add(base.origin == .authored ? .desktop : .defaultValue, base.value, key: field.propertyKey)
+            }
+            if let target = setting.fluidTarget, CanonicalFluidValueCodec.value(for: target, node: node) != nil,
+               let value = CanonicalFluidValueCodec.resolved(target, node: node, viewportWidth: viewportWidth) {
+                add(.fluid, .number(value), key: CanonicalFluidValueCodec.key(target))
+            }
+            if breakpoint != .desktop {
+                let key = ResponsiveGeometryResolver.key(field, breakpoint: breakpoint)
+                if let property = node.insertionProperty(key), case .number = property.value { add(.breakpoint(breakpoint), property.value, key: key) }
+            }
+            if let layout { add(.layout(layout.source), .number(layout.value), key: nil) }
+        case .visibility:
+            if let hidden = node.insertionProperty("hidden"), case .boolean = hidden.value {
+                add(hidden.origin == .authored ? .desktop : .defaultValue, hidden.value, key: "hidden")
+            } else {
+                add(.defaultValue, .boolean(false), key: nil)
+            }
+            if breakpoint != .desktop {
+                let key = ResponsiveVisibilityResolver.key(breakpoint)
+                if case .boolean(let visible)? = node.insertionProperty(key)?.value {
+                    add(.breakpoint(breakpoint), .boolean(!visible), key: key)
+                }
+            }
+        case .opacity:
+            add(.defaultValue, .number(1), key: nil)
+            if let styles {
+                for id in CanonicalReusableStyleIndex.appliedIDs(node) {
+                    guard let definition = styles.byID[id], let opacity = definition.opacity else { continue }
+                    add(.linkedStyle(id, name: definition.name), .number(opacity), key: nil)
+                }
+            }
+            if let property = node.insertionProperty("style.opacity"), case .number = property.value {
+                add(.local, property.value, key: "style.opacity")
+            }
+        case .textSize, .lineHeight:
+            let suffix = setting == .textSize ? "size" : "lineHeight"
+            let fallback = setting == .textSize ? CanonicalTypography.defaultValue.size : CanonicalTypography.defaultValue.lineHeight
+            add(.defaultValue, .number(fallback), key: nil)
+            if let property = node.insertionProperty(CanonicalTypography.namespace + suffix), case .number = property.value {
+                add(.local, property.value, key: property.key.rawValue)
+            }
+            if let target = setting.fluidTarget, let value = CanonicalFluidValueCodec.resolved(target, node: node, viewportWidth: viewportWidth) {
+                add(.fluid, .number(value), key: CanonicalFluidValueCodec.key(target))
+            }
+        }
+        // Container queries win last, in rule order (SF-0605-003).
+        if let key = setting.containerQueryKey, let statuses = containerQueries.statuses[node.id],
+           let rules = try? CanonicalContainerQueries.rules(on: node) {
+            for status in statuses where status.matches {
+                guard let rule = rules.first(where: { $0.id == status.ruleID }),
+                      let value = rule.values.first(where: { $0.key == key }) else { continue }
+                steps.append(.init(source: .containerQuery(rule.id, containerID: status.containerID), value: value.property.value,
+                                   propertyID: value.property.id))
+            }
+        }
+        return .init(setting: setting, nodeID: node.id, breakpoint: breakpoint, steps: steps)
+    }
+
+    /// "120", "Hidden", "50%".
+    static func describe(_ value: PropertyValue, setting: ValueTraceSetting) -> String {
+        switch (setting, value) {
+        case (.visibility, .boolean(let hidden)): return hidden ? "Hidden" : "Shown"
+        case (.opacity, .number(let number)): return "\(Int((number * 100).rounded()))%"
+        case (_, .number(let number)):
+            return number.rounded() == number ? String(Int(number)) : String(format: "%.2f", number)
+        case (_, .boolean(let flag)): return flag ? "On" : "Off"
+        case (_, .string(let text)): return text
+        }
+    }
+
+    /// SF-0704-002/005: one command that removes the winning value so the
+    /// next step shows. Refused with a reason when the winner can't be cleared
+    /// here or the result would be invalid.
+    static func clearWinner(_ trace: ValueTrace, pageID: PageID, document: CanonicalDocument,
+                            expectedRevision: UInt64, isLifecycleAvailable: Bool) throws -> DocumentCommand {
+        guard isLifecycleAvailable else { throw CommandExecutionError.disabled("Values can't be cleared while the project is busy.") }
+        guard document.revision == expectedRevision,
+              let node = document.pages.first(where: { $0.id == pageID })?.nodes.first(where: { $0.id == trace.nodeID }) else {
+            throw CommandExecutionError.disabled("The project changed. Nothing changed; inspect the value again.")
+        }
+        guard let winner = trace.winner, trace.canClearWinner else {
+            switch trace.winner?.source {
+            case .linkedStyle?: throw CommandExecutionError.disabled("This value comes from a linked style. Unlink the style in Design, or set a value here.")
+            case .desktop?: throw CommandExecutionError.disabled("Desktop geometry is required. Change it instead of clearing it.")
+            case .layout?: throw CommandExecutionError.disabled("Layout places this value. Change the object's sizing or its Stack or Grid instead.")
+            default: throw CommandExecutionError.disabled("This value is the SiteForge default; there is nothing to clear.")
+            }
+        }
+        let command: DocumentCommand
+        if case .containerQuery(let ruleID, _) = winner.source, let key = trace.setting.containerQueryKey {
+            let rule = try CanonicalContainerQueries.rules(on: node).first { $0.id == ruleID }
+            guard let rule else { throw CommandExecutionError.disabled("This rule no longer exists. Nothing changed.") }
+            let edit: ContainerQueryEdit = rule.values.count > 1
+                ? .setValue(nodeID: node.id, ruleID: ruleID, key: key, value: nil)
+                : .removeRule(nodeID: node.id, ruleID: ruleID)
+            command = try ContainerQueryCommandRegistry().prepare(edit, pageID: pageID, expectedDocumentID: document.id,
+                expectedRevision: document.revision, document: document, isLifecycleAvailable: true).command
+        } else {
+            guard let propertyID = winner.propertyID, node.properties.contains(where: { $0.id == propertyID }) else {
+                throw CommandExecutionError.disabled("The project changed. Nothing changed; inspect the value again.")
+            }
+            command = .removeProperty(.init(pageID: pageID, nodeID: node.id, propertyID: propertyID))
+        }
+        let availability = CommandRegistry().availability(for: command, in: document)
+        guard availability.isEnabled else {
+            throw CommandExecutionError.disabled("Clearing this value would leave the object invalid. Change the value instead.")
+        }
+        return command
+    }
+}
+
+// MARK: - SF-0606 responsive-audit suppression
+
+/// SF-0606-002/004/005: marks one kind of finding intentional for one stored
+/// object (or reports it again) as one property command. Objects that exist
+/// only inside component copies are suppressed in the original component.
+struct ResponsiveAuditSuppressionRegistry: Sendable {
+    func prepare(nodeID: NodeID, pageID: PageID, kind: ResponsiveAuditFindingKind, suppressed: Bool,
+                 expectedDocumentID: DocumentID, expectedRevision: UInt64, document: CanonicalDocument,
+                 isLifecycleAvailable: Bool) throws -> DocumentCommand {
+        typealias S = CanonicalResponsiveAuditSuppression
+        guard isLifecycleAvailable else { throw CommandExecutionError.disabled("Findings can't be changed while the project is busy.") }
+        guard document.id == expectedDocumentID, document.revision == expectedRevision,
+              let page = document.pages.first(where: { $0.id == pageID }) else {
+            throw CommandExecutionError.disabled("The project changed. Run the audit again; nothing changed.")
+        }
+        guard let node = page.nodes.first(where: { $0.id == nodeID }) else {
+            throw CommandExecutionError.disabled("This object is part of a component copy. Open the original component to mark it intentional.")
+        }
+        var kinds = S.suppressedKinds(of: node)
+        let changed = suppressed ? kinds.insert(kind.rawValue).inserted : kinds.remove(kind.rawValue) != nil
+        guard changed else {
+            throw CommandExecutionError.disabled(suppressed ? "This finding is already marked intentional." : "This finding isn't suppressed.")
+        }
+        let current = node.insertionProperty(S.suppressedKey)
+        guard let encoded = S.encoded(kinds) else {
+            guard let current else { throw CommandExecutionError.disabled("This finding isn't suppressed.") }
+            return .removeProperty(.init(pageID: pageID, nodeID: nodeID, propertyID: current.id))
+        }
+        return .setProperty(.init(pageID: pageID, nodeID: nodeID,
+            property: .init(id: current?.id ?? PropertyID(), key: .init(rawValue: S.suppressedKey), value: .string(encoded), origin: .authored)))
+    }
+}
+
+// MARK: - SF-0605 container-query authoring
+
+enum ContainerQueryEdit: Equatable, Sendable {
+    /// Names (or, with nil, stops) `nodeID` as a query container.
+    case setContainerName(nodeID: NodeID, name: String?)
+    case addRule(nodeID: NodeID, container: String?, minWidth: Double?, maxWidth: Double?, key: String, value: PropertyValue)
+    case setRange(nodeID: NodeID, ruleID: ContainerQueryRuleID, minWidth: Double?, maxWidth: Double?)
+    case setRuleContainer(nodeID: NodeID, ruleID: ContainerQueryRuleID, container: String?)
+    /// Sets one setting; nil removes it (the last one can't be removed: remove the rule).
+    case setValue(nodeID: NodeID, ruleID: ContainerQueryRuleID, key: String, value: PropertyValue?)
+    case moveRule(nodeID: NodeID, ruleID: ContainerQueryRuleID, offset: Int)
+    case removeRule(nodeID: NodeID, ruleID: ContainerQueryRuleID)
+
+    var nodeID: NodeID {
+        switch self {
+        case .setContainerName(let id, _), .addRule(let id, _, _, _, _, _), .setRange(let id, _, _, _),
+             .setRuleContainer(let id, _, _), .setValue(let id, _, _, _), .moveRule(let id, _, _), .removeRule(let id, _): id
+        }
+    }
+
+    var diagnosticOperation: String {
+        switch self {
+        case .setContainerName(_, let name): name == nil ? "container-query.container.remove" : "container-query.container.set"
+        case .addRule: "container-query.rule.add"
+        case .setRange: "container-query.rule.range"
+        case .setRuleContainer: "container-query.rule.container"
+        case .setValue(_, _, _, let value): value == nil ? "container-query.value.remove" : "container-query.value.set"
+        case .moveRule: "container-query.rule.move"
+        case .removeRule: "container-query.rule.remove"
+        }
+    }
+}
+
+struct PreparedContainerQueryEdit: Equatable, Sendable {
+    let command: DocumentCommand
+    let announcement: String
+    /// For a new rule, its identity.
+    let ruleID: ContainerQueryRuleID?
+}
+
+/// SF-0605-002/004/005: each edit is one validated transaction of ordinary
+/// property commands (no new history command). Stale identity, a busy
+/// lifecycle, invalid names, ranges and settings refuse with a specific
+/// reason and change nothing.
+struct ContainerQueryCommandRegistry: Sendable {
+    static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-0605-%03d", $0) })
+    typealias Q = CanonicalContainerQueries
+
+    func prepare(_ edit: ContainerQueryEdit, pageID: PageID, expectedDocumentID: DocumentID, expectedRevision: UInt64,
+                 document: CanonicalDocument, isLifecycleAvailable: Bool,
+                 lifecycleDisabledReason: String? = nil) throws -> PreparedContainerQueryEdit {
+        guard isLifecycleAvailable else {
+            throw CommandExecutionError.disabled(lifecycleDisabledReason ?? "Container queries can't be changed while the project is busy.")
+        }
+        guard document.id == expectedDocumentID, document.revision == expectedRevision,
+              let page = document.pages.first(where: { $0.id == pageID }),
+              let node = page.nodes.first(where: { $0.id == edit.nodeID }) else {
+            throw CommandExecutionError.disabled("The project changed before this container query edit. Nothing changed; try again.")
+        }
+        let existing: [CanonicalContainerQueryRule]
+        do { existing = try Q.rules(on: node) } catch {
+            throw CommandExecutionError.disabled("This object's container queries are damaged. Undo the last change or restore a saved copy.")
+        }
+        var commands: [DocumentCommand] = []
+        func set(_ key: String, _ value: PropertyValue) {
+            let current = node.insertionProperty(key)
+            guard current?.value != value else { return }
+            commands.append(.setProperty(.init(pageID: pageID, nodeID: node.id,
+                property: .init(id: current?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored))))
+        }
+        func remove(_ key: String) {
+            guard let current = node.insertionProperty(key) else { return }
+            commands.append(.removeProperty(.init(pageID: pageID, nodeID: node.id, propertyID: current.id)))
+        }
+        func order(_ ids: [ContainerQueryRuleID]) {
+            if ids.isEmpty { remove(Q.rulesKey) } else { set(Q.rulesKey, .string(ids.map(\.description).joined(separator: ","))) }
+        }
+        func rule(_ id: ContainerQueryRuleID) throws -> CanonicalContainerQueryRule {
+            guard let rule = existing.first(where: { $0.id == id }) else {
+                throw CommandExecutionError.disabled("This rule no longer exists. Nothing changed.")
+            }
+            return rule
+        }
+        func range(_ minimum: Double?, _ maximum: Double?, ruleID: ContainerQueryRuleID) throws {
+            for value in [minimum, maximum].compactMap({ $0 }) {
+                guard value.isFinite, value.rounded() == value, (0...Q.maximumWidth).contains(value) else {
+                    throw CommandExecutionError.disabled("Enter widths in whole points from 0 to \(Int(Q.maximumWidth)).")
+                }
+            }
+            guard minimum != nil || maximum != nil else {
+                throw CommandExecutionError.disabled("Enter a minimum width, a maximum width, or both.")
+            }
+            guard (minimum ?? 0) <= (maximum ?? Q.maximumWidth) else {
+                throw CommandExecutionError.disabled("The minimum width must not be larger than the maximum width.")
+            }
+            if let minimum { set(Q.ruleKey(ruleID, "minWidth"), .number(minimum)) } else { remove(Q.ruleKey(ruleID, "minWidth")) }
+            if let maximum { set(Q.ruleKey(ruleID, "maxWidth"), .number(maximum)) } else { remove(Q.ruleKey(ruleID, "maxWidth")) }
+        }
+        func containerName(_ name: String?, ruleID: ContainerQueryRuleID) throws {
+            if let name {
+                guard Q.isValidName(name) else { throw CommandExecutionError.disabled(Self.nameReason) }
+                set(Q.ruleKey(ruleID, "container"), .string(name))
+            } else { remove(Q.ruleKey(ruleID, "container")) }
+        }
+        let announcement: String
+        var newRule: ContainerQueryRuleID?
+        switch edit {
+        case .setContainerName(_, let name):
+            if let name {
+                guard Q.containerKinds.contains(node.kind) else {
+                    throw CommandExecutionError.disabled("Only a Frame, Section, Stack or Grid can be a query container.")
+                }
+                guard Q.isValidName(name) else { throw CommandExecutionError.disabled(Self.nameReason) }
+                set(Q.containerKey, .string(name))
+                announcement = Q.hasIndependentContainerWidth(node)
+                    ? "\(node.name) is the query container \(name)."
+                    : "\(node.name) is named \(name), but its width depends on its contents (Hug), so rules can't query it yet. Give it a Fixed or Fill width."
+            } else {
+                remove(Q.containerKey)
+                announcement = "\(node.name) is no longer a query container. Rules that used it look for the next container above."
+            }
+        case .addRule(_, let container, let minimum, let maximum, let key, let value):
+            guard existing.count < Q.maximumRulesPerNode else {
+                throw CommandExecutionError.disabled("An object can have up to \(Q.maximumRulesPerNode) container query rules.")
+            }
+            let id = ContainerQueryRuleID()
+            newRule = id
+            try range(minimum, maximum, ruleID: id)
+            try containerName(container, ruleID: id)
+            try Self.check(key, value, node: node, page: page)
+            set(Q.setKey(id, key), value)
+            order(existing.map(\.id) + [id])
+            announcement = "Added a rule: \(Self.title(key)) when the container is \(CanonicalContainerQueryRule(id: id, container: container, minWidth: minimum, maxWidth: maximum, values: []).rangeDescription) wide."
+        case .setRange(_, let ruleID, let minimum, let maximum):
+            _ = try rule(ruleID)
+            try range(minimum, maximum, ruleID: ruleID)
+            announcement = "Updated the rule's width range."
+        case .setRuleContainer(_, let ruleID, let container):
+            _ = try rule(ruleID)
+            try containerName(container, ruleID: ruleID)
+            announcement = container.map { "The rule now queries the container \($0)." } ?? "The rule now queries the nearest container."
+        case .setValue(_, let ruleID, let key, let value):
+            let current = try rule(ruleID)
+            if let value {
+                try Self.check(key, value, node: node, page: page)
+                set(Q.setKey(ruleID, key), value)
+                announcement = "\(Self.title(key)) set for this rule."
+            } else {
+                guard current.values.contains(where: { $0.key == key }) else {
+                    throw CommandExecutionError.disabled("This rule doesn't change \(Self.title(key)).")
+                }
+                guard current.values.count > 1 else {
+                    throw CommandExecutionError.disabled("A rule needs at least one setting. Remove the rule instead.")
+                }
+                remove(Q.setKey(ruleID, key))
+                announcement = "\(Self.title(key)) removed from this rule."
+            }
+        case .moveRule(_, let ruleID, let offset):
+            _ = try rule(ruleID)
+            var ids = existing.map(\.id)
+            guard let index = ids.firstIndex(of: ruleID), offset == -1 || offset == 1, ids.indices.contains(index + offset) else {
+                throw CommandExecutionError.disabled("This rule can't move further.")
+            }
+            ids.swapAt(index, index + offset)
+            order(ids)
+            announcement = offset < 0 ? "Moved the rule up; later rules win." : "Moved the rule down; later rules win."
+        case .removeRule(_, let ruleID):
+            _ = try rule(ruleID)
+            for property in node.properties where property.key.rawValue.hasPrefix(Q.ruleKey(ruleID, "")) {
+                commands.append(.removeProperty(.init(pageID: pageID, nodeID: node.id, propertyID: property.id)))
+            }
+            order(existing.map(\.id).filter { $0 != ruleID })
+            announcement = "Removed the rule."
+        }
+        guard !commands.isEmpty else { throw CommandExecutionError.disabled("The container query already has these values.") }
+        let command = commands.count == 1 ? commands[0] : DocumentCommand.batch(commands)
+        let availability = CommandRegistry().availability(for: command, in: document)
+        guard availability.isEnabled else {
+            throw CommandExecutionError.disabled(availability.disabledReason ?? "This container query change can't be applied.")
+        }
+        return .init(command: command, announcement: announcement, ruleID: newRule)
+    }
+
+    static let nameReason = "Use 1 to 32 lowercase letters, digits or hyphens, starting with a letter, for example card."
+
+    private static func check(_ key: String, _ value: PropertyValue, node: DocumentNode, page: DocumentPage) throws {
+        guard Q.queryableKeys.contains(key) else {
+            throw CommandExecutionError.disabled("Container queries can change visibility, opacity, text size, line height, width and height.")
+        }
+        let parent: DocumentNode? = {
+            if case .node(let id) = node.parent { return page.nodes.first { $0.id == id } }
+            return nil
+        }()
+        guard Q.accepts(key, value: value, on: node, parent: parent) else {
+            switch key {
+            case "layout.width", "layout.height":
+                throw CommandExecutionError.disabled("Width and height can change only on a fixed-size object placed in a Frame, without a fluid size, so nothing else moves.")
+            case CanonicalTypography.namespace + "size", CanonicalTypography.namespace + "lineHeight":
+                guard node.kind.isTextual else { throw CommandExecutionError.disabled("Text size applies to text, buttons and links only.") }
+                if CanonicalFluidValueCodec.value(for: key == CanonicalTypography.namespace + "size" ? .fontSize : .lineHeight, node: node) != nil {
+                    throw CommandExecutionError.disabled("This text uses smooth scaling for that setting. Turn smooth scaling off to use a container query.")
+                }
+                throw CommandExecutionError.disabled("Enter a size from 1 to 1,000 pt (line height up to 2,000 pt).")
+            case "style.opacity": throw CommandExecutionError.disabled("Enter an opacity from 0 to 1.")
+            default: throw CommandExecutionError.disabled("This value isn't supported for this setting.")
+            }
+        }
+    }
+
+    static func title(_ key: String) -> String {
+        switch key {
+        case "hidden": "Visibility"
+        case "style.opacity": "Opacity"
+        case CanonicalTypography.namespace + "size": "Text size"
+        case CanonicalTypography.namespace + "lineHeight": "Line height"
+        case "layout.width": "Width"
+        case "layout.height": "Height"
+        default: "Setting"
+        }
+    }
+}
+
+// MARK: - OD-033 variant authoring (SF-0904-002/004/005/006)
+
+/// One authoring action on a component's variants or a copy's choice.
+enum ComponentVariantEdit: Equatable, Sendable {
+    case addAxis(name: String, valueNames: [String])
+    case renameAxis(ComponentVariantAxisID, name: String)
+    case moveAxis(ComponentVariantAxisID, offset: Int)
+    case removeAxis(ComponentVariantAxisID)
+    case addValue(axis: ComponentVariantAxisID, name: String)
+    case renameValue(ComponentVariantValueID, name: String)
+    case moveValue(ComponentVariantValueID, offset: Int)
+    case removeValue(ComponentVariantValueID)
+    case setDefault(ComponentVariantValueID)
+    case setCombinationAllowed(CanonicalVariantCombination, allowed: Bool)
+    /// "Use base value": removes one variant's own value for one setting.
+    case resetProperty(nodeID: NodeID, target: CanonicalVariantTarget, propertyKey: String)
+    /// A copy's value for one axis; nil uses the axis default.
+    case setChoice(instanceID: NodeID, pageID: PageID, axis: ComponentVariantAxisID, value: ComponentVariantValueID?)
+    /// Removes every stored choice of a copy, including unavailable ones.
+    case resetChoices(instanceID: NodeID, pageID: PageID)
+
+    var diagnosticOperation: String {
+        switch self {
+        case .addAxis: "variant.axis.add"
+        case .renameAxis: "variant.axis.rename"
+        case .moveAxis: "variant.axis.move"
+        case .removeAxis: "variant.axis.remove"
+        case .addValue: "variant.value.add"
+        case .renameValue: "variant.value.rename"
+        case .moveValue: "variant.value.move"
+        case .removeValue: "variant.value.remove"
+        case .setDefault: "variant.value.default"
+        case .setCombinationAllowed(_, let allowed): allowed ? "variant.combination.allow" : "variant.combination.disallow"
+        case .resetProperty: "variant.property.reset"
+        case .setChoice: "variant.choice.set"
+        case .resetChoices: "variant.choice.reset"
+        }
+    }
+}
+
+enum ComponentVariantError: Error, Equatable, LocalizedError, Sendable {
+    case stale
+    case unavailable(String)
+    case invalidName
+    case noChanges
+    case structureNeedsBase
+    case notVariantCapable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .stale: "The project changed before this variant edit could be applied. Nothing changed; try again."
+        case .unavailable(let reason): reason
+        case .invalidName: "Use a name of 1 to 256 characters, without line breaks, that no other property or value of this component uses."
+        case .noChanges: "The variants already have these values."
+        case .structureNeedsBase: "Objects are the same in every variant. Switch to Base to add, remove or move objects."
+        case .notVariantCapable: "This setting is the same in every variant. Switch to Base to change it."
+        }
+    }
+
+    /// Closed failure category for diagnostics; never the reason text.
+    var diagnosticCategory: String {
+        switch self {
+        case .stale: "stale"
+        case .unavailable: "unavailable"
+        case .invalidName: "invalid-name"
+        case .noChanges: "no-changes"
+        case .structureNeedsBase: "structure-needs-base"
+        case .notVariantCapable: "not-variant-capable"
+        }
+    }
+}
+
+extension ComponentVariantEdit {
+    /// The requirement a diagnostic for this edit names: allowed combinations
+    /// and Use Base Value are resolution rules; everything else is authoring.
+    var requirementID: String {
+        switch self {
+        case .setCombinationAllowed, .resetProperty: "SF-0904-003"
+        default: "SF-0904-002"
+        }
+    }
+}
+
+/// SF-0904-008: one variant operation with sanitized identities only; names,
+/// values and property keys never enter the record.
+struct ComponentVariantDiagnostic: Equatable, Sendable {
+    let requirementID: String
+    let operation: String
+    let documentIdentifier: String
+    let definitionIdentifier: String
+    let failureCategory: String
+    let durationMilliseconds: Double
+
+    init(requirementID: String, operation: String, documentID: DocumentID, definitionID: PageID,
+         error: Error?, durationMilliseconds: Double) {
+        self.requirementID = requirementID
+        self.operation = operation
+        documentIdentifier = DiagnosticStableIdentifier.sanitize(documentID.description, domain: .document, kind: "variant-document")
+        definitionIdentifier = DiagnosticStableIdentifier.sanitize(definitionID.description, domain: .document, kind: "variant-component")
+        if let error {
+            failureCategory = (error as? ComponentVariantError)?.diagnosticCategory ?? "command-rejected"
+        } else {
+            failureCategory = "none"
+        }
+        self.durationMilliseconds = durationMilliseconds
+    }
+}
+
+struct PreparedComponentVariantEdit: Equatable, Sendable {
+    let command: DocumentCommand
+    /// Copies that keep a choice this edit makes unavailable (they show the
+    /// default until repaired), for confirmation text.
+    let copiesNeedingRepair: Int
+    let announcement: String
+}
+
+/// SF-0904-002/004/005: every variant edit is one validated transaction of
+/// ordinary property commands, so undo, redo, autosave, recovery and history
+/// need nothing new. Stale identity, a busy lifecycle, invalid names, limits
+/// and the default rules refuse with a specific reason and change nothing.
+struct ComponentVariantCommandRegistry: Sendable {
+    static let requirementIDs: Set<String> = Set((1...8).map { String(format: "SF-0904-%03d", $0) })
+    typealias V = CanonicalComponentVariants
+
+    func prepare(_ edit: ComponentVariantEdit, definitionID: PageID, expectedDocumentID: DocumentID,
+                 expectedRevision: UInt64, document: CanonicalDocument, isLifecycleAvailable: Bool,
+                 lifecycleDisabledReason: String? = nil, forCommit: Bool = true) throws -> PreparedComponentVariantEdit {
+        guard isLifecycleAvailable else {
+            throw ComponentVariantError.unavailable(lifecycleDisabledReason ?? "Variants can't be changed while the project is busy.")
+        }
+        guard document.id == expectedDocumentID, document.revision == expectedRevision else { throw ComponentVariantError.stale }
+        guard let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+              let root = V.rootNode(of: definition) else {
+            throw ComponentVariantError.unavailable("The component is unavailable.")
+        }
+        let current = try V.variantSet(in: definition)
+        let result: (commands: [DocumentCommand], repair: Int, announcement: String)
+        switch edit {
+        case .setChoice(let instanceID, let pageID, let axis, let value):
+            result = try choiceCommands(instanceID: instanceID, pageID: pageID, axis: axis, value: value,
+                                        definition: definition, set: current, document: document)
+        case .resetChoices(let instanceID, let pageID):
+            guard let instance = document.pages.first(where: { $0.id == pageID })?.nodes.first(where: { $0.id == instanceID }),
+                  CanonicalComponentReference.definitionID(for: instance) == definitionID else { throw ComponentVariantError.stale }
+            let removals = instance.properties.filter { V.isChoiceKey($0.key.rawValue) }
+                .map { DocumentCommand.removeProperty(.init(pageID: pageID, nodeID: instanceID, propertyID: $0.id)) }
+            result = (removals, 0, "This copy uses the default variant.")
+        case .resetProperty(let nodeID, let target, let propertyKey):
+            guard let node = definition.nodes.first(where: { $0.id == nodeID }) else { throw ComponentVariantError.stale }
+            let keys: Set<String> = [V.overrideKey(target, propertyKey), V.unsetKey(target, propertyKey)]
+            let removals = node.properties.filter { keys.contains($0.key.rawValue) }
+                .map { DocumentCommand.removeProperty(.init(pageID: definitionID, nodeID: nodeID, propertyID: $0.id)) }
+            result = (removals, 0, "This variant uses the base value again.")
+        default:
+            result = try setCommands(edit, definition: definition, root: root, set: current, document: document,
+                                     countingRepairs: forCommit)
+        }
+        guard !result.commands.isEmpty else { throw ComponentVariantError.noChanges }
+        let command = DocumentCommand.batch(result.commands)
+        // `forCommit: false` only enables a control: every rule above still
+        // applies, but the whole-document validation runs once, on commit. A
+        // variant popover has dozens of controls and must not validate the
+        // project once per control on the main actor (SF-0904-007).
+        if forCommit {
+            let availability = CommandRegistry().availability(for: command, in: document)
+            guard availability.isEnabled else {
+                throw ComponentVariantError.unavailable(availability.disabledReason ?? "This variant change can't be applied.")
+            }
+        }
+        return .init(command: command, copiesNeedingRepair: result.repair, announcement: result.announcement)
+    }
+
+    // MARK: Axes, values and combinations
+
+    private struct Draft {
+        var axes: [CanonicalVariantAxis]
+        var disallowed: Set<String>
+    }
+
+    private func setCommands(_ edit: ComponentVariantEdit, definition: DocumentPage, root: DocumentNode,
+                             set current: CanonicalVariantSet?, document: CanonicalDocument, countingRepairs: Bool)
+        throws -> (commands: [DocumentCommand], repair: Int, announcement: String) {
+        func label(_ name: String) throws -> String {
+            guard CanonicalComponentText.validLabel(name) else { throw ComponentVariantError.invalidName }
+            return name
+        }
+        var draft = Draft(axes: current?.axes ?? [], disallowed: current?.disallowed ?? [])
+        // How override targets map into the edited set (nil drops them).
+        var remap: (CanonicalVariantTarget) -> CanonicalVariantTarget? = { $0 }
+        var removedValues = Set<ComponentVariantValueID>()
+        let announcement: String
+        func axisIndex(_ id: ComponentVariantAxisID) throws -> Int {
+            guard let index = draft.axes.firstIndex(where: { $0.id == id }) else { throw ComponentVariantError.stale }
+            return index
+        }
+        func valueIndex(_ id: ComponentVariantValueID) throws -> (axis: Int, value: Int) {
+            for (axisOffset, axis) in draft.axes.enumerated() {
+                if let index = axis.values.firstIndex(where: { $0.id == id }) { return (axisOffset, index) }
+            }
+            throw ComponentVariantError.stale
+        }
+        func replaceAxis(_ index: Int, name: String? = nil, values: [CanonicalVariantValue]? = nil,
+                         defaultValueID: ComponentVariantValueID? = nil) {
+            let axis = draft.axes[index]
+            draft.axes[index] = .init(id: axis.id, name: name ?? axis.name, values: values ?? axis.values,
+                                      defaultValueID: defaultValueID ?? axis.defaultValueID)
+        }
+        switch edit {
+        case .addAxis(let name, let valueNames):
+            guard draft.axes.count < V.maximumAxes else {
+                throw ComponentVariantError.unavailable("A component can have up to \(V.maximumAxes) variant properties.")
+            }
+            guard (2...V.maximumValuesPerAxis).contains(valueNames.count) else {
+                throw ComponentVariantError.unavailable("Give the new property 2 to \(V.maximumValuesPerAxis) values.")
+            }
+            let values = try valueNames.map { CanonicalVariantValue(id: .init(), name: try label($0)) }
+            let axis = CanonicalVariantAxis(id: .init(), name: try label(name), values: values, defaultValueID: values[0].id)
+            draft.axes.append(axis)
+            // Existing combinations gain the new axis: their overrides apply to
+            // its default value, and a disallowed combination stays disallowed
+            // with every value of the new axis.
+            remap = { target in
+                guard case .combination(let combination) = target else { return target }
+                return .combination(.init(combination.valueIDs + [axis.defaultValueID]))
+            }
+            draft.disallowed = Set(draft.disallowed.flatMap { key -> [String] in
+                guard let combination = CanonicalVariantCombination.parse(key) else { return [] }
+                return values.map { CanonicalVariantCombination(combination.valueIDs + [$0.id]).key }
+            })
+            announcement = "Added the variant property \(axis.name) with \(values.count) values; \(values[0].name) is the default."
+        case .renameAxis(let id, let name):
+            replaceAxis(try axisIndex(id), name: try label(name))
+            announcement = "Renamed the variant property to \(name)."
+        case .moveAxis(let id, let offset):
+            let index = try axisIndex(id), target = index + offset
+            guard offset == -1 || offset == 1, draft.axes.indices.contains(target) else { throw ComponentVariantError.noChanges }
+            draft.axes.swapAt(index, target)
+            let order = draft.axes
+            // Combination keys follow axis order: re-key them.
+            let rekey: (CanonicalVariantCombination) -> CanonicalVariantCombination = { combination in
+                .init(order.map { axis in combination.valueIDs.first { id in axis.values.contains { $0.id == id } } ?? axis.defaultValueID })
+            }
+            remap = { target in
+                guard case .combination(let combination) = target else { return target }
+                return .combination(rekey(combination))
+            }
+            draft.disallowed = Set(draft.disallowed.compactMap { CanonicalVariantCombination.parse($0).map { rekey($0).key } })
+            announcement = "Moved the variant property \(offset < 0 ? "up" : "down")."
+        case .removeAxis(let id):
+            let index = try axisIndex(id)
+            let axis = draft.axes.remove(at: index)
+            removedValues.formUnion(axis.values.map(\.id))
+            // Combinations change shape; their overrides and restrictions end.
+            remap = { target in
+                if case .value(let value) = target, !removedValues.contains(value) { return target }
+                return nil
+            }
+            draft.disallowed = []
+            announcement = draft.axes.isEmpty
+                ? "Removed \(axis.name). This component has no variants now."
+                : "Removed the variant property \(axis.name) and its values' settings."
+        case .addValue(let axisID, let name):
+            let index = try axisIndex(axisID)
+            guard draft.axes[index].values.count < V.maximumValuesPerAxis else {
+                throw ComponentVariantError.unavailable("A variant property can have up to \(V.maximumValuesPerAxis) values.")
+            }
+            let value = CanonicalVariantValue(id: .init(), name: try label(name))
+            replaceAxis(index, values: draft.axes[index].values + [value])
+            announcement = "Added the value \(value.name)."
+        case .renameValue(let id, let name):
+            let position = try valueIndex(id)
+            var values = draft.axes[position.axis].values
+            values[position.value] = .init(id: id, name: try label(name))
+            replaceAxis(position.axis, values: values)
+            announcement = "Renamed the value to \(name)."
+        case .moveValue(let id, let offset):
+            let position = try valueIndex(id), target = position.value + offset
+            var values = draft.axes[position.axis].values
+            guard offset == -1 || offset == 1, values.indices.contains(target) else { throw ComponentVariantError.noChanges }
+            values.swapAt(position.value, target)
+            replaceAxis(position.axis, values: values)
+            announcement = "Moved the value \(offset < 0 ? "up" : "down")."
+        case .removeValue(let id):
+            let position = try valueIndex(id)
+            let axis = draft.axes[position.axis]
+            guard axis.defaultValueID != id else {
+                throw ComponentVariantError.unavailable("This is the default value. Choose another default first.")
+            }
+            guard axis.values.count > 2 else {
+                throw ComponentVariantError.unavailable("A variant property needs at least two values. Remove the property instead.")
+            }
+            replaceAxis(position.axis, values: axis.values.filter { $0.id != id })
+            removedValues.insert(id)
+            remap = { target in
+                switch target {
+                case .value(let value): return value == id ? nil : target
+                case .combination(let combination): return combination.valueIDs.contains(id) ? nil : target
+                }
+            }
+            draft.disallowed = draft.disallowed.filter { !$0.contains(id.description) }
+            announcement = "Removed the value \(axis.values[position.value].name) and its settings."
+        case .setDefault(let id):
+            let position = try valueIndex(id)
+            replaceAxis(position.axis, defaultValueID: id)
+            let candidate = CanonicalVariantSet(axes: draft.axes, disallowed: draft.disallowed)
+            guard !draft.disallowed.contains(candidate.defaultCombination.key) else {
+                throw ComponentVariantError.unavailable("The default variant must be allowed. Allow \(candidate.name(of: candidate.defaultCombination)) first.")
+            }
+            announcement = "\(draft.axes[position.axis].values[position.value].name) is now the default."
+        case .setCombinationAllowed(let combination, let allowed):
+            let candidate = CanonicalVariantSet(axes: draft.axes, disallowed: draft.disallowed)
+            guard candidate.isCombination(combination) else { throw ComponentVariantError.stale }
+            if allowed {
+                guard draft.disallowed.remove(combination.key) != nil else { throw ComponentVariantError.noChanges }
+                announcement = "\(candidate.name(of: combination)) is allowed again."
+            } else {
+                guard combination != candidate.defaultCombination else {
+                    throw ComponentVariantError.unavailable("The default variant can't be disallowed. Choose another default first.")
+                }
+                guard draft.disallowed.insert(combination.key).inserted else { throw ComponentVariantError.noChanges }
+                remap = { target in target == .combination(combination) ? nil : target }
+                announcement = "Copies can no longer choose \(candidate.name(of: combination))."
+            }
+        default:
+            throw ComponentVariantError.noChanges
+        }
+        guard draft.axes.reduce(1, { $0 * $1.values.count }) <= V.maximumCombinations || draft.axes.isEmpty else {
+            throw ComponentVariantError.unavailable("A component can have up to \(V.maximumCombinations) variant combinations.")
+        }
+        let names = draft.axes.map { $0.name.lowercased() }
+        guard Set(names).count == names.count,
+              draft.axes.allSatisfy({ axis in Set(axis.values.map { $0.name.lowercased() }).count == axis.values.count }) else {
+            throw ComponentVariantError.invalidName
+        }
+        var commands = Self.metadataCommands(draft: draft, root: root, pageID: definition.id)
+        commands += try Self.overrideCommands(definition: definition, remap: remap)
+        // Only the commit's confirmation text needs the count (a scan of every page).
+        let repair = countingRepairs ? Self.copiesNeedingRepair(definitionID: definition.id, before: current,
+            after: draft.axes.isEmpty ? nil : CanonicalVariantSet(axes: draft.axes, disallowed: draft.disallowed), document: document) : 0
+        return (commands, repair, announcement)
+    }
+
+    /// Sets, replaces or removes the root's variant metadata so it encodes `draft` exactly.
+    private static func metadataCommands(draft: Draft, root: DocumentNode, pageID: PageID) -> [DocumentCommand] {
+        var desired: [String: PropertyValue] = [:]
+        if !draft.axes.isEmpty {
+            desired[V.axesKey] = .string(draft.axes.map(\.id.description).joined(separator: ","))
+            for axis in draft.axes {
+                desired[V.axisKey(axis.id, "name")] = .string(axis.name)
+                desired[V.axisKey(axis.id, "values")] = .string(axis.values.map(\.id.description).joined(separator: ","))
+                desired[V.axisKey(axis.id, "default")] = .string(axis.defaultValueID.description)
+                for value in axis.values { desired[V.valueNameKey(value.id)] = .string(value.name) }
+            }
+            if !draft.disallowed.isEmpty { desired[V.disallowedKey] = .string(draft.disallowed.sorted().joined(separator: ",")) }
+        }
+        var commands: [DocumentCommand] = []
+        for property in root.properties where V.isMetadataKey(property.key.rawValue) && desired[property.key.rawValue] == nil {
+            commands.append(.removeProperty(.init(pageID: pageID, nodeID: root.id, propertyID: property.id)))
+        }
+        for (key, value) in desired.sorted(by: { $0.key < $1.key }) {
+            let existing = root.properties.first { $0.key.rawValue == key }
+            guard existing?.value != value else { continue }
+            commands.append(.setProperty(.init(pageID: pageID, nodeID: root.id,
+                property: .init(id: existing?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored))))
+        }
+        return commands
+    }
+
+    /// Moves or removes override properties whose target changed shape.
+    private static func overrideCommands(definition: DocumentPage,
+                                         remap: (CanonicalVariantTarget) -> CanonicalVariantTarget?) throws -> [DocumentCommand] {
+        var removals: [DocumentCommand] = [], additions: [DocumentCommand] = []
+        for node in definition.nodes {
+            for property in node.properties where V.isOverrideKey(property.key.rawValue) {
+                let key = property.key.rawValue
+                let isUnset = key.hasPrefix(V.unsetPrefix)
+                let rest = key.dropFirst((isUnset ? V.unsetPrefix : V.overridePrefix).count)
+                guard let dot = rest.firstIndex(of: "."),
+                      let target = CanonicalVariantTarget.parse(String(rest[..<dot])) else {
+                    throw ComponentVariantError.unavailable("This component's variant data is damaged. Undo the last change or restore a saved copy.")
+                }
+                let propertyKey = String(rest[rest.index(after: dot)...])
+                let mapped = remap(target)
+                guard mapped != target else { continue }
+                removals.append(.removeProperty(.init(pageID: definition.id, nodeID: node.id, propertyID: property.id)))
+                if let mapped {
+                    let newKey = isUnset ? V.unsetKey(mapped, propertyKey) : V.overrideKey(mapped, propertyKey)
+                    additions.append(.setProperty(.init(pageID: definition.id, nodeID: node.id,
+                        property: .init(key: .init(rawValue: newKey), value: property.value, origin: .authored))))
+                }
+            }
+        }
+        return removals + additions
+    }
+
+    /// Copies (anywhere, including inside definitions) whose stored choices
+    /// are honored before the edit but not after it: they keep the choice and
+    /// show the default until repaired.
+    private static func copiesNeedingRepair(definitionID: PageID, before: CanonicalVariantSet?, after: CanonicalVariantSet?,
+                                            document: CanonicalDocument) -> Int {
+        func needsRepair(_ node: DocumentNode, _ set: CanonicalVariantSet?) -> Bool {
+            guard let set else { return node.properties.contains { V.isChoiceKey($0.key.rawValue) } }
+            return !V.resolution(for: node, set: set).findings.isEmpty
+        }
+        return document.pages.flatMap(\.nodes).filter { node in
+            CanonicalComponentReference.definitionID(for: node) == definitionID
+                && !needsRepair(node, before) && needsRepair(node, after)
+        }.count
+    }
+
+    // MARK: A copy's choice
+
+    private func choiceCommands(instanceID: NodeID, pageID: PageID, axis: ComponentVariantAxisID,
+                                value: ComponentVariantValueID?, definition: DocumentPage,
+                                set current: CanonicalVariantSet?, document: CanonicalDocument)
+        throws -> (commands: [DocumentCommand], repair: Int, announcement: String) {
+        guard let page = document.pages.first(where: { $0.id == pageID }),
+              let instance = page.nodes.first(where: { $0.id == instanceID }),
+              CanonicalComponentReference.definitionID(for: instance) == definition.id else { throw ComponentVariantError.stale }
+        let key = V.choiceKey(axis)
+        let existing = instance.properties.first { $0.key.rawValue == key }
+        var commands: [DocumentCommand] = []
+        let announcement: String
+        if let value {
+            guard let set = current, let entry = set.axes.first(where: { $0.id == axis }),
+                  let chosen = entry.values.first(where: { $0.id == value }) else { throw ComponentVariantError.stale }
+            var next = instance
+            next.properties.removeAll { $0.key.rawValue == key }
+            next.properties.append(.init(key: .init(rawValue: key), value: .string(value.description)))
+            let resolution = V.resolution(for: next, set: set)
+            guard !resolution.findings.contains(where: { if case .disallowedCombination = $0 { return true } else { return false } }) else {
+                throw ComponentVariantError.unavailable("That combination isn't allowed for this component. Choose another value.")
+            }
+            guard existing?.value != .string(value.description) else { throw ComponentVariantError.noChanges }
+            commands.append(.setProperty(.init(pageID: pageID, nodeID: instanceID,
+                property: .init(id: existing?.id ?? PropertyID(), key: .init(rawValue: key), value: .string(value.description), origin: .authored))))
+            commands += Self.sizeCommands(instance: instance, next: next, definition: definition, pageID: pageID)
+            announcement = "This copy shows \(entry.name): \(chosen.name)."
+        } else {
+            guard let existing else { throw ComponentVariantError.noChanges }
+            commands.append(.removeProperty(.init(pageID: pageID, nodeID: instanceID, propertyID: existing.id)))
+            var next = instance
+            next.properties.removeAll { $0.key.rawValue == key }
+            commands += Self.sizeCommands(instance: instance, next: next, definition: definition, pageID: pageID)
+            announcement = "This copy uses the default value."
+        }
+        return (commands, 0, announcement)
+    }
+
+    /// A copy that still has its current variant's size takes the new
+    /// variant's size; a copy the user resized keeps its own size.
+    private static func sizeCommands(instance: DocumentNode, next: DocumentNode, definition: DocumentPage,
+                                     pageID: PageID) -> [DocumentCommand] {
+        func rootSize(_ node: DocumentNode) -> (Double, Double)? {
+            guard let root = V.rootNode(of: V.resolvedDefinition(definition, for: node)),
+                  let width = root.insertionNumberProperty("layout.width"),
+                  let height = root.insertionNumberProperty("layout.height") else { return nil }
+            return (width, height)
+        }
+        guard let before = rootSize(instance), let after = rootSize(next), before != after,
+              let width = instance.insertionProperty("layout.width"), let height = instance.insertionProperty("layout.height"),
+              width.value == .number(before.0), height.value == .number(before.1) else { return [] }
+        return [
+            .setProperty(.init(pageID: pageID, nodeID: instance.id,
+                property: .init(id: width.id, key: width.key, value: .number(after.0), origin: .authored))),
+            .setProperty(.init(pageID: pageID, nodeID: instance.id,
+                property: .init(id: height.id, key: height.key, value: .number(after.1), origin: .authored))),
+        ]
+    }
+}
+
+extension CanonicalComponentVariants {
+    /// The variant shown while editing `target`: an axis value is shown with
+    /// every other axis at its default; a combination is shown as itself.
+    /// Whether `target` is a variant of `set` that can be edited: an existing
+    /// value, or an allowed combination of two or more axes.
+    static func isEditable(_ target: CanonicalVariantTarget, in set: CanonicalVariantSet) -> Bool {
+        switch target {
+        case .value(let id): set.value(id) != nil
+        case .combination(let combination): set.axes.count > 1 && set.isAllowed(combination)
+        }
+    }
+
+    static func previewCombination(for target: CanonicalVariantTarget, in set: CanonicalVariantSet) -> CanonicalVariantCombination {
+        switch target {
+        case .combination(let combination): return combination
+        case .value(let id):
+            return .init(set.axes.map { axis in axis.values.contains { $0.id == id } ? id : axis.defaultValueID })
+        }
+    }
+
+    /// The project as it is presented while `target` of the open definition is
+    /// being edited: that definition shows the variant (metadata kept, override
+    /// storage hidden). Identities are unchanged, so commands prepared from it
+    /// can be converted by `rewrite`.
+    static func presentedDocument(_ document: CanonicalDocument, definitionID: PageID,
+                                  target: CanonicalVariantTarget) -> CanonicalDocument {
+        guard let index = document.pages.firstIndex(where: { $0.id == definitionID }),
+              let set = try? variantSet(in: document.pages[index]) else { return document }
+        var result = document
+        result.pages[index] = resolved(document.pages[index], targets: set.targets(for: previewCombination(for: target, in: set)),
+                                       keepingMetadata: true)
+        return result
+    }
+
+    /// Which variant supplies `key` on `node` in `combination`; nil is the base.
+    static func source(of key: String, on node: DocumentNode, set: CanonicalVariantSet,
+                       combination: CanonicalVariantCombination) -> CanonicalVariantTarget? {
+        guard let nodeOverrides = try? overrides(on: node) else { return nil }
+        for target in set.targets(for: combination).reversed()
+        where nodeOverrides.values[target]?[key] != nil || nodeOverrides.unset[target]?.contains(key) == true {
+            return target
+        }
+        return nil
+    }
+
+    /// SF-0904-002 (owner choice: edit inside the variant): the one conversion
+    /// point. While `target` of the open definition is being edited, property
+    /// edits on that definition become that target's overrides: a value equal
+    /// to what the target would otherwise show removes its override, and a
+    /// removed property becomes an unset marker. Variant metadata edits pass
+    /// through. Structure edits and settings that are the same in every variant
+    /// are refused. Commands for other pages are unchanged.
+    static func rewrite(_ command: DocumentCommand, definitionID: PageID, target: CanonicalVariantTarget,
+                        document: CanonicalDocument) throws -> DocumentCommand {
+        guard let pageIndex = document.pages.firstIndex(where: { $0.id == definitionID }) else { return command }
+        let page = document.pages[pageIndex]
+        // Undo, redo or a history jump can remove the variant being edited
+        // before the workspace returns to Base. An edit of this definition is
+        // then refused instead of being stored silently in the base.
+        func editsDefinition(_ command: DocumentCommand) -> Bool {
+            switch command {
+            case .batch(let commands): commands.contains(where: editsDefinition)
+            case .setProperty(let value): value.pageID == definitionID
+            case .removeProperty(let value): value.pageID == definitionID
+            case .insertNode(let value): value.pageID == definitionID
+            case .removeNode(let value): value.pageID == definitionID
+            case .moveNode(let value): value.pageID == definitionID
+            case .removePage(let value): value.pageID == definitionID
+            case .insertPage(let value): value.page.id == definitionID
+            default: false
+            }
+        }
+        guard let set = try variantSet(in: page), isEditable(target, in: set) else {
+            guard !editsDefinition(command) else { throw ComponentVariantError.stale }
+            return command
+        }
+        let presented = presentedDocument(document, definitionID: definitionID, target: target).pages[pageIndex]
+        func inherited(_ node: DocumentNode, _ key: String) throws -> PropertyValue? {
+            let lower: [CanonicalVariantTarget]
+            switch target {
+            case .value: lower = []
+            case .combination(let combination): lower = combination.valueIDs.map(CanonicalVariantTarget.value)
+            }
+            return resolvedNode(node, overrides: try overrides(on: node), targets: lower)
+                .properties.first { $0.key.rawValue == key }?.value
+        }
+        func commands(storing value: PropertyValue?, key: String, on node: DocumentNode) throws -> [DocumentCommand] {
+            let overrideKey = self.overrideKey(target, key), unsetKey = self.unsetKey(target, key)
+            let existingOverride = node.properties.first { $0.key.rawValue == overrideKey }
+            let existingUnset = node.properties.first { $0.key.rawValue == unsetKey }
+            let base = try inherited(node, key)
+            var result: [DocumentCommand] = []
+            if value == base {
+                for property in [existingOverride, existingUnset].compactMap({ $0 }) {
+                    result.append(.removeProperty(.init(pageID: definitionID, nodeID: node.id, propertyID: property.id)))
+                }
+                return result
+            }
+            if let value {
+                if let existingUnset {
+                    result.append(.removeProperty(.init(pageID: definitionID, nodeID: node.id, propertyID: existingUnset.id)))
+                }
+                result.append(.setProperty(.init(pageID: definitionID, nodeID: node.id,
+                    property: .init(id: existingOverride?.id ?? PropertyID(), key: .init(rawValue: overrideKey), value: value, origin: .authored))))
+            } else {
+                if let existingOverride {
+                    result.append(.removeProperty(.init(pageID: definitionID, nodeID: node.id, propertyID: existingOverride.id)))
+                }
+                if existingUnset == nil {
+                    result.append(.setProperty(.init(pageID: definitionID, nodeID: node.id,
+                        property: .init(key: .init(rawValue: unsetKey), value: .boolean(true), origin: .authored))))
+                }
+            }
+            return result
+        }
+        func convert(_ command: DocumentCommand) throws -> [DocumentCommand] {
+            switch command {
+            case .batch(let commands):
+                return try commands.flatMap(convert)
+            case .setProperty(let value) where value.pageID == definitionID:
+                let key = value.property.key.rawValue
+                if key.hasPrefix(namespace) { return [command] }
+                guard isVariantCapable(key) else { throw ComponentVariantError.notVariantCapable(key) }
+                guard let node = page.nodes.first(where: { $0.id == value.nodeID }) else { throw ComponentVariantError.stale }
+                return try commands(storing: value.property.value, key: key, on: node)
+            case .removeProperty(let value) where value.pageID == definitionID:
+                guard let node = page.nodes.first(where: { $0.id == value.nodeID }) else { throw ComponentVariantError.stale }
+                if let stored = node.properties.first(where: { $0.id == value.propertyID }),
+                   stored.key.rawValue.hasPrefix(namespace) { return [command] }
+                guard let shown = presented.nodes.first(where: { $0.id == value.nodeID })?
+                        .properties.first(where: { $0.id == value.propertyID }) else { throw ComponentVariantError.stale }
+                let key = shown.key.rawValue
+                guard isVariantCapable(key) else { throw ComponentVariantError.notVariantCapable(key) }
+                return try commands(storing: nil, key: key, on: node)
+            case .insertNode(let value) where value.pageID == definitionID:
+                throw ComponentVariantError.structureNeedsBase
+            case .removeNode(let value) where value.pageID == definitionID:
+                throw ComponentVariantError.structureNeedsBase
+            case .moveNode(let value) where value.pageID == definitionID:
+                throw ComponentVariantError.structureNeedsBase
+            case .removePage(let value) where value.pageID == definitionID:
+                throw ComponentVariantError.structureNeedsBase
+            case .insertPage(let value) where value.page.id == definitionID:
+                throw ComponentVariantError.structureNeedsBase
+            default:
+                return [command]
+            }
+        }
+        let converted = try convert(command)
+        guard !converted.isEmpty else { throw ComponentVariantError.noChanges }
+        return converted.count == 1 ? converted[0] : .batch(converted)
     }
 }
 
@@ -2245,11 +4122,95 @@ struct DesignInspectorCommandRegistry: Sendable {
     }
 }
 
+// MARK: - SF-0510 linked box appearance resolution
+
+/// SF-0510-003: which rule supplied a box appearance value.
+enum CanonicalBoxAppearanceSource: Equatable, Sendable {
+    /// Set on the object itself (always wins).
+    case local
+    /// Supplied by this applied reusable style (the last one that sets it).
+    case linked(ReusableStyleID)
+    /// Nothing supplies it; the default (no border, square corners, no shadow).
+    case unset
+}
+
+struct CanonicalBoxStyleResolution: Equatable, Sendable {
+    let style: CanonicalBoxStyle
+    let borderSource: CanonicalBoxAppearanceSource
+    let cornerRadiusSource: CanonicalBoxAppearanceSource
+    let shadowSource: CanonicalBoxAppearanceSource
+}
+
+/// SF-0510-003: one precedence rule for canvas, Inspector, Preview and
+/// export. Group by group (border, corner radius, shadow): the object's own
+/// value wins; otherwise the last applied reusable style that supplies the
+/// group; otherwise nothing. Padding and clipping stay object-only because
+/// layout reads them directly. A local shadow's enabled flag applies only to
+/// that local shadow; a linked shadow is always enabled.
+enum CanonicalLinkedBoxStyleResolver {
+    static func resolve(node: DocumentNode, tokens: [LocalColorToken],
+                        index: CanonicalReusableStyleIndex?) -> CanonicalBoxStyleResolution? {
+        guard let local = LocalColorTokenResolver.resolvedBoxStyle(for: node, tokens: tokens) else { return nil }
+        var linkedBorder: (CanonicalBorder, ReusableStyleID)?
+        var linkedRadius: (Double, ReusableStyleID)?
+        var linkedShadow: (CanonicalShadow, ReusableStyleID)?
+        if let index {
+            for id in CanonicalReusableStyleIndex.appliedIDs(node) {
+                guard let box = index.byID[id]?.box else { continue }
+                if let value = box.border { linkedBorder = (value, id) }
+                if let value = box.cornerRadius { linkedRadius = (value, id) }
+                if let value = box.shadow { linkedShadow = (value, id) }
+            }
+        }
+        // Explicit types keep these optional-tuple chains cheap to type-check.
+        let border: (CanonicalBorder, CanonicalBoxAppearanceSource)?
+        if let value = local.border { border = (value, .local) }
+        else if let linked = linkedBorder { border = (linked.0, .linked(linked.1)) }
+        else { border = nil }
+        let radius: (Double, CanonicalBoxAppearanceSource)?
+        if let value = local.cornerRadius { radius = (value, .local) }
+        else if let linked = linkedRadius { radius = (linked.0, .linked(linked.1)) }
+        else { radius = nil }
+        let shadow: (CanonicalShadow, CanonicalBoxAppearanceSource)?
+        if let value = local.shadow { shadow = (value, .local) }
+        else if let linked = linkedShadow { shadow = (linked.0, .linked(linked.1)) }
+        else { shadow = nil }
+        let style = CanonicalBoxStyle(
+            border: border?.0, cornerRadius: radius?.0, shadow: shadow?.0,
+            shadowEnabled: local.shadow != nil ? local.shadowEnabled : nil,
+            padding: local.padding, clipsContent: local.clipsContent)
+        return CanonicalBoxStyleResolution(style: style, borderSource: border?.1 ?? .unset,
+            cornerRadiusSource: radius?.1 ?? .unset, shadowSource: shadow?.1 ?? .unset)
+    }
+}
+
 // MARK: - SF-0504 / SF-0510 / SF-0511 positioning and reusable/state styles
 
 enum PositionInsetEdge: String, CaseIterable, Sendable { case top, right, bottom, left }
 
 enum ReusableAppearanceProperty: String, Sendable { case fill, opacity }
+
+/// SF-0510: the linked box groups an object can hand back to its styles.
+/// Raw values follow the existing diagnostic naming (for example `z-index`).
+enum ReusableBoxProperty: String, CaseIterable, Sendable {
+    case border
+    case cornerRadius = "corner-radius"
+    case shadow
+}
+
+/// SF-0510-002/003/004: the box values a whole compatible selection shares,
+/// ready to store in a reusable style. A group that differs across the
+/// selection is reported in `mixed` and not captured, never guessed or
+/// averaged. Token-resolved colors are captured as plain values (a snapshot,
+/// not a live token link), exactly like the existing color capture.
+struct ReusableBoxSelectionCapture: Equatable, Sendable {
+    let box: CanonicalReusableBoxAppearance
+    let mixed: [ReusableBoxProperty]
+    let applicableCount: Int
+    let skippedCount: Int
+    /// Objects whose captured border or shadow color came from a color token.
+    let tokenColorCount: Int
+}
 
 struct ReusableStyleSelectionCapture: Equatable, Sendable {
     let fill: CanonicalSolidColor
@@ -2263,14 +4224,25 @@ enum AdvancedStyleEdit: Sendable {
     case positionMode(CanonicalPositionMode)
     case positionInset(PositionInsetEdge, Double?)
     case zIndex(Int)
-    case createReusableStyle(id: ReusableStyleID, name: String, fill: CanonicalSolidColor?, opacity: Double?)
-    case updateReusableStyle(id: ReusableStyleID, name: String, fill: CanonicalSolidColor?, opacity: Double?)
+    /// `box` stores linked border/corners/shadow in the same transaction.
+    case createReusableStyle(id: ReusableStyleID, name: String, fill: CanonicalSolidColor?, opacity: Double?,
+                             box: CanonicalReusableBoxAppearance = .init())
+    /// `box == nil` keeps the style's linked box values; a value replaces them
+    /// in the same transaction (one undo step for Update from Selection).
+    case updateReusableStyle(id: ReusableStyleID, name: String, fill: CanonicalSolidColor?, opacity: Double?,
+                             box: CanonicalReusableBoxAppearance? = nil)
     case removeReusableStyle(ReusableStyleID)
     case applyReusableStyles([ReusableStyleID])
     case linkReusableStyle(ReusableStyleID)
     case unlinkReusableStyle(ReusableStyleID)
     case moveReusableStyle(ReusableStyleID, offset: Int)
     case useLinkedAppearance(ReusableAppearanceProperty)
+    /// Replace a style's linked border, corner radius and shadow (one
+    /// transaction; name, fill and opacity are untouched).
+    case setReusableStyleBox(id: ReusableStyleID, box: CanonicalReusableBoxAppearance)
+    /// Remove the selected objects' own value for one box group so their
+    /// linked styles supply it again.
+    case useLinkedBox(ReusableBoxProperty)
     case setState(state: CanonicalInteractionStyleState, id: UUID, fill: CanonicalSolidColor?, opacity: Double?)
     case removeState(CanonicalInteractionStyleState)
 }
@@ -2304,10 +4276,12 @@ struct AdvancedStyleCommandRegistry: Sendable {
     )
     static let appearanceKinds: Set<NodeKind> = [.frame, .section, .stack, .grid, .button]
 
-    static func captureSelection(_ nodes: [DocumentNode], in document: CanonicalDocument) throws -> ReusableStyleSelectionCapture {
+    /// `styleIndex` must be built from `document` when given; nil builds it here.
+    static func captureSelection(_ nodes: [DocumentNode], in document: CanonicalDocument,
+                                 styleIndex: CanonicalReusableStyleIndex? = nil) throws -> ReusableStyleSelectionCapture {
         let applicable = nodes.filter { appearanceKinds.contains($0.kind) }
         guard !applicable.isEmpty else { throw AdvancedStyleCommandError.noSelection }
-        let index = try CanonicalReusableStyleIndex(document: document)
+        let index = try styleIndex ?? CanonicalReusableStyleIndex(document: document)
         var samples: [(CanonicalSolidColor, Double)] = []
         for node in applicable {
             guard CanonicalImageFill.resolve(node) == nil else {
@@ -2335,10 +4309,55 @@ struct AdvancedStyleCommandRegistry: Sendable {
             boundFillCount: applicable.filter { LocalColorTokenBinding.id(for: $0) != nil }.count)
     }
 
+    /// SF-0510-002/003: reads what the selection actually shows (own value
+    /// first, then linked styles) so a new style reproduces it. A disabled
+    /// shadow shows no shadow and is not captured.
+    /// `styleIndex` must be built from `document` when given (a cached index
+    /// for the same document value); nil builds it here.
+    static func captureBoxSelection(_ nodes: [DocumentNode], in document: CanonicalDocument,
+                                    styleIndex: CanonicalReusableStyleIndex? = nil) throws -> ReusableBoxSelectionCapture {
+        let applicable = nodes.filter { appearanceKinds.contains($0.kind) }
+        guard !applicable.isEmpty else { throw AdvancedStyleCommandError.noSelection }
+        let index = try styleIndex ?? CanonicalReusableStyleIndex(document: document)
+        var samples: [CanonicalReusableBoxAppearance] = []
+        var tokenColorCount = 0
+        for node in applicable {
+            guard DesignBoxStyleCommandRegistry.hasWellFormedContentBoxProperties(node),
+                  let resolved = CanonicalLinkedBoxStyleResolver.resolve(node: node, tokens: document.colorTokens, index: index) else {
+                throw AdvancedStyleCommandError.unavailable("A selected object has box appearance that cannot be read safely. Nothing changed.")
+            }
+            let showsShadow = resolved.style.shadowEnabled != false
+            samples.append(CanonicalReusableBoxAppearance(border: resolved.style.border,
+                cornerRadius: resolved.style.cornerRadius,
+                shadow: showsShadow ? resolved.style.shadow : nil).quantized)
+            let tokenBorder = resolved.borderSource == .local && LocalColorTokenBinding.id(for: node, target: .border) != nil
+            let tokenShadow = showsShadow && resolved.shadowSource == .local
+                && LocalColorTokenBinding.id(for: node, target: .outerShadow) != nil
+            if tokenBorder || tokenShadow { tokenColorCount += 1 }
+        }
+        var box = CanonicalReusableBoxAppearance()
+        var mixed: [ReusableBoxProperty] = []
+        let first = samples[0]
+        if samples.allSatisfy({ $0.border == first.border }) { box.border = first.border } else { mixed.append(.border) }
+        if samples.allSatisfy({ $0.cornerRadius == first.cornerRadius }) { box.cornerRadius = first.cornerRadius } else { mixed.append(.cornerRadius) }
+        if samples.allSatisfy({ $0.shadow == first.shadow }) { box.shadow = first.shadow } else { mixed.append(.shadow) }
+        guard !box.isEmpty else {
+            throw AdvancedStyleCommandError.unavailable(mixed.isEmpty
+                ? "The selection has no border, corner radius or shadow to store. Nothing changed."
+                : "The selection's border, corner radius or shadow differ between objects. Nothing changed; select objects with matching values.")
+        }
+        return .init(box: box, mixed: mixed, applicableCount: applicable.count,
+                     skippedCount: nodes.count - applicable.count, tokenColorCount: tokenColorCount)
+    }
+
+    /// `styleIndex` must be built from `document` when given (the workspace
+    /// passes its cached index for the same document value); nil builds it
+    /// here. Validation and results are otherwise identical.
     func prepare(
         _ command: AdvancedStyleCommand,
         in document: CanonicalDocument,
-        context: TransformValidationContext
+        context: TransformValidationContext,
+        styleIndex: CanonicalReusableStyleIndex? = nil
     ) throws -> PreparedDesignInspectorEdit {
         guard !command.cancelled else { throw AdvancedStyleCommandError.cancelled }
         guard context.isLifecycleAvailable else {
@@ -2364,14 +4383,14 @@ struct AdvancedStyleCommandRegistry: Sendable {
         guard let page = document.pages.first(where: { $0.id == command.identity.pageID }) else {
             throw AdvancedStyleCommandError.unavailable("The active page is unavailable.")
         }
-        let index = try CanonicalReusableStyleIndex(document: document)
+        let index = try styleIndex ?? CanonicalReusableStyleIndex(document: document)
 
         switch command.edit {
-        case .createReusableStyle(let id, let name, let fill, let opacity):
+        case .createReusableStyle(let id, let name, let fill, let opacity, let box):
             guard index.byID[id] == nil else { throw AdvancedStyleCommandError.invalidValue }
-            return try definitionEdit(id: id, name: name, fill: fill, opacity: opacity,
+            return try definitionEdit(id: id, name: name, fill: fill, opacity: opacity, box: box,
                 page: page, ownerNode: nil, existing: nil)
-        case .updateReusableStyle(let id, let name, let fill, let opacity):
+        case .updateReusableStyle(let id, let name, let fill, let opacity, let box):
             guard let existing = index.byID[id] else {
                 throw AdvancedStyleCommandError.unavailable("The reusable style no longer exists.")
             }
@@ -2379,7 +4398,7 @@ struct AdvancedStyleCommandRegistry: Sendable {
                   let ownerPage = document.pages.first(where: { $0.id == owner.pageID }) else {
                 throw AdvancedStyleCommandError.unavailable("The reusable style owner is unavailable.")
             }
-            return try definitionEdit(id: id, name: name, fill: fill, opacity: opacity,
+            return try definitionEdit(id: id, name: name, fill: fill, opacity: opacity, box: box,
                 page: ownerPage, ownerNode: owner.node, existing: existing)
         case .removeReusableStyle(let id):
             guard index.byID[id] != nil else {
@@ -2400,6 +4419,14 @@ struct AdvancedStyleCommandRegistry: Sendable {
             guard !commands.isEmpty else { throw AdvancedStyleCommandError.noChanges }
             return .init(applicableNodeIDs: [owner.node.id], skippedNodeIDs: [], skippedReasons: [:],
                          documentCommand: .batch(commands))
+        case .setReusableStyleBox(let id, let box):
+            guard let existing = index.byID[id] else {
+                throw AdvancedStyleCommandError.unavailable("The reusable style no longer exists.")
+            }
+            guard let owner = definitionOwner(id: id, in: document) else {
+                throw AdvancedStyleCommandError.unavailable("The reusable style owner is unavailable.")
+            }
+            return try definitionBoxEdit(id: id, box: box, owner: owner, existing: existing)
         default:
             return try selectedNodeEdit(command.edit, page: page, document: document,
                                         context: context, index: index,
@@ -2409,12 +4436,20 @@ struct AdvancedStyleCommandRegistry: Sendable {
 
     private func definitionEdit(
         id: ReusableStyleID, name: String, fill: CanonicalSolidColor?, opacity: Double?,
+        box: CanonicalReusableBoxAppearance?,
         page: DocumentPage, ownerNode: DocumentNode?, existing: CanonicalReusableStyleDefinition?
     ) throws -> PreparedDesignInspectorEdit {
+        // `box == nil` keeps the style's linked border/corners/shadow
+        // (SF-0510-002/004); the kept or new values count toward the
+        // "supplies at least one value" rule.
+        guard box?.isValid ?? true else { throw AdvancedStyleCommandError.invalidValue }
+        let resultingBox = box?.quantized ?? existing?.box ?? CanonicalReusableBoxAppearance()
         guard CanonicalReusableStyleIndex.validName(name), fill?.isValid ?? true,
               opacity.map({ $0.isFinite && (0...1).contains($0) }) ?? true,
-              fill != nil || opacity != nil else { throw AdvancedStyleCommandError.invalidValue }
-        guard existing.map({ $0.name != name || $0.fill != fill || $0.opacity != opacity }) ?? true else {
+              fill != nil || opacity != nil || !resultingBox.isEmpty else { throw AdvancedStyleCommandError.invalidValue }
+        guard existing.map({
+            $0.name != name || $0.fill != fill || $0.opacity != opacity || $0.box != resultingBox
+        }) ?? true else {
             throw AdvancedStyleCommandError.noChanges
         }
         guard let root = ownerNode ?? page.rootNodeIDs.first.flatMap({ rootID in
@@ -2440,8 +4475,54 @@ struct AdvancedStyleCommandRegistry: Sendable {
                 commands.append(.removeProperty(.init(pageID: page.id, nodeID: root.id, propertyID: current.id)))
             }
         }
+        if box != nil {
+            commands += Self.boxFieldCommands(prefix: prefix, box: resultingBox, owner: root, pageID: page.id)
+        }
         guard !commands.isEmpty else { throw AdvancedStyleCommandError.noChanges }
         return .init(applicableNodeIDs: [root.id], skippedNodeIDs: [], skippedReasons: [:],
+                     documentCommand: .batch(commands))
+    }
+
+    /// Set, replace or remove a style's linked box fields so they match `box`
+    /// exactly (already RGBA8). Removed groups leave no partial fields.
+    private static func boxFieldCommands(prefix: String, box: CanonicalReusableBoxAppearance,
+                                         owner: DocumentNode, pageID: PageID) -> [DocumentCommand] {
+        var desired: [String: PropertyValue] = [:]
+        for entry in box.fieldValues { desired[entry.field] = entry.value }
+        let fields = CanonicalReusableBoxAppearance.borderFields + CanonicalReusableBoxAppearance.cornerRadiusFields
+            + CanonicalReusableBoxAppearance.shadowFields
+        var commands: [DocumentCommand] = []
+        for field in fields {
+            let key = prefix + field
+            let current = owner.insertionProperty(key)
+            if let value = desired[field] {
+                if current?.value == value, current?.origin == .authored { continue }
+                commands.append(.setProperty(.init(pageID: pageID, nodeID: owner.id,
+                    property: .init(id: current?.id ?? PropertyID(), key: .init(rawValue: key), value: value, origin: .authored))))
+            } else if let current {
+                commands.append(.removeProperty(.init(pageID: pageID, nodeID: owner.id, propertyID: current.id)))
+            }
+        }
+        return commands
+    }
+
+    /// SF-0510-002/004/005: one transaction that writes, replaces or removes
+    /// a style's linked box fields; colors are stored as RGBA8. Every object
+    /// linked to the style picks the change up on the next resolution.
+    private func definitionBoxEdit(
+        id: ReusableStyleID, box: CanonicalReusableBoxAppearance,
+        owner: (pageID: PageID, node: DocumentNode), existing: CanonicalReusableStyleDefinition
+    ) throws -> PreparedDesignInspectorEdit {
+        guard box.isValid else { throw AdvancedStyleCommandError.invalidValue }
+        let stored = box.quantized
+        guard existing.fill != nil || existing.opacity != nil || !stored.isEmpty else {
+            throw AdvancedStyleCommandError.unavailable("A reusable style must keep at least one value. Add a fill or opacity before removing its last border, corner radius or shadow.")
+        }
+        guard stored != existing.box else { throw AdvancedStyleCommandError.noChanges }
+        let prefix = CanonicalReusableStyleIndex.namespace + "definition.\(id.description)."
+        let commands = Self.boxFieldCommands(prefix: prefix, box: stored, owner: owner.node, pageID: owner.pageID)
+        guard !commands.isEmpty else { throw AdvancedStyleCommandError.noChanges }
+        return .init(applicableNodeIDs: [owner.node.id], skippedNodeIDs: [], skippedReasons: [:],
                      documentCommand: .batch(commands))
     }
 
@@ -2467,7 +4548,7 @@ struct AdvancedStyleCommandRegistry: Sendable {
             switch edit {
             case .positionMode, .positionInset, .zIndex: applies = supportsPosition
             case .applyReusableStyles, .linkReusableStyle, .unlinkReusableStyle, .moveReusableStyle,
-                 .useLinkedAppearance, .setState, .removeState: applies = supportsAppearance
+                 .useLinkedAppearance, .useLinkedBox, .setState, .removeState: applies = supportsAppearance
             default: applies = false
             }
             guard applies else {
@@ -2541,6 +4622,41 @@ struct AdvancedStyleCommandRegistry: Sendable {
                     }
                     appendRemove(key: "style.opacity", node: node, page: page, to: &commands)
                 }
+            case .useLinkedBox(let property):
+                // SF-0510-003/004: an explicit hand-back to linked styles, never a
+                // general "remove". The whole selection is refused unless each
+                // object has a linked style that supplies the group, and a color
+                // token bound to the object's own border or shadow is kept
+                // (unbind it explicitly first), matching linked fills.
+                let linked = try CanonicalReusableStyleIndex.strictlyDecodedAppliedIDs(node).compactMap { index.byID[$0]?.box }
+                let ns = DesignBoxStyleCommandRegistry.namespace
+                let keys: [String]
+                switch property {
+                case .border:
+                    guard linked.contains(where: { $0.border != nil }) else {
+                        throw AdvancedStyleCommandError.unavailable("Link a reusable style with a border first.")
+                    }
+                    guard LocalColorTokenBinding.id(for: node, target: .border) == nil else {
+                        throw AdvancedStyleCommandError.unavailable("The border color token binding is retained. Unbind it explicitly before using a linked border.")
+                    }
+                    keys = ["border.width", "border.style", "border.color.red", "border.color.green",
+                            "border.color.blue", "border.color.alpha"]
+                case .cornerRadius:
+                    guard linked.contains(where: { $0.cornerRadius != nil }) else {
+                        throw AdvancedStyleCommandError.unavailable("Link a reusable style with a corner radius first.")
+                    }
+                    keys = ["radius.uniform"]
+                case .shadow:
+                    guard linked.contains(where: { $0.shadow != nil }) else {
+                        throw AdvancedStyleCommandError.unavailable("Link a reusable style with a shadow first.")
+                    }
+                    guard LocalColorTokenBinding.id(for: node, target: .outerShadow) == nil else {
+                        throw AdvancedStyleCommandError.unavailable("The shadow color token binding is retained. Unbind it explicitly before using a linked shadow.")
+                    }
+                    keys = ["shadow.offsetX", "shadow.offsetY", "shadow.blur", "shadow.spread", "shadow.color.red",
+                            "shadow.color.green", "shadow.color.blue", "shadow.color.alpha", "shadow.enabled"]
+                }
+                for key in keys { appendRemove(key: ns + key, node: node, page: page, to: &commands) }
             case .setState(let state, let variantID, let fill, let opacity):
                 guard state != .default, fill?.isValid ?? true,
                       opacity.map({ $0.isFinite && (0...1).contains($0) }) ?? true,
@@ -2648,6 +4764,8 @@ enum AdvancedStyleDiagnosticFactory {
         case .unlinkReusableStyle: "reusable.unlink"
         case .moveReusableStyle: "reusable.reorder"
         case .useLinkedAppearance(let property): "reusable.inherit.\(property.rawValue)"
+        case .setReusableStyleBox: "reusable.box.set"
+        case .useLinkedBox(let property): "reusable.inherit.\(property.rawValue)"
         case .setState(let state, _, _, _): "state.\(state.rawValue).set"
         case .removeState(let state): "state.\(state.rawValue).remove"
         }
@@ -2692,6 +4810,14 @@ enum LocalColorTokenResolver {
         }
         return CanonicalBoxStyle(border: border, cornerRadius: style.cornerRadius, shadow: shadow,
             shadowEnabled: style.shadowEnabled, padding: style.padding, clipsContent: style.clipsContent)
+    }
+
+    /// SF-0510-003: the object's own (token-aware) box values, with linked
+    /// reusable-style border, corner radius and shadow filling any group the
+    /// object does not set. `reusableStyles == nil` keeps local-only behavior.
+    static func resolvedBoxStyle(for node: DocumentNode, tokens: [LocalColorToken],
+                                 reusableStyles: CanonicalReusableStyleIndex?) -> CanonicalBoxStyle? {
+        CanonicalLinkedBoxStyleResolver.resolve(node: node, tokens: tokens, index: reusableStyles)?.style
     }
 
     static func fillValue(nodes: [DocumentNode], in document: CanonicalDocument) -> DesignInspectorValue {
@@ -2743,6 +4869,7 @@ enum LocalColorTokenEdit: Sendable {
     case update(ColorTokenID, name: String, color: CanonicalSolidColor)
     case rename(ColorTokenID, String)
     case recolor(ColorTokenID, CanonicalSolidColor)
+    case darkVariant(ColorTokenID, CanonicalSolidColor?)
     case delete(ColorTokenID)
     case bind(ColorTokenID)
     case unbind
@@ -2795,6 +4922,9 @@ struct LocalColorTokenCommandRegistry {
             guard let index = tokens.firstIndex(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
             guard color.isValid else { throw LocalColorTokenCommandError.invalid }
             tokens[index].color = color
+        case .darkVariant(let id, let color):
+            guard let index = tokens.firstIndex(where: { $0.id == id }), color?.isValid ?? true else { throw LocalColorTokenCommandError.invalid }
+            tokens[index].darkColor = color
         case .delete(let id):
             guard tokens.contains(where: { $0.id == id }) else { throw LocalColorTokenCommandError.stale }
             let uses = document.pages.flatMap(\.nodes).reduce(0) { count, node in
@@ -3201,6 +5331,24 @@ struct GeometryInspectorCommand: Equatable, Sendable {
     let provenance: GeometryInspectorProvenance
     var breakpoint: ResponsiveBreakpoint = .desktop
     var removesOverride = false
+    /// SF-0703: a relative edit ("+=10") adds this to each object's own value
+    /// at `breakpoint`; `value` is then ignored. Objects whose result would be
+    /// out of range are skipped and reported, never clamped.
+    var relativeDelta: Double? = nil
+}
+
+/// SF-0703-002: relative entry in a geometry field: `+=10`, `-=4` (also `−=`).
+enum GeometryInspectorRelativeInput {
+    static func delta(_ input: String, locale: Locale = .current) -> Double? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sign: Double
+        if trimmed.hasPrefix("+=") { sign = 1 } else if trimmed.hasPrefix("-=") || trimmed.hasPrefix("−=") { sign = -1 } else { return nil }
+        let rest = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        guard let first = rest.first, first != "+", first != "-", first != "−",
+              case .success(let magnitude) = GeometryInspectorNumberParser.parse(rest, locale: locale) else { return nil }
+        let delta = sign * magnitude
+        return delta.isFinite && delta != 0 ? delta : nil
+    }
 }
 
 enum GeometryInspectorError: Error, Equatable, LocalizedError, Sendable {
@@ -3739,7 +5887,10 @@ struct GeometryInspectorCommandRegistry: Sendable {
         guard command.orderedNodeIDs == context.selectedNodeIDs else {
             throw GeometryInspectorError.selectionMismatch
         }
-        guard command.removesOverride || Self.isValid(command.value, for: command.field) else { throw GeometryInspectorError.invalidValue }
+        guard command.removesOverride || command.relativeDelta != nil || Self.isValid(command.value, for: command.field) else {
+            throw GeometryInspectorError.invalidValue
+        }
+        guard command.relativeDelta.map({ $0.isFinite && !command.removesOverride }) ?? true else { throw GeometryInspectorError.invalidValue }
 
         var commands: [DocumentCommand] = []
         var skipped: [NodeID] = []
@@ -3761,6 +5912,15 @@ struct GeometryInspectorCommandRegistry: Sendable {
             guard !node.insertionBooleanProperty("locked") else { throw GeometryInspectorError.lockedTarget }
             guard !node.insertionBooleanProperty("hidden") else { throw GeometryInspectorError.hiddenTarget }
             guard context.availableNodeIDs.contains(id) else { throw GeometryInspectorError.unavailableTarget }
+            let value: Double
+            if let delta = command.relativeDelta {
+                // Each object keeps its own starting point (SF-0703-002).
+                guard let current = ResponsiveGeometryResolver.value(for: command.field, node: node, breakpoint: command.breakpoint)?.0,
+                      Self.isValid(current + delta, for: command.field) else { skipped.append(id); continue }
+                value = current + delta
+            } else {
+                value = command.value
+            }
             if command.breakpoint == .desktop {
                 if automaticSizing, CanonicalSizingConstraints.isLayoutResolved(command.field, node: node, page: page,
                     breakpoint: .desktop, width: nil, nodesByID: geometryNodesByID) { skipped.append(id); continue }
@@ -3773,8 +5933,8 @@ struct GeometryInspectorCommandRegistry: Sendable {
                     let adjusted: (width: Double, height: Double)
                     do {
                         adjusted = try SizingConstraintPolicy.adjusted(
-                            width: command.field == .width ? command.value : frame.size.width,
-                            height: command.field == .height ? command.value : frame.size.height,
+                            width: command.field == .width ? value : frame.size.width,
+                            height: command.field == .height ? value : frame.size.height,
                             constraints: sizing, driver: command.field == .width ? .width : .height)
                     } catch { throw GeometryInspectorError.invalidValue }
                     for (field, value) in [(GeometryInspectorField.width, adjusted.width), (.height, adjusted.height)] {
@@ -3785,7 +5945,7 @@ struct GeometryInspectorCommandRegistry: Sendable {
                     }
                 } else {
                     commands.append(.setProperty(.init(pageID: page.id, nodeID: id,
-                        property: .init(id: property.id, key: property.key, value: .number(command.value), origin: .authored))))
+                        property: .init(id: property.id, key: property.key, value: .number(value), origin: .authored))))
                 }
             } else {
                 let key = ResponsiveGeometryResolver.key(command.field, breakpoint: command.breakpoint)
@@ -3793,10 +5953,10 @@ struct GeometryInspectorCommandRegistry: Sendable {
                     commands.append(command.removesOverride
                         ? .removeProperty(.init(pageID: page.id, nodeID: id, propertyID: property.id))
                         : .setProperty(.init(pageID: page.id, nodeID: id,
-                            property: .init(id: property.id, key: property.key, value: .number(command.value), origin: .authored))))
+                            property: .init(id: property.id, key: property.key, value: .number(value), origin: .authored))))
                 } else if !command.removesOverride {
                     commands.append(.setProperty(.init(pageID: page.id, nodeID: id,
-                        property: .init(key: .init(rawValue: key), value: .number(command.value), origin: .authored),
+                        property: .init(key: .init(rawValue: key), value: .number(value), origin: .authored),
                         insertionIndex: node.properties.count)))
                 }
             }
@@ -4223,12 +6383,26 @@ struct TransformCommandRegistry: Sendable {
         var geometries: [TransformGeometry] = []
         geometries.reserveCapacity(command.orderedNodeIDs.count)
         let transformNodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        // OD-018: supplied slot contents store slot-local geometry. The
+        // mutation adds the delta to stored values; the preview outline and
+        // snapping use the world frames the canvas shows.
+        // Only a selection inside a copy's slot contents needs them; this runs
+        // on every preview frame.
+        let selectionIsSlotContent = command.orderedNodeIDs.contains { id in
+            var parent = transformNodesByID[id]?.parent
+            while case .node(let parentID)? = parent, let ancestor = transformNodesByID[parentID] {
+                if ancestor.kind == .component { return true }
+                parent = ancestor.parent
+            }
+            return false
+        }
+        let slotOffsets = selectionIsSlotContent ? CanonicalSlotGeometry.offsets(in: page, document: document) : [:]
         let automaticSizing = page.hasAutomaticSizing
         var mutations: [DocumentCommand] = []
         mutations.reserveCapacity(command.orderedNodeIDs.count * 4)
         for id in command.orderedNodeIDs {
             guard !cancellation.isCancelled() else { throw TransformError.cancelled }
-            guard let node = page.nodes.first(where: { $0.id == id }) else {
+            guard let node = transformNodesByID[id] else {
                 if document.pages.drop(while: { $0.id != page.id }).dropFirst().contains(where: {
                     $0.nodes.contains(where: { $0.id == id })
                 }) || document.pages.prefix(while: { $0.id != page.id }).contains(where: {
@@ -4254,7 +6428,14 @@ struct TransformCommandRegistry: Sendable {
             let sizing: CanonicalSizingConstraints? = [.frame, .image].contains(node.kind)
                 ? CanonicalSizingConstraints.resolved(for: node) : nil
             let preview = try Self.resolve(original, operation: command.operation, sizing: sizing)
-            geometries.append(TransformGeometry(nodeID: id, original: original, preview: preview))
+            if let offset = slotOffsets[id] {
+                func world(_ rect: WorldRect) -> WorldRect {
+                    .init(origin: .init(x: rect.origin.x + offset.dx, y: rect.origin.y + offset.dy), size: rect.size)
+                }
+                geometries.append(TransformGeometry(nodeID: id, original: world(original), preview: world(preview)))
+            } else {
+                geometries.append(TransformGeometry(nodeID: id, original: original, preview: preview))
+            }
             mutations.append(contentsOf: try propertyCommands(
                 pageID: page.id, node: node, frame: preview, operation: command.operation
             ))
@@ -4429,6 +6610,8 @@ enum FluidValueCommandError: Error, Equatable, LocalizedError, Sendable {
     case stale, cancelled, duplicateTarget, emptySelection, missingTarget
     case lockedTarget, hiddenTarget, unavailableTarget, invalidValue
     case noApplicableTargets, noChanges, revisionExhausted, lifecycleUnavailable(String)
+    /// SF-0605-003: a container-query rule on the object sets the same setting.
+    case containerQueryConflict
 
     var errorDescription: String? {
         switch self {
@@ -4445,6 +6628,7 @@ enum FluidValueCommandError: Error, Equatable, LocalizedError, Sendable {
         case .noChanges: "The selected objects already use that fluid value."
         case .revisionExhausted: "The document cannot accept another fluid-value revision."
         case .lifecycleUnavailable(let reason): reason
+        case .containerQueryConflict: "A container query rule on this object sets this value. Remove that setting from the rule to use smooth scaling."
         }
     }
 }
@@ -4562,6 +6746,7 @@ struct FluidValueCommandRegistry: Sendable {
             let key = CanonicalFluidValueCodec.key(command.target)
             let existing = node.insertionProperty(key)
             if let value = command.value {
+                guard !Self.containerQuerySets(command.target, on: node) else { throw FluidValueCommandError.containerQueryConflict }
                 if command.target == .fontSize || command.target == .lineHeight {
                     guard Self.typographyRemainsValid(node: node, replacing: command.target, with: value) else {
                         throw FluidValueCommandError.invalidValue
@@ -4612,6 +6797,16 @@ struct FluidValueCommandRegistry: Sendable {
         return .init(identity: command.identity, target: command.target,
                      applicableNodeIDs: applicable, skippedNodeIDs: skipped,
                      documentCommand: documentCommand)
+    }
+
+    /// SF-0605-003: on the canvas a fluid value wins over a container-query
+    /// rule for the same setting, in CSS the rule wins, so the two are never
+    /// combined. The rule side is refused in `CanonicalContainerQueries.accepts`.
+    private static func containerQuerySets(_ target: FluidValueTarget, on node: DocumentNode) -> Bool {
+        let key = target.fixedPropertyKey
+        guard CanonicalContainerQueries.queryableKeys.contains(key),
+              let rules = try? CanonicalContainerQueries.rules(on: node) else { return false }
+        return rules.contains { rule in rule.values.contains { $0.key == key } }
     }
 
     private static func typographyRemainsValid(
@@ -4680,6 +6875,7 @@ enum FluidValueDiagnosticFactory {
         case .noChanges: "no-change"
         case .revisionExhausted: "revision-exhausted"
         case .lifecycleUnavailable: "lifecycle-unavailable"
+        case .containerQueryConflict: "container-query-conflict"
         }
     }
 }
@@ -6599,5 +8795,30 @@ struct ImageInspectorCommandRegistry: Sendable {
             if let alt { try validate(.altText(alt), document: document) }
         case .fit, .decorative: break
         }
+    }
+}
+
+/// Choose an unoccupied midpoint of the largest gap. Interpolating its color
+/// preserves the authored ramp rather than inserting a repeated opaque spike.
+enum GradientAuthoringInsertion {
+    static func stop(in layer: CanonicalFillLayer) -> CanonicalGradientStop? {
+        guard layer.kind == .linearGradient, layer.isValid else { return nil }
+        let ordered = layer.stops.enumerated().sorted {
+            $0.element.position == $1.element.position ? $0.offset < $1.offset : $0.element.position < $1.element.position
+        }.map(\.element)
+        let positions = Array(Set([0.0, 1.0] + ordered.map(\.position))).sorted()
+        guard let gap = zip(positions, positions.dropFirst()).max(by: { $0.1 - $0.0 < $1.1 - $1.0 }), gap.1 > gap.0 else { return nil }
+        let position = (gap.0 + gap.1) / 2
+        let color: CanonicalSolidColor
+        if position < ordered[0].position { color = ordered[0].color }
+        else if position > ordered[ordered.count - 1].position { color = ordered[ordered.count - 1].color }
+        else {
+            guard let pair = zip(ordered, ordered.dropFirst()).first(where: { $0.0.position <= position && position < $0.1.position }) else { return nil }
+            let t = (position - pair.0.position) / (pair.1.position - pair.0.position)
+            let a = pair.0.color, b = pair.1.color
+            guard let interpolated = CanonicalSolidColor.premultipliedInterpolation(a, b, fraction: t) else { return nil }
+            color = interpolated
+        }
+        return .init(id: GradientStopID(), position: position, color: color)
     }
 }

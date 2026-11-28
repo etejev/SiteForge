@@ -1,6 +1,10 @@
 # SiteForge Project Status
 
-## Current closeout —2026-11-02, focused repairs pass; final gate pending
+For current requirement coverage and verification see
+[Implementation Status](IMPLEMENTATION_STATUS.md). The current execution
+checkpoint is in the [development handoff](CODEX_HANDOFF.md).
+
+## Historical closeout — November 2, 2026
 
 The27 original failed methods now have passing exact focused receipts. Both
 required native Header/Footer journeys pass511.484s/50.786s; final-source

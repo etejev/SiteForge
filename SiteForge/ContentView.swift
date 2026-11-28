@@ -23,6 +23,7 @@ struct ContentView: View {
                 LaunchExperienceView(controller: launchExperience)
             }
         }
+        .modifier(RecoveryDetailsPresentation(controller: launchExperience.lifecycle))
         .preferredColorScheme(WorkspaceMaterialPolicy.preferredColorScheme())
         .alert(
             launchExperience.lifecycle.pendingUnsavedChangesPrompt?.transition.title ?? "Save changes?",
@@ -52,6 +53,28 @@ struct ContentView: View {
             }
         } message: {
             Text(launchExperience.lifecycle.pendingUnsavedChangesPrompt?.message ?? "The current project is unchanged.")
+        }
+    }
+}
+
+
+private struct RecoveryDetailsPresentation: ViewModifier {
+    @ObservedObject var controller: DocumentLifecycleController
+
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: $controller.isRecoveryDetailsPresented) {
+            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.toolbarGroupSpacing) {
+                Text("Recovery Details").font(.title2)
+                Text(controller.recoveryCandidate?.summary ?? "No valid recovery candidate is available.")
+                Text("Project content and complete file paths are excluded from these details.")
+                    .foregroundStyle(.secondary)
+                Button("Done") { controller.isRecoveryDetailsPresented = false }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("recovery.details.done")
+            }
+            .padding(SiteForgeVisualSystem.settingsFormPadding).frame(minWidth: 420)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("recovery.details")
         }
     }
 }

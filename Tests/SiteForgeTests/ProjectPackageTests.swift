@@ -62,6 +62,194 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertTrue(text.contains("\"sha256\""))
     }
 
+    /// OD-032: the blank project plus `pages` pages of `framesPerPage` frames.
+    private func framedPackage(pages: Int, framesPerPage: Int) throws -> ProjectPackage {
+        var document = ProjectCreation.blank()
+        for pageIndex in 0..<pages {
+            var page = DocumentPage(name: "Framed Page \(pageIndex + 1)", route: PageRoute(rawValue: "/framed-\(pageIndex + 1)"))
+            let rootID = try XCTUnwrap(page.rootNodeIDs.first)
+            let rootIndex = try XCTUnwrap(page.nodes.firstIndex { $0.id == rootID })
+            for index in 0..<framesPerPage {
+                let frame = DocumentNode(kind: .frame, name: "Frame \(index + 1)", parent: .node(rootID), properties:
+                    [("layout.x", Double(index % 40 * 30)), ("layout.y", Double(index / 40 * 30)), ("layout.width", 24), ("layout.height", 24)]
+                        .map { NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1)) })
+                page.nodes[rootIndex].childIDs.append(frame.id)
+                page.nodes.append(frame)
+            }
+            document.pages.append(page)
+        }
+        try document.validate()
+        return ProjectPackage(projectID: projectID, createdAt: ProjectTimestamp("2026-11-26T03:00:00.000Z"), document: document)
+    }
+
+    // SF-0301-001/003/004, SF-1702-001, OD-032: a document that fits one
+    // member is still written as package v1 (older builds open it); a larger
+    // one is written as package v2: a root without pages, then ordered page
+    // members each within the member limit, each with its own checksum. The
+    // bytes are deterministic and the package reopens identical.
+    func testPackageVersionTwoSplitsALargeDocumentIntoBoundedPageMembersAndRoundTrips() async throws {
+        let store = ProjectPackageStore()
+        let small = try await store.encode(package())
+        let smallManifest = try XCTUnwrap(decodeArchive(small).first { $0.path == "manifest.json" })
+        XCTAssertTrue(String(decoding: smallManifest.data, as: UTF8.self).contains("\"packageVersion\":1"))
+        XCTAssertFalse(try decodeArchive(small).contains { $0.path.hasPrefix("pages/") })
+
+        let large = try framedPackage(pages: 2, framesPerPage: 4_000)
+        let envelope = try DocumentSerializer.encode(large.document)
+        XCTAssertGreaterThan(envelope.count, ProjectPackageStore.maximumMemberBytes, "Precondition")
+        let first = try await store.encode(large)
+        let second = try await store.encode(large)
+        XCTAssertEqual(second, first, "Deterministic")
+        let members = try decodeArchive(first)
+        let manifestData = try XCTUnwrap(members.first { $0.path == "manifest.json" }).data
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        XCTAssertEqual(manifest["packageVersion"] as? Int, 2)
+        XCTAssertEqual((manifest["compatibility"] as? [String: Any])?["minimumPackageReaderVersion"] as? Int, 2)
+        let pageMembers = members.filter { $0.path.hasPrefix("pages/") }.sorted { $0.path < $1.path }
+        XCTAssertGreaterThanOrEqual(pageMembers.count, 2)
+        XCTAssertEqual(pageMembers.map(\.path), (0..<pageMembers.count).map { String(format: "pages/%04d.json", $0) })
+        XCTAssertTrue(pageMembers.allSatisfy { $0.data.count <= ProjectPackageStore.maximumMemberBytes })
+        let descriptors = try XCTUnwrap(manifest["members"] as? [[String: Any]])
+        for member in pageMembers {
+            let descriptor = try XCTUnwrap(descriptors.first { $0["path"] as? String == member.path })
+            XCTAssertEqual(descriptor["role"] as? String, "pages")
+            XCTAssertEqual(descriptor["sha256"] as? String, SHA256.hash(data: member.data).map { String(format: "%02x", $0) }.joined())
+        }
+        let root = try XCTUnwrap(members.first { $0.path == "document.json" }).data
+        XCTAssertLessThan(root.count, 64 * 1_024, "The root holds no pages")
+        XCTAssertNotNil(root.range(of: ProjectPackagePageSplit.marker))
+        XCTAssertNil(root.range(of: Data("Framed Page 1".utf8)))
+        XCTAssertEqual(try ProjectPackagePageSplit.join(root: root, members: pageMembers.map(\.data)), envelope,
+                       "Joining reproduces the exact canonical document")
+
+        let decoded = try await store.decode(first)
+        XCTAssertEqual(decoded.document, large.document)
+        XCTAssertEqual(decoded.projectID, large.projectID)
+        XCTAssertEqual(decoded.compatibility.minimumPackageReaderVersion, 2)
+        XCTAssertFalse(decoded.optionalMembers.contains { $0.path.hasPrefix("pages/") }, "Page members are not optional members")
+        // Written again after it shrinks, the project is package v1 again.
+        var shrunk = decoded.document
+        shrunk.pages.removeLast(2)
+        let rewritten = try await store.encode(ProjectPackage(projectID: decoded.projectID, createdAt: decoded.createdAt,
+            document: shrunk, compatibility: decoded.compatibility))
+        let rewrittenManifest = try XCTUnwrap(decodeArchive(rewritten).first { $0.path == "manifest.json" })
+        XCTAssertTrue(String(decoding: rewrittenManifest.data, as: UTF8.self).contains("\"packageVersion\":1"))
+        XCTAssertTrue(String(decoding: rewrittenManifest.data, as: UTF8.self).contains("\"minimumPackageReaderVersion\":1"))
+    }
+
+    // OD-032: packing keeps page order, fills each member up to the limit,
+    // never splits a page (a page above the limit is refused), and joining
+    // is the exact inverse. A root or member that could inject document
+    // fields or reorder content is refused.
+    func testPageSplitPacksWholePagesInOrderAndRefusesTamperedMembers() throws {
+        let pages = (1...5).map { Data(#"{"n":\#($0),"pad":"\#(String(repeating: "x", count: 10))"}"#.utf8) }
+        let list = "[" + pages.map { String(decoding: $0, as: UTF8.self) }.joined(separator: ",") + "]"
+        let envelope = Data(#"{"document":{"id":"d","pages":\#(list),"revision":1},"schemaVersion":26}"#.utf8)
+        let limit = pages[0].count * 2 + 3
+        let split = try ProjectPackagePageSplit.split(envelope: envelope, pages: pages, memberLimit: limit)
+        XCTAssertEqual(split.members.count, 3, "Two pages per member, then one")
+        XCTAssertTrue(split.members.allSatisfy { $0.count <= limit })
+        XCTAssertEqual(split.largestPageBytes, pages.map(\.count).max())
+        XCTAssertEqual(String(decoding: split.root, as: UTF8.self),
+                       #"{"document":{"id":"d","pages":"app.siteforge.package-v2.pages","revision":1},"schemaVersion":26}"#)
+        XCTAssertEqual(try ProjectPackagePageSplit.join(root: split.root, members: split.members), envelope)
+        XCTAssertEqual(try ProjectPackagePageSplit.split(envelope: envelope, pages: pages, memberLimit: 10_000).members.count, 1)
+
+        XCTAssertThrowsError(try ProjectPackagePageSplit.split(envelope: envelope, pages: pages, memberLimit: pages[0].count + 1)) {
+            XCTAssertEqual($0 as? ProjectPackageError, .oversizedInput, "A page is never split")
+        }
+        XCTAssertThrowsError(try ProjectPackagePageSplit.split(envelope: envelope, pages: Array(pages.reversed()), memberLimit: limit)) {
+            XCTAssertEqual($0 as? ProjectPackageError, .corruptDocument, "Pages must match the document's own encoding")
+        }
+        func refusesJoin(_ root: Data, _ members: [Data], _ label: String) {
+            XCTAssertThrowsError(try ProjectPackagePageSplit.join(root: root, members: members), label) {
+                XCTAssertEqual($0 as? ProjectPackageError, .corruptDocument, label)
+            }
+        }
+        refusesJoin(split.root, [], "no page members")
+        refusesJoin(split.root, [Data(#"[{"n":1}],"revision":9,"x":[{"n":2}]"#.utf8)], "member closes the list early")
+        refusesJoin(split.root, [Data("[]".utf8)], "empty member")
+        refusesJoin(split.root, [Data("[1,2]".utf8)], "members hold pages, not other values")
+        refusesJoin(split.root, [Data(#"{"n":1}"#.utf8)], "not an array")
+        refusesJoin(envelope, split.members, "root without the marker")
+        let doubled = Data(#"{"document":{"a":"x","pages":"app.siteforge.package-v2.pages","b":{"pages":"app.siteforge.package-v2.pages"}},"schemaVersion":26}"#.utf8)
+        refusesJoin(doubled, split.members, "two markers")
+        let misplaced = Data(#"{"document":{"pages":[],"websiteMetadata":{"pages":"app.siteforge.package-v2.pages"}},"schemaVersion":26}"#.utf8)
+        refusesJoin(misplaced, split.members, "marker outside the document's page list")
+
+        XCTAssertEqual(ProjectPackagePageSplit.memberIndex("pages/0007.json"), 7)
+        for path in ["pages/7.json", "pages/00007.json", "pages/-001.json", "pages/0007.JSON", "page/0007.json"] {
+            XCTAssertNil(ProjectPackagePageSplit.memberIndex(path), path)
+        }
+    }
+
+    // SF-0301-004, SF-1702-008, OD-032: the v2 reader refuses a missing page
+    // member, a gap in numbering, a page member with another role, a v1
+    // manifest carrying page members, a v2 manifest that older readers could
+    // open, and a tampered page member, each with a specific error and
+    // without returning a document.
+    func testPackageVersionTwoReaderRefusesMalformedPageMembers() async throws {
+        let store = ProjectPackageStore()
+        let members = try decodeArchive(try await store.encode(try framedPackage(pages: 2, framesPerPage: 4_000)))
+        let pagePaths = members.map(\.path).filter { $0.hasPrefix("pages/") }.sorted()
+        XCTAssertGreaterThanOrEqual(pagePaths.count, 2)
+        func withoutMember(_ path: String) throws -> [ArchiveMember] {
+            try editingManifest(in: members.filter { $0.path != path }) { manifest in
+                manifest["members"] = (manifest["members"] as! [[String: Any]]).filter { $0["path"] as? String != path }
+            }
+        }
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) {
+            try await store.decode(encodeArchive(try withoutMember(pagePaths[0])))
+        }
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) {
+            try await store.decode(encodeArchive(try editingManifest(in: members) { manifest in
+                manifest["members"] = (manifest["members"] as! [[String: Any]]).map { descriptor in
+                    var descriptor = descriptor
+                    if descriptor["path"] as? String == pagePaths[1] { descriptor["role"] = "optional" }
+                    return descriptor
+                }
+            }))
+        }
+        let lastPage = try XCTUnwrap(pagePaths.last)
+        let renamed = members.map { $0.path == lastPage ? ArchiveMember(path: "pages/0009.json", data: $0.data) : $0 }
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) {
+            try await store.decode(encodeArchive(try editingManifest(in: renamed) { manifest in
+                manifest["members"] = (manifest["members"] as! [[String: Any]]).map { descriptor in
+                    var descriptor = descriptor
+                    if descriptor["path"] as? String == lastPage { descriptor["path"] = "pages/0009.json" }
+                    return descriptor
+                }
+            }))
+        }
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) {
+            try await store.decode(encodeArchive(try editingManifest(in: members) { manifest in
+                manifest["packageVersion"] = 1
+                manifest["compatibility"] = ["minimumPackageReaderVersion": 1,
+                                             "minimumDocumentSchemaVersion": (manifest["compatibility"] as! [String: Any])["minimumDocumentSchemaVersion"]!]
+            }))
+        }
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) {
+            try await store.decode(encodeArchive(try editingManifest(in: members) { manifest in
+                var compatibility = manifest["compatibility"] as! [String: Any]
+                compatibility["minimumPackageReaderVersion"] = 1
+                manifest["compatibility"] = compatibility
+            }))
+        }
+        var tampered = members
+        let index = try XCTUnwrap(tampered.firstIndex { $0.path == pagePaths[0] })
+        var bytes = tampered[index].data
+        bytes[bytes.count / 2] ^= 0x01
+        tampered[index] = ArchiveMember(path: pagePaths[0], data: bytes)
+        await XCTAssertThrowsProjectPackageError(.memberIntegrityFailure) {
+            try await store.decode(encodeArchive(tampered))
+        }
+        // An optional member may not use the page-member prefix on write.
+        var forged = try framedPackage(pages: 0, framesPerPage: 1)
+        forged = ProjectPackage(projectID: forged.projectID, createdAt: forged.createdAt, document: forged.document,
+                                optionalMembers: [ProjectPackageMember(path: "pages/0000.json", data: Data("[]".utf8))])
+        await XCTAssertThrowsProjectPackageError(.corruptManifest) { try await store.encode(forged) }
+    }
+
     // SF-0301-001, SF-1702-001, SF-1702-008
     func testSuccessfulRoundTripPreservesIdentityMetadataResourcesAndDocument() async throws {
         let store = ProjectPackageStore()
@@ -1101,6 +1289,609 @@ final class ProjectPackageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: destination), before)
         let preserved = try await store.read(from: destination)
         XCTAssertEqual(preserved.document.pages[0].name, "Committed")
+    }
+
+    // SF-1301-001, SF-1301-002, SF-1301-003, SF-1301-004 (OD-043, ADR-0038)
+    func testNamedSnapshotsAreStrictBoundedAndRoundTripThroughThePackage() async throws {
+        let base = package()
+        let document = base.document
+        let stamp = ProjectTimestamp("2026-11-26T15:00:00.000Z")
+        let created = try ProjectSnapshots.creating(named: "  Launch draft  ", from: document, in: base, at: stamp)
+        let first = created.entry
+        XCTAssertEqual(first.name, "Launch draft")
+        XCTAssertEqual(first.documentRevision, 7)
+        XCTAssertEqual(first.documentSchemaVersion, DocumentSerializer.currentSchemaVersion)
+        XCTAssertEqual(created.package.document, document, "Creating a snapshot never edits the document")
+        XCTAssertEqual(try ProjectSnapshots.list(in: created.package, documentID: documentID), [first])
+        XCTAssertEqual(created.package.optionalMembers.map(\.path),
+                       [ProjectSnapshotIndex.indexMemberPath, ProjectSnapshotIndex.memberPath(for: first.id)].sorted())
+        XCTAssertEqual(try ProjectSnapshots.list(in: base, documentID: documentID), [])
+
+        let store = ProjectPackageStore()
+        let encoded = try await store.encode(created.package)
+        let decoded = try await store.decode(encoded)
+        XCTAssertEqual(decoded.optionalMembers, created.package.optionalMembers)
+        let reencoded = try await store.encode(decoded)
+        XCTAssertEqual(reencoded, encoded)
+        XCTAssertEqual(try ProjectSnapshots.document(for: first.id, documentID: documentID, in: decoded), document)
+
+        XCTAssertThrowsError(try ProjectSnapshots.creating(named: "launch DRAFT", from: document, in: decoded, at: stamp)) {
+            XCTAssertEqual($0 as? ProjectSnapshotError, .duplicateName)
+        }
+        for name in ["", "   ", "tab\tname", String(repeating: "a", count: ProjectSnapshotIndex.maximumNameBytes + 1)] {
+            XCTAssertThrowsError(try ProjectSnapshots.validatedName(name)) {
+                XCTAssertEqual($0 as? ProjectSnapshotError, .invalidName)
+            }
+        }
+
+        var filled = decoded
+        for number in 2...ProjectSnapshotIndex.maximumCount {
+            filled = try ProjectSnapshots.creating(named: "Version \(number)", from: document, in: filled, at: stamp).package
+        }
+        XCTAssertEqual(try ProjectSnapshots.list(in: filled, documentID: documentID).count, ProjectSnapshotIndex.maximumCount)
+        XCTAssertThrowsError(try ProjectSnapshots.creating(named: "One more", from: document, in: filled, at: stamp)) {
+            XCTAssertEqual($0 as? ProjectSnapshotError, .limitReached)
+        }
+
+        let renamed = try ProjectSnapshots.renaming(first.id, to: "Approved", documentID: documentID, in: filled)
+        let renamedEntry = try XCTUnwrap(try ProjectSnapshots.list(in: renamed, documentID: documentID).first)
+        XCTAssertEqual(renamedEntry.id, first.id, "Rename keeps the snapshot's identity")
+        XCTAssertEqual(renamedEntry.name, "Approved")
+        XCTAssertEqual(renamedEntry.sha256, first.sha256)
+        XCTAssertThrowsError(try ProjectSnapshots.renaming(first.id, to: "version 2", documentID: documentID, in: renamed)) {
+            XCTAssertEqual($0 as? ProjectSnapshotError, .duplicateName)
+        }
+        XCTAssertThrowsError(try ProjectSnapshots.renaming(first.id, to: "Approved", documentID: documentID, in: renamed)) {
+            XCTAssertEqual($0 as? ProjectSnapshotError, .sameName)
+        }
+        let deleted = try ProjectSnapshots.deleting(first.id, documentID: documentID, in: renamed)
+        XCTAssertFalse(deleted.optionalMembers.contains { $0.path == first.memberPath })
+        XCTAssertEqual(try ProjectSnapshots.list(in: deleted, documentID: documentID).count, ProjectSnapshotIndex.maximumCount - 1)
+        XCTAssertThrowsError(try ProjectSnapshots.deleting(first.id, documentID: documentID, in: deleted)) {
+            XCTAssertEqual($0 as? ProjectSnapshotError, .notFound)
+        }
+        XCTAssertThrowsError(try ProjectSnapshots.document(for: first.id, documentID: documentID, in: deleted)) {
+            XCTAssertEqual($0 as? ProjectSnapshotError, .notFound)
+        }
+        let emptied = try ProjectSnapshots.deleting(first.id, documentID: documentID, in: created.package)
+        XCTAssertEqual(emptied.optionalMembers, base.optionalMembers, "Deleting the last snapshot also removes the index")
+
+        func replacingMember(_ path: String, in source: ProjectPackage, with data: Data?) -> ProjectPackage {
+            var members = source.optionalMembers.filter { $0.path != path }
+            if let data { members.append(ProjectPackageMember(path: path, role: .optional, data: data)) }
+            return ProjectPackage(projectID: source.projectID, createdAt: source.createdAt, modifiedAt: source.modifiedAt,
+                                  document: source.document, optionalMembers: members.sorted { $0.path < $1.path })
+        }
+        func editingIndex(_ edit: (inout [String: Any]) -> Void) throws -> ProjectPackage {
+            let member = try XCTUnwrap(created.package.optionalMembers.first { $0.path == ProjectSnapshotIndex.indexMemberPath })
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: member.data) as? [String: Any])
+            edit(&json)
+            let data = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
+            return replacingMember(member.path, in: created.package, with: data)
+        }
+        let snapshotData = try XCTUnwrap(created.package.optionalMembers.first { $0.path == first.memberPath }?.data)
+        let unknownKey = try editingIndex { $0["extra"] = true }
+        let futureVersion = try editingIndex { $0["version"] = 2 }
+        let damaged: [(String, ProjectPackage, ProjectSnapshotError)] = [
+            ("changed bytes", replacingMember(first.memberPath, in: created.package, with: snapshotData + Data(" ".utf8)), .corrupt),
+            ("missing document", replacingMember(first.memberPath, in: created.package, with: nil), .corrupt),
+            ("missing index", replacingMember(ProjectSnapshotIndex.indexMemberPath, in: created.package, with: nil), .corrupt),
+            ("unlisted member", replacingMember("snapshots/stray.json", in: created.package, with: snapshotData), .corrupt),
+            ("unknown key", unknownKey, .corrupt),
+            ("future version", futureVersion, .unsupportedVersion(2)),
+        ]
+        for (label, value, expected) in damaged {
+            XCTAssertThrowsError(try ProjectSnapshots.list(in: value, documentID: documentID), label) {
+                XCTAssertEqual($0 as? ProjectSnapshotError, expected, label)
+            }
+            XCTAssertThrowsError(try ProjectSnapshots.creating(named: "New", from: document, in: value, at: stamp), label)
+            XCTAssertEqual(ProjectSnapshots.removingAll(in: value).optionalMembers, [], "Delete All repairs: \(label)")
+            XCTAssertEqual(ProjectSnapshots.removingAll(in: value).document, document)
+        }
+        XCTAssertThrowsError(try ProjectSnapshots.list(in: created.package, documentID: DocumentID())) {
+            XCTAssertEqual($0 as? ProjectSnapshotError, .documentMismatch)
+        }
+        XCTAssertEqual(ProjectSnapshots.requirementIDs, Set((1...8).map { String(format: "SF-1301-%03d", $0) }))
+    }
+
+    // SF-0906-001, SF-0906-002, SF-0906-003, SF-0906-004, SF-0906-007 (OD-046, ADR-0041)
+    @MainActor
+    func testComponentLibrariesExportImportReadOnlyUpdateCompareAndDetach() async throws {
+        let stamp = ProjectTimestamp("2026-11-26T17:00:00.000Z")
+        let token = LocalColorToken(name: "Library Brand", color: CanonicalSolidColor(red: 0.1, green: 0.2, blue: 0.9, alpha: 1))
+        func libraryGeometry(_ size: Double) -> [NodeProperty] {
+            [("layout.x", 0.0), ("layout.y", 0.0), ("layout.width", size), ("layout.height", size)].map {
+                NodeProperty(key: .init(rawValue: $0.0), value: .number($0.1))
+            }
+        }
+        func libraryDefinition(_ name: String, token: ColorTokenID? = nil) -> DocumentPage {
+            let id = PageID(), rootID = NodeID()
+            let fill = token.map { [NodeProperty(key: .init(rawValue: LocalColorTokenBinding.key(for: .fill)),
+                                                 value: .string($0.description))] } ?? []
+            let root = DocumentNode(id: rootID, kind: .frame, name: name, parent: .page(id),
+                                    properties: libraryGeometry(320) + fill)
+            return DocumentPage(id: id, name: name, route: .init(rawValue: ""), role: .componentDefinition,
+                                provenance: .authored, rootNodeIDs: [rootID], nodes: [root])
+        }
+        var source = CanonicalDocument()
+        source.colorTokens = [token]
+        source.pages += [libraryDefinition("Card", token: token.id), libraryDefinition("Badge")]
+        try source.validate()
+        let sourcePackage = ProjectPackage(createdAt: stamp, document: source)
+        let blank = CanonicalDocument()
+        XCTAssertThrowsError(try ComponentLibraries.exporting(named: "Empty", version: .initial, from: blank,
+                                                              in: ProjectPackage(createdAt: stamp, document: blank), at: stamp)) {
+            XCTAssertEqual($0 as? ComponentLibraryError, .nothingToExport)
+        }
+        // SF-0906-004: what a library file cannot carry is refused by the component's name.
+        func libraryRefusal(_ kind: NodeKind, _ properties: [NodeProperty], fonts: [FontAsset] = [],
+                            homeProperties: [NodeProperty] = []) -> ComponentLibraryError? {
+            let id = PageID(), rootID = NodeID()
+            let root = DocumentNode(id: rootID, kind: kind, name: "Promo", parent: .page(id),
+                                    properties: libraryGeometry(80) + properties)
+            var project = CanonicalDocument()
+            project.fontAssets = fonts
+            if let homeRoot = project.pages[0].rootNodeIDs.first,
+               let homeIndex = project.pages[0].nodes.firstIndex(where: { $0.id == homeRoot }) {
+                project.pages[0].nodes[homeIndex].properties += homeProperties
+            }
+            project.pages.append(DocumentPage(id: id, name: "Promo", route: .init(rawValue: ""), role: .componentDefinition,
+                                              provenance: .authored, rootNodeIDs: [rootID], nodes: [root]))
+            do {
+                _ = try ComponentLibraries.exporting(named: "Refused", version: .initial, from: project,
+                                                     in: ProjectPackage(createdAt: stamp, document: project), at: stamp)
+                return nil
+            } catch {
+                return error as? ComponentLibraryError
+            }
+        }
+        func libraryString(_ key: String, _ value: String) -> NodeProperty {
+            NodeProperty(key: .init(rawValue: key), value: .string(value))
+        }
+        XCTAssertEqual(libraryRefusal(.image, [libraryString(CanonicalMediaPlayback.assetKey, AssetID().description)]),
+                       .usesVideoOrAudio("Promo"))
+        XCTAssertEqual(libraryRefusal(.text, [libraryString(SiteTranslationKey.namespace + "unparsed", "Bonjour")]),
+                       .usesTranslations("Promo"))
+        let libraryFont = FontAsset(resourceID: ResourceID(), family: "Inter", format: .woff2,
+            originalFilename: "inter.woff2", byteCount: 1, contentHash: String(repeating: "c", count: 64))
+        XCTAssertEqual(libraryRefusal(.text, [libraryString(CanonicalTypography.namespace + "family", "inter")], fonts: [libraryFont]),
+                       .usesProjectFonts("Promo"), "Font families match without regard to case")
+        XCTAssertEqual(libraryRefusal(.button, [libraryString(CanonicalLinkTarget.namespace + "kind", "page"),
+                                                libraryString(CanonicalLinkTarget.namespace + "pageID", PageID().description)]),
+                       .linksOutside("Promo"))
+        // Lane V02 finding: a reusable style defined on a website page does not travel; it is named, not "invalid content".
+        let libraryStyleID = ReusableStyleID()
+        let styleDefinition = CanonicalReusableStyleIndex.namespace + "definition.\(libraryStyleID.description)."
+        let libraryStyle = [libraryString(styleDefinition + "name", "Brand Card"),
+                            NodeProperty(key: .init(rawValue: styleDefinition + "opacity"), value: .number(0.5))]
+        let appliesStyle = libraryString(CanonicalReusableStyleIndex.appliedKey, libraryStyleID.description)
+        XCTAssertEqual(libraryRefusal(.frame, [appliesStyle], homeProperties: libraryStyle),
+                       .usesReusableStyle("Promo", "Brand Card"))
+        XCTAssertNotEqual(libraryRefusal(.frame, [appliesStyle] + libraryStyle), .usesReusableStyle("Promo", "Brand Card"),
+                          "A style defined inside the exported component travels with it")
+        XCTAssertEqual(ComponentLibraryError.usesReusableStyle("Promo", "Brand Card").diagnosticCategory, "uses-reusable-style")
+        XCTAssertEqual(ComponentLibraryError.usesVideoOrAudio("Promo").diagnosticCategory, "uses-media")
+        XCTAssertEqual(ComponentLibraryError.recordTooLarge.diagnosticCategory, "record-too-large")
+
+        let v1 = try ComponentLibraries.exporting(named: "  UI Kit ", version: .initial, from: source, in: sourcePackage, at: stamp)
+        XCTAssertEqual(v1.file.name, "UI Kit")
+        XCTAssertEqual(v1.package.document, source, "Export never edits the document")
+        XCTAssertEqual(try ComponentLibraries.index(in: v1.package, documentID: source.id)?.published?.version, .initial)
+        XCTAssertThrowsError(try ComponentLibraries.exporting(named: "UI Kit", version: .initial, from: source,
+                                                              in: v1.package, at: stamp)) {
+            XCTAssertEqual($0 as? ComponentLibraryError, .versionNotNewer(.initial))
+        }
+        let read1 = try ComponentLibraries.reading(v1.data)
+        XCTAssertEqual(read1.file.libraryID, v1.file.libraryID)
+        XCTAssertEqual(read1.content.definitions.map(\.name), ["Card", "Badge"])
+        XCTAssertEqual(read1.content.colorTokens, [token], "Only tokens the components use are exported")
+        XCTAssertThrowsError(try ComponentLibraries.importing(read1.file, read1.content, into: source,
+                                                              package: v1.package, at: stamp)) {
+            XCTAssertEqual($0 as? ComponentLibraryError, .ownLibrary)
+        }
+
+        // Import into another project: one command, identities kept.
+        let consumer = CanonicalDocument()
+        let consumerPackage = ProjectPackage(createdAt: stamp, document: consumer)
+        let imported = try ComponentLibraries.importing(read1.file, read1.content, into: consumer,
+                                                        package: consumerPackage, at: stamp)
+        let session = DocumentSession(document: consumer)
+        try session.execute(imported.command)
+        let afterImport = session.document
+        XCTAssertEqual(afterImport.componentDefinitions.map(\.id), read1.content.definitions.map(\.id))
+        XCTAssertEqual(afterImport.colorTokens.map(\.id), [token.id])
+        XCTAssertEqual(ComponentLibraries.status(of: imported.record, in: afterImport), .current(.initial))
+        XCTAssertEqual(ComponentLibraries.status(of: imported.record, in: consumer), .missing)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, consumer.pages, "Undo removes the whole import")
+        XCTAssertEqual(session.document.colorTokens, consumer.colorTokens)
+        try session.redo()
+
+        let store = ProjectPackageStore()
+        let decoded = try await store.decode(try await store.encode(imported.package))
+        XCTAssertEqual(decoded.optionalMembers, imported.package.optionalMembers)
+        let index = try XCTUnwrap(try ComponentLibraries.index(in: decoded, documentID: consumer.id))
+        XCTAssertEqual(index.imported, [imported.record])
+        XCTAssertThrowsError(try ComponentLibraries.importing(read1.file, read1.content, into: afterImport,
+                                                              package: imported.package, at: stamp)) {
+            XCTAssertEqual($0 as? ComponentLibraryError, .alreadyImported("UI Kit"))
+        }
+        XCTAssertThrowsError(try ComponentLibraries.importing(read1.file, read1.content, into: afterImport,
+                                                              package: ProjectPackage(createdAt: stamp, document: afterImport), at: stamp)) {
+            XCTAssertEqual($0 as? ComponentLibraryError, .identityConflict)
+        }
+
+        // Read-only: library items cannot change; moving them is allowed.
+        let protection = ComponentLibraries.protectedIdentifiers(in: index)
+        func violation(_ edited: CanonicalDocument) -> ComponentLibraryError? {
+            ComponentLibraries.readOnlyViolation(from: afterImport, to: edited, pages: protection.pages, tokens: protection.tokens)
+        }
+        let cardID = read1.content.definitions[0].id
+        var renamed = afterImport
+        renamed.pages[try XCTUnwrap(renamed.pages.firstIndex { $0.id == cardID })].name = "Mine"
+        XCTAssertEqual(violation(renamed), .readOnly("UI Kit"))
+        var removed = afterImport
+        removed.pages.removeAll { $0.id == cardID }
+        XCTAssertEqual(violation(removed), .readOnly("UI Kit"))
+        var recolored = afterImport
+        recolored.colorTokens[0].name = "Other"
+        XCTAssertEqual(violation(recolored), .readOnly("UI Kit"))
+        var moved = afterImport
+        moved.pages.swapAt(moved.pages.count - 1, moved.pages.count - 2)
+        XCTAssertNil(violation(moved))
+        var ownEdit = afterImport
+        ownEdit.pages[0].name = "Start"
+        XCTAssertNil(violation(ownEdit))
+
+        // A copy of Badge on the home page; version 1.1.0 renames Card, drops
+        // Badge and adds Banner.
+        var withCopy = afterImport
+        let homeRoot = withCopy.pages[0].rootNodeIDs[0]
+        let badgeID = read1.content.definitions[1].id
+        let copy = DocumentNode(kind: .component, name: "Badge", parent: .node(homeRoot),
+            properties: libraryGeometry(120) + [NodeProperty(key: .init(rawValue: CanonicalComponentReference.key),
+                                                             value: .string(badgeID.description))])
+        let rootIndex = try XCTUnwrap(withCopy.pages[0].nodes.firstIndex { $0.id == homeRoot })
+        withCopy.pages[0].nodes[rootIndex].childIDs.append(copy.id)
+        withCopy.pages[0].nodes.append(copy)
+        try withCopy.validate()
+        var source2 = source
+        source2.pages[try XCTUnwrap(source2.pages.firstIndex { $0.id == cardID })].name = "Card Large"
+        source2.pages.removeAll { $0.id == badgeID }
+        source2.pages.append(libraryDefinition("Banner"))
+        let v2version = try XCTUnwrap(ComponentLibraryVersion("1.1.0"))
+        let v2 = try ComponentLibraries.exporting(named: "UI Kit", version: v2version, from: source2, in: v1.package, at: stamp)
+        XCTAssertEqual(v2.file.libraryID, v1.file.libraryID, "Exporting again keeps the library's identity")
+        let read2 = try ComponentLibraries.reading(v2.data)
+
+        let preview = try ComponentLibraries.previewingUpdate(read2.file, read2.content, in: withCopy, package: imported.package)
+        XCTAssertEqual(preview.fromVersion, .initial)
+        XCTAssertEqual(preview.toVersion, v2version)
+        XCTAssertFalse(preview.isDowngrade)
+        XCTAssertEqual(preview.removedComponentNames, ["Badge"])
+        XCTAssertEqual(preview.affectedCopyCount, 1)
+        XCTAssertEqual(preview.comparison.filtered(area: .pages, kind: .added).count, 1)
+        XCTAssertEqual(preview.comparison.filtered(area: .pages, kind: .removed).count, 1)
+        XCTAssertEqual(preview.comparison.filtered(area: .pages, kind: .changed).map(\.subject), ["Component name"])
+
+        let updated = try ComponentLibraries.updating(read2.file, read2.content, in: withCopy, package: imported.package)
+        let updateSession = DocumentSession(document: withCopy)
+        try updateSession.execute(try XCTUnwrap(updated.command))
+        XCTAssertEqual(updateSession.document.componentDefinitions.map(\.name), ["Card Large", "Banner"])
+        XCTAssertEqual(updateSession.document.pages.prefix(2).map(\.id), withCopy.pages.prefix(2).map(\.id),
+                       "The project's own pages keep their place")
+        let record2 = try XCTUnwrap(try ComponentLibraries.index(in: updated.package, documentID: consumer.id)?.imported.first)
+        XCTAssertEqual(record2.knownVersions.map(\.version), [.initial, v2version])
+        XCTAssertEqual(Set(record2.definitionIDs), Set(read1.content.definitions.map(\.id) + read2.content.definitions.map(\.id)),
+                       "The record keeps every identity a version delivered, so Undo is recognised")
+        XCTAssertEqual(ComponentLibraries.status(of: record2, in: updateSession.document), .current(v2version))
+        try updateSession.undo()
+        XCTAssertEqual(ComponentLibraries.status(of: record2, in: updateSession.document), .earlier(.initial),
+                       "Undo of an update is reported, not hidden")
+        try updateSession.redo()
+        XCTAssertThrowsError(try ComponentLibraries.previewingUpdate(read2.file, read2.content, in: updateSession.document,
+                                                                     package: updated.package)) {
+            XCTAssertEqual($0 as? ComponentLibraryError, .unchanged)
+        }
+        let back = try ComponentLibraries.previewingUpdate(read1.file, read1.content, in: updateSession.document,
+                                                           package: updated.package)
+        XCTAssertTrue(back.isDowngrade, "Going back to an older version is an explicit, reviewed update")
+
+        let detached = try ComponentLibraries.detaching(read1.file.libraryID, documentID: consumer.id, in: updated.package)
+        XCTAssertNil(try ComponentLibraries.index(in: detached, documentID: consumer.id), "The last record removes the member")
+        XCTAssertThrowsError(try ComponentLibraries.detaching(read1.file.libraryID, documentID: consumer.id, in: detached)) {
+            XCTAssertEqual($0 as? ComponentLibraryError, .notImported)
+        }
+
+        // Files and records are strict.
+        var tampered = try XCTUnwrap(try JSONSerialization.jsonObject(with: v1.data) as? [String: Any])
+        tampered["name"] = ""
+        let cases: [(String, Data, ComponentLibraryError)] = [
+            ("not json", Data("library".utf8), .invalidFile),
+            ("other format", Data(#"{"format":"x","version":1}"#.utf8), .invalidFile),
+            ("future", Data(#"{"format":"app.siteforge.component-library","version":2}"#.utf8), .unsupportedVersion(2)),
+            ("empty name", try JSONSerialization.data(withJSONObject: tampered), .invalidFile),
+            ("too large", Data(count: ComponentLibraryFile.maximumBytes + 1), .fileTooLarge),
+        ]
+        for (label, data, expected) in cases {
+            XCTAssertThrowsError(try ComponentLibraries.reading(data), label) {
+                XCTAssertEqual($0 as? ComponentLibraryError, expected, label)
+            }
+        }
+        func withMember(_ path: String, _ data: Data) -> ProjectPackage {
+            ProjectPackage(projectID: projectID, createdAt: stamp, modifiedAt: stamp, document: consumer,
+                           optionalMembers: [ProjectPackageMember(path: path, role: .optional, data: data)])
+        }
+        for damaged in [withMember(ComponentLibraryIndex.memberPath, Data("{}".utf8)),
+                        withMember("libraries/stray.json", Data("{}".utf8))] {
+            XCTAssertThrowsError(try ComponentLibraries.index(in: damaged, documentID: consumer.id)) {
+                XCTAssertEqual($0 as? ComponentLibraryError, .corrupt)
+            }
+            XCTAssertEqual(ComponentLibraries.removingAll(in: damaged).optionalMembers, [])
+        }
+        XCTAssertThrowsError(try ComponentLibraries.index(in: imported.package, documentID: DocumentID())) {
+            XCTAssertEqual($0 as? ComponentLibraryError, .documentMismatch)
+        }
+
+        XCTAssertEqual(ComponentLibraryVersion("1.2.3")?.description, "1.2.3")
+        for bad in ["1.2", "01.0.0", "1.0.0-beta", "a.b.c", "1..0", ""] {
+            XCTAssertNil(ComponentLibraryVersion(bad), bad)
+        }
+        XCTAssertLessThan(try XCTUnwrap(ComponentLibraryVersion("1.9.0")), try XCTUnwrap(ComponentLibraryVersion("1.10.0")))
+        XCTAssertEqual(ComponentLibraryVersion.initial.nextMinor.description, "1.1.0")
+        XCTAssertEqual(ComponentLibraries.requirementIDs, Set((1...8).map { String(format: "SF-0906-%03d", $0) }))
+    }
+
+    // SF-1306-001, SF-1306-002, SF-1306-003, SF-1306-004, SF-1306-007 (OD-043, ADR-0040)
+    func testVersionComparisonMatchesByIdentitySeparatesMovesFromRecreationAndIsBounded() throws {
+        let rootID = NodeID(), heroID = NodeID(), cardID = NodeID(), footerID = NodeID()
+        let oldID = NodeID(), badgeID = NodeID(), newID = NodeID()
+        let aboutID = PageID(), retiredID = PageID(), addedID = PageID()
+        let tokenID = ColorTokenID()
+        let textProperty = NodeProperty(key: PropertyKey(rawValue: "text.content"), value: .string("Hello"))
+        let widthProperty = NodeProperty(key: PropertyKey(rawValue: "geometry.width"), value: .number(320))
+        func comparisonNode(_ id: NodeID, _ name: String, parent: NodeParent, children: [NodeID] = [],
+                            properties: [NodeProperty] = []) -> DocumentNode {
+            DocumentNode(id: id, kind: .frame, name: name, parent: parent, childIDs: children, properties: properties)
+        }
+        func comparisonSource(_ document: CanonicalDocument, _ name: String) -> ProjectComparisonSource {
+            ProjectComparisonSource(snapshotID: nil, name: name, document: document)
+        }
+        let baselineHome = DocumentPage(id: pageID, name: "Home", route: PageRoute(rawValue: "/"), role: .home,
+            rootNodeIDs: [rootID], nodes: [
+                comparisonNode(rootID, "Root", parent: .page(pageID), children: [heroID, cardID, footerID, oldID]),
+                comparisonNode(heroID, "Hero", parent: .node(rootID), children: [badgeID], properties: [textProperty]),
+                comparisonNode(badgeID, "Badge", parent: .node(heroID)),
+                comparisonNode(cardID, "Box", parent: .node(rootID), properties: [widthProperty]),
+                comparisonNode(footerID, "Footer", parent: .node(rootID)),
+                comparisonNode(oldID, "Old", parent: .node(rootID)),
+            ])
+        var editedText = textProperty
+        editedText.value = .string("Hi")
+        // Same key and value, new identity: a re-created property.
+        let recreatedWidth = NodeProperty(key: widthProperty.key, value: .number(320))
+        let targetHome = DocumentPage(id: pageID, name: "Home", route: PageRoute(rawValue: "/"), role: .home,
+            rootNodeIDs: [rootID], nodes: [
+                comparisonNode(rootID, "Root", parent: .page(pageID), children: [heroID, footerID, cardID, newID]),
+                comparisonNode(heroID, "Hero", parent: .node(rootID), properties: [editedText]),
+                comparisonNode(cardID, "Card", parent: .node(rootID), children: [badgeID], properties: [recreatedWidth]),
+                comparisonNode(badgeID, "Badge", parent: .node(cardID)),
+                comparisonNode(footerID, "Footer", parent: .node(rootID)),
+                comparisonNode(newID, "New", parent: .node(rootID)),
+            ])
+        let about = DocumentPage(id: aboutID, name: "About")
+        var renamedAbout = about
+        renamedAbout.name = "About Us"
+        let brand = LocalColorToken(id: tokenID, name: "Brand", color: CanonicalSolidColor(red: 1, green: 0, blue: 0, alpha: 1))
+        let primary = LocalColorToken(id: tokenID, name: "Primary", color: CanonicalSolidColor(red: 0, green: 0, blue: 1, alpha: 1))
+        let baseline = CanonicalDocument(id: documentID, revision: 3,
+            pages: [baselineHome, about, DocumentPage(id: retiredID, name: "Retired")], colorTokens: [brand])
+        let target = CanonicalDocument(id: documentID, revision: 9,
+            pages: [renamedAbout, targetHome, DocumentPage(id: addedID, name: "Added")], colorTokens: [primary])
+
+        let comparison = try ProjectComparer.compare(comparisonSource(baseline, "Launch"),
+                                                     with: comparisonSource(target, ProjectComparisonSource.currentDocumentName))
+        func changes(_ area: ProjectComparisonArea, _ kind: ProjectComparisonChangeKind) -> [ProjectComparisonChange] {
+            comparison.filtered(area: area, kind: kind)
+        }
+        XCTAssertEqual(changes(.pages, .removed).map(\.pageID), [retiredID])
+        XCTAssertEqual(changes(.pages, .added).map(\.pageID), [addedID])
+        XCTAssertEqual(changes(.pages, .moved).map(\.pageID), [aboutID], "Only the page that changed place moves")
+        XCTAssertEqual(changes(.pages, .changed).map(\.before), ["About"])
+        XCTAssertEqual(changes(.pages, .changed).map(\.after), ["About Us"])
+        XCTAssertEqual(changes(.layers, .removed).map(\.nodeID), [oldID])
+        XCTAssertEqual(changes(.layers, .added).map(\.nodeID), [newID])
+        XCTAssertEqual(Set(changes(.layers, .moved).compactMap(\.nodeID)), [footerID, badgeID],
+                       "Removing and inserting siblings does not move their neighbours")
+        let badge = try XCTUnwrap(changes(.layers, .moved).first { $0.nodeID == badgeID })
+        XCTAssertEqual(badge.subject, "Container")
+        XCTAssertEqual(badge.before, "Hero")
+        XCTAssertEqual(badge.after, "Card")
+        XCTAssertEqual(changes(.layers, .moved).first { $0.nodeID == footerID }?.subject, "Layer order")
+        XCTAssertEqual(changes(.layers, .changed).map(\.subject), ["Layer name"])
+        XCTAssertEqual(changes(.properties, .changed).map(\.before), ["\"Hello\""])
+        XCTAssertEqual(changes(.properties, .changed).map(\.after), ["\"Hi\""])
+        XCTAssertEqual(changes(.properties, .removed).map(\.before), ["320"],
+                       "A re-created property is removed and added, never matched by its key")
+        XCTAssertEqual(changes(.properties, .added).map(\.after), ["320"])
+        XCTAssertEqual(changes(.colorTokens, .changed).map(\.subject), ["Token name", "Token color"])
+        XCTAssertEqual(changes(.colorTokens, .changed).last?.after, "#0000FF")
+        XCTAssertEqual(comparison.changes.map(\.id), Array(comparison.changes.indices))
+        XCTAssertEqual(comparison.baselineRevision, 3)
+        XCTAssertEqual(comparison.targetRevision, 9)
+        XCTAssertFalse(comparison.isTruncated)
+        XCTAssertEqual(comparison.filtered(query: "about us").map(\.pageID), [aboutID, aboutID])
+        let again = try ProjectComparer.compare(comparisonSource(baseline, "Launch"),
+                                                with: comparisonSource(target, ProjectComparisonSource.currentDocumentName))
+        XCTAssertEqual(again, comparison, "The same two versions always give the same comparison")
+
+        let report = comparison.report()
+        XCTAssertTrue(report.contains("- Baseline: Launch (revision 3)"))
+        XCTAssertTrue(report.contains("- Compared with: Current Document (revision 9)"))
+        XCTAssertTrue(report.contains("## Layers"))
+        XCTAssertTrue(report.contains("no viewport, data or font context"))
+        XCTAssertFalse(report.contains("## Images"), "Areas without changes are left out")
+
+        let identical = try ProjectComparer.compare(comparisonSource(target, "A"), with: comparisonSource(target, "B"))
+        XCTAssertTrue(identical.isIdentical)
+        XCTAssertEqual(identical.countSummary, "No differences")
+        // Fonts, and data without a dedicated comparison, are never reported as identical.
+        var withFont = target
+        withFont.fontAssets = [FontAsset(resourceID: ResourceID(), family: "Inter", format: .woff2,
+            originalFilename: "inter.woff2", byteCount: 1, contentHash: String(repeating: "c", count: 64))]
+        XCTAssertEqual(try ProjectComparer.compare(comparisonSource(target, "A"), with: comparisonSource(withFont, "B"))
+            .changes.map(\.subject), ["Project fonts"])
+        var renumbered = target
+        renumbered.revision += 5
+        XCTAssertTrue(try ProjectComparer.compare(comparisonSource(target, "A"), with: comparisonSource(renumbered, "B")).isIdentical,
+                      "A different revision alone is not a change")
+        var otherData = target
+        otherData.creationKind = .migratedLegacy
+        XCTAssertEqual(try ProjectComparer.compare(comparisonSource(target, "A"), with: comparisonSource(otherData, "B"))
+            .changes.map(\.subject), ["Other project data"])
+        // ADR-0122: build settings are named on their own; grid choices stay "Project preferences".
+        var withBuild = target
+        withBuild.projectPreferences = ProjectPreferences(gridSpacing: 24, build: BuildProfileSettings(profile: .staticRelease))
+        XCTAssertEqual(try ProjectComparer.compare(comparisonSource(target, "A"), with: comparisonSource(withBuild, "B"))
+            .changes.map(\.subject), ["Project preferences", "Build settings"])
+        // ADR-0037 Amendment 1: a custom code review alone is a build settings change.
+        var reviewedBuild = withBuild
+        reviewedBuild.projectPreferences?.build?.reviewedCustomCodeDigest = String(repeating: "d", count: 64)
+        XCTAssertEqual(try ProjectComparer.compare(comparisonSource(withBuild, "A"), with: comparisonSource(reviewedBuild, "B"))
+            .changes.map(\.subject), ["Build settings"])
+        // A page's origin has its own entry, so it is never hidden behind other changes.
+        var reorigined = target
+        reorigined.pages[0].provenance = .template
+        XCTAssertEqual(try ProjectComparer.compare(comparisonSource(target, "A"), with: comparisonSource(reorigined, "B"))
+            .changes.map(\.subject), ["Page origin"])
+        reorigined.creationKind = .migratedLegacy
+        XCTAssertEqual(try ProjectComparer.compare(comparisonSource(target, "A"), with: comparisonSource(reorigined, "B"))
+            .changes.map(\.subject), ["Page origin", "Other project data"])
+        // Order-only changes of color tokens (and images, guides) are moves, listed beside other changes.
+        let accent = LocalColorToken(name: "Accent", color: CanonicalSolidColor(red: 0, green: 1, blue: 0, alpha: 1))
+        var twoTokens = target
+        twoTokens.colorTokens = [primary, accent]
+        var swappedTokens = twoTokens
+        swappedTokens.colorTokens = [accent, primary]
+        swappedTokens.pages[0].name = "About Again"
+        let reorderedTokens = try ProjectComparer.compare(comparisonSource(twoTokens, "A"), with: comparisonSource(swappedTokens, "B"))
+        XCTAssertEqual(reorderedTokens.filtered(area: .colorTokens, kind: .moved).map(\.subject), ["Token order"])
+        XCTAssertEqual(reorderedTokens.filtered(area: .colorTokens, kind: .moved).map(\.location), ["Accent"])
+        XCTAssertEqual(reorderedTokens.filtered(area: .pages, kind: .changed).map(\.subject), ["Page name"])
+        XCTAssertThrowsError(try ProjectComparer.compare(comparisonSource(baseline, "A"),
+                                                         with: comparisonSource(CanonicalDocument(), "B"))) {
+            XCTAssertEqual($0 as? ProjectComparisonError, .documentMismatch)
+        }
+        XCTAssertThrowsError(try ProjectComparer.compare(comparisonSource(baseline, "A"), with: comparisonSource(target, "B"),
+                                                         checkpoint: { throw CancellationError() })) {
+            XCTAssertTrue($0 is CancellationError)
+        }
+
+        var crowded = targetHome
+        crowded.nodes += (0..<(ProjectComparer.maximumChanges + 10)).map {
+            comparisonNode(NodeID(), "Item \($0)", parent: .node(rootID))
+        }
+        var large = target
+        large.pages[1] = crowded
+        let bounded = try ProjectComparer.compare(comparisonSource(baseline, "A"), with: comparisonSource(large, "B"))
+        XCTAssertTrue(bounded.isTruncated)
+        XCTAssertFalse(bounded.isIdentical)
+        XCTAssertEqual(bounded.changes.count, ProjectComparer.maximumChanges)
+        XCTAssertTrue(bounded.countSummary.hasSuffix("only the first \(ProjectComparer.maximumChanges) are listed"))
+        // SF-1306-007: the large fixture (10,000 layers) checks for cancellation at least every 256 layers.
+        var comparisonChecks = 0
+        var tenThousand = target
+        tenThousand.pages[1].nodes += (0..<10_000).map { comparisonNode(NodeID(), "Bulk \($0)", parent: .node(rootID)) }
+        let largeFixture = try ProjectComparer.compare(comparisonSource(target, "A"), with: comparisonSource(tenThousand, "B"),
+                                                       checkpoint: { comparisonChecks += 1 })
+        XCTAssertTrue(largeFixture.isTruncated)
+        XCTAssertGreaterThanOrEqual(comparisonChecks, 10_000 / 256)
+
+        XCTAssertEqual(ProjectComparer.movedIdentifiers(from: [1, 2, 3, 4], to: [0, 1, 2, 3, 4]), [], "An insertion moves nothing")
+        XCTAssertEqual(ProjectComparer.movedIdentifiers(from: [1, 2, 3, 4], to: [4, 1, 2, 3]), [4])
+        XCTAssertEqual(ProjectComparer.valueText(.number(12)), "12")
+        XCTAssertEqual(ProjectComparer.valueText(.number(0.5)), "0.5")
+        XCTAssertEqual(ProjectComparer.valueText(.boolean(true)), "true")
+        let long = ProjectComparer.valueText(.string(String(repeating: "a", count: 400) + "\nend"))
+        XCTAssertTrue(long.hasSuffix("…\""))
+        XCTAssertFalse(long.contains("\n"))
+        XCTAssertEqual(ProjectComparer.requirementIDs, Set((1...8).map { String(format: "SF-1306-%03d", $0) }))
+    }
+
+    // SF-0309-001, SF-0309-003, SF-0309-004, SF-0309-008 (ADR-0130)
+    func testDocumentMigrationRegistryIsContiguousAndDryRunReportsWithoutContent() throws {
+        XCTAssertNoThrow(try DocumentMigrations.validateRegistry())
+        XCTAssertEqual(DocumentMigrations.steps.count,
+                       DocumentSerializer.currentSchemaVersion - DocumentSerializer.minimumSupportedSchemaVersion)
+        XCTAssertEqual(try DocumentMigrations.path(from: DocumentSerializer.currentSchemaVersion), [])
+        XCTAssertEqual(try DocumentMigrations.path(from: DocumentSerializer.currentSchemaVersion - 2).map(\.toSchema),
+                       [DocumentSerializer.currentSchemaVersion - 1, DocumentSerializer.currentSchemaVersion])
+        let newer = DocumentSerializer.currentSchemaVersion + 1
+        XCTAssertThrowsError(try DocumentMigrations.path(from: newer)) {
+            XCTAssertEqual($0 as? DocumentMigrationRefusal, .newerSchema(newer))
+        }
+        XCTAssertThrowsError(try DocumentMigrations.path(from: 0)) {
+            XCTAssertEqual($0 as? DocumentMigrationRefusal, .unsupportedSchema(0))
+        }
+
+        let packageBytes = try legacyGolden(
+            named: "schema-v1-rootless",
+            sha256: "ef1455c5eb9055ec97fb5d41562686226e9db040313a4609e769cc5f7f44694d"
+        )
+        let stored = try ProjectPackageStore.storedDocument(in: packageBytes)
+        XCTAssertEqual(stored.schemaVersion, 1)
+        let identifiers = DocumentMigrations.storedIdentifiers(in: stored.data)
+        XCTAssertEqual(identifiers.pages, ["31000000-0000-0000-0000-000000000002"])
+        XCTAssertEqual(identifiers.nodes, [])
+        let report = try DocumentMigrations.dryRun(stored.data)
+        XCTAssertEqual(report, try DocumentMigrations.dryRun(stored.data), "A dry run is deterministic")
+        XCTAssertEqual(report.sourceSchemaVersion, 1)
+        XCTAssertEqual(report.targetSchemaVersion, DocumentSerializer.currentSchemaVersion)
+        XCTAssertEqual(report.steps, DocumentMigrations.steps)
+        XCTAssertEqual(report.sourcePageCount, 1)
+        XCTAssertEqual(report.migratedPageCount, 1)
+        XCTAssertEqual(report.addedNodeCount, 1, "Only the minimum root is added")
+        XCTAssertEqual(report.sourceByteCount, stored.data.count)
+        XCTAssertEqual(report.stepLines.count, report.steps.count)
+        XCTAssertTrue(report.summary.contains("schema 1 to \(DocumentSerializer.currentSchemaVersion)"))
+        XCTAssertFalse(report.summary.contains("Legacy Landing"), "Reports hold counts, never content")
+
+        // The schema-2 golden needs one step fewer and adds nothing.
+        let schemaTwo = try ProjectPackageStore.storedDocument(in: try legacyGolden(
+            named: "schema-v2-minimum",
+            sha256: "c2ebf92c01924cccd9fe6db5a48bbe4d23a6273d03526f41ed5f744efcbe7739"
+        ))
+        let twoReport = try DocumentMigrations.dryRun(schemaTwo.data)
+        XCTAssertEqual(twoReport.steps.first?.fromSchema, 2)
+        XCTAssertEqual(twoReport.steps.count, DocumentSerializer.currentSchemaVersion - 2)
+        XCTAssertEqual(twoReport.addedPageCount + twoReport.addedNodeCount, 0)
+
+        // Refusals: a newer schema and damaged data; each names a recovery action.
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: stored.data) as? [String: Any])
+        object["schemaVersion"] = newer
+        let newerData = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        XCTAssertThrowsError(try DocumentMigrations.dryRun(newerData)) {
+            XCTAssertEqual($0 as? DocumentMigrationRefusal, .newerSchema(newer))
+        }
+        for damaged in [Data("{}".utf8), Data("not json".utf8)] {
+            XCTAssertThrowsError(try DocumentMigrations.dryRun(damaged)) {
+                XCTAssertEqual($0 as? DocumentMigrationRefusal, .malformed)
+            }
+        }
+        object["schemaVersion"] = 1
+        object["document"] = ["id": "not-a-uuid"]
+        let broken = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        XCTAssertThrowsError(try DocumentMigrations.dryRun(broken)) {
+            XCTAssertEqual($0 as? DocumentMigrationRefusal, .malformed)
+        }
+        let refusals: [DocumentMigrationRefusal] = [
+            .newerSchema(newer), .unsupportedSchema(0), .malformed, .lostContent(pages: 1, nodes: 2), .unstableResult,
+        ]
+        for refusal in refusals {
+            XCTAssertNotNil(refusal.recoverySuggestion)
+            XCTAssertNotNil(refusal.errorDescription)
+        }
+        XCTAssertEqual(Set(refusals.map(\.diagnosticCategory)).count, refusals.count)
     }
 
     // SF-0301-003, SF-1702-001

@@ -31,6 +31,7 @@ MODEL_SLICE = list(dict.fromkeys(MODEL_FOUNDATION + [
     "SiteForge/SelectionModel.swift",
     "SiteForge/TransformModel.swift",
     "SiteForge/CanvasRendererCore.swift",
+    "SiteForge/DecorativeEffects.swift",
 ]))
 ENGINE_SLICE = MODEL_SLICE
 RUNWAY_HEADLESS_SLICE = [

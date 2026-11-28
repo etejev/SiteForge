@@ -70,6 +70,8 @@ enum DragDropError: Error, Equatable, LocalizedError, Sendable {
     case sourceNotSelected, multipleSelectionUnsupported
     case missingDestination, unavailableDestination, lockedDestination, hiddenDestination
     case incompatibleContainer, invalidIndex, noOp, cycle, depthLimit, revisionExhausted, cancelled
+    /// OD-018: a top-level item of a copy's slot moves with slot commands.
+    case slotItem
 
     var errorDescription: String? {
         switch self {
@@ -96,6 +98,7 @@ enum DragDropError: Error, Equatable, LocalizedError, Sendable {
         case .depthLimit: "This move would exceed the supported nesting depth."
         case .revisionExhausted: "The document revision cannot accept another drag operation."
         case .cancelled: "The drag was cancelled; the committed document is unchanged."
+        case .slotItem: "Top-level items in a copy's slot move with Move Up and Move Down in the Inspector. Cut and Paste moves them elsewhere."
         }
     }
 }
@@ -213,9 +216,42 @@ struct DragDropCommandRegistry: Sendable {
             // misleading Undo availability.
             throw DragDropError.noOp
         }
-        let canonical = DocumentCommand.moveNode(MoveNodeCommand(pageID: page.id, nodeID: source.id, destination: destination.parent, index: command.destination.requestedIndex))
+        // OD-018: a copy's top-level slot items keep their slot membership.
+        if case .node(let parentID) = source.parent, hierarchy.nodes[parentID]?.kind == .component {
+            throw DragDropError.slotItem
+        }
+        var canonical = DocumentCommand.moveNode(MoveNodeCommand(pageID: page.id, nodeID: source.id, destination: destination.parent, index: command.destination.requestedIndex))
+        // OD-018: moving between ordinary page content and a copy's slot
+        // contents (or between two slots) changes the coordinate domain; keep
+        // the object where it is on the canvas.
+        let supplied = CanonicalComponentSlot.suppliedNodeIDs(in: page)
+        let destinationID: NodeID? = if case .node(let id) = destination.parent { id } else { nil }
+        if supplied.contains(source.id) || destinationID.map(supplied.contains) == true {
+            let offsets = CanonicalSlotGeometry.offsetsByBreakpoint(in: page, document: document)
+            let zero = WorldVector(dx: 0, dy: 0)
+            let shifts = canonicalShifts(source: source.id, destination: destinationID, offsets: offsets, zero: zero)
+            if !shifts.isEmpty {
+                let commands = CanonicalSlotGeometry.shiftCommands(subtreeOf: source.id, in: page) { shifts[$0] ?? zero }
+                if !commands.isEmpty { canonical = .batch([canonical] + commands) }
+            }
+        }
         guard CommandRegistry().availability(for: canonical, in: document).isEnabled else { throw DragDropError.invalidIndex }
         return PreparedDragDrop(command: canonical, preview: DragDropPreview(identity: command.identity, sourceNodeID: source.id, destination: command.destination, committedDestination: adjusted))
+    }
+
+    /// Per breakpoint: old offset − new offset, so world position is kept.
+    private func canonicalShifts(source: NodeID, destination: NodeID?,
+                                 offsets: [ResponsiveBreakpoint: [NodeID: WorldVector]],
+                                 zero: WorldVector) -> [ResponsiveBreakpoint: WorldVector] {
+        var result: [ResponsiveBreakpoint: WorldVector] = [:]
+        for breakpoint in ResponsiveBreakpoint.allCases {
+            let table = offsets[breakpoint] ?? [:]
+            let old = table[source] ?? zero
+            let new = destination.flatMap { table[$0] } ?? zero
+            let delta = WorldVector(dx: old.dx - new.dx, dy: old.dy - new.dy)
+            if delta.dx != 0 || delta.dy != 0 { result[breakpoint] = delta }
+        }
+        return result
     }
 
     private func resolve(_ destination: DragDestination, hierarchy: HierarchyIndex, context: DragDropValidationContext) throws -> DragDestination {
@@ -393,6 +429,7 @@ private extension DragDropError {
         case .depthLimit: "depth-limit"
         case .revisionExhausted: "revision-exhausted"
         case .cancelled: "cancelled"
+        case .slotItem: "slot-item"
         }
     }
 }

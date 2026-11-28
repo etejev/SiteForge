@@ -1,5 +1,133 @@
 # Open Decisions
 
+## OD-033 — Component variants (SF-0904)
+
+Status: Approved by the owner — 2026-11-25 3:57 PM EST (recorded by Code Forge). The recommended default below is the decision. Raised by Code Forge 2026-11-25.
+
+- Decision: property-only variants — one definition with named axes and
+  per-combination node property overrides (no structural differences), reusing
+  the definition graph, override namespaces and command kernel; instances store
+  an axis-value map; an unknown or removed value keeps the stored intent and
+  resolves to the default with a visible repair finding.
+- Implementation status: complete in source, not verified (Code Forge batch 07,
+  2026-11-26; document schema 26, clipboard v7, ADR-0029). Owner choice
+  2026-11-26: edit inside the variant; structure only in Base. Out of scope:
+  transitions between variants and per-breakpoint variant selection.
+
+- Context: SF-0904 requires variant axes, values, allowed combinations, a
+  default and per-instance selection, with removed values migrating or
+  surfacing repair. The canonical model has no variant concept; ADR-0018 models
+  one definition graph per component. Variants change definition storage,
+  instance references, override scoping, clipboard fingerprints and output.
+- Recommended default: model a variant set as one definition with named axes and
+  per-combination node overrides (properties only, no structural differences),
+  reusing the existing definition graph, override namespaces and command kernel.
+  Instances store an axis-value map; an unknown or removed value keeps the
+  stored intent and resolves to the default with a visible repair finding.
+- Alternatives: one separate definition per variant linked into a set (simpler
+  storage, harder shared editing and duplicated overrides); or structural
+  variants (any node may differ), which needs per-variant graphs and is much larger.
+- Tradeoffs: property-only variants cover common button/card states and keep
+  one graph; structural differences would still need separate components.
+- Affected requirements: SF-0904-001–008, SF-0901-001/003/005, SF-0905-003/004,
+  SF-0308-003/004.
+- Deadline: before any variant control or schema change.
+- Safe temporary assumption: no variant UI or storage; components remain single-variant.
+
+## OD-034 — Nested component instances inside definitions (SF-0901)
+
+Status: Approved by the owner — 2026-11-25 3:57 PM EST (recorded by Code Forge). The recommended default below is the decision. Raised by Code Forge 2026-11-25.
+
+- Decision: allow instances inside definitions with a dependency-cycle check on
+  every insertion, paste, duplicate, detach, page-chrome copy and definition
+  edit (reject a cycle, naming its path), a bounded nesting depth, and the shared
+  20,000-node expansion budget; overrides on nested instances stay one level
+  deep until nested override paths are specified.
+- Implementation status: complete in source — Code Forge batch 05 (unverified;
+  Codex to build and run). Graph, schema 24, nested expansion on canvas,
+  Preview and export, authoring and transfer paths (including paste into an
+  open definition) with cycle/depth/size checks, Components panel usage,
+  inner-definition navigation, UI journey. ADR-0018 amendment records it.
+  Out of scope as decided: values on inner instances from the page (nested
+  override paths, SF-0905), slot content (OD-018), variants (OD-033).
+
+- Context: ADR-0018 rejects component instances inside definitions in its first
+  slice to prevent dependency cycles. SF-0901 lists "nested structure" and
+  requires that cycles are prevented, so nesting itself is in scope.
+- Recommended default: allow instances inside definitions with a dependency
+  graph check on every insertion, paste and definition edit (reject any edit
+  that creates a cycle, with the cycle path in the message), a bounded nesting
+  depth, and the existing shared 20,000-node expansion budget. Overrides on
+  nested instances stay one level deep until override paths (SF-0905 nested
+  overrides) are specified.
+- Alternatives: keep nesting rejected (safe, limits real design systems); or
+  allow nesting with full nested override paths at once (larger and needs an
+  override-path format decision).
+- Tradeoffs: cycle checks are cheap at authoring time but every transfer path
+  (clipboard, duplicate, detach, page-chrome copy) must apply the same check.
+- Affected requirements: SF-0901-001–008, SF-0905-001–005, SF-0308-003/004,
+  SF-0302-003.
+- Deadline: before enabling instance insertion inside a definition.
+- Safe temporary assumption: nested instances in definitions remain rejected
+  (superseded from document schema 24 by the decision above; schemas 1–23
+  still reject them).
+
+## OD-032 — Project file capacity above 4 MiB of page data
+
+Status: Approved by the owner — 2026-11-25 3:57 PM EST (recorded by Code Forge). The recommended default below is the decision. Raised by Code Forge 2026-11-25.
+
+- Decision: plan package v2 that splits the document into bounded members (for
+  example one manifest-declared member per page plus a small document root),
+  keeping every existing per-member, per-file-count and parser bound as a
+  security boundary, and reading package v1 through its dedicated decoder.
+  The owner accepts that this is an incompatible format change (AGENTS.md
+  "irreversible or incompatible data migration") requiring migration of
+  existing projects; older builds will not open v2 projects.
+- Implementation status: complete in source, not verified (Code Forge batch 08,
+  2026-11-26; ADR-0030). Package v1 is still written when the document fits
+  one member; larger documents are written as package v2 with ordered page
+  members. The refuse-and-warn behavior below now applies to the 8 MiB file
+  limit and the 4 MiB per-page limit.
+
+Package v1 is one file whose canonical `document.json` is a single member capped
+at 4 MiB (8 MiB per file, 256 members; ADR-0001, ADR-0012, OD-002). The project
+is never split today. The editing budget is 20,000 nodes
+(`InsertionPolicy`/`LayoutPolicy`/`ResolvedGraphPolicy`). Measured from the
+minimal-page JSON shape, the spec's large fixture (10,000 single-root pages) is
+about 3.6 MiB, roughly 89% of the cap, and the stress fixture (20,000 nodes)
+about 7.1 MiB. Pages with real content reach the cap far sooner, so a project
+the editor accepts can become unsaveable. Before this change such a save showed
+"The project could not be validated."
+
+Interim behavior (implemented, limits unchanged): a save or autosave above the
+cap is refused before any write with `DocumentLifecycleFailure.projectTooLarge`
+and a specific message; the last saved file is byte-for-byte unchanged; every
+successful save/autosave measures the document and the status bar warns from
+85% ("Project file N% full").
+
+- Recommended default: plan a package-v2 slice that splits the document into
+  bounded members (for example one manifest-declared member per page plus a
+  small document root), keeping every existing per-member, per-file-count and
+  parser bound as a security boundary, and reading package v1 through its
+  dedicated decoder. This is the reversal path ADR-0001 and ADR-0012 already
+  name. Until then, keep the interim warn-and-refuse behavior.
+- Alternative 1: raise the v1 limits. Rejected by ADR-0012 ("security
+  boundaries, not tuning values"); it also keeps whole-file allocation.
+- Alternative 2: lower the node budget or block edits that would exceed the
+  cap. Duplicates the limit in a second place; the encoded size depends on
+  content, so a cheap exact pre-check is not available.
+- Alternative 3: keep only the interim behavior. Large real sites cannot be
+  saved; acceptable only while large-site claims are out of scope.
+- Tradeoff: package v2 is an incompatible format change (older builds cannot
+  open v2 projects) and needs a migration, per-page integrity and recovery
+  changes, so it requires owner approval (AGENTS.md: incompatible migration).
+- Affected requirements: SF-0301-004, SF-0301-007, SF-0206-007, SF-1702-004,
+  SF-1702-008.
+- Deadline: before any large-project or release-level scale claim, and before
+  any save journey on the large or stress fixtures.
+- Safe temporary assumption: package v1 limits unchanged; refuse oversized
+  writes truthfully without touching the last saved file; warn at 85%.
+
 ## OD-031 — Hosted verification capacity
 
 Status: owner approved eight independent macOS UI jobs plus one non-UI
@@ -55,6 +183,25 @@ attempt-qualified artifacts, require the exact run ID, SHA, shard and
 authoritative latest job attempt, reject duplicate or stale receipts, and
 test this selection before allowing a targeted retry. Do not rerun the
 previous run or assume staggered allocation proves UI acceptance.
+
+Display capability remains an independent gate. Run `42847939727` recorded
+an unchanged native window `(-76, 31, 1100, 752)` after the required
+1280-point resize: the native drag's target was X=1202 on a 1024-point
+display. Its separate five-destination journey could not hit Pages.
+Run `42866090110` again captures a 1024-point hosted desktop
+in shards 1 and 3. The current shard 7 still needs its own receipt; do
+not count the earlier results against the new SHA.
+
+If shard 7 confirms the same boundary, the recommended next choice is
+owner approval to check for a supported display mode on the disposable
+host, then use a mode that exposes the full native 1280-point window if
+available. If unavailable, consider an explicitly approved host with
+that capability and sufficient runner capacity. Changing the host has
+an operational/trust cost; neither option changes test coverage, the
+production minimum, or the window contract. Decision deadline: before
+another baseline push that depends on the wider display. Until then,
+preserve the strict native hit and resize assertions and do not change
+runner settings or move UI development ahead of a green baseline.
 
 ## OD-030 — Complete macOS UI automation authorization
 
@@ -149,6 +296,20 @@ currently needed; final verification/commit/push are still pending.
   hit-path diagnostic, not host/control replacement or speculative experiments.
 
 ## OD-028 — Complete Xcode's required system components
+
+November 14 resumed check: Xcode 27.2 (27B52) returns exit 0 from
+`xcodebuild -checkFirstLaunchStatus` with the process-scoped Xcode developer
+directory. The global developer setting still points to Command Line Tools.
+The earlier exit 69 below is historical.
+
+November 14 restoration update: Xcode 27.2 (27B52) is installed. With
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`,
+`xcodebuild -checkFirstLaunchStatus` returns 69 without output both inside
+and outside the agent sandbox. The console has a logged-in owner and the
+project-local verification Python check passes. Open Xcode and complete
+first-launch prompts. If **Install Required System Components** appears,
+select **Install** and complete macOS authentication. Resume focused XCTest
+once the same process-scoped readiness check returns 0.
 
 Status: Resolved by owner — 2026-11-02
 
@@ -775,7 +936,13 @@ agent changed a privacy permission; no product-policy change was requested.
 
 ## OD-019 — Explicit migration of retained component override conflicts
 
-Status: Open — 2026-10-13
+Status: Approved by the owner — 2026-11-25 3:57 PM EST (recorded by Code Forge). The recommended default below is the decision. Originally opened 2026-10-13.
+
+- Decision: keep reset, restore-original and navigation only (current behavior).
+  Any future retarget/convert control requires a further owner approval of
+  explicit same-type target selection, a collision policy and a
+  preview/confirmation; cross-type conversion is rejected; never select by label.
+- Implementation status: no change required; current shipped behavior is the decision.
 
 - Needed by: future retargeting/conversion beyond SF-AUTHORING-120 recovery.
 - Context: SF-0902-004/005 and SF-0905-003/004/005 require stable or migrated
@@ -802,7 +969,19 @@ Status: Open — 2026-10-13
 
 ## OD-018 — Canonical ownership of supplied component slot content
 
-Status: Open — 2026-10-13
+Status: Approved by the owner — 2026-11-25 3:57 PM EST (recorded by Code Forge). The recommended default below is the decision. Originally opened 2026-10-13.
+
+- Decision: instance-owned canonical child subtrees with explicit stable slot
+  membership and ordered roots; supplied content replaces only that slot's
+  fallback in derived projection; the definition never acquires instance-owned
+  nodes; slot removal keeps supplied content as a recoverable conflict until an
+  explicit migration, reset or detach; zero-or-more supplied roots and an
+  authored empty state distinct from inheritance.
+- Implementation status: complete in source — Code Forge batch 06 (unverified;
+  Codex to build and run). Document schema 25, clipboard v6, slot rules (allowed
+  top-level types, item limit) included by owner choice, Customize starts from a
+  copy of the default contents. ADR-0018 amendment records it. The safe
+  temporary assumption below applies to schemas 1–24 only.
 
 - Needed by: supplied-content authoring in `SF-AUTHORING-118` under
   `SF-0902`, `SF-0903` and `SF-0905`.
@@ -910,7 +1089,7 @@ Status: Approved — 2026-08-12
 
 ## OD-001 — Minimum supported macOS release and reference hardware tiers
 
-Status: Open
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Support the current and previous two major macOS releases; Apple silicon is the primary reference tier.
 
 - Needed by: Milestone 0 exit and any release-level performance claim.
 - Recommended default: support the current and previous two major macOS releases, with Apple silicon as the primary reference tier.
@@ -939,7 +1118,7 @@ Status: Open
 
 ## OD-013 — Initial distribution trust level
 
-Status: Open
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Unsigned GitHub alpha during development; Developer ID signing and notarization before public beta.
 
 - Recommended default: GitHub-hosted unsigned alpha during development; Developer ID signing and notarization before public beta.
 - Options: unsigned technical alpha, Developer ID direct distribution, Mac App Store, or both signed channels.
@@ -947,7 +1126,7 @@ Status: Open
 
 ## OD-014 — Trusted app-owned artifact retention and reclamation
 
-Status: Open — non-blocking safety boundary
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Retain artifacts under verified app-owned directories; no automatic deletion yet.
 
 - Needed by: before any automatic cleanup policy for retained package staging/quarantine files or recovery tombstones.
 - Context: the identity-bound filesystem intentionally does not reverse a completed swap, reopen an ambiguous displaced name, or unlink a name after a raced replacement. Recovery Discard performs logical retirement through an owned tombstone. These choices preserve unknown external data at the tested seams but can leave owned artifacts for later maintenance.
@@ -959,7 +1138,7 @@ Status: Open — non-blocking safety boundary
 
 ## OD-017 — Signed update feed and installer ownership
 
-Status: Open — blocks trusted update installation, not metadata inspection
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Sparkle 2 with an EdDSA-signed appcast from GitHub Releases, stable and preview feeds. Still needed from the owner before enabling Install: Developer ID team, update-signing key owner, feed URL (and OD-012).
 
 - Needed by: enabling the SF-1507 installer handoff or publishing a production update feed.
 - Recommended default: Developer ID signing and notarization with Sparkle 2,
@@ -1015,3 +1194,177 @@ Status: Approved — 2026-07-21
 - Revisit triggers: production display-link traces miss an owner-approved budget; tile/cache memory exceeds its bound; required effects cannot be expressed efficiently; or framework improvements provide equivalent incremental, input, accessibility, material, and stress evidence.
 - Architecture record: ADR-0014.
 - Affected requirements: `SF-0401-001` through `SF-0401-008`, `SF-0407-001` through `SF-0407-008`, `SF-1901-001` through `SF-1901-008`, and `SF-1903-001` through `SF-1903-008`.
+
+## OD-035 — CMS collections, editor and dynamic pages
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: collections and the Collections editor (SF-1001, SF-1002) complete in source, not verified (Code Forge batch D02, 2026-11-26, ADR-0071); template pages and bindings (SF-1003) complete in source, not verified: detail pages (batch D03) and list pages with filter, order, limit and pagination (batch D04), ADR-0072. Lane R review (RD, 2026-11-26): list-page test paths corrected (`../../` from `blog/page/2.html`); Collections editor validates once per pane and field rows name their field for VoiceOver. Still unverified.
+
+- Affected requirements: SF-1001, SF-1002, SF-1003.
+- Recommended default: Local, project-stored collections (typed fields: text, rich text, number, date, image, reference), a collection editor window, and template pages that generate one static page per item at export. No server; content lives in the project package.
+- Alternative: Connected CMS services behind adapters (SF-1005) first; or no CMS until after release.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-036 — Expression language
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: language, type checking and storage record complete in source, not verified (Code Forge batch D01, 2026-11-26, ADR-0070); authoring UI and build output arrive with template bindings (batch D03).
+
+- Affected requirements: SF-1004.
+- Recommended default: A small, total, side-effect-free expression language (field access, string/number/date formatting, comparison, conditional) evaluated at build time only, with typed validation and no loops or user functions.
+- Alternative: Reuse a JavaScript subset at runtime. Rejected for now: unbounded execution and a security boundary for authored code.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-037 — Data sources and connectors
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: not started; each needs its own planned batch before code. Lane R review (RD, 2026-11-26): local CSV/JSON import engine (SF-1005, files only) complete in source, not verified (Code Forge batch D05, ADR-0073, 2 tests); the Import tab of the Collections editor is not built; connectors stay deferred.
+
+- Affected requirements: SF-1005.
+- Recommended default: Defer: only local collections and file import (CSV/JSON) until a connector permission model and credential storage design is approved.
+- Alternative: An adapter API with OAuth connectors from the start.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-038 — Localization of authored sites
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: parts 1–4 written (4c without a right-to-left default language), unverified — batch E02 (ADR-0080): language model, rules, resolution and the `setLocalization` command; batch E03 (ADR-0081): per-node text, alternative-text and image translations, resolution through fallbacks, the missing-translation report, and language changes that drop or swap translations in the same undoable edit; batch E04 (ADR-0082): export writes one tree per language (`/<code>/`) with translations or fallbacks, `lang`/`dir`, hreflang alternates with x-default, every language in the sitemap, translated images, and missing-translation warnings before export; batch E05 (ADR-0083): File > Languages… sheet behind the `localization.site-languages` flag — add, name, remove, order fallbacks, direction, make default, turn languages on/off as one undoable edit, with the number of translations removed shown before Apply and the missing-translation summary; batch E06 (ADR-0084): the Inspector's Translations section — pick a language, see which rule chose each value, translate or clear text, alternative text and images as one undoable edit each, the element's missing translations per language, right-to-left typing; batch E07 (ADR-0085): the canvas and Local Preview show a chosen language exactly as export writes it (view state only, never saved or undone), with a Canvas Language bar, missing-translation count, canvas text editing refused with a recovery, and the Inspector following the shown language; batch E08 (ADR-0086): a shown right-to-left language mirrors the canvas layout the way `dir="rtl"` does in export (laid-out children run from the right, absolutely placed children keep their offset), also in Local Preview, with moving and resizing refused while it is shown. Not built: a right-to-left default language mirrored on the canvas, right alignment of text without authored typography, Website Preview at the shown language's address. Lane R review (RE, 2026-11-26): duplicate comparison entry removed, Make Default + Remove of the old default in one edit, translated images carried and remapped by copy/paste, mirrored-canvas clicks announce only on the selection, Languages pickers labelled; remaining gaps in docs/reviews/LANE-RE-review-2026-11-26.md. Still unverified.
+
+- Affected requirements: SF-1007, SF-1506.
+- Recommended default: Per-project locales with a default; translatable text and media stored per locale on the node; per-locale routes (/fr/…); export writes one tree per locale with hreflang. App UI localization stays English-only until release.
+- Alternative: Separate projects per locale (no shared structure).
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-039 — Interactions, runtime state and overlays
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: complete in source for the approved first slice, not verified (Code Forge lane C batches C02 and C03, 2026-11-26, ADR-0061, ADR-0062): event graph with the fixed action set and generated runtime (SF-1101); page variables, visibility conditions and modal/popover/menu overlays (SF-1105, SF-1106). Not in this slice: session/persistent/URL variables, trigger-relative overlay positioning. Lane R review (RC, 2026-11-26, ADR-0064): hidden rule on every page with the runtime; overlays ignore visibility conditions and Show/Hide go through the overlay stack; a condition decides the first render; new warnings `overlay-condition-ignored` and `interaction-container-flat`; static-layout container support open. Still unverified.
+
+- Affected requirements: SF-1101, SF-1105, SF-1106.
+- Recommended default: A declarative event graph (trigger → action list) with a fixed action set (show/hide, toggle class/state, open/close overlay, scroll to, navigate), bounded runtime variables (boolean/number/string), compiled to a small generated runtime script; overlays and menus built on it.
+- Alternative: Allow authored JavaScript handlers (needs SF-1107 sandbox decision first).
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-040 — Animation, transitions and scroll effects
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: complete in source for the approved first slice, not verified (Code Forge lane C batch C01, 2026-11-26, ADR-0060): state-change transitions and reveal on scroll with reduced-motion fallbacks; no timeline editor, parallax or scroll-progress effects.
+
+- Affected requirements: SF-1103, SF-1104.
+- Recommended default: CSS-first: transitions and keyframe animations on state changes and viewport-entry triggers, honoring prefers-reduced-motion; no timeline editor in the first slice.
+- Alternative: A full timeline editor with JS-driven animation.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-041 — Custom code boundaries
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: complete in source, not verified (Code Forge batch 17, 2026-11-26, ADR-0037).
+
+- Affected requirements: SF-1107.
+- Recommended default: Allow page- and site-level custom head/body HTML and CSS only, clearly marked as unvalidated, excluded from Preview by default and shown with a warning; no authored JavaScript execution in the editor.
+- Alternative: Sandboxed authored JavaScript in Preview.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-042 — JavaScript bundling, export targets and publishing
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: zip export adapter complete in source, not verified (Code Forge batch 15, 2026-11-26, ADR-0035). Still open: one hashed runtime script file (separate batch); publishing deferred. Lane H (static output depth): H01 Static Release CSS optimizer and size report complete in source, not verified (2026-11-26, ADR-0120, SF-1204). H02 integrity manifest, cache policy, output reference audit, oversized and unused-asset findings complete in source, not verified (ADR-0121, SF-1206). H03 build settings (saved in project preferences), per-file build report, budget and release-policy findings with one-step repairs complete in source, not verified (ADR-0122, SF-1208/SF-1211); default budgets and policy pending OD-120. Lane R review (RH, 2026-11-26): H01–H03 reviewed against declarations; nested-page video posters start at the page's folder; Settings › Project Reset keeps build settings; Check Website shows findings before the reports and build settings; repair buttons keyboard-reachable. Still unverified.
+
+- Affected requirements: SF-1205, SF-1209, SF-1210.
+- Recommended default: Keep static export only: generated runtime JS emitted as one hashed file; export adapters for a plain folder and a zip; publishing (domains, hosting, rollback) deferred until a hosting provider and credential model are chosen.
+- Alternative: Build in a hosted publishing service with domains and rollback.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-043 — Local versioning, comparison and collaboration
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: partial in source, not verified (Code Forge batch 18 part 1, 2026-11-26, ADR-0038): named snapshot storage in the project file and create/rename/delete/restore in the document lifecycle; Snapshots sheet (File > Snapshots…, flag `versions.named-snapshots`, lane E batch E01, ADR-0039) in source, not verified; comparison (SF-1306): structural snapshot/current-document comparison with filters and an exported report in a Compare Versions sheet (lane A batch A02, ADR-0040), not verified; rendered/visual comparison not built; SF-1302–SF-1305 deferred. Lane R review (RA, 2026-11-26): comparison names build settings on their own and never shows two different versions as identical; the comparison run passes only Sendable values to the main actor. Still unverified.
+
+- Affected requirements: SF-1301, SF-1306, SF-1302–SF-1305.
+- Recommended default: Local snapshots stored beside the project (named, timestamped, bounded count) with restore and a structural/visual diff between two snapshots; real-time collaboration, comments, roles and merge deferred to a later milestone with its own architecture review.
+- Alternative: Build on Git or a sync service now.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-044 — Plugins
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: not started; each needs its own planned batch before code.
+
+- Affected requirements: SF-1401–SF-1406.
+- Recommended default: Defer until after release; when started, run plugins out of process with a declared-permission manifest, a versioned document API that goes through the command kernel, and no network by default.
+- Alternative: In-process Swift plugins (rejected: crashes and full document access).
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-045 — Video, audio, SVG and fonts
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: SF-0804 SVG complete in source, not verified (Code Forge batches B01 and B04, 2026-11-26, ADR-0050); SF-0805 fonts complete in source, not verified (Code Forge batches B02 and B04, 2026-11-26, ADR-0051); SF-0803 video/audio complete in source, not verified (Code Forge batch F01, 2026-11-26, ADR-0100; files limited to 16 MB, see OD-100). Lane R review (RB, 2026-11-26): playback edits validated before commit, new-project resources check fonts and media, Video & Audio… in the Site menu, media diagnostic records. Still unverified.
+
+- Affected requirements: SF-0803, SF-0804, SF-0805.
+- Recommended default: Video/audio as local assets with poster image and native controls (no transcoding); SVG imported as a sanitized asset (scripts, external references and event attributes removed) rendered as an image; fonts: project-embedded WOFF2/TTF with license note and system-font fallback stacks.
+- Alternative: Inline editable SVG vectors and a font service.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-046 — Shared component libraries
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: partial in source, not verified (Code Forge lane A batch A03, 2026-11-26, ADR-0041): exported versioned library files of component definitions and color tokens, import as a read-only copy, reviewed update with comparison, detach; images, fonts, nested library dependencies and live linking not built. Lane R review (RA, 2026-11-26): an update's record keeps every identity its versions delivered, so Undo of an update shows the earlier version and keeps it read-only; library row buttons name their library for VoiceOver. Still unverified.
+
+- Affected requirements: SF-0906.
+- Recommended default: A library is an exported, versioned package of component definitions and tokens that other projects import as a read-only copy with update/compare; no live linking across projects in the first slice.
+- Alternative: Live linked libraries across projects.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-047 — Feature flags
+
+Status: Approved by the owner — 2026-11-26 1:30 PM EST (recorded by Code Forge). The recommended default is the decision. Implementation status: complete in source, not verified (Code Forge batch 16, 2026-11-26, ADR-0036).
+
+- Affected requirements: SF-1803.
+- Recommended default: Compile-time and launch-argument flags only (existing DebugTestComposition pattern), documented per flag with an owner and removal date; no remote experimentation.
+- Alternative: A remote flag service.
+- Tradeoff: building it adds a subsystem, schema and test surface that Codex must verify; deferring keeps these requirements without tracked evidence.
+- Safe temporary assumption: the capability is absent; no partial UI or storage exists for it.
+
+## OD-070 — Runtime variable scopes beyond the page
+
+Status: Open — raised by Code Forge lane C, 2026-11-26. Implementation status: not started (waiting for this decision).
+
+- Affected requirements: SF-1106 (session, persistent and URL-derived state; "persistence is consent-aware").
+- Context: OD-039 approved bounded page variables; they are built (ADR-0062) and reset on every page load, so nothing is stored. SF-1106 also lists session, persistent and URL-derived state, and requires consent-aware persistence. The spec and OD-039 do not say how consent works.
+- Recommended default: add a per-variable scope of Page (today), Session (kept in `sessionStorage` for the tab, no consent prompt because it ends with the tab) or URL parameter (read once from `?name=` at load, typed and validated, never written back). No persistent (`localStorage` or cookie) scope until SiteForge has a site-wide consent setting.
+- Alternative: also offer Persistent with a built-in consent banner generated into the site.
+- Tradeoff: session and URL scopes cover filters, tabs and deep links with no privacy prompt; persistent state needs a consent design and legal review first.
+- Safe temporary assumption: page scope only; no storage.
+
+## OD-071 — Later motion slices: timeline, parallax and scroll progress
+
+Status: Open — raised by Code Forge lane C, 2026-11-26. Implementation status: not started (waiting for this decision).
+
+- Affected requirements: SF-1103 (timeline, tracks, keyframes, preview and scrub, reusable transitions), SF-1104 (scroll progress, parallax, sticky coordination, pinning).
+- Context: OD-040's first slice (CSS transitions and reveal on scroll with reduced-motion fallbacks) is built (ADR-0060). OD-040 says "no timeline editor in the first slice" and does not say whether later slices are wanted.
+- Recommended default: next build reusable named transitions (a project list the Motion section picks from) and CSS scroll-progress effects (`animation-timeline: view()` with a static fallback, parallax as a bounded translate only, never pinning), all behind reduced motion. Keep a keyframe timeline editor and pinning out of scope.
+- Alternative: build the full timeline editor with JavaScript-driven animation and pinning.
+- Tradeoff: the recommended slice is CSS-only and stays layout-stable; a timeline editor is a large UI and test surface, and pinning risks trapping scroll (SF-1104 invariant).
+- Safe temporary assumption: only the first slice exists.
+
+## OD-100 — Video and audio files larger than 16 MB
+
+Status: Open — raised by Code Forge lane F, 2026-11-26. Implementation status: not started (waiting for this decision); files over 16 MB are refused with a plain message (ADR-0100).
+
+- Affected requirements: SF-0803-004, SF-0803-007.
+- Context: OD-045 says video/audio are local assets with no transcoding. Project resources are kept in memory and in the package with a 16 MB per-file limit (`ImageAsset.maximumResourceBytes`), which is small for video.
+- Recommended default: keep 16 MB per file for now and tell the author to export a smaller file; revisit with a streamed, file-backed resource store before raising the limit.
+- Alternative: raise the media limit (for example to 200 MB) now and keep large files beside the project instead of in memory.
+- Tradeoff: the default needs no new storage code and stays safe for memory and save time; larger files need streamed import, save and export paths plus new tests.
+- Safe temporary assumption: 16 MB per file.
+
+## OD-120 — Default build budgets and release policy
+
+Status: Open — raised by Code Forge lane H, 2026-11-26. Implementation status: the recommended default is in use as the safe temporary assumption (H03, ADR-0122); each value is one constant in `BuildProfileSettings` / `BuildSettingsResolver`.
+
+- Affected requirements: SF-1208-001, SF-1208-003, SF-1211-003.
+- Context: SF-1211 needs bundle budgets and a release policy that decides whether warnings block writing. Projects that save no build settings follow SiteForge defaults, and the defaults decide which existing sites now see budget warnings.
+- Recommended default: page budget 256 KB per generated HTML file, asset budget 5 MB per file under `assets/`, site budget 50 MB for all written files; release policy "Block on errors only" (warnings never stop writing unless a project chooses "Block Static Release on warnings").
+- Alternative: no budgets by default (0 = no limit) and/or "Block Static Release on warnings" as the default policy.
+- Tradeoff: the default flags heavy pages and files without blocking anyone; no-budget defaults hide size problems, and a blocking default would stop builds that write today.
+- Safe temporary assumption: the recommended default.

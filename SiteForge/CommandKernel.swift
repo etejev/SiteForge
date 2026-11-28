@@ -131,6 +131,9 @@ enum CanonicalPageGraphClone {
                           !preservePageLinks || internalSection { value = .string(destinationPageID.description) }
                 else if key == CanonicalLinkTarget.namespace + "nodeID", internalSection, let old = targetNode, let mapped = ids[old] {
                     value = .string(mapped.description)
+                } else if key == CanonicalEventGraph.interactionsKey {
+                    value = CanonicalEventGraph.remappingTargets(value, nodeMap: ids,
+                        pageMap: preservePageLinks ? [:] : [page.id: destinationPageID])
                 } else if CanonicalComponentAction.overrideID(key) != nil, case .string(let raw) = value,
                           let target = CanonicalComponentAction.decode(raw) {
                     switch target {
@@ -421,8 +424,10 @@ struct PageCommandRegistry {
             // their authored intent atomic with the independent content copy.
             if var metadata = document.websiteMetadata,
                let original = metadata.pages.first(where: { $0.pageID == page.id }) {
+                // SF-1107-005 (ADR-0145): the copy keeps the page's custom code too.
                 metadata.pages.append(.init(pageID: newID, title: original.title,
-                    description: original.description, allowsIndexing: original.allowsIndexing))
+                    description: original.description, allowsIndexing: original.allowsIndexing,
+                    customCode: original.customCode))
                 metadata.pages.sort { $0.pageID.description < $1.pageID.description }
                 commands.append(.setWebsiteMetadata(.init(documentID: document.id, metadata: metadata)))
             }
@@ -463,6 +468,11 @@ enum CommandName: String, CaseIterable, Codable, Sendable {
     case removeImageAsset = "document.asset.image.remove"
     case setColorTokens = "document.colorTokens.set"
     case setWebsiteMetadata = "document.websiteMetadata.set"
+    case setProjectPreferences = "document.projectPreferences.set"
+    case setCollections = "document.collections.set"
+    case setFontAssets = "document.fontAssets.set"
+    case setLocalization = "document.localization.set"
+    case setMediaAssets = "document.mediaAssets.set"
     case batch = "document.batch"
     case undo = "history.undo"
     case redo = "history.redo"
@@ -612,6 +622,118 @@ struct SetWebsiteMetadataCommand: Codable, Equatable, Sendable {
     }
 }
 
+/// SF-0206-001/005: replaces the document's project-scoped preferences as one
+/// transaction; `nil` means the project follows this Mac and SiteForge defaults.
+struct SetProjectPreferencesCommand: Codable, Equatable, Sendable {
+    let documentID: DocumentID
+    let preferences: ProjectPreferences?
+    init(documentID: DocumentID, preferences: ProjectPreferences?) {
+        self.documentID = documentID; self.preferences = preferences
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case documentID, preferences }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        documentID = try values.decode(DocumentID.self, forKey: .documentID)
+        preferences = try values.decodeIfPresent(ProjectPreferences.self, forKey: .preferences)
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(documentID, forKey: .documentID)
+        try values.encode(preferences, forKey: .preferences)
+    }
+}
+
+/// OD-035 / SF-1001-005: replaces the document's collections as one
+/// transaction; an empty list means the project has no collections.
+struct SetCollectionsCommand: Codable, Equatable, Sendable {
+    let documentID: DocumentID
+    let collections: [ContentCollection]
+    init(documentID: DocumentID, collections: [ContentCollection]) {
+        self.documentID = documentID; self.collections = collections
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case documentID, collections }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        documentID = try values.decode(DocumentID.self, forKey: .documentID)
+        collections = try values.decode([ContentCollection].self, forKey: .collections)
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(documentID, forKey: .documentID)
+        try values.encode(collections, forKey: .collections)
+    }
+}
+
+/// OD-045 / SF-0805-005: replaces the project's font faces as one
+/// transaction; an empty list means the project has no fonts. Resource bytes
+/// are installed separately and stay in the project for Undo.
+struct SetFontAssetsCommand: Codable, Equatable, Sendable {
+    let documentID: DocumentID
+    let fontAssets: [FontAsset]
+    init(documentID: DocumentID, fontAssets: [FontAsset]) {
+        self.documentID = documentID; self.fontAssets = fontAssets
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case documentID, fontAssets }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        documentID = try values.decode(DocumentID.self, forKey: .documentID)
+        fontAssets = try values.decode([FontAsset].self, forKey: .fontAssets)
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(documentID, forKey: .documentID)
+        try values.encode(fontAssets, forKey: .fontAssets)
+    }
+}
+
+/// OD-045 / SF-0803-005: replaces the project's video, audio and captions
+/// files as one transaction; an empty list means the project has none.
+/// Resource bytes are installed separately and stay in the project for Undo.
+struct SetMediaAssetsCommand: Codable, Equatable, Sendable {
+    let documentID: DocumentID
+    let mediaAssets: [MediaAsset]
+    init(documentID: DocumentID, mediaAssets: [MediaAsset]) {
+        self.documentID = documentID; self.mediaAssets = mediaAssets
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case documentID, mediaAssets }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        documentID = try values.decode(DocumentID.self, forKey: .documentID)
+        mediaAssets = try values.decode([MediaAsset].self, forKey: .mediaAssets)
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(documentID, forKey: .documentID)
+        try values.encode(mediaAssets, forKey: .mediaAssets)
+    }
+}
+
+/// OD-038 / SF-1007-005: replaces the site's languages as one transaction;
+/// `nil` means the site has one unnamed language (localization off).
+struct SetLocalizationCommand: Codable, Equatable, Sendable {
+    let documentID: DocumentID
+    let localization: SiteLocalization?
+    init(documentID: DocumentID, localization: SiteLocalization?) {
+        self.documentID = documentID; self.localization = localization
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case documentID, localization }
+    init(from decoder: Decoder) throws {
+        try requireExactKeys(CodingKeys.self, in: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        documentID = try values.decode(DocumentID.self, forKey: .documentID)
+        localization = try values.decodeIfPresent(SiteLocalization.self, forKey: .localization)
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(documentID, forKey: .documentID)
+        try values.encode(localization, forKey: .localization)
+    }
+}
+
 indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case insertPage(InsertPageCommand)
     case removePage(RemovePageCommand)
@@ -631,11 +753,21 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
     case removeImageAsset(RemoveImageAssetCommand)
     case setColorTokens(SetColorTokensCommand)
     case setWebsiteMetadata(SetWebsiteMetadataCommand)
+    case setProjectPreferences(SetProjectPreferencesCommand)
+    case setCollections(SetCollectionsCommand)
+    case setFontAssets(SetFontAssetsCommand)
+    case setLocalization(SetLocalizationCommand)
+    case setMediaAssets(SetMediaAssetsCommand)
     case batch([DocumentCommand])
 
     var minimumPersistedHistorySchema: Int {
         switch self {
         case .setWebsiteMetadata: 3
+        case .setProjectPreferences: 4
+        case .setCollections: 4
+        case .setFontAssets: 4
+        case .setLocalization: 4
+        case .setMediaAssets: 4
         case .batch(let commands): commands.map(\.minimumPersistedHistorySchema).max() ?? 1
         default: 1
         }
@@ -661,6 +793,11 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
         case .removeImageAsset: .removeImageAsset
         case .setColorTokens: .setColorTokens
         case .setWebsiteMetadata: .setWebsiteMetadata
+        case .setProjectPreferences: .setProjectPreferences
+        case .setCollections: .setCollections
+        case .setFontAssets: .setFontAssets
+        case .setLocalization: .setLocalization
+        case .setMediaAssets: .setMediaAssets
         case .batch: .batch
         }
     }
@@ -714,6 +851,16 @@ indirect enum DocumentCommand: Codable, Equatable, Sendable {
             command.tokens.map { CommandTarget(namespace: "color-token", rawValue: $0.id.rawValue) }
         case .setWebsiteMetadata(let command):
             [command.documentID.commandTarget] + (command.metadata?.pages.map { $0.pageID.commandTarget } ?? [])
+        case .setProjectPreferences(let command):
+            [command.documentID.commandTarget]
+        case .setCollections(let command):
+            [command.documentID.commandTarget] + command.collections.map { $0.id.commandTarget }
+        case .setFontAssets(let command):
+            [command.documentID.commandTarget] + command.fontAssets.map { $0.id.commandTarget }
+        case .setLocalization(let command):
+            [command.documentID.commandTarget] + (command.localization?.locales.map { $0.id.commandTarget } ?? [])
+        case .setMediaAssets(let command):
+            [command.documentID.commandTarget] + command.mediaAssets.map { $0.id.commandTarget }
         case .batch(let commands):
             commands.flatMap(\.targets)
         }
@@ -780,6 +927,11 @@ struct CommandRegistry {
             CommandDescriptor(name: .removeImageAsset, title: "Delete Image Asset", mutatesDocument: true),
             CommandDescriptor(name: .setColorTokens, title: "Edit Color Tokens", mutatesDocument: true),
             CommandDescriptor(name: .setWebsiteMetadata, title: "Edit Site Settings", mutatesDocument: true),
+            CommandDescriptor(name: .setProjectPreferences, title: "Edit Project Preferences", mutatesDocument: true),
+            CommandDescriptor(name: .setCollections, title: "Edit Collections", mutatesDocument: true),
+            CommandDescriptor(name: .setFontAssets, title: "Edit Fonts", mutatesDocument: true),
+            CommandDescriptor(name: .setLocalization, title: "Edit Languages", mutatesDocument: true),
+            CommandDescriptor(name: .setMediaAssets, title: "Edit Video and Audio", mutatesDocument: true),
             CommandDescriptor(name: .batch, title: "Grouped Edit", mutatesDocument: true),
             CommandDescriptor(name: .undo, title: "Undo", mutatesDocument: true),
             CommandDescriptor(name: .redo, title: "Redo", mutatesDocument: true),
@@ -978,6 +1130,16 @@ struct CommandRegistry {
             guard document.websiteMetadata?.faviconAssetID != value.assetID else {
                 return .disabled(reason: "This image is the site favicon. Choose another favicon or remove it in Site Settings before deleting this asset.")
             }
+            guard document.websiteMetadata?.socialImageAssetID != value.assetID else {
+                return .disabled(reason: "This image is the site's social image. Choose another one or remove it in Website Settings before deleting this asset.")
+            }
+            guard !CanonicalCollections.usesAsset(value.assetID, in: document.collections) else {
+                return .disabled(reason: "Collection items use this image. Change or clear those image fields in Collections before deleting this asset.")
+            }
+            // OD-038 (ADR-0081): a translated image keeps its asset in use.
+            guard !CanonicalTranslations.usesAsset(value.assetID, in: document) else {
+                return .disabled(reason: "A translation uses this image. Change or clear that translated image before deleting this asset.")
+            }
             let reference = value.assetID.description
             guard !document.pages.flatMap(\.nodes).contains(where: {
                 $0.insertionStringProperty(CanonicalImageStyle.namespace + "assetID") == reference
@@ -994,6 +1156,31 @@ struct CommandRegistry {
         case .setWebsiteMetadata(let value):
             guard value.documentID == document.id else { return .disabled(reason: "The site settings belong to another document.") }
             guard value.metadata != document.websiteMetadata else { return .disabled(reason: "Site settings are unchanged.") }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .setProjectPreferences(let value):
+            guard value.documentID == document.id else { return .disabled(reason: "The project preferences belong to another document.") }
+            guard value.preferences != document.projectPreferences else { return .disabled(reason: "Project preferences are unchanged.") }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .setCollections(let value):
+            guard value.documentID == document.id else { return .disabled(reason: "The collections belong to another document.") }
+            guard value.collections != document.collections else { return .disabled(reason: "Collections are unchanged.") }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .setFontAssets(let value):
+            guard value.documentID == document.id else { return .disabled(reason: "The fonts belong to another document.") }
+            guard value.fontAssets != document.fontAssets else { return .disabled(reason: "Fonts are unchanged.") }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .setLocalization(let value):
+            guard value.documentID == document.id else { return .disabled(reason: "The languages belong to another document.") }
+            guard value.localization != document.localization else { return .disabled(reason: "Languages are unchanged.") }
+            return validationAvailability(afterApplying: command, to: document)
+
+        case .setMediaAssets(let value):
+            guard value.documentID == document.id else { return .disabled(reason: "The video and audio files belong to another document.") }
+            guard value.mediaAssets != document.mediaAssets else { return .disabled(reason: "Video and audio files are unchanged.") }
             return validationAvailability(afterApplying: command, to: document)
 
         case .batch(let commands):
@@ -1303,6 +1490,36 @@ struct CommandRegistry {
             document.websiteMetadata = value.metadata
             return CommandMutation(inverse: .setWebsiteMetadata(.init(documentID: document.id, metadata: previous)))
 
+        case .setProjectPreferences(let value):
+            guard value.documentID == document.id else { throw CommandExecutionError.disabled("The project preferences belong to another document.") }
+            let previous = document.projectPreferences
+            document.projectPreferences = value.preferences
+            return CommandMutation(inverse: .setProjectPreferences(.init(documentID: document.id, preferences: previous)))
+
+        case .setCollections(let value):
+            guard value.documentID == document.id else { throw CommandExecutionError.disabled("The collections belong to another document.") }
+            let previous = document.collections
+            document.collections = value.collections
+            return CommandMutation(inverse: .setCollections(.init(documentID: document.id, collections: previous)))
+
+        case .setFontAssets(let value):
+            guard value.documentID == document.id else { throw CommandExecutionError.disabled("The fonts belong to another document.") }
+            let previous = document.fontAssets
+            document.fontAssets = value.fontAssets
+            return CommandMutation(inverse: .setFontAssets(.init(documentID: document.id, fontAssets: previous)))
+
+        case .setLocalization(let value):
+            guard value.documentID == document.id else { throw CommandExecutionError.disabled("The languages belong to another document.") }
+            let previous = document.localization
+            document.localization = value.localization
+            return CommandMutation(inverse: .setLocalization(.init(documentID: document.id, localization: previous)))
+
+        case .setMediaAssets(let value):
+            guard value.documentID == document.id else { throw CommandExecutionError.disabled("The video and audio files belong to another document.") }
+            let previous = document.mediaAssets
+            document.mediaAssets = value.mediaAssets
+            return CommandMutation(inverse: .setMediaAssets(.init(documentID: document.id, mediaAssets: previous)))
+
         case .batch(let commands):
             var inverses: [DocumentCommand] = []
             for nestedCommand in commands {
@@ -1410,15 +1627,43 @@ final class CommandDiagnostics {
                durationMilliseconds: durationMilliseconds, result: .failure, failureCategory: .validation)
     }
 
-    func recordComponentOperation(pageID: PageID, nodeIDs: [NodeID], succeeded: Bool, durationMilliseconds: Double) {
-        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0901-008", "SF-0902-008", "SF-0905-005", "SF-0905-008"],
+    /// `slotOperation` adds SF-0903-008 for slot edits (`ComponentEdit.isSlotEdit`).
+    func recordComponentOperation(pageID: PageID, nodeIDs: [NodeID], succeeded: Bool, durationMilliseconds: Double,
+                                  slotOperation: Bool = false) {
+        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0901-008", "SF-0902-008", "SF-0905-005", "SF-0905-008"]
+                + (slotOperation ? ["SF-0903-008"] : []),
             commandName: .batch, sanitizedIdentifiers: ([pageID.commandTarget] + nodeIDs.map(\.commandTarget)).map(sanitize),
             durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
             failureCategory: succeeded ? nil : .validation))
     }
+    func recordComponentUsageNotesOperation(definitionID: PageID, command: CommandName,
+                                           result: DiagnosticResult, durationMilliseconds: Double) {
+        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0907-001", "SF-0907-002", "SF-0907-003", "SF-0907-004", "SF-0907-005", "SF-0907-006", "SF-0907-008"],
+            commandName: command, sanitizedIdentifiers: [sanitize(definitionID.commandTarget)],
+            durationMilliseconds: max(0, durationMilliseconds), result: result,
+            failureCategory: result == .success ? nil : (result == .cancelled ? .cancellation : .validation)))
+    }
+
     func recordPageStructureOperation(pageID: PageID, nodeIDs: [NodeID], succeeded: Bool, durationMilliseconds: Double) {
         buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0501-008", "SF-0502-005", "SF-0806-008", "SF-0304-005"],
             commandName: .batch, sanitizedIdentifiers: ([pageID.commandTarget] + nodeIDs.map(\.commandTarget)).map(sanitize),
+            durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
+            failureCategory: succeeded ? nil : .validation))
+    }
+
+    /// SF-0704-008: Clear Winning Value, by stable identity only (no values).
+    func recordValueSourceOperation(pageID: PageID, nodeID: NodeID, succeeded: Bool, durationMilliseconds: Double) {
+        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0704-002", "SF-0704-005", "SF-0704-008"],
+            commandName: .batch, sanitizedIdentifiers: [pageID.commandTarget, nodeID.commandTarget].map(sanitize),
+            durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
+            failureCategory: succeeded ? nil : .validation))
+    }
+
+    /// SF-0807-008: Use Another Asset Instead and Remove Unused Assets, by
+    /// stable identity only (no names, file names or bytes).
+    func recordAssetDependencyOperation(assetIDs: [AssetID], succeeded: Bool, durationMilliseconds: Double) {
+        buffer.append(CommandDiagnosticRecord(requirementIDs: ["SF-0807-002", "SF-0807-004", "SF-0807-005", "SF-0807-008"],
+            commandName: .batch, sanitizedIdentifiers: assetIDs.map(\.commandTarget).map(sanitize),
             durationMilliseconds: max(0, durationMilliseconds), result: succeeded ? .success : .failure,
             failureCategory: succeeded ? nil : .validation))
     }
@@ -1461,6 +1706,46 @@ final class CommandDiagnostics {
     }
 }
 
+/// SF-0307-001/002: one row of the named history list, oldest first. Applied
+/// rows are the undo side; the newest applied row is the current state.
+struct HistoryListItem: Equatable, Identifiable, Sendable {
+    let id: TransactionID
+    let name: String
+    let timestamp: ProjectTimestamp
+    let isApplied: Bool
+    let isCurrent: Bool
+    /// False for the rows that saving drops once there are more than
+    /// `PersistedHistoryStore.maximumEntryCount`: the oldest Undo rows first,
+    /// then the farthest Redo rows (`PersistedHistoryStore.removingOldest`).
+    /// The byte limit can drop more.
+    let persistsOnSave: Bool
+    let pageIDs: [PageID]
+}
+
+/// SF-0306-002: identifies edits that may merge into one undo step, for
+/// example repeated keyboard nudges of the same selection. Not persisted.
+struct TransactionCoalescingKey: Hashable, Sendable {
+    let kind: String
+    let identifiers: [String]
+}
+
+/// SF-0306-008 / SF-0307-008: one redacted record per merged undo step,
+/// in-memory journal trim or history jump. Counts, durations and failure
+/// categories only, never names, identifiers or content.
+struct TransactionHistoryDiagnosticRecord: Equatable, Sendable {
+    enum Operation: String, Equatable, Sendable {
+        case coalesce
+        case trim
+        case jump
+    }
+
+    let requirementID: String
+    let operation: Operation
+    let stepCount: Int
+    let durationNanoseconds: UInt64
+    let failureCategory: String?
+}
+
 struct HistoryEntry: Codable, Equatable, Sendable {
     let id: TransactionID
     let parentRevision: UInt64
@@ -1490,9 +1775,29 @@ final class DocumentSession: ObservableObject {
     private var undoStack: [HistoryEntry] = []
     private var redoStack: [HistoryEntry] = []
     private(set) var historyBoundaryRevision: UInt64
+    /// SF-0306-002/004: undo steps merged by `executeCoalescing` and entries
+    /// dropped by the bounded journal, for diagnostics and tests.
+    private(set) var coalescedTransactionCount: UInt64 = 0
+    private(set) var droppedTransactionCount: UInt64 = 0
+    private var coalescing: (key: TransactionCoalescingKey, at: Date)?
+    static let maximumUndoEntries = 1_000
+    static let coalescingWindow: TimeInterval = 1.0
+    static let maximumCoalescedCommands = 256
+    private(set) var transactionDiagnostics = BoundedDiagnosticBuffer<TransactionHistoryDiagnosticRecord>()
+    var transactionDiagnosticRecords: [TransactionHistoryDiagnosticRecord] { transactionDiagnostics.snapshot() }
 
     let registry: CommandRegistry
     let diagnostics: CommandDiagnostics
+    /// OD-033: while a component variant is being edited, the workspace
+    /// installs the one conversion point that stores edits as that variant's
+    /// overrides and refuses structure edits. Only new commands pass through
+    /// it; undo and redo replay commands that were already converted.
+    var authoringTransform: ((DocumentCommand, CanonicalDocument) throws -> DocumentCommand)?
+
+    /// OD-046 (ADR-0041): checks the result of each new command before it is
+    /// committed (copies from shared component libraries are read-only). It
+    /// throws `CommandExecutionError`. Undo and redo are not checked.
+    var commitGuard: ((CanonicalDocument, CanonicalDocument) throws -> Void)?
 
     init(
         document: CanonicalDocument = CanonicalDocument(),
@@ -1509,6 +1814,17 @@ final class DocumentSession: ObservableObject {
     var canRedo: Bool { !redoStack.isEmpty }
     var nextUndoLabel: String? { undoStack.last?.label }
     var nextRedoLabel: String? { redoStack.last?.label }
+    /// SF-0306-006: what the next Undo or Redo reverts, for accessibility
+    /// values. A grouped step keeps its registry title first (UI tests and
+    /// persisted history use it) and adds what it groups, for example
+    /// "Grouped Edit: Move Node (3 changes)".
+    var nextUndoDescription: String? { undoStack.last.map { historyDescription($0) } }
+    var nextRedoDescription: String? { redoStack.last.map { historyDescription($0) } }
+
+    private func historyDescription(_ entry: HistoryEntry) -> String {
+        let name = transactionName(for: entry)
+        return name == entry.label ? name : "\(entry.label): \(name)"
+    }
 
     var undoAvailability: CommandAvailability {
         registry.historyAvailability(for: .undo, canUndo: canUndo, canRedo: canRedo)
@@ -1527,6 +1843,7 @@ final class DocumentSession: ObservableObject {
         redoStack.removeAll()
         historyBoundaryRevision = boundaryRevision ?? baseline.revision
         lastError = nil
+        coalescing = nil
     }
 
     @discardableResult
@@ -1534,19 +1851,203 @@ final class DocumentSession: ObservableObject {
         _ command: DocumentCommand,
         cancellation: CommandCancellation = .never
     ) throws -> CanonicalDocument {
+        coalescing = nil
         let parentRevision = document.revision
-        let mutation = try commit(command, diagnosticName: command.name, cancellation: cancellation)
+        let effective = try authoringTransform?(command, document) ?? command
+        let mutation = try commit(effective, diagnosticName: effective.name, cancellation: cancellation,
+                                  check: commitGuard)
         undoStack.append(HistoryEntry(
             id: TransactionID(), parentRevision: parentRevision, resultRevision: document.revision,
-            commandName: command.name, label: registry.descriptor(for: command.name).title,
-            timestamp: ProjectTimestamp(date: Date()), affectedIdentifiers: command.targets,
-            forward: command, inverse: mutation.inverse
+            commandName: effective.name, label: registry.descriptor(for: effective.name).title,
+            timestamp: ProjectTimestamp(date: Date()), affectedIdentifiers: effective.targets,
+            forward: effective, inverse: mutation.inverse
         ))
+        trimUndoJournal()
         redoStack.removeAll()
         return document
     }
 
+    /// SF-0306-002/003: commits `command` as one transaction, merged into the
+    /// previous one when that was committed with the same `key` at most
+    /// `coalescingWindow` seconds earlier and nothing came between (undo, redo,
+    /// another edit, a save, a new baseline). A merged entry is still exactly one
+    /// revision whose forward and inverse are flat batches, so persisted
+    /// history validates it, and one Undo returns to the state before the first
+    /// merged edit. A failed command commits nothing and ends coalescing.
+    @discardableResult
+    func executeCoalescing(
+        _ command: DocumentCommand,
+        key: TransactionCoalescingKey,
+        at now: Date = Date()
+    ) throws -> CanonicalDocument {
+        var mergeTarget: HistoryEntry?
+        if let previous = undoStack.last, let active = coalescing, active.key == key, redoStack.isEmpty,
+           previous.resultRevision == document.revision, previous.parentRevision >= historyBoundaryRevision,
+           now >= active.at, now.timeIntervalSince(active.at) <= Self.coalescingWindow {
+            mergeTarget = previous
+        }
+        coalescing = nil
+        let start = DispatchTime.now().uptimeNanoseconds
+        let parentRevision = document.revision
+        let effective = try authoringTransform?(command, document) ?? command
+        let mutation = try commit(effective, diagnosticName: effective.name, cancellation: .never,
+                                  check: commitGuard)
+        let steps = Self.flattenedCommands(effective)
+        if let mergeTarget,
+           Self.flattenedCommands(mergeTarget.forward).count + steps.count <= Self.maximumCoalescedCommands {
+            let forward = DocumentCommand.batch(Self.flattenedCommands(mergeTarget.forward) + steps)
+            let inverse = DocumentCommand.batch(
+                Self.flattenedCommands(mutation.inverse) + Self.flattenedCommands(mergeTarget.inverse))
+            undoStack[undoStack.count - 1] = HistoryEntry(
+                id: TransactionID(), parentRevision: parentRevision, resultRevision: document.revision,
+                commandName: forward.name, label: registry.descriptor(for: forward.name).title,
+                timestamp: ProjectTimestamp(date: now), affectedIdentifiers: forward.targets,
+                forward: forward, inverse: inverse
+            )
+            coalescedTransactionCount += 1
+            recordTransactionDiagnostic(.coalesce, steps: Self.flattenedCommands(forward).count, start: start, failure: nil)
+        } else {
+            undoStack.append(HistoryEntry(
+                id: TransactionID(), parentRevision: parentRevision, resultRevision: document.revision,
+                commandName: effective.name, label: registry.descriptor(for: effective.name).title,
+                timestamp: ProjectTimestamp(date: now), affectedIdentifiers: effective.targets,
+                forward: effective, inverse: mutation.inverse
+            ))
+            trimUndoJournal()
+        }
+        redoStack.removeAll()
+        coalescing = (key, now)
+        return document
+    }
+
+    /// Ends any coalescing run, so the next edit starts a new undo step. The
+    /// lifecycle calls this before it captures history for a save or autosave.
+    func endCoalescing() {
+        coalescing = nil
+    }
+
+    /// SF-0306-003: a non-content name for a history entry. A grouped batch
+    /// made of one kind of change is named after that kind and its count;
+    /// everything else uses the registry title that persisted history validates.
+    func transactionName(for entry: HistoryEntry) -> String {
+        let steps = Self.flattenedCommands(entry.forward)
+        guard case .batch = entry.forward, let first = steps.first,
+              steps.allSatisfy({ $0.name == first.name }) else {
+            return entry.label
+        }
+        let title = registry.descriptor(for: first.name).title
+        return steps.count == 1 ? title : "\(title) (\(steps.count) changes)"
+    }
+
+    /// SF-0307-002: applied entries oldest first, then the entries Redo would
+    /// apply, nearest first.
+    func historyList() -> [HistoryListItem] {
+        let ordered: [(entry: HistoryEntry, applied: Bool)] = undoStack.map { (entry: $0, applied: true) }
+            + redoStack.reversed().map { (entry: $0, applied: false) }
+        // Mirrors `PersistedHistoryStore.removingOldest`: the oldest Undo
+        // entries go first, then the farthest Redo entries (the list's tail).
+        let excess = max(0, ordered.count - PersistedHistoryStore.maximumEntryCount)
+        let droppedUndo = min(excess, undoStack.count)
+        let keptEnd = ordered.count - (excess - droppedUndo)
+        return ordered.enumerated().map { index, row in
+            HistoryListItem(
+                id: row.entry.id, name: transactionName(for: row.entry), timestamp: row.entry.timestamp,
+                isApplied: row.applied, isCurrent: row.applied && index == undoStack.count - 1,
+                persistsOnSave: index >= droppedUndo && index < keptEnd, pageIDs: Self.pageIDs(affectedBy: row.entry)
+            )
+        }
+    }
+
+    /// The pages the next Undo or Redo changes, for following them (SF-0307-005).
+    var nextUndoPageIDs: [PageID] { undoStack.last.map { Self.pageIDs(affectedBy: $0) } ?? [] }
+    var nextRedoPageIDs: [PageID] { redoStack.last.map { Self.pageIDs(affectedBy: $0) } ?? [] }
+
+    static func pageIDs(affectedBy entry: HistoryEntry) -> [PageID] {
+        var seen = Set<UUID>()
+        return entry.affectedIdentifiers.compactMap { target in
+            guard target.namespace == PageIdentifierDomain.diagnosticNamespace,
+                  seen.insert(target.rawValue).inserted else { return nil }
+            return PageID(target.rawValue)
+        }
+    }
+
+    /// SF-0307-003: moves to the state right after entry `id` (nil: the oldest
+    /// reachable state) one ordinary Undo or Redo at a time, so the history
+    /// boundary and every validation still apply. If a step fails, the steps
+    /// already taken are reversed and the error is thrown, leaving the content
+    /// and both stacks as they were. Returns the number of steps taken.
+    @discardableResult
+    func jump(toStateAfter id: TransactionID?) throws -> Int {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let target: Int
+        if let id {
+            if let index = undoStack.firstIndex(where: { $0.id == id }) {
+                target = index + 1
+            } else if let index = redoStack.firstIndex(where: { $0.id == id }) {
+                target = undoStack.count + (redoStack.count - index)
+            } else {
+                recordTransactionDiagnostic(.jump, steps: 0, start: start, failure: "not-found")
+                throw CommandExecutionError.disabled("This history step is no longer available.")
+            }
+        } else {
+            target = 0
+        }
+        var undone = 0
+        var redone = 0
+        do {
+            while undoStack.count > target { try undo(); undone += 1 }
+            while undoStack.count < target { try redo(); redone += 1 }
+        } catch {
+            for _ in 0..<undone { try? redo() }
+            for _ in 0..<redone { try? undo() }
+            recordTransactionDiagnostic(.jump, steps: undone + redone, start: start,
+                                        failure: Self.transactionFailureCategory(error))
+            throw error
+        }
+        recordTransactionDiagnostic(.jump, steps: undone + redone, start: start, failure: nil)
+        return undone + redone
+    }
+
+    private func recordTransactionDiagnostic(_ operation: TransactionHistoryDiagnosticRecord.Operation, steps: Int,
+                                             start: UInt64, failure: String?) {
+        transactionDiagnostics.append(TransactionHistoryDiagnosticRecord(
+            requirementID: operation == .jump ? "SF-0307-008" : "SF-0306-008",
+            operation: operation, stepCount: steps,
+            durationNanoseconds: DispatchTime.now().uptimeNanoseconds - start, failureCategory: failure))
+    }
+
+    private static func transactionFailureCategory(_ error: Error) -> String {
+        guard let error = error as? CommandExecutionError else { return "unexpected" }
+        switch error {
+        case .cancelled: return "cancelled"
+        case .disabled: return "unavailable"
+        case .revisionExhausted: return "revision-exhausted"
+        case .invalidResult: return "invalid-result"
+        }
+    }
+
+    static func flattenedCommands(_ command: DocumentCommand) -> [DocumentCommand] {
+        if case .batch(let commands) = command { return commands.flatMap(flattenedCommands) }
+        return [command]
+    }
+
+    /// SF-0306-004: the in-memory journal is bounded. The oldest entries are
+    /// dropped first and the minimum boundary advances past them (ADR-0003
+    /// retention), so Undo can never reach a state without its entry.
+    private func trimUndoJournal() {
+        let excess = undoStack.count - Self.maximumUndoEntries
+        guard excess > 0 else { return }
+        let start = DispatchTime.now().uptimeNanoseconds
+        if let lastDropped = undoStack.prefix(excess).last {
+            historyBoundaryRevision = max(historyBoundaryRevision, lastDropped.resultRevision)
+        }
+        undoStack.removeFirst(excess)
+        droppedTransactionCount += UInt64(excess)
+        recordTransactionDiagnostic(.trim, steps: excess, start: start, failure: nil)
+    }
+
     func undo() throws {
+        coalescing = nil
         guard let entry = undoStack.last else {
             throw CommandExecutionError.disabled(
                 undoAvailability.disabledReason ?? "Undo is unavailable."
@@ -1558,6 +2059,7 @@ final class DocumentSession: ObservableObject {
     }
 
     func redo() throws {
+        coalescing = nil
         guard let entry = redoStack.last else {
             throw CommandExecutionError.disabled(
                 redoAvailability.disabledReason ?? "Redo is unavailable."
@@ -1588,13 +2090,15 @@ final class DocumentSession: ObservableObject {
         redoStack = snapshot.redoEntries
         historyBoundaryRevision = snapshot.boundaryRevision
         lastError = nil
+        coalescing = nil
         objectWillChange.send()
     }
 
     private func commit(
         _ command: DocumentCommand,
         diagnosticName: CommandName,
-        cancellation: CommandCancellation
+        cancellation: CommandCancellation,
+        check: ((CanonicalDocument, CanonicalDocument) throws -> Void)? = nil
     ) throws -> CommandMutation {
         let start = DispatchTime.now().uptimeNanoseconds
         let committedDocument = document
@@ -1622,6 +2126,7 @@ final class DocumentSession: ObservableObject {
             } catch let error as ModelValidationError {
                 throw CommandExecutionError.invalidResult(error)
             }
+            try check?(committedDocument, draft)
             document = draft
             lastError = nil
             recordDiagnostic(

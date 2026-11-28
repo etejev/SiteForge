@@ -8,6 +8,8 @@ command always executes the full unit and UI test suite.
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import subprocess
 import sys
 import unittest
@@ -20,6 +22,10 @@ QUICK_SELECTORS = (
 )
 
 SOURCE_TESTS = {
+    "DecorativeEffects.swift": ("TransformModelTests", "CanvasRendererTests"),
+    "DecorativeEffectsInspector.swift": ("CanvasTextRenderingTests", "SiteForgeLaunchTests"),
+    "FastStyleControls.swift": ("CanvasTextRenderingTests", "InsertionModelTests", "SiteForgeLaunchTests"),
+    "FooterContent.swift": ("TransformModelTests", "ProjectResourceTests", "SiteForgeLaunchTests"),
     "CanvasRendererCore.swift": ("CanvasRendererTests", "SelectionModelTests"),
     "CanvasViewport.swift": ("CanvasViewportTests", "CanvasRendererTests"),
     "CommandKernel.swift": ("CommandKernelTests", "InsertionModelTests"),
@@ -118,6 +124,8 @@ def selector_for_test_path(path: str) -> str | None:
     if len(parts) != 3 or parts[0] != "Tests":
         return None
     stem = Path(path).stem
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stem):
+        return None
     if parts[1] == "SiteForgeTests" and stem.endswith("Tests"):
         return f"SiteForgeTests/{stem}"
     if parts[1] == "SiteForgeUITests" and stem.endswith("Tests"):
@@ -125,8 +133,12 @@ def selector_for_test_path(path: str) -> str | None:
     return None
 
 
-def select_for_paths(paths: list[str]) -> tuple[str, ...] | None:
-    """Return selectors, or None when the full suite is the safe choice."""
+def select_for_paths(paths: list[str], root: Path | None = None) -> tuple[str, ...] | None:
+    """Return requested coverage hints, or None for an unresolved scope.
+
+    Root-aware callers reject missing test files. Built enumeration, rather
+    than Swift parsing or an old inventory, resolves executable methods.
+    """
     selectors: set[str] = set()
     relevant_path_seen = False
 
@@ -142,6 +154,8 @@ def select_for_paths(paths: list[str]) -> tuple[str, ...] | None:
 
         direct_selector = selector_for_test_path(path)
         if direct_selector:
+            if root is not None and not (root / path).is_file():
+                return None
             selectors.add(direct_selector)
             continue
 
@@ -155,6 +169,8 @@ def select_for_paths(paths: list[str]) -> tuple[str, ...] | None:
                     if test_name.startswith("SiteForgeLaunchTests")
                     else "SiteForgeTests"
                 )
+                if root is not None and not (root / "Tests" / target / (test_name.split("/")[0] + ".swift")).is_file():
+                    return None
                 selectors.add(f"{target}/{test_name}")
             continue
 
@@ -162,8 +178,8 @@ def select_for_paths(paths: list[str]) -> tuple[str, ...] | None:
             selectors.update(QUICK_SELECTORS)
             continue
 
-        # Build/test orchestration and unknown production inputs can affect every
-        # target. Escalating is more efficient than trusting an incomplete map.
+        # Unknown inputs require an explicit owner choice; never silently widen
+        # a local affected-scope request to the complete suite.
         if path == "sf" or path.startswith("scripts/") or path.startswith("Tests/"):
             return None
 
@@ -181,9 +197,8 @@ def git_lines(root: Path, *arguments: str) -> list[str]:
         cwd=root,
         check=True,
         capture_output=True,
-        text=True,
     )
-    return [line for line in result.stdout.splitlines() if line]
+    return [os.fsdecode(path) for path in result.stdout.split(b"\0") if path]
 
 
 def changed_paths(root: Path, base: str) -> list[str]:
@@ -201,24 +216,24 @@ def changed_paths(root: Path, base: str) -> list[str]:
             git_lines(
                 root,
                 "diff",
-                "--name-only",
-                "--diff-filter=ACMRTUXB",
+                "--name-only", "-z", "--no-renames",
+                "--diff-filter=ACDMRTUXB",
                 f"{base}...HEAD",
             )
         )
     paths.update(
-        git_lines(root, "diff", "--name-only", "--diff-filter=ACMRTUXB")
+        git_lines(root, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACDMRTUXB")
     )
     paths.update(
         git_lines(
             root,
             "diff",
             "--cached",
-            "--name-only",
-            "--diff-filter=ACMRTUXB",
+            "--name-only", "-z", "--no-renames",
+            "--diff-filter=ACDMRTUXB",
         )
     )
-    paths.update(git_lines(root, "ls-files", "--others", "--exclude-standard"))
+    paths.update(git_lines(root, "ls-files", "-z", "--others", "--exclude-standard"))
     return sorted(paths)
 
 
@@ -272,7 +287,7 @@ def main() -> int:
         result = unittest.TextTestRunner(verbosity=1).run(suite)
         return 0 if result.wasSuccessful() else 1
 
-    selection = select_for_paths(changed_paths(args.root.resolve(), args.base))
+    selection = select_for_paths(changed_paths(args.root.resolve(), args.base), args.root.resolve())
     if selection is None:
         print("FULL")
     else:

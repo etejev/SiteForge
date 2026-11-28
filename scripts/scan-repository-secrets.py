@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 import sys
@@ -42,14 +43,19 @@ SENSITIVE_NAMES = {
 SENSITIVE_SUFFIXES = {".p12", ".pfx", ".key", ".pem", ".mobileprovision", ".provisionprofile"}
 
 
-def iter_files(root: Path):
-    for path in root.rglob("*"):
-        relative = path.relative_to(root)
-        if any(part in SKIP_DIRECTORIES or any(part.endswith(suffix) for suffix in SKIP_SUFFIXES)
-               for part in relative.parts):
-            continue
-        if path.is_file():
-            yield path, relative
+def is_excluded(name: str) -> bool:
+    return name in SKIP_DIRECTORIES or name.endswith(tuple(SKIP_SUFFIXES))
+
+
+def iter_files(root: Path, on_error):
+    for directory, subdirectories, files in os.walk(root, onerror=on_error, followlinks=False):
+        subdirectories[:] = [name for name in subdirectories if not is_excluded(name)]
+        for name in files:
+            if is_excluded(name):
+                continue
+            path = Path(directory) / name
+            if path.is_file():
+                yield path, path.relative_to(root)
 
 
 def scan_file(path: Path, relative: Path) -> list[Finding]:
@@ -77,7 +83,12 @@ def scan_file(path: Path, relative: Path) -> list[Finding]:
 
 def scan(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    for path, relative in iter_files(root):
+
+    def record_directory_error(error: OSError) -> None:
+        directory = Path(error.filename) if error.filename is not None else root
+        findings.append(Finding(directory.relative_to(root), 1, "unreadable-directory"))
+
+    for path, relative in iter_files(root, record_directory_error):
         findings.extend(scan_file(path, relative))
     return findings
 

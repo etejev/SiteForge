@@ -110,6 +110,12 @@ def restore_skip_reasons(entries, transcript):
         entry["reasons"] = re.findall(r"(?m)^/[^\n]+:\d+: " + marker + r"([^\r\n]+)$", transcript)
 
 
+def approved_skip(record):
+    reason = SKIPS.get(record["selector"])
+    return (record["outcome"] == "Skipped" and reason is not None
+            and record["reasons"] in ([reason], ["Test skipped - " + reason]))
+
+
 def reconcile(receipts, groups, sha):
     labels = ["core", *(f"ui-{i}" for i in range(1, SHARDS + 1))]
     errors = []
@@ -143,11 +149,9 @@ def reconcile(receipts, groups, sha):
             errors.append(str(error))
         for key, record in zip(keys, entries, strict=True):
             outcome = record["outcome"]
-            if outcome == "Skipped" and key in SKIPS:
-                reason = SKIPS[key]
-                if record["reasons"] in ([reason], ["Test skipped - " + reason]):
-                    print(f"  {key}: {reason}")
-                    continue
+            if approved_skip(record):
+                print(f"  {key}: {SKIPS[key]}")
+                continue
             if outcome != "Passed":
                 errors.append(f"{key}: {outcome} {record['reasons']}")
     require(not errors, "\n".join(errors))

@@ -553,10 +553,25 @@ struct CanvasViewportAdoptionGate: Sendable {
 /// Editor-only grid policy. The values are world units, so grid lines pan and
 /// zoom with the viewport and never enter canonical project state.
 enum CanvasWorldGridPolicy {
+    static let defaultBaseInterval = 16.0
     static func minorInterval(for zoom: Double) -> Double {
-        zoom < 0.5 ? 64 : (zoom > 4 ? 8 : 16)
+        minorInterval(for: zoom, base: defaultBaseInterval)
+    }
+    /// The default grid's densest band (16 pt at 50%). No base interval may
+    /// draw denser, which bounds line count on every zoom (SF-0206-007).
+    static let minimumScreenSpacing = 8.0
+    /// SF-0206-003: a project's base interval keeps the same zoom bands
+    /// (4x when zoomed out, half when zoomed in). Invalid input uses the default.
+    static func minorInterval(for zoom: Double, base: Double) -> Double {
+        let interval = base.isFinite && base > 0 ? base : defaultBaseInterval
+        var minor = zoom < 0.5 ? interval * 4 : (zoom > 4 ? interval / 2 : interval)
+        if zoom.isFinite, zoom > 0 {
+            while minor * zoom < minimumScreenSpacing - 0.000_001 { minor *= 2 }
+        }
+        return minor
     }
     static func majorInterval(for zoom: Double) -> Double { minorInterval(for: zoom) * 4 }
+    static func majorInterval(for zoom: Double, base: Double) -> Double { minorInterval(for: zoom, base: base) * 4 }
     static func deviceAligned(_ viewportValue: Double, scale: Double) -> Double {
         (viewportValue * scale).rounded() / scale
     }

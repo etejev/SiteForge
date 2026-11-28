@@ -1,5 +1,215 @@
 # SiteForge Implementation Status
 
+## November 27 — Focused stabilization verified
+
+The frozen run `20261127-092146-994865f2` recorded 14 regular failures and
+24 UI failures with three approved skips. The owner requested replays of
+the failed selectors for this commit. All 14 regular selectors have passing
+receipts across `20261127-142815-da0666b6`, `20261127-145357-166f25e7`, and
+`20261127-151559-9508dcf9`. The native replay `20261127-152034-6a7f2402`
+finished before the Mac restart with 11 passed and 13 failed. The exact
+13-case follow-up `20261127-215622-86b1f7fd` passed nine more methods
+after the owner authorized macOS automation. The four-case follow-up
+`20261127-221824-6546a6d7` passed container queries and Snapshots-to-Compare.
+Both remaining Inspector cases passed in `20261127-222758-966af0e1`.
+All 14 regular and 24 native UI failures now have passing receipts.
+Owner-local build `26.11.28` is installed and passed strict signature
+verification. The app, testing harness and final two-case replay
+`20261127-223727-68efdf0a` share fingerprint
+`8f1d7ae12b92050568c82339681e26d3355fddc7a046b5fcd065b5650894bff0`.
+The owner approved failed-selector verification for this delivery. Module
+and release acceptance remain at their existing scope.
+[Current queue](CODEX_QUEUE.md) and
+[focused evidence](reviews/QUICK-INTEGRATION-2026-11-26.md#november-27-focused-delivery-scope).
+
+## November 27 — Native regression triage (verification in progress)
+
+The local gate reconciles complete XCTest results against the freshly
+enumerated methods and uses the existing hosted skip policy (SF-1902-008).
+All 43 collector checks passed, including an equal-count selector mismatch,
+an unapproved skip, Xcode's bundle-prefixed inventory format, and resumed
+segments with duplicate or missing results. The working tree also repairs
+toolbar history routing, component self-insertion,
+snapshot accessibility, Preview range handling and repeated static build
+work. Repository checks and application and test-target compilation passed.
+The staged replay build matches source fingerprint `968b33bf25a6`.
+Native evidence for this source is pending.
+[Affected checks and open failures](reviews/QUICK-INTEGRATION-2026-11-26.md#native-regression-triage).
+
+## November 27 — Regular-suite regression repairs
+
+The follow-up repairs slot detachment, collection title escaping and
+interactive button hydration. Package reads reuse the validated migration
+payload. Responsive audit consumes the same resolved page as the renderer.
+Several fixtures now exercise the correct validation and replacement paths.
+The fixed candidate needs an affected replay through Testing. See the
+[integration review](reviews/QUICK-INTEGRATION-2026-11-26.md).
+
+## November 27 — Faster local test feedback (SF-1902, SF-0501-007)
+
+The Testing window defaults to affected features and has a native smoke
+action for three existing journeys. Local XCTest runs enable per-case
+timeouts, with hard limits for selected regular scale checks. The full gate
+continues to require both complete targets. Connected export reuses the
+navigation-owner index. Build and run evidence is tracked in the
+[integration review](reviews/QUICK-INTEGRATION-2026-11-26.md).
+
+## November 27 — Full Verification recovery (SF-1902)
+
+The November 26 candidate passed repository checks and compiled. macOS
+required UI automation authorization during discovery, so neither test target
+executed. Full Verification now retains results from a ready target even if
+the other is blocked, with the full gate still requiring both. The collector
+passed all 39 checks. Retry `20261127-092146-994865f2` passed preflight and
+repository checks on the frozen fingerprint `ecbc5d638369`. The working
+candidate has since changed.
+[Integration evidence](reviews/QUICK-INTEGRATION-2026-11-26.md).
+
+## November 26 — Quick candidate integration (verification in progress)
+
+Fixed Swift compilation defects in workspace initialization, rendering access
+and test fixtures. Reduced allocation during page-size accounting and avoided
+redundant transform validation. Added native snapshot/comparison coverage and
+improved diagnosis of blocked test runs. The [integration evidence and coverage
+map](reviews/QUICK-INTEGRATION-2026-11-26.md) distinguishes historical receipts
+from current verification. Requirement status and the installed build are
+unchanged pending full results (SF-0204, SF-0405, SF-1301, SF-1306, SF-1902).
+
+## November 25 — Quick batch integrity repairs (verification in progress)
+
+Corrected responsive slot-coordinate conversion and resized-copy editing origins,
+strengthened showcase bounds coverage, declared the browser prerequisite and
+repaired a Quick test compilation error. A WebKit delegate signature warning was
+also corrected. New regression cases cover inherited coordinates, exact history
+and rendered slot origins. App and complete test-target compilation passed for
+Apple silicon and Intel, as did syntax/whitespace checks. Desktop access was
+restored and the first native 19-selector run completed with 15 passed/four failed.
+Failure diagnosis led to clipboard traversal, fixed-output positioning, navigation
+sizing and fixture repairs. A separate replay blocked in Git preflight with no
+test execution. Later 20-selector runs passed 19/20 while isolating the recipe.
+Final affected replay `20261125-201323-26ef8307` passed all four selected methods
+including actual-browser acceptance and showcase save/loading. The actual Start
+Full Verification button launched `20261125-201801-d8042c0e`. Its UI discovery
+stage blocked before either XCTest target ran. Final acceptance and installation
+remain pending.
+[Bounded requirements, changes and verification checkpoint](evidence/SF-QUICK-BATCH-INTEGRITY.md).
+
+## November 25 — Code Forge batch 01 candidate (unverified)
+
+Owner-requested assistance while Codex was paused. Code Forge added a
+reproducible Aurora Flow showcase recipe (test target) with two new core
+selectors, `BundledSiteTemplates.auroraFlowID/auroraFlowURL`, a Start choice
+that stays hidden until reviewed sample bytes are bundled, two missing UI
+entries in the hosted timing manifest and Safari pre-open for the fast-style
+gradient journey. A temporary hosted branch of the whole working tree
+(`quick/batch-01`, commit `fe77e61`) passed its build step on two UI shards and
+was then deleted by the owner with draft PR #1; no test results were kept.
+Batch 02 added five core selectors and an actual-browser Flow runtime harness.
+Nothing has a native Testing receipt; no installation, local commit on the Mac,
+visual acceptance or module-status promotion is claimed.
+[Code Forge activity](coordination/CODE_FORGE_ACTIVITY.md).
+
+## November 22 — fast visual styling candidate in progress
+
+The owner-priority styling slice (bounded SF-0506-001–008, SF-0508-001–008,
+SF-0701-001–008) has reproduced and corrected compressed native diagonal
+geometry. Nine initial focused methods and a later seven-method native boundary
+receipt passed at their distinct exact sources. Actual slider/undo/redo/keyboard/
+save and gradient/native Preview/Safari/save-reopen journeys passed. Native
+reconciliation follow-up found an unchanged displayed hex value opening a hidden
+quantized color preview. Its actual native opacity/ordered Undo/Redo journey
+passed at source8b7e in `20261122-033811-f11bc3de`. A separate Colors panel
+order-out lifecycle case now has an active-session cleanup correction pending
+replay. Full acceptance, full verification and replacement install remain pending.
+The verified installed baseline is still `9883ae6d6c5f…`.
+[Work and exact receipts](evidence/SF-FAST-STYLE-AUTHORING.md).
+
+The owner expanded the assignment to authorable mouse-reactive gradients,
+flexible ordinary footer groups, local QR resources and a fresh editable glassy
+Aurora showcase. Its first executed Start Regular scope passed seven of eight
+methods: typed effects/history/output, responsive ordinary footer groups/copy,
+real QR decoding/quiet-zone/regeneration/output checks and nested tooling are
+green at their exact source. Colors order-out lifecycle remains in repair.
+Native visual/runtime acceptance and showcase completion are still pending.
+[Implementation receipts and remaining gates](evidence/SF-INTERACTIVE-GRADIENT-SHOWCASE.md).
+Only a verified reviewed local commit is authorized after final acceptance;
+remote GitHub actions remain reserved for the owner. No requirement module
+status is promoted by this in-progress slice.
+
+## November 22 — native UI consistency verified and installed
+
+Owner-local build 26.11.22 uses semantic macOS gray native surfaces and preserves
+approved geometry and authored website data. Testing's peers, stable controls,
+concise scope/outcome, selected/live history, exact report routing and helper
+appearance are verified. Actual blue-fill contrast is 3.25:1–5.13:1 in sampled
+active/inactive Light/Dark states. The final source passed its Settings/Testing
+UI replay and 1 XCTest + 88 nested tooling checks through native Start; distinct
+unaffected 53-core/five-appearance and nine-journey receipts are retained.
+Strict app/helper signatures and matching installed source/harness fingerprint
+`9883ae6d6c5f068ff1346ac937918a75fea594ebd050c44067f89d441cfd4606` pass.
+Installed Settings/CLI/report smoke and clean native captures pass. Coverage is
+bounded to SF-0201-003/006/008, SF-0203-006, SF-0206-003/006/008,
+SF-0303-006, SF-0701-006, SF-1503-006, SF-1505-006 and SF-1607-006/008;
+module status is unchanged. [Evidence](evidence/SF-NATIVE-UI-CONSISTENCY.md).
+
+## November 21 — affected scope verified and installed
+
+Bounded SF-1902-007/008 correction retains deleted/renamed Git paths, rejects
+missing suites and validates every executable method against the new build.
+Unresolved UI/CLI review requires explicit choice; headless affected execution
+uses the same inventory guard. Native Start passed 87 nested tooling checks;
+18 unaffected native methods and the installed affected preview are retained.
+Build 26.11.22 has verified signatures and source/harness identity. Module status
+is unchanged. [Evidence](evidence/SF-AFFECTED-TEST-SCOPE.md).
+
+## November 21 — local-worker evaluation
+
+OC-001 produced no patch or completed checks after a response timeout and
+invalid stream termination. Its unchanged isolated source was verified; no
+worker implementation was integrated. Codex continues development, and the
+scope-selection issue remains queued. This assessment supports SF-1902-007/008
+without expanding module status. [Evaluation evidence](evidence/SF-OPENCODE-EVALUATION.md).
+
+## November 21 — native Testing window verified and installed
+
+Owner-local build 26.11.22 is installed with strict app/helper signatures and
+matching source/provision fingerprints. Settings opens a native Testing window
+before a run; regular/UI/exact/affected scopes, explicit full verification,
+shared history, persistent reports and reviewed local CLI requests are covered.
+Preparation uses distinct activity and measured estimates without old counts.
+The installed run passed 17 code methods; the Settings replay and retained
+Safari journey passed. Forty-nine tooling checks, native controls/click-through,
+complete repository checking and installed report retrieval pass. No CUA
+permission dependency remains. Bounded SF-0206-002/003/004/006/008,
+SF-1607-002/004/008 and SF-1902-007/008 support does not expand module status.
+[Receipts, scope reuse and captures](evidence/SF-TESTING-PROGRESS-MONITOR.md).
+
+## November 21 — native interface redesign verified and installed
+
+The full gate passed 895 core and 167 UI tests with three approved skips.
+Build 26.11.21 is installed and matches the verified source fingerprint.
+The retained xcresult has a missing object. Complete log accounting and
+the installation receipt are recorded in the linked evidence.
+
+Source covers the Start lifecycle, workspace navigation, contextual page actions,
+Page Background, App Settings, and Website Settings. The focused workspace
+replay passed forward and reverse native keyboard traversal and the shared
+Page Background fill and history journey. See the exact requirement clauses,
+capture receipts, and remaining gates in the
+[redesign evidence](evidence/SF-NATIVE-UI-REDESIGN.md).
+
+## November 15 — local component usage notes
+
+Bounded SF-0907-001/002/003/004/005/006/008 coverage adds optional
+definition-root usage notes, native inspection and editing, transactional
+Apply and Clear, and graph duplication and local transfer. Project schema
+20 and clipboard v3 validate the new property. Compatible older content
+opens with no authored note. The integrated native Details journey passed.
+The full local gate passed 895 core and 167 UI tests, with three approved
+owner skips and zero failures or unrun. The broader SF-0907 module remains
+Partial.
+[Usage notes evidence](evidence/SF-0907-LOCAL-USAGE-NOTES.md)
+
 ## November 9 targeted checkpoint
 
 The completed ordinary full run passed 888 non-UI and 163 UI tests, with
@@ -10,6 +220,54 @@ See [the failure inventory](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md
 for the SF-0406, SF-0501, SF-0507, SF-0806, SF-0902, and SF-0905 evidence.
 The owner deferred fresh full local verification for this checkpoint;
 no requirement status is promoted by combining the two receipts.
+
+## November 14 — desktop closeout
+
+Page Editor Select All passed exact native replay (SF-0203-006,
+SF-0303-006, SF-1503-006). Workspace traversal passed forward and reverse,
+including the actual native toolbar and empty-canvas stops (SF-1505-006).
+The fresh full local run passed both keyboard journeys, both connected
+chrome slices, and all six Safari selectors (SF-0806-006, SF-1203-003/006,
+SF-1211-004). It recorded 890 core passes, 167 UI passes, three approved
+owner Dark Flow skips, zero failures, and zero unrun. Hosted OD-031
+verification remains open (SF-1605-008).
+[Desktop evidence](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#november-14-desktop-closeout-replay)
+
+## November 14 — connected Header/Footer spacing
+
+Model and native selectors passed. Inner Spacing and Link Spacing
+retain their originating viewport and recover stale drafts through
+Escape/Cancel. Clean values follow the active responsive source.
+See the [requirements and exact selectors](evidence/SF-LOCAL-BUILDER-CONNECTED-SPACING.md).
+
+## November 14 — connected Header/Footer height
+
+Model and native selectors passed. The existing bottom-edge and
+Inspector paths keep height edits in their originating screen size. An
+unchanged drag leaves inherited height and history intact. See the
+[requirements and exact selectors](evidence/SF-LOCAL-BUILDER-CONNECTED-HEIGHT.md).
+
+## November 14 — keyboard source pass
+
+Page Editor Select All validation now receives scene-scoped draft focus
+(bounded SF-0203-006, SF-0303-006 and SF-1503-006). The exact menu test now
+checks that selection preserves the field value and cancel leaves the
+existing page identity intact. See the desktop closeout above for native
+runtime acceptance and the Pages → Layers Tab result (SF-1505-006).
+
+## November 14 — local verification recovery
+
+Bounded SF-1902-007/008: the repository scanner now prunes its existing
+directory exclusions before descent. The traversal regression confirms an
+in-scope nested finding and checks that excluded trees are never opened.
+An in-scope directory read failure now produces a redacted finding and
+causes a nonzero verification result.
+SF-LOCAL-BUILDER-012–016 remains Partial. See the
+[current acceptance evidence](evidence/SF-LOCAL-BUILDER-FULL-INVENTORY-20261102.md#november-14-resumed-acceptance)
+for the local toolchain and OD-031 hosted receipt boundaries.
+The full gate reached all 888 core and 170 UI methods. Six Safari
+prerequisite failures, two reproduced native keyboard failures, and one
+event synthesis failure that passed on exact replay keep the gate non-green.
 
 ## Current closeout —2026-11-02, focused repairs pass; final gate pending
 

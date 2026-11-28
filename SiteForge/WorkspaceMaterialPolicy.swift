@@ -54,7 +54,7 @@ enum SiteForgeVisualSystem {
     // native chrome; feature views should consume these semantic roles.
     static let gridUnit: CGFloat = 8
     static let hairlineSpacing: CGFloat = 2
-    static let tabStripInset: CGFloat = 3
+    static let tabStripInset: CGFloat = 6
     static let microSpacing: CGFloat = 4
     static let compactSpacing: CGFloat = 6
     static let controlInset: CGFloat = 8
@@ -67,8 +67,8 @@ enum SiteForgeVisualSystem {
     static let launchCardCornerRadius: CGFloat = 20
     static let rowCornerRadius: CGFloat = 6
     static let fieldCornerRadius: CGFloat = 7
-    static let settingsSidebarWidth: CGFloat = 250
-    static let settingsContentMaxWidth: CGFloat = 680
+    static let settingsSidebarWidth: CGFloat = 201
+    static let settingsContentMaxWidth: CGFloat = 570
     static let launchOuterPadding: CGFloat = 40
     static let launchInnerPadding: CGFloat = 32
     static let launchSectionSpacing: CGFloat = 24
@@ -77,67 +77,36 @@ enum SiteForgeVisualSystem {
     static let rowInset: CGFloat = 8
     static let inspectorBottomClearance: CGFloat = 80
     static let thumbnailSize: CGFloat = 48
-    static let statusBarHeight: CGFloat = 36
-    static let settingsHeaderIconSize: CGFloat = 32
-    static let emptyHintMaximumWidth: CGFloat = 220
+    static let statusBarHeight: CGFloat = 30
     static let launchShadowRadius: CGFloat = 24
     static let launchShadowOffset: CGFloat = 8
+    static let testingStartLabelWidth: CGFloat = 142
     static let compactControlHeight: CGFloat = 28
-    static let tabStripHeight: CGFloat = 32
+    static let tabStripHeight: CGFloat = 41
+    static let tabLabelSize: CGFloat = 10.5
+    static let tabLabelInset: CGFloat = 3.5
+    static let toolRailWidth: CGFloat = 48
     static let sidePaneIdealWidth: CGFloat = 288
-    static let navigatorIdealWidth: CGFloat = 344
-    static let inspectorIdealWidth: CGFloat = 384
-    static let settingsSidebarRowHeight: CGFloat = 44
-    static let settingsIdealWidth: CGFloat = 970
-    static let settingsIdealHeight: CGFloat = 740
-    static let launchSurfaceNSColor = NSColor(name: "SiteForgeApprovedLaunchSurface") { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.11, green: 0.125, blue: 0.15, alpha: 1)
-            : NSColor(calibratedRed: 0.91, green: 0.93, blue: 0.97, alpha: 1)
-    }
-
-    static let chromeSurfaceNSColor = NSColor(name: "SiteForgeChromeSurface") { appearance in
-        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return dark
-            ? NSColor(srgbRed: 0.11, green: 0.125, blue: 0.15, alpha: 1)
-            : NSColor(calibratedWhite: 0.965, alpha: 1)
-    }
-    static let elevatedSurfaceNSColor = NSColor(name: "SiteForgeElevatedSurface") { appearance in
-        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return dark
-            ? NSColor(srgbRed: 0.15, green: 0.167, blue: 0.195, alpha: 1)
-            : NSColor(calibratedWhite: 0.995, alpha: 1)
-    }
+    static let navigatorIdealWidth: CGFloat = 276
+    static let inspectorIdealWidth: CGFloat = 304
+    static let settingsSidebarRowHeight: CGFloat = 36
+    static let settingsIdealWidth: CGFloat = 860
+    static let settingsIdealHeight: CGFloat = 470
+    static let settingsHorizontalInset: CGFloat = 38
+    // Owner-approved macOS system grays, November 21. Native semantic roles
+    // resolve with appearance/accessibility; authored page colors remain data.
+    static let launchSurfaceNSColor = NSColor.windowBackgroundColor
+    static let chromeSurfaceNSColor = NSColor.windowBackgroundColor
+    static let elevatedSurfaceNSColor = NSColor.underPageBackgroundColor
     static let chromeSelectionNSColor = NSColor(name: "SiteForgeChromeSelection") { appearance in
         let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         return dark ? NSColor.controlAccentColor.withAlphaComponent(0.20)
             : NSColor.controlAccentColor.withAlphaComponent(0.10)
     }
 
-    /// Opaque editor workspace colors deliberately separate the infinite
-    /// pasteboard from native chrome. Materials remain reserved for panes and
-    /// headers, avoiding the gray-on-gray wash produced by nesting the same
-    /// translucent surface throughout the shell.
-    static let canvasPasteboardNSColor = NSColor(
-        name: NSColor.Name("SiteForgeCanvasPasteboard")
-    ) { appearance in
-        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let increased = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        if dark {
-            return NSColor(
-                srgbRed: increased ? 0.18 : 0.205,
-                green: increased ? 0.195 : 0.225,
-                blue: increased ? 0.22 : 0.255,
-                alpha: 1
-            )
-        }
-        return NSColor(
-            calibratedRed: increased ? 0.87 : 0.91,
-            green: increased ? 0.87 : 0.91,
-            blue: increased ? 0.88 : 0.915,
-            alpha: 1
-        )
-    }
+    /// The pasteboard is editor chrome; the authored website paper below is
+    /// independent of the application appearance.
+    static let canvasPasteboardNSColor = NSColor.underPageBackgroundColor
     static let artboardSurfaceNSColor = NSColor(
         name: NSColor.Name("SiteForgeArtboardSurface")
     ) { appearance in
@@ -182,29 +151,114 @@ enum SiteForgeVisualSystem {
     static var danger: Color { Color(nsColor: .systemRed) }
 }
 
+/// Colors shared by the approved editor, Start and settings surfaces.
+struct SiteForgeChromePalette {
+    let scheme: ColorScheme
+    let contrast: ColorSchemeContrast
+
+    init(scheme: ColorScheme, contrast: ColorSchemeContrast) {
+        self.scheme = scheme
+        switch WorkspaceMaterialOverrides.current().increasedContrast {
+        case true?: self.contrast = .increased
+        case false?: self.contrast = .standard
+        case nil: self.contrast = contrast
+        }
+    }
+
+    func shade(_ dark: UInt32, _ light: UInt32) -> Color {
+        let hex = scheme == .dark ? dark : light
+        return Color(red: Double((hex >> 16) & 255) / 255,
+                     green: Double((hex >> 8) & 255) / 255,
+                     blue: Double(hex & 255) / 255)
+    }
+
+    var base: Color { Color(nsColor: .windowBackgroundColor) }
+    var panel: Color { Color(nsColor: .underPageBackgroundColor) }
+    var bar: Color { Color(nsColor: .windowBackgroundColor) }
+    var raised: Color { SiteForgeVisualSystem.elevatedSurface }
+    var inset: Color { Color(nsColor: .controlBackgroundColor) }
+    var line: Color {
+        contrast == .increased ? Color(nsColor: .labelColor).opacity(0.6) : Color(nsColor: .separatorColor)
+    }
+    var text: Color { Color(nsColor: .labelColor) }
+    var quiet: Color { Color(nsColor: .secondaryLabelColor) }
+    var faint: Color { Color(nsColor: .secondaryLabelColor) }
+    var accent: Color { shade(0xA6ADFF, 0x424FC6) }
+    var action: Color { shade(0x515DE2, 0x4653D0) }
+    var selected: Color { SiteForgeVisualSystem.selectionTint }
+    var danger: Color { shade(0xFFB0AC, 0xAE2F32) }
+}
+
+struct SiteForgeChromeButtonStyle: ButtonStyle {
+    let palette: SiteForgeChromePalette
+    var primary = false
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(primary ? .white : palette.text)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 32)
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+            .background(primary ? palette.action : palette.raised, in: RoundedRectangle(cornerRadius: 7))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(primary ? Color.clear : palette.line, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            .opacity(enabled ? (configuration.isPressed ? 0.78 : 1) : 0.48)
+    }
+}
+
+struct SiteForgeSettingsSidebarRow: View {
+    let title: String
+    let symbol: String
+    let selected: Bool
+    let action: () -> Void
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        let palette = SiteForgeChromePalette(scheme: scheme, contrast: contrast)
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: symbol)
+                    .frame(width: 16)
+                    .foregroundStyle(selected ? palette.accent : palette.quiet)
+                    .accessibilityHidden(true)
+                Text(title).fontWeight(selected ? .semibold : .medium)
+                    .foregroundStyle(palette.text)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(minHeight: SiteForgeVisualSystem.settingsSidebarRowHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(selected ? palette.selected : .clear, in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
 struct SiteForgeSettingsHeader: View {
     let title: String
     let scope: String
     let detail: String
-    let systemImage: String
+    @ScaledMetric(relativeTo: .largeTitle) private var titleSize: CGFloat = 29
 
     var body: some View {
-        HStack(alignment: .top, spacing: SiteForgeVisualSystem.standardSpacing) {
-            Image(systemName: systemImage)
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.primary)
-                .frame(width: SiteForgeVisualSystem.settingsHeaderIconSize, height: SiteForgeVisualSystem.settingsHeaderIconSize)
-                .background(SiteForgeVisualSystem.selectionTint, in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.controlCornerRadius))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: SiteForgeVisualSystem.microSpacing) {
-                Text(title).font(.title2.bold())
-                if !scope.isEmpty {
-                    Text(scope).font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Text(detail)
-                    .font(.callout)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.system(size: titleSize, weight: .semibold))
+            if !scope.isEmpty {
+                Text(scope).font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !detail.isEmpty {
+                Text(detail).font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -401,22 +455,18 @@ struct SiteForgeInspectorDisclosureStyle: DisclosureGroupStyle {
 }
 
 struct SiteForgeSettingsGroupStyle: GroupBoxStyle {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
+
     func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: SiteForgeVisualSystem.standardSpacing) {
+        let palette = SiteForgeChromePalette(scheme: scheme, contrast: contrast)
+        VStack(alignment: .leading, spacing: 10) {
             configuration.label.font(.headline).fixedSize(horizontal: false, vertical: true)
-            Divider().accessibilityHidden(true)
+            Rectangle().fill(palette.line).frame(height: 1).accessibilityHidden(true)
             configuration.content.frame(maxWidth: .infinity, alignment: .leading)
+            Rectangle().fill(palette.line).frame(height: 1).accessibilityHidden(true)
         }
-        .padding(SiteForgeVisualSystem.cardPadding)
-        .background(reduceTransparency ? SiteForgeVisualSystem.elevatedSurface : SiteForgeVisualSystem.elevatedSurface.opacity(0.96),
-                    in: RoundedRectangle(cornerRadius: SiteForgeVisualSystem.cardCornerRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: SiteForgeVisualSystem.cardCornerRadius, style: .continuous)
-                .strokeBorder(contrast == .increased ? Color.primary.opacity(0.5) : SiteForgeVisualSystem.quietBoundary)
-                .allowsHitTesting(false)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Preference group")
         .accessibilityIdentifier("settings.card")
@@ -755,10 +805,77 @@ final class WorkspaceWindowLifecycleOwner: NSObject {
             name: NSApplication.didFinishLaunchingNotification,
             object: nil
         )
+        #if DEBUG
+        let composition = DebugTestComposition.current()
+        if composition.boolValue(after: "-SiteForgeUITestMode") == true,
+           let token = composition.value(after: "-SiteForgeUITestGeometryToken"),
+           UUID(uuidString: token) != nil {
+            let name = Notification.Name("app.siteforge.test-window-phase." + token)
+            DistributedNotificationCenter.default().addObserver(self, selector: #selector(applyTestWindowPhase(_:)),
+                name: name, object: nil, suspensionBehavior: .deliverImmediately)
+        }
+        #endif
         configureExistingWindows()
     }
 
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        #if DEBUG
+        DistributedNotificationCenter.default().removeObserver(self)
+        #endif
+    }
+
+    #if DEBUG
+    @objc private func applyTestWindowPhase(_ notification: Notification) {
+        guard let window = NSApp.keyWindow,
+              window.attachedSheet == nil, !window.styleMask.contains(.fullScreen),
+              let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame else { return }
+        // Named auxiliary review phases use the same test-only native geometry
+        // route as the workspace, without assigning it the document's role.
+        if window.identifier?.rawValue == "SiteForge.Testing",
+           let phase = notification.object as? String,
+           ["testing-normal", "testing-compact"].contains(phase) {
+            let size = phase == "testing-compact" ? CGSize(width: 720, height: 552) : CGSize(width: 900, height: 692)
+            diagnostics.record(phase: "testing-minimum-\(window.minSize.width)-\(window.minSize.height)", windows: [window])
+            guard size.width >= window.minSize.width, size.height >= window.minSize.height else { return }
+            window.setFrame(WorkspaceExplicitWindowPresentation.frame(requestedFrameSize: size,
+                currentOrigin: window.frame.origin, visibleFrame: visible), display: true, animate: false)
+            return
+        }
+        guard WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(window) else { return }
+        let composition = DebugTestComposition.current()
+        if notification.object as? String == "visible" {
+            fitTestWindow(window, visibleFrame: visible)
+            diagnostics.record(phase: "test-phase-visible", windows: [window])
+            return
+        }
+        guard notification.object as? String == "requested" else { return }
+        let minimum = WorkspaceMetrics.requestedWindowFrameSize(contentSize: WorkspaceMetrics.minimumWindowSize,
+            currentFrameSize: window.frame.size, currentContentLayoutSize: window.contentLayoutRect.size)
+        if let placement = WorkspaceMetrics.requestedUITestWindowPlacement(composition: composition) {
+            let requested = WorkspaceMetrics.uiTestWindowFrame(
+                windowFrame: CGRect(origin: window.frame.origin, size: minimum), visibleFrame: visible, placement: placement)
+            window.minSize = CGSize(width: min(1_100, visible.width), height: 1)
+            window.setFrame(requested, display: true, animate: false)
+            diagnostics.record(phase: "configuration-succeeded-constrained", windows: [window])
+        } else if let review = WorkspaceMetrics.requestedReviewFrameSize(composition: composition)
+                    ?? WorkspaceMetrics.requestedWindowSize(composition: composition).map({ _ in minimum }) {
+            window.minSize = CGSize(width: min(1_100, visible.width), height: 1)
+            let requested = WorkspaceExplicitWindowPresentation.frame(requestedFrameSize: review,
+                currentOrigin: window.frame.origin, visibleFrame: visible)
+            window.setFrame(requested, display: true, animate: false)
+            diagnostics.record(phase: "configuration-succeeded-minimum", windows: [window])
+        }
+    }
+
+    private func fitTestWindow(_ window: NSWindow, visibleFrame: CGRect) {
+        window.minSize = CGSize(width: min(visibleFrame.width, WorkspaceMetrics.minimumWindowSize.width), height: 1)
+        window.setFrameAutosaveName("")
+        if !window.frame.isApproximatelyEqual(to: visibleFrame) {
+            window.setFrame(visibleFrame, display: true, animate: false)
+        }
+    }
+    #endif
 
     @objc private func windowDidBecomeUsable(_ notification: Notification) {
         precondition(Thread.isMainThread)
@@ -798,6 +915,14 @@ final class WorkspaceWindowLifecycleOwner: NSObject {
             diagnostics.record(phase: "configuration-no-visible-frame", windows: [window])
             return
         }
+        #if DEBUG
+        if composition.boolValue(after: "-SiteForgeUITestMode") == true {
+            fitTestWindow(window, visibleFrame: visibleFrame)
+            configured.insert(ObjectIdentifier(window))
+            diagnostics.record(phase: "window-ready", windows: [window])
+            return
+        }
+        #endif
         let frameSize = WorkspaceMetrics.requestedWindowFrameSize(contentSize: WorkspaceMetrics.minimumWindowSize, currentFrameSize: window.frame.size, currentContentLayoutSize: window.contentLayoutRect.size)
         if let placement = WorkspaceMetrics.requestedUITestWindowPlacement(composition: composition) {
             window.minSize = WorkspaceMetrics.effectiveMinimumWindowSize(composition: composition)
@@ -806,14 +931,15 @@ final class WorkspaceWindowLifecycleOwner: NSObject {
             diagnostics.record(phase: "configuration-succeeded-constrained", windows: [window])
             return
         }
-        if WorkspaceMetrics.requestedWindowSize(composition: composition) != nil {
+        let reviewFrameSize = WorkspaceMetrics.requestedReviewFrameSize(composition: composition)
+        if reviewFrameSize != nil || WorkspaceMetrics.requestedWindowSize(composition: composition) != nil {
             // This explicit Debug/UI-test mode exercises the production
             // minimum content geometry. General UI tests continue to use the
             // normal visible-frame presentation below.
             window.setFrameAutosaveName("")
             window.minSize = WorkspaceMetrics.minimumWindowSize
             let desired = WorkspaceExplicitWindowPresentation.frame(
-                requestedFrameSize: frameSize,
+                requestedFrameSize: reviewFrameSize ?? frameSize,
                 currentOrigin: window.frame.origin,
                 visibleFrame: visibleFrame
             )
@@ -913,6 +1039,13 @@ final class WorkspaceWindowConfigurationView: NSView {
 
     func configureWindow(composition: DebugTestComposition = .current()) {
         guard let window else { return }
+        // SwiftUI can assign its scene identifier after viewDidMoveToWindow.
+        // Reassert the document role once the anchored view is updated so the
+        // lifecycle owner never mistakes this window for an auxiliary panel.
+        if !WorkspaceWindowRolePolicy.isWorkspaceDocumentWindow(window) {
+            WorkspaceWindowRolePolicy.register(window)
+        }
+        if composition.boolValue(after: "-SiteForgeUITestMode") == true { return }
         // Scene-root configuration can attach before AppKit has ordered the
         // initial launch window. Deferring until it is visible avoids a
         // launch-time frame mutation that temporarily removes the AX window.
@@ -937,13 +1070,16 @@ final class WorkspaceWindowConfigurationView: NSView {
         window.titlebarSeparatorStyle = .automatic
         window.backgroundColor = .windowBackgroundColor
         window.isOpaque = true
-        if requestedWindowFrameSize == nil,
-           let requestedSize = WorkspaceMetrics.requestedWindowSize(composition: composition) {
-            requestedWindowFrameSize = WorkspaceMetrics.requestedWindowFrameSize(
-                contentSize: requestedSize,
-                currentFrameSize: window.frame.size,
-                currentContentLayoutSize: window.contentLayoutRect.size
-            )
+        if requestedWindowFrameSize == nil {
+            if let reviewFrameSize = WorkspaceMetrics.requestedReviewFrameSize(composition: composition) {
+                requestedWindowFrameSize = reviewFrameSize
+            } else if let requestedSize = WorkspaceMetrics.requestedWindowSize(composition: composition) {
+                requestedWindowFrameSize = WorkspaceMetrics.requestedWindowFrameSize(
+                    contentSize: requestedSize,
+                    currentFrameSize: window.frame.size,
+                    currentContentLayoutSize: window.contentLayoutRect.size
+                )
+            }
         }
         if let placement = WorkspaceMetrics.requestedUITestWindowPlacement(composition: composition),
            let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
@@ -1003,7 +1139,8 @@ final class WorkspaceWindowConfigurationView: NSView {
     }
 
     private func installPlacementObserversIfNeeded() {
-        guard WorkspaceMetrics.usesDeterministicUITestPlacement(),
+        guard DebugTestComposition.current().boolValue(after: "-SiteForgeUITestMode") != true,
+              WorkspaceMetrics.usesDeterministicUITestPlacement(),
               let configuredWindow else { return }
         let center = NotificationCenter.default
         let windowNotifications: [Notification.Name] = [

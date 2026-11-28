@@ -3,6 +3,7 @@ import Combine
 import Foundation
 import Network
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum WebsitePreviewError: Error, Equatable, Sendable {
     case invalidOutput, unavailable, cancelled
@@ -16,10 +17,13 @@ struct WebsitePreviewHTTPContent: Sendable {
         let type: String
         let body: Data
         let headOnly: Bool
+        /// SF-0803: set for 206/416 byte-range replies.
+        var contentRange: String? = nil
 
         var bytes: Data {
-            let reason = [200: "OK", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed", 431: "Request Header Fields Too Large"][status] ?? "Error"
-            let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n\r\n"
+            let reason = [200: "OK", 206: "Partial Content", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed", 416: "Range Not Satisfiable", 431: "Request Header Fields Too Large"][status] ?? "Error"
+            let range = contentRange.map { "Content-Range: \($0)\r\n" } ?? ""
+            let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nAccept-Ranges: bytes\r\n\(range)Connection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n\r\n"
             return Data(header.utf8) + (headOnly ? Data() : body)
         }
     }
@@ -69,8 +73,39 @@ struct WebsitePreviewHTTPContent: Sendable {
         let found = files[path]
         let body = found ?? files["404.html"] ?? Data("Page not found.\n".utf8)
         let suffix = found == nil && files["404.html"] != nil ? "html" : (path as NSString).pathExtension.lowercased()
-        let types = ["html": "text/html; charset=utf-8", "css": "text/css; charset=utf-8", "js": "text/javascript; charset=utf-8", "json": "application/json", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "avif": "image/avif", "ico": "image/x-icon", "woff": "font/woff", "woff2": "font/woff2", "ttf": "font/ttf"]
-        return .init(status: found == nil ? 404 : 200, type: types[suffix] ?? "application/octet-stream", body: body, headOnly: first[0] == "HEAD")
+        let types = ["html": "text/html; charset=utf-8", "css": "text/css; charset=utf-8", "js": "text/javascript; charset=utf-8", "json": "application/json", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "avif": "image/avif", "ico": "image/x-icon", "svg": "image/svg+xml", "woff": "font/woff", "woff2": "font/woff2", "ttf": "font/ttf", "mp4": "video/mp4", "webm": "video/webm", "mp3": "audio/mpeg", "m4a": "audio/mp4", "ogg": "audio/ogg", "wav": "audio/wav", "vtt": "text/vtt; charset=utf-8", "txt": "text/plain; charset=utf-8", "xml": "application/xml; charset=utf-8"]
+        let type = types[suffix] ?? "application/octet-stream"
+        // SF-0803: Safari plays video and audio only from servers that answer
+        // byte ranges. One `bytes=` range is served; anything else is 416.
+        if let found, let rangeLine = lines.dropFirst().first(where: { $0.lowercased().hasPrefix("range:") }) {
+            let spec = String(rangeLine.dropFirst(6)).trimmingCharacters(in: .whitespaces).lowercased()
+            guard let bounds = Self.byteRange(spec, count: found.count) else {
+                return .init(status: 416, type: "text/plain; charset=utf-8", body: Data(), headOnly: false,
+                             contentRange: "bytes */\(found.count)")
+            }
+            return .init(status: 206, type: type, body: Data(found.dropFirst(bounds.lowerBound).prefix(bounds.count)),
+                         headOnly: first[0] == "HEAD",
+                         contentRange: "bytes \(bounds.lowerBound)-\(bounds.upperBound - 1)/\(found.count)")
+        }
+        return .init(status: found == nil ? 404 : 200, type: type, body: body, headOnly: first[0] == "HEAD")
+    }
+
+    /// One `bytes=` range (`a-b`, `a-` or `-n`) as a half-open range inside
+    /// `count`, or nil when it is malformed, multiple or unsatisfiable.
+    static func byteRange(_ spec: String, count: Int) -> Range<Int>? {
+        guard spec.hasPrefix("bytes="), count > 0 else { return nil }
+        let value = spec.dropFirst(6)
+        guard !value.contains(","), let dash = value.firstIndex(of: "-") else { return nil }
+        let start = value[..<dash].trimmingCharacters(in: .whitespaces)
+        let end = value[value.index(after: dash)...].trimmingCharacters(in: .whitespaces)
+        if start.isEmpty {
+            guard let suffix = Int(end), suffix > 0 else { return nil }
+            return max(0, count - suffix)..<count
+        }
+        guard let lower = Int(start), lower >= 0, lower < count else { return nil }
+        if end.isEmpty { return lower..<count }
+        guard let upper = Int(end), upper >= lower else { return nil }
+        return lower..<(min(count - 1, upper) + 1)
     }
 }
 
@@ -170,13 +205,16 @@ final class LoopbackWebsiteServer: @unchecked Sendable {
 actor BrowserWebsiteBuilder {
     func prepare(document: CanonicalDocument, package: ProjectPackage) throws -> (StaticBuildCompilation, URL?) {
         try Task.checkCancellation()
+        // SF-1107: authored custom code never runs in Preview.
         return try writePrepared(StaticBuildCompiler.compile(document: document,
-            profileSelection: .init(profile: .development), package: package), revision: document.revision)
+            profileSelection: .init(profile: .development), package: package, includesCustomCode: false),
+            revision: document.revision)
     }
 
     func prepare(document: CanonicalDocument, descriptors: [ResourceID: ProjectResourceDescriptor], data: [ResourceID: Data]) throws -> (StaticBuildCompilation, URL?) {
         try Task.checkCancellation()
-        let result = StaticBuildCompiler.compile(document: document, profileSelection: .init(profile: .development), resourceDescriptors: descriptors, resourceData: data)
+        let result = StaticBuildCompiler.compile(document: document, profileSelection: .init(profile: .development),
+            resourceDescriptors: descriptors, resourceData: data, includesCustomCode: false)
         return try writePrepared(result, revision: document.revision)
     }
 
@@ -206,9 +244,16 @@ actor BrowserWebsiteBuilder {
         try? FileManager.default.removeItem(at: root)
     }
 
-    func export(_ plan: LocalStaticBuildPlan, to destination: URL, replacing: Bool) throws {
+    func export(_ plan: LocalStaticBuildPlan, to destination: URL, replacing: Bool,
+                target: StaticExportTarget = .folder) throws {
         try Task.checkCancellation()
-        try LocalStaticBuildWriter.write(plan, to: destination, expectedRevision: plan.revision, replacingExisting: replacing)
+        switch target {
+        case .folder:
+            try LocalStaticBuildWriter.write(plan, to: destination, expectedRevision: plan.revision, replacingExisting: replacing)
+        case .zipArchive:
+            try LocalStaticBuildWriter.writeZipArchive(plan, to: destination, expectedRevision: plan.revision,
+                                                       replacingExisting: replacing)
+        }
     }
 }
 
@@ -225,6 +270,8 @@ struct WebsitePreviewExportRequest: Sendable {
     @Published private(set) var isExporting = false
     @Published private(set) var isOpeningBrowser = false
     @Published private(set) var exportFailure: LocalStaticBuildWriteError?
+    /// SF-1209-008 (ADR-0145): the last export's value-free record.
+    @Published private(set) var lastExportDiagnostic: StaticExportDiagnostic?
     @Published private(set) var url: URL?
     @Published private(set) var revision: UInt64?
     @Published private(set) var documentID: DocumentID?
@@ -284,6 +331,7 @@ struct WebsitePreviewExportRequest: Sendable {
 
     @discardableResult
     func build(document: CanonicalDocument, pageID: PageID?, package: ProjectPackage,
+               localeID: SiteLocaleID? = nil,
                isDocumentCurrent: @escaping @MainActor (DocumentID) -> Bool = { _ in true },
                isCurrent: @escaping @MainActor (DocumentID, UInt64) -> Bool) -> Task<Void, Never> {
         task?.cancel()
@@ -317,7 +365,12 @@ struct WebsitePreviewExportRequest: Sendable {
                 guard !Task.isCancelled, requestID == request, isDocumentCurrent(document.id),
                       isCurrent(document.id, document.revision) else { throw WebsitePreviewError.cancelled }
                 let page = document.websitePages.first { $0.id == pageID } ?? document.websitePages.first { $0.role == .home }
-                let path = try page.map { try MultiPageStaticBuildPlanner.outputPath(for: $0) } ?? "index.html"
+                // SF-1003: previewing a template page opens its first item page.
+                let itemRoutes = CollectionTemplates.linkTargets(document)
+                let previewPage = page.map { page in itemRoutes[page.id].map { DocumentPage(id: page.id, name: page.name, route: $0) } ?? page }
+                let pagePath = try previewPage.map { try MultiPageStaticBuildPlanner.outputPath(for: $0) } ?? "index.html"
+                // OD-038 (ADR-0087): open the language the canvas shows, at its own address.
+                let path = SiteLanguageOutput.previewPath(pagePath, showing: localeID, in: document)
                 let oldServer = server, oldRoot = outputRoot
                 server = nextServer; outputRoot = root; plan = nextPlan
                 documentID = document.id; revision = document.revision; successfulBuildID = request
@@ -419,7 +472,7 @@ struct WebsitePreviewExportRequest: Sendable {
 
     @discardableResult
     func export(to destination: URL, request captured: WebsitePreviewExportRequest? = nil,
-                replacingExisting: Bool = false) -> Task<Void, Never>? {
+                replacingExisting: Bool = false, target: StaticExportTarget = .folder) -> Task<Void, Never>? {
         guard let intent = captured ?? makeExportRequest(), !isBuilding, !isExporting,
               intent.buildID == requestID, intent.documentID == documentID,
               artifactDocumentIsCurrent?(intent.documentID) == true, intent.plan == plan else { return nil }
@@ -428,19 +481,26 @@ struct WebsitePreviewExportRequest: Sendable {
         let exportRequest = UUID(); exportRequestID = exportRequest
         browserOpenRequestID = UUID(); isOpeningBrowser = false
         isExporting = true; exportFailure = nil; status = "Exporting website revision \(plan.revision)…"
+        let started = ContinuousClock.now
         let work = Task {
             defer { if exportRequestID == exportRequest { isExporting = false; exportTask = nil } }
             do {
                 try Task.checkCancellation()
-                try await builder.export(plan, to: destination, replacing: replacingExisting)
+                try await builder.export(plan, to: destination, replacing: replacingExisting, target: target)
                 guard requestID == request, exportRequestID == exportRequest,
                       artifactDocumentIsCurrent?(intent.documentID) == true else { return }
-                status = "Exported the same website revision \(plan.revision) used by Safari."
+                lastExportDiagnostic = StaticExportDiagnostic(target: target, documentID: intent.documentID, plan: plan,
+                                                              duration: started.duration(to: .now), failure: nil)
+                status = target == .zipArchive
+                    ? "Exported a zip archive of the same website revision \(plan.revision) used by Safari."
+                    : "Exported the same website revision \(plan.revision) used by Safari."
             } catch {
                 guard requestID == request, exportRequestID == exportRequest,
                       artifactDocumentIsCurrent?(intent.documentID) == true else { return }
                 let category = error as? LocalStaticBuildWriteError ?? (error is CancellationError ? .cancelled : .writeFailed)
                 exportFailure = category
+                lastExportDiagnostic = StaticExportDiagnostic(target: target, documentID: intent.documentID, plan: plan,
+                                                              duration: started.duration(to: .now), failure: category)
                 switch category {
                 case .permissionDenied: status = "Export needs access. Choose a writable destination and retry."
                 case .insufficientSpace: status = "Export needs more disk space. Free space or choose another destination."
@@ -448,6 +508,7 @@ struct WebsitePreviewExportRequest: Sendable {
                 case .destinationExists: status = "Export destination already exists. Confirm replacement or choose another folder."
                 case .stale, .cancelled: status = "Export was cancelled or superseded. Choose Export again for the displayed successful website."
                 case .writeFailed: status = "Export did not finish. Choose a writable destination and retry."
+                case .archiveTooLarge: status = "The website is too large for one zip archive. Export it as a folder instead."
                 }
             }
         }
@@ -461,6 +522,9 @@ struct StaticBuildFindingRepairRow: View {
     let availability: StaticBuildFindingRevealAvailability
     let identifierPrefix: String
     let reveal: () -> Void
+    /// SF-1211-002 (ADR-0122): an optional one-step repair (Check Website only).
+    var repairAction: StaticBuildRepairAction? = nil
+    var applyRepair: (StaticBuildRepairAction) -> Void = { _ in }
     private var severity: String {
         switch finding.severity {
         case .error: "Needs repair"
@@ -509,6 +573,16 @@ struct StaticBuildFindingRepairRow: View {
                 }
             case .noTarget: EmptyView()
             }
+            if let repairAction {
+                InspectorActionLayout {
+                    Button { applyRepair(repairAction) } label: { InspectorActionLabel(title: repairAction.title) }
+                        // Same Tab discovery and single Space activation as Show Object above.
+                        .focusable()
+                        .onKeyPress(.space, phases: .down) { _ in applyRepair(repairAction); return .handled }
+                        .accessibilityHint(repairAction.hint)
+                        .accessibilityIdentifier(identifierPrefix + ".repairAction." + repairAction.identifier + "." + finding.id)
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
@@ -519,6 +593,7 @@ struct StaticBuildFindingRepairRow: View {
 
 struct BrowserPreviewPanel: View {
     @ObservedObject var controller: BrowserPreviewController
+    @ObservedObject var features: FeatureFlagStore = .shared
     let refresh: () -> Void
     let dismiss: () -> Void
     let availability: (StaticBuildFinding, StaticBuildFindingReceipt) -> StaticBuildFindingRevealAvailability
@@ -582,6 +657,15 @@ struct BrowserPreviewPanel: View {
                 Button("Export…", action: export).disabled(controller.plan == nil || controller.isExporting || controller.isBuilding || isOpeningFinding)
                     .accessibilityValue(controller.revision.map { "Successful website revision \($0)" } ?? "No successful website")
                     .accessibilityIdentifier("preview.website.export")
+                if features.isEnabled(.zipExport) {
+                    // SF-1209-003 (ADR-0145): a plan the zip target cannot carry is reported before export.
+                    let zipIssue = controller.plan.flatMap { StaticExportTarget.zipArchive.unsupportedReason(for: $0) }
+                    Button("Export Zip…", action: exportZip).disabled(controller.plan == nil || controller.isExporting || controller.isBuilding || isOpeningFinding || zipIssue != nil)
+                        .help(zipIssue ?? "Exports the same files as one zip archive.")
+                        .accessibilityValue(controller.revision.map { "Successful website revision \($0)" } ?? "No successful website")
+                        .accessibilityHint(zipIssue ?? "")
+                        .accessibilityIdentifier("preview.website.exportZip")
+                }
             }
         }
         .padding(24)
@@ -600,6 +684,22 @@ struct BrowserPreviewPanel: View {
             guard response == .OK, let url = panel.url else { return }
             controller.export(to: url, request: request,
                               replacingExisting: FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
+    /// OD-042: the same successful website as one zip archive.
+    private func exportZip() {
+        guard let request = controller.makeExportRequest() else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export Website as Zip Archive"
+        panel.nameFieldStringValue = "Website.zip"
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            controller.export(to: url, request: request,
+                              replacingExisting: FileManager.default.fileExists(atPath: url.path),
+                              target: .zipArchive)
         }
     }
 }

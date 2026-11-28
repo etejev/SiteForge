@@ -119,3 +119,43 @@ The AppKit viewport draws primary/secondary and locked inspection outlines only 
 `TransformModel.swift` retains the selected ownership split for move and resize. The Foundation-only registry resolves exact geometry and validates stable session, document, page, revision, scene, renderer-generation, and selected-node identities before compiling the existing canonical `layout.x/y/width/height` properties into one batch transaction. The scene/window-owned session and preview remain non-`Codable`; they cannot become a second geometry source or enter packages, persisted history, preview, or export-facing snapshots.
 
 The AppKit viewport owns genuine pointer gestures and bounded native accessible handle views. Preview outlines and handles remain in the editor-overlay container; only a successful transaction produces a new authored scene. Renderer adoption then uses exact old/new dirty regions and the existing hit-test/accessibility adapters. Compatible multiple selection can move atomically, while multiple resize and any incompatible target are rejected instead of coerced. Retained 100-/10,000-object preparation evidence confirms deterministic bounded behavior but the large result exceeds one 60 Hz interval; simultaneous 10,000-object transforms, incremental indexing, interactive frame pacing, and OD-001 budgets remain unproven. Metal remains absent.
+
+## Amendment 2026-11-26 (lane V20): keyboard nudge and Return shortcuts
+
+Approved by the owner 2026-11-26 9:55 PM EST (lane V decisions, item 3): View > Move Selection Right 1 px no longer uses
+Control-Right Arrow, which is the macOS Mission Control "Move right a space" default (the whole Control-arrow family is
+taken: Move left/right a space, Mission Control, Application windows), so the shortcut never reached the app on most Macs.
+
+| Command | Keys | Where it applies |
+| --- | --- | --- |
+| Nudge selection 1 px | Left/Right/Up/Down Arrow | focused canvas (`NativeCanvasViewportView.keyDown`, `TransformPolicy.keyboardStep`) |
+| Nudge selection 10 px | Shift-Arrow | focused canvas (`TransformPolicy.keyboardLargeStep`) |
+| View > Pan Left/Right/Up/Down | Option-Arrow | menu and focused canvas; menu items off while text input has focus (lane V21) |
+| View > Move Selection Right 1 px | Option-Command-Right Arrow (was Control-Right Arrow) | menu, any focus except inline text editing |
+| Selection > Edit Selected Text | Return (plain), keypad Enter | menu and focused canvas |
+
+Why Option-Command: plain and Shift arrows already nudge on the canvas (the common macOS design-app convention) and must
+stay with text fields elsewhere; Option-arrows pan the viewport; Command-arrows and Shift-/Option-Shift-arrows are text
+navigation and selection in every field; Control-Option is the VoiceOver modifier. Option-Command-arrows have no macOS
+system default (Mission Control, Spotlight, Force Quit, screenshots, input sources, accessibility Zoom) and no text-system
+binding, and no other SiteForge command uses them. Option-Command-Left/Up/Down Arrow stay reserved for any later
+Move Selection Left/Up/Down 1 px menu commands, with Shift added for 10 px variants. The menu item is disabled while
+inline text editing is active, so the key never moves the object being edited. The context-menu "Move Right 1 px" and
+the canvas accessibility actions "Move Right 1 px" / "Move Down 1 px" have no shortcut and are unchanged.
+
+The canvas begins text editing only on Return or keypad Enter without Shift, Control, Option or Command (Caps Lock,
+keypad and Fn flags are ignored). Before, a modified Return such as a disabled Option-Command-Return (Isolate Selection)
+or Command-Return outside editing fell through and began text editing. Tests:
+`SiteForgeTests/CanvasTextRenderingTests/testNativeCanvasReturnBeginsTextEditingOnlyWithoutModifierKeys`;
+`SiteForgeUITests/SiteForgeLaunchTests/testGeometryTransformPointerKeyboardNumericUndoRedoAndAccessibilityJourney`
+presses Option-Command-Right Arrow. Accessibility identifiers are unchanged. No schema change.
+
+Lane V21 note (2026-11-26): AppKit offers a key event to the menu bar before the first responder, so the always-enabled
+View > Pan items took Option-Left/Right (move by word) and Option-Up/Down (move by paragraph) from text fields, the
+Inspector, sheets and the inline canvas editor. `ViewportPanCommandPolicy.isMenuPanEnabled` now disables them while a
+SwiftUI text input reports `siteforgeNativeTextEditor`, an `NSTextView` (including a field editor) is first responder, or
+inline text editing is active; the focused canvas still pans. If a stale enabled snapshot fires anyway, the action sends
+the standard text movement (`textMovementSelectors`) instead of panning. The shortcuts are unchanged. Tests:
+`SiteForgeTests/CanvasTextRenderingTests/testViewPanMenuIsDisabledWhileTextInputOrInlineTextEditingHasFocus`;
+`SiteForgeUITests/SiteForgeLaunchTests/testViewportCommandsAreKeyboardAndAccessibilityOperable` presses Option-Right in
+the viewport width field and checks that the viewport does not pan.

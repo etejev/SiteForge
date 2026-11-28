@@ -7,6 +7,180 @@ import XCTest
 
 @MainActor
 final class InsertionModelTests: XCTestCase {
+    // SF-0508-002/004/005, SF-0305-005: paint previews are disposable;
+    // completion owns one canonical history entry and cannot target a later selection.
+    func testFastStylePreviewCoalescesCancelsAndRejectsStaleOwnership() async throws {
+        let (session, _, _, _) = try outputRepairFixture()
+        let header = try XCTUnwrap(session.document.pages[0].nodes.first { CanonicalPageFlow.role($0) == .header })
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1100, height: 700), pixelRatio: 2)
+        await awaitOutputRepairScene(state); state.selectLayer(header.id)
+        let baseline = session.document, history = session.historySnapshot()
+        let owner = UUID(), context = state.responsiveInspectorEditContext
+        let red = CanonicalSolidColor(red: 1, green: 0, blue: 0, alpha: 0.5)
+        let blue = CanonicalSolidColor(red: 0, green: 0, blue: 1, alpha: 0.8)
+        XCTAssertTrue(state.previewDesignStyle(.fill(.replaceSolid(red)), owner: owner, expectedContext: context))
+        XCTAssertTrue(state.previewDesignStyle(.fill(.replaceSolid(blue)), owner: owner, expectedContext: context))
+        await awaitOutputRepair(state) {
+            state.canvasRenderPlan?.authoredObjects.first { $0.id == header.id }?.fillLayers.last?.rgba == [0, 0, 1, 0.8]
+        }
+        XCTAssertEqual(session.document, baseline); XCTAssertEqual(session.historySnapshot(), history)
+        state.cancelDesignStylePreview(owner: owner)
+        XCTAssertEqual(session.document, baseline); XCTAssertEqual(session.historySnapshot(), history)
+        await awaitOutputRepairScene(state)
+        XCTAssertTrue(state.previewDesignStyle(.fill(.replaceSolid(red)), owner: owner, expectedContext: context))
+        XCTAssertTrue(state.previewDesignStyle(.fill(.replaceSolid(blue)), owner: owner, expectedContext: context))
+        XCTAssertTrue(state.finishDesignStylePreview(owner: owner))
+        XCTAssertEqual(session.document.revision, baseline.revision + 1)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, history.undoEntries.count + 1)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+        await awaitOutputRepairScene(state)
+        let committed = session.document
+        XCTAssertTrue(state.previewDesignStyle(.fill(.replaceSolid(blue)), owner: owner))
+        XCTAssertTrue(state.finishDesignStylePreview(owner: owner))
+        XCTAssertEqual(session.document, committed, "Unchanged preview is history-neutral")
+        XCTAssertFalse(state.previewDesignStyle(.fill(.replaceSolid(red)), owner: UUID(), expectedContext: context))
+        XCTAssertEqual(session.document, committed)
+        try session.undo(); XCTAssertEqual(session.document.pages, baseline.pages)
+        try session.redo(); XCTAssertEqual(session.document.pages, committed.pages)
+        await awaitOutputRepairScene(state)
+        XCTAssertTrue(state.previewDesignStyle(.box(.cornerRadius(22)), owner: owner))
+        state.cancelDesignStylePreview(owner: UUID())
+        XCTAssertTrue(state.finishDesignStylePreview(owner: owner), "Another viewer cannot cancel an owned preview")
+        await awaitOutputRepairScene(state)
+        let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == header.id })
+        XCTAssertEqual(DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.cornerRadius, 22)
+    }
+
+    // SF-0306-005 (ADR-0133): repeated stepper clicks or slider adjustments
+    // of one field of one selection are one undo step; another field or a
+    // pause longer than the coalescing window starts a new one.
+    func testFastStyleRepeatedFieldAdjustmentsCoalesceIntoOneUndoStep() async throws {
+        let (session, _, _, _) = try outputRepairFixture()
+        let header = try XCTUnwrap(session.document.pages[0].nodes.first { CanonicalPageFlow.role($0) == .header })
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1100, height: 700), pixelRatio: 2)
+        await awaitOutputRepairScene(state); state.selectLayer(header.id)
+        var now = Date(timeIntervalSince1970: 5_000)
+        state.coalescingNow = { now }
+        let baseline = session.document, history = session.historySnapshot()
+        let owner = UUID()
+        let red = CanonicalSolidColor(red: 1, green: 0, blue: 0, alpha: 0.5)
+        let blue = CanonicalSolidColor(red: 0, green: 0, blue: 1, alpha: 0.8)
+        func adjust(_ edit: DesignStylePreviewEdit, after seconds: TimeInterval) async {
+            now = now.addingTimeInterval(seconds)
+            XCTAssertTrue(state.previewDesignStyle(edit, owner: owner))
+            XCTAssertTrue(state.finishDesignStylePreview(owner: owner))
+            await awaitOutputRepairScene(state)
+        }
+        func radius() throws -> Double? {
+            let node = try XCTUnwrap(session.document.pages[0].nodes.first { $0.id == header.id })
+            return DesignBoxStyleCommandRegistry.resolvedStyle(for: node)?.cornerRadius
+        }
+
+        await adjust(.box(.cornerRadius(10)), after: 0)
+        await adjust(.box(.cornerRadius(12)), after: 0.3)
+        await adjust(.box(.cornerRadius(14)), after: 0.3)
+        XCTAssertEqual(try radius(), 14)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, history.undoEntries.count + 1, "One radius run is one step")
+        await adjust(.fill(.replaceSolid(red)), after: 0.3)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, history.undoEntries.count + 2, "Another field starts a new step")
+        await adjust(.fill(.replaceSolid(blue)), after: DocumentSession.coalescingWindow + 1)
+        XCTAssertEqual(session.historySnapshot().undoEntries.count, history.undoEntries.count + 3,
+                       "A pause longer than the window starts a new step")
+
+        try session.undo(); try session.undo()
+        XCTAssertEqual(try radius(), 14)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, baseline.pages, "One Undo reverts the whole radius run")
+        try session.redo()
+        XCTAssertEqual(try radius(), 14)
+        XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    // SF-0506-002/004/005/006: deliver native mouse and Escape events to
+    // the same production NSSlider while its AppKit tracking loop is active.
+    // This needs no cross-process event-posting permission or model shortcut.
+    func testFastStyleNativeSliderEscapeDuringTrackingPreservesCanvasAndHistory() async throws {
+        let (session, _, _, _) = try outputRepairFixture()
+        let header = try XCTUnwrap(session.document.pages[0].nodes.first { CanonicalPageFlow.role($0) == .header })
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1100, height: 700), pixelRatio: 2)
+        await awaitOutputRepairScene(state); state.selectLayer(header.id)
+        let baseline = session.document, history = session.historySnapshot()
+        let owner = UUID(), context = state.responsiveInspectorEditContext
+        let receipt = NativeStyleEventReceipt()
+        let slider = TrackingDesignSlider(frame: .init(x: 0, y: 0, width: 240, height: 30))
+        slider.minValue = 0; slider.maxValue = 80; slider.doubleValue = 0; slider.isContinuous = true
+        slider.representedContext = context
+        var nativeWindow: NSWindow?
+        let coordinator = DesignStyleSlider.Coordinator { value in
+            receipt.values.append(value)
+            _ = state.previewDesignStyle(.box(.cornerRadius(value)), owner: owner, expectedContext: context)
+            // Synthetic local mouse events cannot hold the hardware button
+            // state. Deliver Escape inside the real cell's action, while its
+            // production tracking owner is still active.
+            if slider.isTrackingGesture, value > 0, receipt.cancelled == 0,
+               let window = nativeWindow {
+                let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+                window.sendEvent(escape)
+            }
+        }
+        slider.target = coordinator; slider.action = #selector(DesignStyleSlider.Coordinator.changed(_:))
+        slider.onBegin = { true }
+        slider.onFinish = { receipt.finished += 1; _ = state.finishDesignStylePreview(owner: owner) }
+        slider.onCancel = { receipt.cancelled += 1; state.cancelDesignStylePreview(owner: owner) }
+        let window = NSWindow(contentRect: .init(x: 100, y: 100, width: 240, height: 30),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = slider
+        window.makeKeyAndOrderFront(nil); window.makeFirstResponder(slider)
+        defer { slider.detachMonitor(); window.orderOut(nil); window.close() }
+        nativeWindow = window
+        let down = NSEvent.mouseEvent(with: .leftMouseDown, location: .init(x: 170, y: 15), modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1)!
+        let release = NSEvent.mouseEvent(with: .leftMouseUp, location: .init(x: 170, y: 15), modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 2, clickCount: 1, pressure: 0)!
+        NSApp.postEvent(release, atStart: false)
+        withExtendedLifetime(coordinator) { window.sendEvent(down) }
+        XCTAssertFalse(receipt.values.isEmpty, "Native tracking must dispatch actual preview values")
+        XCTAssertEqual(receipt.cancelled, 1); XCTAssertEqual(receipt.finished, 0)
+        XCTAssertEqual(slider.doubleValue, 0)
+        XCTAssertEqual(session.document, baseline); XCTAssertEqual(session.historySnapshot(), history)
+        await awaitOutputRepair(state) {
+            state.canvasRenderPlan?.authoredObjects.first { $0.id == header.id }?.cornerRadius == 0
+        }
+        // Separately keep a genuine keyboard gesture open long enough for
+        // asynchronous scene preparation, then cancel through native dispatch.
+        coordinator.preview = { value in
+            receipt.values.append(value)
+            _ = state.previewDesignStyle(.box(.cornerRadius(value)), owner: owner, expectedContext: context)
+        }
+        func key(_ type: NSEvent.EventType, _ code: UInt16, _ text: String) {
+            let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: code)!
+            window.sendEvent(event)
+        }
+        key(.keyDown, 124, "\u{f703}")
+        await awaitOutputRepair(state) {
+            state.canvasRenderPlan?.authoredObjects.first { $0.id == header.id }?.cornerRadius == 1
+        }
+        receipt.sawCanvasPreview = state.canvasRenderPlan?.authoredObjects.first { $0.id == header.id }?.cornerRadius == 1
+        XCTAssertTrue(receipt.sawCanvasPreview)
+        key(.keyDown, 53, "\u{1b}"); key(.keyUp, 124, "\u{f703}")
+        XCTAssertEqual(receipt.cancelled, 2); XCTAssertEqual(receipt.finished, 0)
+        XCTAssertEqual(session.document, baseline); XCTAssertEqual(session.historySnapshot(), history)
+        await awaitOutputRepair(state) {
+            state.canvasRenderPlan?.authoredObjects.first { $0.id == header.id }?.cornerRadius == 0
+        }
+        let details = XCTAttachment(string: "Native mouse previews: \(receipt.values.count); canvas preview observed: \(receipt.sawCanvasPreview); Escape cancellations: \(receipt.cancelled); completions: \(receipt.finished); document/history unchanged")
+        details.name = "FAST-STYLE actual AppKit tracking and Escape receipt"; details.lifetime = .keepAlways; add(details)
+    }
+
     // SF-LOCAL-BUILDER-016 / SF-0702-003/004.
     func testLegacyDesignEquivalentBoxCommitIsSuccessfulAndHistoryNeutral() async throws {
         let (session, _, _, _) = try outputRepairFixture()
@@ -56,6 +230,43 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(state.staticBuildPhase, .cancelled, "Silent dismissal must not leave a taskless writing phase")
         state.openBuildDiagnostics()
         await awaitOutputRepair(state) { state.staticBuildPhase == .ready }
+        XCTAssertEqual(session.document, document); XCTAssertEqual(session.historySnapshot(), history)
+    }
+
+    // SF-1209-001/004/005/008 (OD-042, ADR-0145): Check Website writes the same
+    // plan as one zip archive without rewriting the project or its history; a
+    // refused replacement is reported, categorized and leaves the archive alone.
+    func testCheckWebsiteZipArchiveTargetWritesThePlanAndLeavesTheProjectUnchanged() async throws {
+        let owned = try ApplicationOwnedTestFixture.create("check-website-zip")
+        defer { try? owned.cleanup() }
+        let session = DocumentSession(document: ProjectCreation.blank())
+        let state = WorkspaceShellState(documentSession: session)
+        state.openBuildDiagnostics()
+        await awaitOutputRepair(state) { state.staticBuildPhase == .ready }
+        let compilation = try XCTUnwrap(state.staticBuildCompilation)
+        let plan = try XCTUnwrap(compilation.plan)
+        let history = session.historySnapshot(), document = session.document
+        let destination = owned.url.appendingPathComponent("Website.zip")
+        state.writeStaticBuild(to: destination, replacingExisting: false, expectedCompilation: compilation,
+                               target: .zipArchive)
+        await awaitOutputRepair(state) { state.staticBuildPhase != .writing }
+        XCTAssertEqual(state.staticBuildPhase, .succeeded(destination))
+        XCTAssertTrue(state.staticBuildStatus.contains("zip archive"), state.staticBuildStatus)
+        let written = try Data(contentsOf: destination)
+        let entries = try StaticSiteZipArchive.storedEntries(written)
+        XCTAssertEqual(Set(entries.map(\.path)), Set(plan.files.map(\.path) + plan.binaryFiles.map(\.path)))
+        XCTAssertEqual(state.lastStaticExportDiagnostic?.target, .zipArchive)
+        XCTAssertEqual(state.lastStaticExportDiagnostic?.failureCategory, "none")
+        XCTAssertEqual(state.lastStaticExportDiagnostic?.fileCount, entries.count)
+        XCTAssertEqual(session.document, document); XCTAssertEqual(session.historySnapshot(), history)
+
+        state.runStaticBuildPreflight()
+        await awaitOutputRepair(state) { state.staticBuildPhase == .ready }
+        state.writeStaticBuild(to: destination, replacingExisting: false, target: .zipArchive)
+        await awaitOutputRepair(state) { state.staticBuildPhase != .writing }
+        XCTAssertEqual(state.staticBuildPhase, .failed(String(describing: LocalStaticBuildWriteError.destinationExists)))
+        XCTAssertEqual(state.lastStaticExportDiagnostic?.failureCategory, "destination-exists")
+        XCTAssertEqual(try Data(contentsOf: destination), written)
         XCTAssertEqual(session.document, document); XCTAssertEqual(session.historySnapshot(), history)
     }
 
@@ -1286,6 +1497,57 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertFalse(PageChromeCopyError.dependency.localizedDescription.contains(asset.originalFilename))
     }
 
+    // SF-0501, SF-0903-005, OD-018: copying a Header to other pages copies a
+    // copy inside it together with its own slot contents (new identities,
+    // same slot, slot-local geometry), so it draws the same on every page.
+    func testPageChromeReuseCopiesAComponentCopysOwnSlotContents() throws {
+        var fixture = try chromeReuseFixture()
+        let definitionID = PageID(), rootID = NodeID(), slotNode = NodeID(), slotID = ComponentSlotPropertyID()
+        func geometry(_ x: Double, _ y: Double, _ width: Double, _ height: Double) -> [NodeProperty] {
+            [("layout.x", x), ("layout.y", y), ("layout.width", width), ("layout.height", height)].map {
+                .init(key: .init(rawValue: $0.0), value: .number($0.1))
+            }
+        }
+        fixture.document.pages.append(DocumentPage(id: definitionID, name: "Badge", route: .init(rawValue: ""),
+            role: .componentDefinition, provenance: .authored, rootNodeIDs: [rootID], nodes: [
+                DocumentNode(id: rootID, kind: .frame, name: "Badge", parent: .page(definitionID), childIDs: [slotNode],
+                             properties: geometry(0, 0, 120, 32)),
+                DocumentNode(id: slotNode, kind: .frame, name: "Label slot", parent: .node(rootID), properties: geometry(8, 4, 100, 24) + [
+                    .init(key: .init(rawValue: CanonicalComponentSlot.namespace + "id"), value: .string(slotID.description), origin: .authored),
+                    .init(key: .init(rawValue: CanonicalComponentSlot.namespace + "label"), value: .string("Label"), origin: .authored),
+                    .init(key: .init(rawValue: CanonicalComponentSlot.namespace + "type"), value: .string("ordered-fallback-children"), origin: .authored)]),
+            ]))
+        let headerIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == fixture.header })
+        let content = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: fixture.document.pages[0].nodes[headerIndex]))
+        let instance = DocumentNode(kind: .component, name: "Badge", parent: .node(content), properties: geometry(0, 0, 120, 32) + [
+            .init(key: .init(rawValue: CanonicalComponentReference.key), value: .string(definitionID.description)),
+            .init(key: .init(rawValue: CanonicalComponentSlot.overrideKey(slotID)), value: .string(CanonicalComponentSlot.suppliedValue), origin: .authored)])
+        let label = DocumentNode(kind: .text, name: "New", parent: .node(instance.id), properties: geometry(2, 2, 60, 20) + [
+            .init(key: .init(rawValue: "content.text"), value: .string("New")),
+            .init(key: .init(rawValue: CanonicalComponentSlot.supplyKey), value: .string(slotID.description), origin: .authored)])
+        var withChild = instance; withChild.childIDs = [label.id]
+        let contentIndex = try XCTUnwrap(fixture.document.pages[0].nodes.firstIndex { $0.id == content })
+        fixture.document.pages[0].nodes[contentIndex].childIDs.append(instance.id)
+        fixture.document.pages[0].nodes += [withChild, label]
+        try fixture.document.validate()
+
+        let session = DocumentSession(document: fixture.document)
+        try session.execute(PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture, roles: [.header]), document: session.document).command)
+        try session.document.validate()
+        for target in fixture.targets {
+            let page = try XCTUnwrap(session.document.pages.first { $0.id == target })
+            let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            let copy = try XCTUnwrap(page.nodes.first { CanonicalComponentReference.definitionID(for: $0) == definitionID })
+            XCTAssertNotEqual(copy.id, instance.id)
+            let roots = try XCTUnwrap(CanonicalComponentSlot.suppliedRoots(of: copy, nodesByID: byID)[slotID])
+            XCTAssertEqual(roots.count, 1)
+            XCTAssertNotEqual(roots[0].id, label.id)
+            XCTAssertEqual(roots[0].insertionGeometry?.origin, WorldPoint(x: 2, y: 2), "Slot-local storage is copied as is")
+            let resolved = try ComponentGraphResolver.resolvedPage(page, in: session.document, breakpoint: .desktop)
+            XCTAssertEqual(resolved.nodes.first { $0.id == roots[0].id }?.insertionStringProperty("content.text"), "New")
+        }
+    }
+
     func testPageChromeReuseSheetSelectionRaceAndPreparationCancellationAreNeutral() async throws {
         let fixture = try chromeReuseFixture(), session = DocumentSession(document: fixture.document)
         let state = WorkspaceShellState(documentSession: session)
@@ -1738,8 +2000,28 @@ final class InsertionModelTests: XCTestCase {
         }
         let plan = try MultiPageStaticBuildPlanner.plan(document: hidden)
         let css = try XCTUnwrap(plan.files.first { $0.path == "styles.css" }?.contents)
-        let cardRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: card) + " {") }
-        XCTAssertTrue(cardRules.last?.contains("display:none") == true)
+        // Lane V14a: the phone rule hides with the node attribute's extra
+        // specificity (a Button inside takes `display` from `:is(a,button)`).
+        let cardHiding = CanonicalCSSRule.selector(for: card) + "[data-siteforge-node] { display:none; }"
+        let cardRules = css.components(separatedBy: "\n").filter { $0.hasPrefix(CanonicalCSSRule.selector(for: card)) }
+        XCTAssertTrue(cardRules.last?.hasPrefix(cardHiding) == true, css)
+        XCTAssertFalse(css.contains(CanonicalCSSRule.selector(for: card) + " { display:none; }"))
+        XCTAssertFalse(css.contains("@media (min-width: 1024px) { \(cardHiding) }"), "Visible on desktop")
+        // Hidden on desktop (and so on tablets) but shown again on phones: the
+        // desktop rule is limited to desktop widths so the phone rule can win.
+        var shownOnPhones = hidden
+        let cardIndex = try XCTUnwrap(shownOnPhones.pages[0].nodes.firstIndex { $0.id == card })
+        for key in ["hidden", ResponsiveVisibilityResolver.key(.mobile)] {
+            if let index = shownOnPhones.pages[0].nodes[cardIndex].properties.firstIndex(where: { $0.key.rawValue == key }) {
+                shownOnPhones.pages[0].nodes[cardIndex].properties[index].value = .boolean(true)
+            } else {
+                shownOnPhones.pages[0].nodes[cardIndex].properties.append(.init(key: .init(rawValue: key), value: .boolean(true)))
+            }
+        }
+        try shownOnPhones.validate()
+        let phoneCSS = ConnectedPageOutput.css(pages: shownOnPhones.pages)
+        XCTAssertTrue(phoneCSS.contains("@media (min-width: 1024px) { \(cardHiding) }"), phoneCSS)
+        XCTAssertEqual(phoneCSS.components(separatedBy: cardHiding).count, 3, "Desktop and tablet only")
         XCTAssertTrue(css.contains("font-size: clamp(12px"))
         XCTAssertTrue(css.contains("line-height: clamp(18px"))
         XCTAssertEqual(try MultiPageStaticBuildPlanner.plan(document: DocumentSerializer.decode(DocumentSerializer.encode(hidden))).files, plan.files)
@@ -2332,6 +2614,68 @@ final class InsertionModelTests: XCTestCase {
         XCTAssertEqual(page().nodes.map(\.id), nodeIDs)
     }
 
+    func testConnectedSpacingRejectsStaleViewportAndKeepsExactOverrideHistory() async throws {
+        let (session, header, _, footer) = try connectedPageSession()
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 1000, height: 700), pixelRatio: 2)
+        await awaitOutputRepairScene(state)
+        state.selectLayer(header)
+        XCTAssertEqual(state.selectionState.primaryID, header)
+        let initial = session.document
+        let initialHistory = session.historySnapshot()
+        let owner = try XCTUnwrap(initial.pages[0].nodes.first { $0.id == header })
+        let navigation = try XCTUnwrap(CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: owner))
+        let desktop = state.layoutInspectorDraftScope
+        XCTAssertTrue(state.commitViewportWidth(390))
+        await awaitOutputRepairScene(state)
+        let mobile = state.layoutInspectorDraftScope
+        let mobileIdentity = try XCTUnwrap(state.componentTextDraftIdentity)
+        XCTAssertFalse(state.commitPageStructure(.padding(header, 20, .mobile), identity: mobileIdentity, draftScope: desktop))
+        let basePadding = CanonicalPageFlow.padding(owner, breakpoint: .mobile, width: 390)
+        var gapDraft = LayoutInspectorNumericDraft(text: "24", committed: "16", scope: mobile)
+        XCTAssertTrue(state.commitViewportWidth(420))
+        let freeMobile = state.layoutInspectorDraftScope
+        XCTAssertEqual(freeMobile.breakpoint, mobile.breakpoint)
+        XCTAssertFalse(state.commitPageStructure(.navigationGap(header, 24, .mobile),
+            identity: mobileIdentity, draftScope: freeMobile), "The previous renderer has not adopted the new width")
+        await awaitOutputRepairScene(state)
+        let liveIdentity = try XCTUnwrap(state.componentTextDraftIdentity)
+        gapDraft.adopt(committed: "16", scope: freeMobile)
+        XCTAssertEqual(gapDraft.text, "24")
+        XCTAssertEqual(gapDraft.conflict, .contextChanged)
+        XCTAssertFalse(state.commitPageStructure(.navigationGap(header, 24, .mobile),
+            identity: liveIdentity, draftScope: gapDraft.scope))
+        XCTAssertEqual(session.document, initial)
+        XCTAssertEqual(session.historySnapshot(), initialHistory)
+
+        XCTAssertTrue(state.commitPageStructure(.padding(header, basePadding, .mobile),
+            identity: liveIdentity, draftScope: freeMobile))
+        let padded = session.document.pages
+        let paddingKey = ResponsiveContainerLayoutResolver.key(.padding, breakpoint: .mobile)
+        XCTAssertEqual(padded[0].nodes.first { $0.id == header }?.insertionProperty(paddingKey)?.value, .number(basePadding))
+        XCTAssertEqual(padded[0].nodes.first { $0.id == header }?.insertionProperty("layout.padding"), owner.insertionProperty("layout.padding"))
+        await awaitOutputRepairScene(state)
+        XCTAssertTrue(state.commitPageStructure(.navigationGap(header, 16, .mobile),
+            identity: try XCTUnwrap(state.componentTextDraftIdentity), draftScope: freeMobile))
+        let spaced = session.document.pages
+        let gapKey = ResponsiveContainerLayoutResolver.key(.gap, breakpoint: .mobile)
+        XCTAssertEqual(spaced[0].nodes.first { $0.id == navigation }?.insertionProperty(gapKey)?.value, .number(16))
+        XCTAssertEqual(spaced[0].nodes.first { $0.id == footer }, initial.pages[0].nodes.first { $0.id == footer })
+        await awaitOutputRepairScene(state)
+        let resetIdentity = try XCTUnwrap(state.componentTextDraftIdentity)
+        XCTAssertFalse(state.commitPageStructure(.navigationGap(header, nil, .mobile), identity: resetIdentity, draftScope: mobile))
+        XCTAssertTrue(state.commitPageStructure(.navigationGap(header, nil, .mobile), identity: resetIdentity, draftScope: freeMobile))
+        XCTAssertEqual(session.document.pages, padded)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, spaced)
+        try session.redo()
+        XCTAssertEqual(session.document.pages, padded)
+        try session.undo()
+        try session.undo()
+        try session.undo()
+        XCTAssertEqual(session.document.pages, initial.pages)
+    }
+
     func testHeaderNavigationGapRejectsInvalidCancelledLockedAndWrongScope() throws {
         let (session, headerID, _, _) = try connectedPageSession()
         let before = session.document
@@ -2446,6 +2790,106 @@ final class InsertionModelTests: XCTestCase {
         try session.undo()
         XCTAssertEqual(try snapshot(.mobile)?.links.first { $0.id == more.id }?.isAvailable, true)
         XCTAssertEqual(try DocumentSerializer.decode(DocumentSerializer.encode(session.document)), session.document)
+    }
+
+    // SF-0304-002/005, SF-0502-002/003/005, SF-0602-003/004:
+    // ordinary responsive Footer groups preserve managed title/nav identities.
+    func testFooterGroupsPreserveChromeResponsiveLayoutAndExactUndoCopy() async throws {
+        let fixture = try chromeReuseFixture(), session = DocumentSession(document: fixture.document)
+        let before = session.document.pages
+        XCTAssertThrowsError(try FooterContentCommandRegistry.prepare(preset: .about, footerID: fixture.footer,
+            selectedGridID: nil, createColumnsConfirmed: false, document: session.document, pageID: fixture.source))
+        let worker = FooterContentWorker()
+        let first = try await worker.prepare(preset: .about, footerID: fixture.footer, selectedGridID: nil,
+            createColumnsConfirmed: true, document: session.document, pageID: fixture.source, payload: "")
+        try session.execute(first.command)
+        let after = session.document.pages
+        XCTAssertEqual(session.document.pages[0].nodes.first { $0.id == fixture.footer }?.id, fixture.footer)
+        XCTAssertNotNil(session.document.pages[0].nodes.first { $0.id == first.groupID && $0.kind == .stack })
+        XCTAssertTrue(session.document.pages[0].nodes.filter { $0.parent == .node(first.groupID) }.contains { $0.kind == .link })
+        XCTAssertThrowsError(try pageStructureCommand(.automaticLayout(fixture.footer), document: session.document, selected: fixture.footer))
+        try session.undo(); XCTAssertEqual(session.document.pages, before)
+        try session.redo(); XCTAssertEqual(session.document.pages, after)
+        var groups = [first.groupID]
+        for preset in [FooterGroupPreset.contact, .empty, .about] {
+            let next = try await worker.prepare(preset: preset, footerID: fixture.footer, selectedGridID: first.columnsID,
+                createColumnsConfirmed: false, document: session.document, pageID: fixture.source, payload: "")
+            let prior = session.document.pages
+            try session.execute(next.command); groups.append(next.groupID)
+            let inserted = session.document.pages
+            try session.undo(); XCTAssertEqual(session.document.pages, prior)
+            try session.redo(); XCTAssertEqual(session.document.pages, inserted)
+        }
+        let page = session.document.pages[0]
+        let grid = try XCTUnwrap(page.nodes.first { $0.id == first.columnsID })
+        for (width, breakpoint, count) in [(1440.0, ResponsiveBreakpoint.desktop, 3.0), (768, .tablet, 2), (390, .mobile, 1)] {
+            XCTAssertEqual(ResponsiveContainerLayoutResolver.value(for: .columns, node: grid, breakpoint: breakpoint, viewportWidth: width)?.0, .number(count))
+            let snapshot = ConnectedPageLayoutSnapshot(page: page, breakpoint: breakpoint, width: width,
+                availablePageIDs: Set(session.document.pages.map(\.id)))
+            let frames = try groups.map { try XCTUnwrap(snapshot.frames[$0]) }
+            for frame in frames {
+                XCTAssertGreaterThan(frame.size.width, 0); XCTAssertGreaterThan(frame.size.height, 0)
+                XCTAssertGreaterThanOrEqual(frame.origin.x, -0.5)
+                XCTAssertLessThanOrEqual(frame.origin.x + frame.size.width, width + 0.5)
+            }
+            if breakpoint == .mobile { for index in 1..<frames.count {
+                XCTAssertGreaterThanOrEqual(frames[index].origin.y, frames[index-1].origin.y + frames[index-1].size.height)
+            } }
+        }
+        let originalSource = session.document.pages[0]
+        let copy = try PageChromeCopyRegistry().prepare(chromeReuseRequest(fixture, document: session.document,
+            roles: [.footer], targets: [fixture.targets[0]]), document: session.document)
+        try session.execute(copy.command); try session.document.validate()
+        XCTAssertEqual(session.document.pages[0], originalSource)
+        let target = try XCTUnwrap(session.document.pages.first { $0.id == fixture.targets[0] })
+        XCTAssertEqual(target.nodes.filter { $0.kind == .grid }.count, 1)
+        XCTAssertEqual(target.nodes.filter { $0.name == "About Us" && $0.kind == .stack }.count, 2)
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: DocumentSerializer.encode(session.document)) as? [String: Any])
+        envelope["schemaVersion"] = 20
+        XCTAssertThrowsError(try DocumentSerializer.decode(JSONSerialization.data(withJSONObject: envelope)))
+    }
+
+    // SF-0802-002/004/005/008, SF-0806-003/005, SF-1206-003/004:
+    // actual local encoder/decoder, immutable bytes and output mismatch gate.
+    func testFooterQRCodeDecodesRegeneratesWithHistoryAndDetectsMismatchedBytes() async throws {
+        let (session, _, _, footer) = try connectedPageSession()
+        let pageID = session.document.pages[0].id, worker = FooterContentWorker()
+        let payload = "https://example.com/showcase"
+        let insertion = try await worker.prepare(preset: .qr, footerID: footer, selectedGridID: nil,
+            createColumnsConfirmed: true, document: session.document, pageID: pageID, payload: payload)
+        let resource = try XCTUnwrap(insertion.resource)
+        try ProjectQRCodeVerifier.verify(resource.data, payload: payload)
+        try session.execute(insertion.command)
+        let original = session.document
+        let node = try XCTUnwrap(original.pages[0].nodes.first { (try? CanonicalQRCode.resolve($0)) != nil })
+        XCTAssertEqual(try CanonicalQRCode.resolve(node)?.payload, payload)
+        XCTAssertEqual(CanonicalImageStyle.resolve(node)?.altText, "QR code for " + payload)
+        let compilation = StaticBuildCompiler.compile(document: original, profileSelection: .init(profile: .development),
+            resourceDescriptors: [resource.descriptor.id: resource.descriptor], resourceData: [resource.descriptor.id: resource.data])
+        XCTAssertTrue(compilation.canWrite, compilation.redactedSummary)
+        XCTAssertTrue(compilation.plan?.files.contains { $0.path == "styles.css" && $0.contents.contains("image-rendering:pixelated") } == true)
+        var mismatch = original
+        let index = try XCTUnwrap(mismatch.pages[0].nodes.firstIndex { $0.id == node.id })
+        let property = try XCTUnwrap(mismatch.pages[0].nodes[index].properties.firstIndex { $0.key.rawValue == CanonicalQRCode.namespace + "payload" })
+        mismatch.pages[0].nodes[index].properties[property].value = .string("https://example.com/different")
+        let rejected = StaticBuildCompiler.compile(document: mismatch, profileSelection: .init(profile: .development),
+            resourceDescriptors: [resource.descriptor.id: resource.descriptor], resourceData: [resource.descriptor.id: resource.data])
+        XCTAssertFalse(rejected.canWrite); XCTAssertTrue(rejected.findings.contains { $0.code == "qr-payload-mismatch" })
+        let regenerated = try await worker.prepareQRUpdate(nodeID: node.id, pageID: pageID, document: session.document,
+            payload: "https://example.com/new-destination")
+        let newResource = try XCTUnwrap(regenerated.resource)
+        try ProjectQRCodeVerifier.verify(newResource.data, payload: "https://example.com/new-destination")
+        try session.execute(regenerated.command)
+        let updated = session.document.pages
+        XCTAssertEqual(session.document.imageAssets.count, 2)
+        XCTAssertTrue(session.document.imageAssets.contains { $0.id == resource.asset.id && $0.contentHash == resource.asset.contentHash })
+        XCTAssertEqual(try CanonicalQRCode.resolve(session.document.pages[0].nodes[index])?.payload, "https://example.com/new-destination")
+        XCTAssertTrue(session.document.pages[0].nodes.contains { (try? CanonicalLinkTarget.resolve($0)) == .external("https://example.com/new-destination") })
+        try session.undo(); XCTAssertEqual(session.document.pages, original.pages); XCTAssertEqual(session.document.imageAssets, original.imageAssets)
+        try session.redo(); XCTAssertEqual(session.document.pages, updated)
+        for invalid in ["", "javascript:alert(1)", "https://u:p@example.com", "https://example.com/" + String(repeating: "a", count: 1100)] {
+            XCTAssertFalse(QRCodeResourceWorker.validURL(invalid))
+        }
     }
 
     private func connectedPageSession(includeAbout: Bool = false) throws -> (DocumentSession, NodeID, [NodeID], NodeID) {
@@ -2820,6 +3264,70 @@ final class InsertionModelTests: XCTestCase {
         let forged = String(decoding: try DocumentSerializer.encode(session.document), as: UTF8.self)
             .replacingOccurrences(of: "\"schemaVersion\":\(DocumentSerializer.currentSchemaVersion)", with: "\"schemaVersion\":15")
         XCTAssertThrowsError(try DocumentSerializer.decode(Data(forged.utf8)))
+    }
+
+    func testConnectedHeightGestureAndDraftKeepResponsiveScopeAndExactHistory() async throws {
+        let (session, header, _, footer) = try connectedPageSession()
+        let state = WorkspaceShellState(documentSession: session)
+        state.resizeViewport(to: .init(width: 900, height: 600), pixelRatio: 2)
+        await awaitOutputRepairScene(state)
+        state.selectedTool = .select
+        state.selectLayer(header)
+        XCTAssertEqual(state.selectionState.primaryID, header)
+
+        func beginHeightDrag(_ id: NodeID) throws {
+            let frame = try XCTUnwrap(state.canvasRenderPlan?.authoredObjects.first { $0.id == id }?.frame)
+            XCTAssertTrue(state.beginPointerTransform(at: .init(x: frame.minX + frame.size.width / 2, y: frame.maxY)))
+        }
+
+        let original = session.document
+        let history = session.historySnapshot()
+        let desktopScope = state.layoutInspectorDraftScope
+        try beginHeightDrag(header)
+        state.updatePointerTransform(delta: .init(dx: 0, dy: 23), constrainAxis: false)
+        XCTAssertNotNil(state.pageFlowMarker)
+        XCTAssertTrue(state.commitViewportWidth(390))
+        XCTAssertNil(state.pageFlowMarker)
+        state.commitPointerTransform()
+        XCTAssertEqual(session.document, original)
+        XCTAssertEqual(session.historySnapshot(), history)
+        await awaitOutputRepairScene(state)
+        XCTAssertFalse(state.commitPageStructureHeight(header, value: 143,
+            scope: desktopScope, identity: try XCTUnwrap(state.componentTextDraftIdentity)))
+
+        try beginHeightDrag(header)
+        state.updatePointerTransform(delta: .init(dx: 0, dy: 23), constrainAxis: false)
+        state.updatePointerTransform(delta: .init(dx: 0, dy: 0), constrainAxis: false)
+        state.commitPointerTransform()
+        XCTAssertEqual(session.document, original)
+        XCTAssertEqual(session.historySnapshot(), history)
+
+        let mobileScope = state.layoutInspectorDraftScope
+        XCTAssertTrue(state.commitPageStructureHeight(header, value: 120,
+            scope: mobileScope, identity: try XCTUnwrap(state.componentTextDraftIdentity)))
+        let mobileKey = ResponsiveGeometryResolver.key(.height, breakpoint: .mobile)
+        let edited = session.document.pages
+        XCTAssertEqual(edited[0].nodes.first { $0.id == header }?.insertionProperty(mobileKey)?.value, .number(120))
+        XCTAssertEqual(edited[0].nodes.first { $0.id == footer }, original.pages[0].nodes.first { $0.id == footer })
+        try session.undo()
+        XCTAssertEqual(session.document.pages, original.pages)
+        try session.redo()
+        XCTAssertEqual(session.document.pages, edited)
+        XCTAssertEqual(state.selectionState.primaryID, header)
+        await awaitOutputRepairScene(state)
+
+        state.selectLayer(footer)
+        try beginHeightDrag(footer)
+        state.updatePointerTransform(delta: .init(dx: 0, dy: 37), constrainAxis: false)
+        state.commitPointerTransform()
+        let resized = session.document.pages
+        XCTAssertEqual(resized[0].nodes.first { $0.id == footer }?.insertionProperty(mobileKey)?.value, .number(237))
+        XCTAssertEqual(resized[0].nodes.first { $0.id == header }, edited[0].nodes.first { $0.id == header })
+        XCTAssertEqual(resized[0].resolvedStructuralGeometry(viewportWidth: 1440)[footer]?.size.height, 200)
+        try session.undo()
+        XCTAssertEqual(session.document.pages, edited)
+        try session.redo()
+        XCTAssertEqual(session.document.pages, resized)
     }
 
     // SF-0201-003/006 and connected-flow Inspector truthfulness: a computed
@@ -4405,4 +4913,11 @@ final class InsertionModelTests: XCTestCase {
 
 private struct ImmediateInsertionAutosaveDebouncer: LifecycleAutosaveDebouncing {
     func wait() async throws {}
+}
+
+@MainActor private final class NativeStyleEventReceipt {
+    var values: [Double] = []
+    var sawCanvasPreview = false
+    var finished = 0
+    var cancelled = 0
 }

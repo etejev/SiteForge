@@ -1,5 +1,52 @@
 # SiteForge Visual Contract
 
+## November 21 — owner-selected native system grays
+
+The owner requested “use macos default grays instead of black backgrounds.”
+This supersedes the prior fixed Testing/monitor black palette and custom native
+chrome RGB values. Use window, under-page, control-background, label and separator
+roles from AppKit/SwiftUI. These resolve with application appearance and macOS
+accessibility. Website paper and authored website colors remain document data.
+The former custom palette's fixed RGB-distance assertions are replaced by native
+role identity, opaque fallback, role separation and unchanged-paper assertions;
+final native captures assess their actual appearance. Approved geometry and
+interaction references remain current. Keep the progress indicator native,
+thin, rounded and blue and all peer controls stable across state changes.
+The detached helper receives the app appearance through its owned launch
+environment and scoped live appearance notifications, including preview/cancel;
+it never changes global macOS preferences.
+[Review evidence](../evidence/SF-NATIVE-UI-CONSISTENCY.md).
+
+## November 15 — approved native interface
+
+The [approval packet](../coordination/APPROVED_NATIVE_UI_REDESIGN.md) records
+the ten reference windows and their exact 2× dimensions. Its measurements
+supersede earlier Start, Navigator, Inspector, and Settings dimensions below.
+The [redesign evidence](../evidence/SF-NATIVE-UI-REDESIGN.md) tracks the native
+captures and verification for this pass.
+
+Start uses a 224-point sidebar, then the same layout during opening, failure,
+and recovery. The workspace places authoring tools in a 48-point rail. Both
+sidebars use a 41-point tab row, a common baseline and bottom rule, and a
+two-point selected underline. At compact width, the 268-point Navigator
+shows five labels. The compact Inspector uses the native More control.
+Page actions reserve fixed space, reveal on pointer or keyboard interaction,
+and retain the same page identity after a rename. Design exposes the current
+Page Background through the shared fill editor. The empty artboard has no
+instructional controls.
+
+App Settings and Website Settings share a 201-point sidebar and flat form
+sections. The 860×470 App Settings reference includes its native title bar.
+The 860×480 Website Settings reference is a project sheet. Both use
+scrolling to preserve controls on smaller displays and with larger text.
+The correct live document, rendering, preference and testing states supply
+the visible values. Native title bars and command validation stay with AppKit.
+
+For ordinary UI tests the main window fills the active display’s visible frame.
+The test harness requests approved artboard screenshots and existing compact
+or safe-edge states after the main window has opened. AppKit owns auxiliary
+window geometry.
+
 ## Current visual acceptance —2026-11-02, closeout remains IN PROGRESS
 
 Native Header/Footer are actual semantic containers for their child controls,

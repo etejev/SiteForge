@@ -152,8 +152,8 @@ final class AppMetadataTests: XCTestCase {
         let canonicalDocument = state.documentSession.document
 
         XCTAssertEqual(CanvasTool.allCases.map(\.title), ["Select", "Section", "Stack", "Grid", "Frame", "Text", "Image", "Button", "Link", "Form", "Component"])
-        XCTAssertEqual(CanvasTool.primaryToolbarTools, [.select, .frame, .text, .image, .component])
-        XCTAssertEqual(CanvasTool.additionalToolbarTools, [.section, .stack, .grid, .button, .link, .form])
+        XCTAssertEqual(CanvasTool.primaryToolbarTools, [.select, .frame, .text, .image, .section])
+        XCTAssertEqual(CanvasTool.additionalToolbarTools, [.stack, .grid, .button, .link, .form, .component])
         XCTAssertEqual(
             Set(CanvasTool.primaryToolbarTools + CanvasTool.additionalToolbarTools),
             Set(CanvasTool.allCases)
@@ -186,10 +186,10 @@ final class AppMetadataTests: XCTestCase {
         let second = PageID(UUID(uuidString: "30000000-0000-0000-0000-000000000002")!)
         let order = ShellFocusTraversal.order(pageIDs: [first, second])
         XCTAssertEqual(order, [
-            .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents, .navigatorPage(first),
-            .navigatorPage(second), .viewportPreset, .viewportWidth, .viewportCompare, .viewportGrid,
+            .navigatorPages, .navigatorLayers, .navigatorElements, .navigatorAssets, .navigatorComponents, .navigatorPage(first), .navigatorMore(first),
+            .navigatorPage(second), .navigatorMore(second), .viewportPreset, .viewportWidth, .viewportCompare, .viewportGrid,
             .viewportZoomOut, .viewportZoomIn,
-            .viewportReset, .viewportFitCanvas, .viewportFit, .viewportCanvas,
+            .viewportFitCanvas, .viewportCanvas,
             .inspectorDesign, .inspectorLayout, .inspectorContent, .inspectorInteractions, .inspectorAccessibility,
         ])
         for (index, value) in order.enumerated() {
@@ -361,7 +361,7 @@ final class AppMetadataTests: XCTestCase {
 
         XCTAssertEqual(
             WorkspaceTabRoutingPolicy.decision(
-                from: .navigatorPage(notFound),
+                from: .navigatorMore(notFound),
                 direction: .forward,
                 pageIDs: [home, notFound],
                 context: context
@@ -393,7 +393,7 @@ final class AppMetadataTests: XCTestCase {
                 pageIDs: [home, notFound],
                 context: context
             ),
-            .route(.navigatorPage(notFound))
+            .route(.navigatorMore(notFound))
         )
         XCTAssertEqual(
             WorkspaceTabRoutingPolicy.decision(

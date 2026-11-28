@@ -8,9 +8,10 @@ enum TransactionIdentifierDomain: StableIdentifierDomain {
 typealias TransactionID = StableIdentifier<TransactionIdentifierDomain>
 
 struct PersistedHistorySnapshot: Codable, Equatable, Sendable {
-    /// V3 adds canonical website metadata commands. V2 and the v1 inverse-index
+    /// V3 adds canonical website metadata commands; v4 adds project-scoped
+    /// preference commands (SF-0206-005). V3, v2 and the v1 inverse-index
     /// adapter remain readable; older schemas cannot smuggle in newer commands.
-    static let currentSchemaVersion = 3
+    static let currentSchemaVersion = 4
 
     let format: String
     let schemaVersion: Int
@@ -324,6 +325,11 @@ private extension PersistedHistoryStore {
         case "removeImageAsset": try requireCommandPayload(value, keys: ["assetID"])
         case "setColorTokens": try requireCommandPayload(value, keys: ["tokens"])
         case "setWebsiteMetadata": try requireCommandPayload(value, keys: ["documentID", "metadata"])
+        case "setProjectPreferences": try requireCommandPayload(value, keys: ["documentID", "preferences"])
+        case "setCollections": try requireCommandPayload(value, keys: ["documentID", "collections"])
+        case "setFontAssets": try requireCommandPayload(value, keys: ["documentID", "fontAssets"])
+        case "setLocalization": try requireCommandPayload(value, keys: ["documentID", "localization"])
+        case "setMediaAssets": try requireCommandPayload(value, keys: ["documentID", "mediaAssets"])
         case "batch":
             guard let commands = value as? [Any] else { throw PersistedHistoryError.corrupt }
             for command in commands { try validateDocumentCommand(command) }
@@ -413,7 +419,7 @@ private extension PersistedHistoryStore {
         switch snapshot.schemaVersion {
         case PersistedHistorySnapshot.currentSchemaVersion:
             return snapshot
-        case 1, 2:
+        case 1, 2, 3:
             return PersistedHistorySnapshot(
                 format: snapshot.format,
                 schemaVersion: PersistedHistorySnapshot.currentSchemaVersion,

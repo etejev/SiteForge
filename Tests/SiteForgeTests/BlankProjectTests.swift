@@ -293,6 +293,173 @@ final class BlankProjectTests: XCTestCase {
         XCTAssertEqual(state.adjacentPage(to: notFoundID, offset: -1), homeID)
     }
 
+    // SF-1004-001, SF-1004-002, SF-1004-003, SF-1004-008
+    func testExpressionLanguageTransformsTextNumbersDatesAndExplainsWhichRuleWon() throws {
+        let schema = SiteExpressionSchema(["title": .text, "price": .number, "discount": .number, "published": .date,
+                                           "featured": .boolean, "author.name": .text, "summary": .text])
+        let day = try XCTUnwrap(SiteExpressionDate(year: 2026, month: 11, day: 26))
+        let context = SiteExpressionContext(["title": .text("  Spring Sale "), "price": .number(19.5),
+                                             "published": .date(day), "featured": .boolean(true),
+                                             "author.name": .text("Ada")])
+        func run(_ source: String) throws -> SiteExpressionEvaluation {
+            SiteExpressionEngine.evaluate(try SiteExpressionEngine.check(source, schema: schema), context: context)
+        }
+
+        XCTAssertEqual(try run("upper(trim(title))").value, .text("SPRING SALE"))
+        XCTAssertEqual(try run("\"By \" + author.name").value, .text("By Ada"))
+        XCTAssertEqual(try run("format(price * 2, 2)").value, .text("39.00"))
+        XCTAssertEqual(try run("round(price / 3, 2)").value, .number(6.5))
+        XCTAssertEqual(try run("formatDate(published, \"long\")").value, .text("November 26, 2026"))
+        XCTAssertEqual(try run("formatDate(published, \"medium\")").value, .text("Nov 26, 2026"))
+        XCTAssertEqual(try run("formatDate(published, \"iso\")").value, .text("2026-11-26"))
+        XCTAssertEqual(try run("year(published) + 1").value, .number(2027))
+        XCTAssertEqual(try run("published > date(\"2026-01-01\") and featured").value, .boolean(true))
+        XCTAssertEqual(try run("concat(\"$\", price)").value, .text("$19.5"))
+        XCTAssertEqual(try run("truncate(\"Hello world\", 5)").value, .text("Hello…"))
+        XCTAssertEqual(try run("replace(title, \"Sale\", \"Event\")").value, .text("  Spring Event "))
+        XCTAssertEqual(try run("-price + 20").value, .number(0.5))
+        XCTAssertEqual(try run("1 + 2 * 3").value, .number(7))
+        XCTAssertEqual(try run("(1 + 2) * 3").value, .number(9))
+        XCTAssertEqual(try run("not featured || length(\"abc\") == 3").value, .boolean(true))
+        XCTAssertEqual(try run("min(price, 10) + max(price, 10) + abs(-1)").value, .number(30.5))
+
+        let branch = try run("if(featured, \"Featured\", \"Regular\")")
+        XCTAssertEqual(branch.value, .text("Featured"))
+        XCTAssertEqual(branch.type, .text)
+        XCTAssertEqual(branch.decisions.map(\.explanation), ["if(…): the condition is true, so the first result is used."])
+        let fallback = try run("summary ?? \"No summary yet\"")
+        XCTAssertEqual(fallback.value, .text("No summary yet"))
+        XCTAssertEqual(fallback.decisions.map(\.explanation), [
+            "The field “summary” has no value.",
+            "The first value is missing or empty, so the fallback is used."
+        ])
+        XCTAssertEqual(try run("default(author.name, \"Staff\")").value, .text("Ada"))
+
+        // Missing values: text reads as empty, conditions as false, numbers stay missing.
+        XCTAssertEqual(try run("upper(summary)").value, .text(""))
+        XCTAssertEqual(try run("summary == \"\"").value, .boolean(true))
+        XCTAssertEqual(try run("isEmpty(summary)").value, .boolean(true))
+        XCTAssertEqual(try run("discount * 2").value, .missing)
+        XCTAssertEqual(try run("if(discount > 0, \"Sale\", \"Full price\")").value, .text("Full price"))
+        XCTAssertEqual(try run("text(discount)").value, .text(""))
+        XCTAssertEqual(SiteExpressionValue.missing.renderedText, "")
+        XCTAssertEqual(SiteExpressionValue.number(3).renderedText, "3")
+
+        let program = try SiteExpressionEngine.check("if(featured, upper(title), author.name)", schema: schema)
+        XCTAssertEqual(program.fieldPaths, ["author.name", "featured", "title"])
+        XCTAssertEqual(program.resultType, .text)
+        XCTAssertEqual(SiteExpressionEngine.evaluate(program, context: context),
+                       SiteExpressionEngine.evaluate(program, context: context))
+
+        let diagnostic = SiteExpressionEngine.diagnostic("evaluate", objectIdentifiers: ["node:b", "node:a"], startedAt: Date())
+        XCTAssertEqual(diagnostic.requirementID, "SF-1004-008")
+        XCTAssertEqual(diagnostic.objectIdentifiers, ["node:a", "node:b"])
+        XCTAssertEqual(diagnostic.failureCategory, "none")
+        XCTAssertFalse(String(describing: diagnostic).contains("Spring"))
+        XCTAssertEqual(SiteExpressionEngine.functionNames.count, SiteExpressionEngine.functionSignatures.count)
+    }
+
+    // SF-1004-001, SF-1004-004, SF-1004-007
+    func testExpressionLanguageRejectsInvalidInputWithLocatedErrorsAndStaysBounded() throws {
+        let schema = SiteExpressionSchema(["title": .text, "price": .number, "published": .date])
+        func failure(_ source: String) -> SiteExpressionError? {
+            do {
+                _ = try SiteExpressionEngine.check(source, schema: schema)
+                return nil
+            } catch {
+                return error as? SiteExpressionError
+            }
+        }
+
+        XCTAssertEqual(failure("")?.category, .empty)
+        XCTAssertEqual(failure("upper(title")?.category, .syntax)
+        XCTAssertEqual(failure("\"open")?.category, .syntax)
+        XCTAssertEqual(failure("title +")?.category, .syntax)
+        XCTAssertEqual(failure("price $ 2")?.category, .syntax)
+        XCTAssertEqual(failure("2abc")?.category, .syntax)
+        XCTAssertEqual(failure("true and")?.category, .syntax)
+        XCTAssertEqual(failure("subtitle")?.category, .unknownField)
+        XCTAssertEqual(failure("subtitle")?.range, SiteExpressionSourceRange(start: 0, end: 8))
+        XCTAssertEqual(failure("shout(title)")?.category, .unknownFunction)
+        XCTAssertEqual(failure("upper(title, title)")?.category, .argumentCount)
+        XCTAssertEqual(failure("title + price")?.category, .typeMismatch)
+        XCTAssertEqual(failure("upper(price)")?.category, .typeMismatch)
+        XCTAssertEqual(failure("upper(price)")?.range, SiteExpressionSourceRange(start: 6, end: 11))
+        XCTAssertEqual(failure("if(title, 1, 2)")?.category, .typeMismatch)
+        XCTAssertEqual(failure("if(price > 1, 1, \"x\")")?.category, .typeMismatch)
+        XCTAssertEqual(failure("date(\"2026-02-30\")")?.category, .invalidLiteral)
+        XCTAssertEqual(failure("formatDate(published, \"fancy\")")?.category, .invalidLiteral)
+        XCTAssertEqual(failure("format(price, 11)")?.category, .invalidLiteral)
+        XCTAssertEqual(failure("truncate(title, price)")?.category, .invalidLiteral)
+        XCTAssertEqual(failure(String(repeating: "1+", count: 1_000) + "1")?.category, .tooLong)
+        XCTAssertEqual(failure(String(repeating: "(", count: 40) + "1" + String(repeating: ")", count: 40))?.category, .tooComplex)
+        XCTAssertEqual(failure(Array(repeating: "1", count: 200).joined(separator: "+"))?.category, .tooComplex)
+        XCTAssertEqual(failure(Array(repeating: "1", count: 300).joined(separator: "+"))?.category, .tooComplex)
+        XCTAssertNotNil(failure("subtitle")?.recoverySuggestion)
+        XCTAssertNil(failure("upper(title) + \" and \" + title"))
+
+        let numbers = SiteExpressionSchema(["a": .number, "b": .number, "raw": .text])
+        let divide = try SiteExpressionEngine.check("a / b", schema: numbers)
+        let zero = SiteExpressionEngine.evaluate(divide, context: SiteExpressionContext(["a": .number(1), "b": .number(0)]))
+        XCTAssertEqual(zero.value, .missing)
+        XCTAssertEqual(zero.findings.map(\.category), [.divisionByZero])
+        let product = try SiteExpressionEngine.check("a * b", schema: numbers)
+        let huge = SiteExpressionEngine.evaluate(product, context: SiteExpressionContext(["a": .number(1e200), "b": .number(1e200)]))
+        XCTAssertEqual(huge.value, .missing)
+        XCTAssertEqual(huge.findings.map(\.category), [.numberOutOfRange])
+        let parse = try SiteExpressionEngine.check("number(raw)", schema: numbers)
+        XCTAssertEqual(SiteExpressionEngine.evaluate(parse, context: SiteExpressionContext(["raw": .text(" 12.5 ")])).value, .number(12.5))
+        for bad in ["1e5", "inf", "0x10", "1.2.3", "-"] {
+            let result = SiteExpressionEngine.evaluate(parse, context: SiteExpressionContext(["raw": .text(bad)]))
+            XCTAssertEqual(result.value, .missing, bad)
+            XCTAssertEqual(result.findings.map(\.category), [.invalidNumber], bad)
+        }
+        let grow = try SiteExpressionEngine.check("replace(raw, \"a\", raw)", schema: numbers)
+        let grown = SiteExpressionEngine.evaluate(grow, context: SiteExpressionContext(["raw": .text(String(repeating: "a", count: 300))]))
+        XCTAssertEqual(grown.value, .missing)
+        XCTAssertEqual(grown.findings.map(\.category), [.textTooLong])
+
+        // Large fixture: 10,000 evaluations of one program, same answers every time.
+        let label = try SiteExpressionEngine.check("if(a > 5000, concat(\"High \", a), concat(\"Low \", a))", schema: numbers)
+        let started = Date()
+        let results = (0..<10_000).map { index in
+            SiteExpressionEngine.evaluate(label, context: SiteExpressionContext(["a": .number(Double(index))])).value
+        }
+        XCTAssertEqual(results[1], .text("Low 1"))
+        XCTAssertEqual(results[9_999], .text("High 9999"))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10)
+    }
+
+    // SF-1004-001, SF-1004-005
+    func testStoredExpressionRoundTripsExactKeysAndKeepsIntentWhenAFieldIsRemoved() throws {
+        let expression = try XCTUnwrap(SiteExpression(source: "upper(title) + \" · \" + author.name"))
+        let data = try JSONEncoder().encode(expression)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), ["version", "source"])
+        XCTAssertEqual(try JSONDecoder().decode(SiteExpression.self, from: data), expression)
+        XCTAssertNil(SiteExpression(source: "upper(title"))
+        XCTAssertNil(SiteExpression(source: "   "))
+        for forged in [#"{"version":2,"source":"title"}"#, #"{"version":1,"source":"title +"}"#,
+                       #"{"version":1,"source":"title","extra":1}"#, #"{"version":1}"#] {
+            XCTAssertThrowsError(try JSONDecoder().decode(SiteExpression.self, from: Data(forged.utf8)), forged)
+        }
+
+        // Removing a field keeps the stored expression; checking names the field.
+        XCTAssertEqual(try expression.check(SiteExpressionSchema(["title": .text, "author.name": .text])).fieldPaths,
+                       ["author.name", "title"])
+        XCTAssertThrowsError(try expression.check(SiteExpressionSchema(["title": .text]))) { error in
+            XCTAssertEqual((error as? SiteExpressionError)?.category, .unknownField)
+            XCTAssertEqual((error as? SiteExpressionError)?.message.contains("author.name"), true)
+        }
+
+        let leapDay = try XCTUnwrap(SiteExpressionDate(iso: "2024-02-29"))
+        XCTAssertEqual(String(decoding: try JSONEncoder().encode([leapDay]), as: UTF8.self), #"["2024-02-29"]"#)
+        XCTAssertNil(SiteExpressionDate(iso: "2023-02-29"))
+        XCTAssertNil(SiteExpressionDate(iso: "2024-2-29"))
+        XCTAssertNil(SiteExpressionDate(iso: "２０２４-02-29"))
+        XCTAssertThrowsError(try JSONDecoder().decode([SiteExpressionDate].self, from: Data(#"["2024-13-01"]"#.utf8)))
+    }
+
     // SF-0202-006, SF-0202-008, SF-0303-001, SF-0303-006, SF-0303-008
     func testNavigatorAccessibilityIdentityComesOnlyFromStablePageIdentity() throws {
         var document = ProjectCreation.blank()

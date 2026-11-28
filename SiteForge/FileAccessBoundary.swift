@@ -209,6 +209,18 @@ private final class CoordinationOperationRelay: @unchecked Sendable {
 }
 
 struct FoundationProjectFileCoordinator: ProjectFileCoordinating {
+    /// An existing presenter can return the /var spelling for a requested
+    /// /private/var URL. Keep the caller's canonical spelling only for this
+    /// exact system alias. The descriptor reader still rejects every symlink
+    /// hop below it, and real coordinated moves keep the new URL.
+    private static func preserveCanonicalSystemPath(requested: URL, coordinated: URL) -> URL {
+        guard requested.isFileURL, coordinated.isFileURL else { return coordinated }
+        let path = requested.path
+        guard path.hasPrefix("/private/var/"),
+              coordinated.path == String(path.dropFirst("/private".count)) else { return coordinated }
+        return requested
+    }
+
     func coordinate<T: Sendable>(
         at url: URL,
         intent: FileAccessIntent,
@@ -227,7 +239,8 @@ struct FoundationProjectFileCoordinator: ProjectFileCoordinating {
                             defer { semaphore.signal() }
                             do {
                                 try Task.checkCancellation()
-                                let value = try await operation(coordinatedURL)
+                                let sourceURL = Self.preserveCanonicalSystemPath(requested: url, coordinated: coordinatedURL)
+                                let value = try await operation(sourceURL)
                                 try Task.checkCancellation()
                                 result.set(.success(value))
                             } catch {

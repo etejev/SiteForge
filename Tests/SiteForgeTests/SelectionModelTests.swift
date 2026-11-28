@@ -197,8 +197,10 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertEqual(document.websitePages[0].id, homeID)
     }
 
-    // SF-AUTHORING-112, SF-0901-006/007/008, SF-0902-004/006 — malformed
-    // nested definition graphs are inspectable without becoming actionable.
+    // SF-AUTHORING-112, SF-0901-006/007/008, SF-0902-004/006, OD-034 — a
+    // cyclic definition graph is inspectable without becoming actionable; an
+    // acyclic nested graph is valid: the inner definition reports its user
+    // and can only be removed by detaching that use.
     func testComponentDependencySnapshotReportsNestedCyclesAndBoundedCapacity() throws {
         let firstID = PageID(), secondID = PageID()
         func definition(_ id: PageID, _ dependency: PageID) -> DocumentPage {
@@ -218,11 +220,26 @@ final class SelectionModelTests: XCTestCase {
         let snapshot = try ComponentDependencySnapshot.build(document: document)
         for id in [firstID, secondID] {
             let entry = try XCTUnwrap(snapshot.entry(for: id))
-            XCTAssertTrue(entry.issues.contains(.nestedComponent))
             XCTAssertTrue(entry.issues.contains(.cyclicDependency))
             XCTAssertFalse(entry.isTransferable)
             XCTAssertFalse(entry.canRemoveWithoutDetach)
+            XCTAssertFalse(entry.canDetachUses)
         }
+        let innerID = PageID(), outerID = PageID()
+        let inner = DocumentPage(id: innerID, name: "Button", route: .init(rawValue: ""), role: .componentDefinition)
+        let nested = CanonicalDocument(pages: [
+            DocumentPage(name: "Home", route: .init(rawValue: "/"), role: .home),
+            inner, definition(outerID, innerID),
+        ])
+        let nestedSnapshot = try ComponentDependencySnapshot.build(document: nested)
+        let outer = try XCTUnwrap(nestedSnapshot.entry(for: outerID))
+        XCTAssertTrue(outer.issues.isEmpty, "\(outer.issues)")
+        XCTAssertTrue(outer.isTransferable)
+        XCTAssertEqual(outer.directDefinitionIDs, [innerID])
+        let used = try XCTUnwrap(nestedSnapshot.entry(for: innerID))
+        XCTAssertEqual(used.dependentDefinitionIDs, [outerID])
+        XCTAssertFalse(used.canRemoveWithoutDetach, "A use inside another component is a use")
+        XCTAssertTrue(used.canDetachUses)
 
         let definitions = (0...ComponentDependencySnapshot.maximumDefinitions).map {
             DocumentPage(name: "Component \($0)", route: .init(rawValue: ""), role: .componentDefinition)

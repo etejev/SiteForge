@@ -12,6 +12,7 @@ enum AuthoringLanguage {
     static let screenSizeHelp = "Preview width selects Desktop, Tablet or Mobile. Inspector fields identify whether you are editing the base value or this screen size. Pan and zoom do not change website content."
     static let checkWebsite = "Check Website"
     static let appPreferencesScope = "SiteForge preferences · this Mac, not your website"
+    static let projectPreferencesScope = "Project preferences · saved in this project file"
     static let staleDraft = "The selection, screen size or current value changed. Nothing changed; press Escape to cancel this draft before editing the new selection."
     static let editOriginalComponent = "Edit original component"
     static let backToCopy = "Back to this copy"
@@ -116,6 +117,11 @@ enum ResponsiveBreakpoint: String, CaseIterable, Codable, Sendable {
         case .mobile: "(width < 600px)"
         }
     }
+    /// The widths only this breakpoint covers. Desktop rules are otherwise
+    /// written without a condition and narrower breakpoints override them; a
+    /// rule that must not reach tablet or phone widths (an object hidden only
+    /// on desktop) needs this range.
+    var cssRangeCondition: String { cssMediaCondition ?? "(min-width: 1024px)" }
 }
 
 enum ResponsiveGeometrySource: Equatable, Sendable {
@@ -286,11 +292,588 @@ struct StaticLayoutOutputReport: Equatable, Sendable {
     let breakpoints: [ResponsiveBreakpoint]
 }
 
+/// SF-0605-003/004: why a rule did or did not apply, by stable identity only.
+enum ContainerQueryFinding: Hashable, Sendable {
+    /// No active container with the rule's name (or none at all) above the object.
+    case noContainer(nodeID: NodeID, ruleID: ContainerQueryRuleID)
+    /// A named container whose width can depend on its contents (Hug width) is skipped.
+    case containerHugs(containerID: NodeID)
+    /// Lane V19: on a page without page flow, a container holding an object
+    /// that keeps its own position or stacking layer, or an overlay, is
+    /// skipped: those need the page around them, outside the wrapper that
+    /// export writes for a queried container (`StaticContainerQueryWrapping`).
+    case containerHoldsPositioned(containerID: NodeID)
+    /// Lane V19: on a page with page flow, an object hidden at this breakpoint
+    /// has no layout there, so a matching Show rule leaves it hidden.
+    case showWithoutLayout(nodeID: NodeID, ruleID: ContainerQueryRuleID)
+
+    var code: String {
+        switch self {
+        case .noContainer: "container-query-no-container"
+        case .containerHugs: "container-query-container-hugs"
+        case .containerHoldsPositioned: "container-query-container-positioned"
+        case .showWithoutLayout: "container-query-show-without-layout"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .noContainer:
+            "This rule has no container above it, so it never applies. Name a container that contains this object, or choose Nearest container."
+        case .containerHugs:
+            "This container's width depends on its contents (Hug), so rules can't query it. Give it a Fixed or Fill width."
+        case .containerHoldsPositioned:
+            "Something inside this container keeps its own position or stacking layer, or opens as an overlay, so on a page without page flow rules can't query this container. Remove that setting or move the object out of the container."
+        case .showWithoutLayout:
+            "This object is hidden at this breakpoint, and on a page with page flow the layout has no room for it there, so this rule can't show it. Show it at this breakpoint in Visibility and hide it with a rule for the widths where it should stay hidden."
+        }
+    }
+}
+
+struct ContainerQueryRuleStatus: Equatable, Sendable {
+    let ruleID: ContainerQueryRuleID
+    let containerID: NodeID?
+    let containerName: String?
+    let containerWidth: Double?
+    let matches: Bool
+}
+
+struct ContainerQueryEvaluation: Equatable, Sendable {
+    /// Rule results per object, in rule order.
+    var statuses: [NodeID: [ContainerQueryRuleStatus]] = [:]
+    /// The setting values that apply, per object, and the rule that supplies each.
+    var winners: [NodeID: [String: ContainerQueryRuleID]] = [:]
+    var findings: Set<ContainerQueryFinding> = []
+
+    static let empty = ContainerQueryEvaluation()
+}
+
+extension CanonicalContainerQueries {
+    /// The nearest active container above `node` that `rule` queries, using
+    /// the same walk as export (`@container` matches the nearest ancestor
+    /// with `container-type`, filtered by name). `unqueryable` (a page without
+    /// page flow, `StaticContainerQueryWrapping.unqueryableContainers`) is
+    /// skipped like a Hug container, because export can't wrap its contents.
+    static func container(for rule: CanonicalContainerQueryRule, of node: DocumentNode,
+                          nodesByID: [NodeID: DocumentNode], findings: inout Set<ContainerQueryFinding>,
+                          unqueryable: Set<NodeID> = []) -> DocumentNode? {
+        var parent = node.parent
+        var steps = 0
+        while case .node(let id) = parent, let ancestor = nodesByID[id], steps < nodesByID.count {
+            steps += 1
+            parent = ancestor.parent
+            guard let name = containerName(of: ancestor) else { continue }
+            guard rule.container == nil || rule.container == name else { continue }
+            guard isActiveContainer(ancestor) else { findings.insert(.containerHugs(containerID: ancestor.id)); continue }
+            guard !unqueryable.contains(ancestor.id) else {
+                findings.insert(.containerHoldsPositioned(containerID: ancestor.id)); continue
+            }
+            return ancestor
+        }
+        return nil
+    }
+
+    /// OD-143 (ADR-0143): browsers evaluate `@container` against the content
+    /// box of a `container-type: inline-size` element, inside its padding and
+    /// border. This is the horizontal inset (left plus right) that export's
+    /// CSS gives `container` at `breakpoint`, read from the same resolvers the
+    /// emitters use, so canvas, Preview, Inspector and the responsive audit
+    /// switch at the width the exported site does:
+    /// - static-layout pages (`StaticBoxStyleOutputEmitter`, `border-box`
+    ///   sizing): the box style's border width, its own or a linked reusable
+    ///   style's, and its box padding, each as written (0.001 px);
+    /// - connected pages (`ConnectedPageOutput`): a box border is drawn as an
+    ///   outline and takes no space; the element has CSS padding only as a
+    ///   horizontal Stack, or as a Hug-height Stack, Section, Grid or Frame
+    ///   with box padding (its layout padding), or as a winning fluid padding,
+    ///   resolved at the viewport width as the browser resolves its `calc`;
+    /// - pages that need the fluid-flow adapter put that padding on an inner
+    ///   wrapper, so the container element itself has none.
+    /// A container without padding or border measures exactly its frame.
+    static func contentInset(of container: DocumentNode, on page: DocumentPage, breakpoint: ResponsiveBreakpoint,
+                             outputMode: ContentBoxOutput? = nil,
+                             viewportWidth: Double? = nil, visibleIDs: Set<NodeID>? = nil,
+                             nodesByID: [NodeID: DocumentNode]? = nil,
+                             reusableStyles: CanonicalReusableStyleIndex? = nil) -> Double {
+        let resolvedOutput = outputMode ?? ContentBoxOutput(page: page)
+        guard resolvedOutput != .staticLayout else {
+            guard DesignBoxStyleCommandRegistry.applicableKinds.contains(container.kind),
+                  DesignBoxStyleCommandRegistry.hasWellFormedContentBoxProperties(container),
+                  let style = LocalColorTokenResolver.resolvedBoxStyle(for: container, tokens: [], reusableStyles: reusableStyles),
+                  style.isValid else { return 0 }
+            func written(_ value: Double?) -> Double { ((value ?? 0) * 1_000).rounded() / 1_000 }
+            return 2 * written(style.border?.width) + 2 * written(style.padding)
+        }
+        guard resolvedOutput != .fluidAdapter else { return 0 }
+        // Connected rules are written once per breakpoint at its preset width.
+        let presetWidth = CanonicalPageFlow.pageWidth(breakpoint, nil)
+        let boxPadding = DesignBoxStyleCommandRegistry.resolvedStyle(for: container)?.padding
+        var padding = 0.0
+        if container.kind.acceptsAuthoredChildren {
+            let byID = nodesByID ?? Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            let visible = visibleIDs ?? page.effectiveVisibleNodeIDs(breakpoint: breakpoint)
+            let policy = ResolvedContainerLayoutPolicy.resolve(container,
+                children: container.childIDs.filter(visible.contains).compactMap { byID[$0] },
+                breakpoint: breakpoint, viewportWidth: presetWidth)
+            let hugs = CanonicalSizingConstraints.effectiveMode(.height, node: container, breakpoint: breakpoint,
+                                                                width: presetWidth) == .hug
+            let row = container.kind == .stack && policy.axis == .horizontal
+            let hugBox = [.stack, .section, .grid].contains(container.kind) || (container.kind == .frame && boxPadding != nil)
+            if row || (hugs && hugBox) { padding = policy.padding }
+        }
+        if boxPadding == nil,
+           ResponsiveContainerLayoutResolver.value(for: .padding, node: container, breakpoint: breakpoint,
+                                                   viewportWidth: presetWidth)?.2 == .fluid,
+           let fluid = CanonicalFluidValueCodec.value(for: .padding, node: container)?.0,
+           StaticFluidValueOutputEmitter.expression(for: fluid) != nil,
+           let resolved = fluid.resolved(viewportWidth: CanonicalPageFlow.pageWidth(breakpoint, viewportWidth)) {
+            padding = resolved
+        }
+        return 2 * padding
+    }
+
+    enum ContentBoxOutput {
+        case staticLayout, connected, fluidAdapter
+
+        init(page: DocumentPage) {
+            self = page.usesConnectedOutput
+                ? (ConnectedFluidOutputPolicy.needsAdapter(page) ? .fluidAdapter : .connected)
+                : .staticLayout
+        }
+    }
+
+    /// SF-0605-003: one deterministic rule for canvas and Preview. Container
+    /// widths are measured once, without any rule applied (a container's
+    /// width never depends on its contents, so this is cycle-free), as the
+    /// content box inside the padding and border export gives it (OD-143,
+    /// `contentInset`); then each object's matching rules apply in their
+    /// order, later rules winning per setting. Returns the page to lay out
+    /// and draw, and the evaluation the Inspector shows. Pages without rules
+    /// are returned unchanged. `styleSource` is the document whose reusable
+    /// styles can give a static-layout container its border.
+    static func evaluated(_ page: DocumentPage, breakpoint: ResponsiveBreakpoint, viewportWidth: Double? = nil,
+                          availablePageIDs: Set<PageID>? = nil,
+                          styleSource: CanonicalDocument? = nil) -> (page: DocumentPage, evaluation: ContainerQueryEvaluation) {
+        guard page.nodes.contains(where: hasRules) else { return (page, .empty) }
+        let geometry = page.resolvedStructuralGeometry(breakpoint: breakpoint, viewportWidth: viewportWidth,
+                                                       availablePageIDs: availablePageIDs)
+        let nodesByID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        let outputMode = ContentBoxOutput(page: page)
+        let connected = outputMode != .staticLayout
+        let styles: CanonicalReusableStyleIndex? = connected ? nil
+            : styleSource.flatMap { try? CanonicalReusableStyleIndex(document: $0) }
+        let visibleIDs: Set<NodeID>? = connected ? page.effectiveVisibleNodeIDs(breakpoint: breakpoint) : nil
+        let unqueryable: Set<NodeID> = connected ? [] : StaticContainerQueryWrapping.unqueryableContainers(page)
+        var contentWidths: [NodeID: Double] = [:]
+        func contentWidth(of container: DocumentNode) -> Double? {
+            if let known = contentWidths[container.id] { return known }
+            guard let frameWidth = geometry[container.id]?.size.width else { return nil }
+            let inset = contentInset(of: container, on: page, breakpoint: breakpoint,
+                                     outputMode: outputMode, viewportWidth: viewportWidth,
+                                     visibleIDs: visibleIDs, nodesByID: nodesByID, reusableStyles: styles)
+            let width = max(0, frameWidth - inset)
+            contentWidths[container.id] = width
+            return width
+        }
+        var evaluation = ContainerQueryEvaluation()
+        var output = page
+        for (index, node) in page.nodes.enumerated() where hasRules(node) {
+            guard let nodeRules = try? Self.rules(on: node) else { continue }
+            var applied: [String: (PropertyValue, ContainerQueryRuleID)] = [:]
+            var statuses: [ContainerQueryRuleStatus] = []
+            for rule in nodeRules {
+                let container = Self.container(for: rule, of: node, nodesByID: nodesByID, findings: &evaluation.findings,
+                                               unqueryable: unqueryable)
+                let width = container.flatMap { contentWidth(of: $0) }
+                if container == nil { evaluation.findings.insert(.noContainer(nodeID: node.id, ruleID: rule.id)) }
+                let matches = width.map(rule.matches(width:)) ?? false
+                statuses.append(.init(ruleID: rule.id, containerID: container?.id,
+                                      containerName: container.flatMap(containerName(of:)), containerWidth: width, matches: matches))
+                guard matches else { continue }
+                for value in rule.values { applied[value.key] = (value.property.value, rule.id) }
+            }
+            evaluation.statuses[node.id] = statuses
+            // Lane V19: on a page with page flow an object hidden at this
+            // breakpoint has no layout there, so export can't show it; the
+            // canvas keeps it hidden too and says why.
+            if connected, case .boolean(false)? = applied["hidden"]?.0, let visibleIDs, !visibleIDs.contains(node.id),
+               let ruleID = applied["hidden"]?.1 {
+                applied["hidden"] = nil
+                evaluation.findings.insert(.showWithoutLayout(nodeID: node.id, ruleID: ruleID))
+            }
+            guard !applied.isEmpty else { continue }
+            evaluation.winners[node.id] = applied.mapValues(\.1)
+            output.nodes[index] = setting(applied.mapValues(\.0), on: node, breakpoint: breakpoint)
+        }
+        return (output, evaluation)
+    }
+
+    /// Writes rule values so they win at `breakpoint` over that breakpoint's
+    /// own override, as the later `@container` rule wins over `@media` in CSS.
+    static func setting(_ values: [String: PropertyValue], on node: DocumentNode,
+                        breakpoint: ResponsiveBreakpoint) -> DocumentNode {
+        var copy = node
+        func write(_ key: String, _ value: PropertyValue) {
+            if let index = copy.properties.firstIndex(where: { $0.key.rawValue == key }) {
+                copy.properties[index].value = value
+                copy.properties[index].origin = .authored
+            } else {
+                copy.properties.append(.init(id: PropertyID(DocumentPage.deterministicUUID(
+                    namespace: node.id.rawValue, label: "container-query:" + key)), key: .init(rawValue: key), value: value))
+            }
+        }
+        for (key, value) in values.sorted(by: { $0.key < $1.key }) {
+            write(key, value)
+            guard breakpoint != .desktop else { continue }
+            switch key {
+            case "hidden":
+                if case .boolean(let hidden) = value { write(ResponsiveVisibilityResolver.key(breakpoint), .boolean(!hidden)) }
+            case "layout.width": write(ResponsiveGeometryResolver.key(.width, breakpoint: breakpoint), value)
+            case "layout.height": write(ResponsiveGeometryResolver.key(.height, breakpoint: breakpoint), value)
+            default: break
+            }
+        }
+        return copy
+    }
+
+    /// SF-1204-003: the one CSS declaration for each queryable setting.
+    /// Visibility has none (lane V19): a rule that hides is written as its own
+    /// hiding rule, and Show writes no `display`, so the object keeps its own
+    /// (flex, grid, block) and only stops being hidden
+    /// (`StaticContainerQueryOutputEmitter`, `StaticVisibilityOutputEmitter`).
+    static func cssDeclaration(_ key: String, _ value: PropertyValue) -> String? {
+        func number(_ value: Double) -> String { String(describing: value) }
+        switch (key, value) {
+        case ("hidden", .boolean): return nil
+        case ("style.opacity", .number(let value)): return "opacity: \(number(value));"
+        case (CanonicalTypography.namespace + "size", .number(let value)): return "font-size: \(number(value))px;"
+        case (CanonicalTypography.namespace + "lineHeight", .number(let value)): return "line-height: \(number(value))px;"
+        case ("layout.width", .number(let value)): return "width: \(number(value))px;"
+        case ("layout.height", .number(let value)): return "height: \(number(value))px;"
+        default: return nil
+        }
+    }
+
+    /// The CSS container name for an authored name (always a valid identifier).
+    static func cssName(_ name: String) -> String { "sf-cq-" + name }
+}
+
+/// SF-0601-003, SF-0603-003 (lane V14a): an object the canvas hides at a
+/// breakpoint stays hidden on an exported static-layout page. The canvas hides
+/// an object and everything inside it wherever `effectiveVisibleNodeIDs`
+/// leaves it out. A static-layout page writes every object as its own
+/// absolutely placed element, so hiding a container's element doesn't hide
+/// its contents, and text and controls take `display` from compound
+/// typography selectors (`…[data-siteforge-node]`, `…:is(a,button)`) that the
+/// layout rule's plain `display: none` loses to. Each hidden object gets
+/// `[…][data-siteforge-node] { display:none; }`, limited to the breakpoints
+/// where it is hidden so another breakpoint can still show it. The build
+/// writes these after typography and the dark-mode block (equal specificity,
+/// so the later rule wins) and before container queries. Connected pages
+/// write their own hiding rules (`ConnectedPageOutput.hiddenRule`).
+enum StaticVisibilityOutputEmitter {
+    static func emit(pages: [DocumentPage]) -> String {
+        let breakpoints = ResponsiveBreakpoint.allCases
+        var hidden: [NodeID: Set<ResponsiveBreakpoint>] = [:]
+        // Lane V19: where container-query Show rules can reveal the object,
+        // its hide holds only while none of them match (`revealConditions`).
+        var conditional: [NodeID: [String]] = [:]
+        var seen = Set<NodeID>()
+        for page in pages where !page.usesConnectedOutput {
+            let visible = breakpoints.map { page.effectiveVisibleNodeIDs(breakpoint: $0) }
+            let shows = StaticContainerQueryWrapping.plan(page).shows
+            let nodesByID = Dictionary(page.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for node in page.nodes {
+                // A list's first page holds every copy a later page uses (SF-1003).
+                guard seen.insert(node.id).inserted else { continue }
+                var hiddenAt = Set(breakpoints.indices.filter { !visible[$0].contains(node.id) }.map { breakpoints[$0] })
+                for breakpoint in breakpoints where !shows.isEmpty && hiddenAt.contains(breakpoint) {
+                    guard let reasons = StaticContainerQueryWrapping.revealConditions(of: node, breakpoint: breakpoint,
+                                                                                       nodesByID: nodesByID, shows: shows) else { continue }
+                    hiddenAt.remove(breakpoint)
+                    conditional[node.id, default: []] += reasons.map {
+                        "@media \(breakpoint.cssRangeCondition) { \(StaticContainerQueryWrapping.nested($0, rule(node.id))) }"
+                    }
+                }
+                if !hiddenAt.isEmpty { hidden[node.id] = hiddenAt }
+            }
+        }
+        let ordered = hidden.keys.sorted { $0.description < $1.description }
+        var lines = ordered.filter { hidden[$0]?.count == breakpoints.count }.map(rule)
+        for breakpoint in breakpoints {
+            let rules = ordered.filter { id in
+                guard let hiddenAt = hidden[id] else { return false }
+                return hiddenAt.count < breakpoints.count && hiddenAt.contains(breakpoint)
+            }.map(rule)
+            if !rules.isEmpty { lines.append("@media \(breakpoint.cssRangeCondition) { \(rules.joined(separator: " ")) }") }
+        }
+        for id in conditional.keys.sorted(by: { $0.description < $1.description }) { lines += conditional[id] ?? [] }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func rule(_ id: NodeID) -> String {
+        CanonicalCSSRule.selector(for: id) + "[data-siteforge-node] { display:none; }"
+    }
+}
+
+/// Lane V19 (owner decision 2026-11-26 9:55 PM EST; ADR-0031 and ADR-0143
+/// amendments): container queries on pages without page flow. Those pages
+/// write every object as its own absolutely placed element, so no element was
+/// the DOM ancestor of a container's contents and `@container` rules never
+/// matched in browsers. Each container that a rule on the page queries now gets
+/// a wrapper element written right after the container's own element, holding
+/// the elements of everything inside it; paint, reading and tab order stay the
+/// same. The wrapper is only the container's content box for queries: it sits
+/// at the page corner with no height and no box, so its contents keep the page
+/// corner as their origin and their exact exported positions, and it paints
+/// and catches nothing. It is `container-type: inline-size`, named with the
+/// container's name and a unique `sf-cqid-<id>`, and as wide as the
+/// container's exported width less `contentInset` (OD-143), so browsers switch
+/// at the width the shared evaluation (`evaluated`) uses.
+///
+/// An object that keeps its own position or stacking layer
+/// (`layout.position.v1.`: insets, Relative, Fixed, Sticky, z-order across the
+/// page) and an overlay with its contents (the interaction runtime layers,
+/// moves and centres them on the page) need the page as their containing
+/// block, so they are never put in a wrapper, and a container holding one
+/// can't be queried on these pages: canvas, Preview, Inspector, the responsive
+/// audit and export all skip it (`container-query-container-positioned`).
+enum StaticContainerQueryWrapping {
+    /// One rule's container and width condition.
+    struct Query: Hashable, Sendable {
+        let container: NodeID
+        /// `(min-width: Npx) and (max-width: Mpx)`, as the rule is written.
+        let condition: String
+    }
+
+    struct Plan: Sendable {
+        /// The containers rules on the page query; each gets a wrapper.
+        var containers: Set<NodeID> = []
+        /// Each object's Show rules (`hidden` = false), in rule order.
+        var shows: [NodeID: [Query]] = [:]
+    }
+
+    static func identifier(_ id: NodeID) -> String { id.rawValue.uuidString.lowercased() }
+
+    /// The wrapper's own container name, so a rule written on another element
+    /// (an object's contents) still queries exactly this container.
+    static func uniqueName(_ id: NodeID) -> String { "sf-cqid-" + identifier(id) }
+
+    static func condition(_ rule: CanonicalContainerQueryRule) -> String {
+        var conditions: [String] = []
+        if let minimum = rule.minWidth { conditions.append("(min-width: \(Int(minimum))px)") }
+        if let maximum = rule.maxWidth { conditions.append("(max-width: \(Int(maximum))px)") }
+        return conditions.joined(separator: " and ")
+    }
+
+    /// The `hidden` value a rule sets, if any.
+    static func hiddenValue(_ rule: CanonicalContainerQueryRule) -> Bool? {
+        guard let entry = rule.values.first(where: { $0.key == "hidden" }),
+              case .boolean(let hidden) = entry.property.value else { return nil }
+        return hidden
+    }
+
+    /// `rule` inside each head in turn, the first outermost.
+    static func nested(_ heads: [String], _ rule: String) -> String {
+        heads.reversed().reduce(rule) { inner, head in "\(head) { \(inner) }" }
+    }
+
+    /// `node` and everything inside it, depth first.
+    static func subtree(of node: DocumentNode, nodesByID: [NodeID: DocumentNode]) -> [NodeID] {
+        var result: [NodeID] = [], visited = Set<NodeID>(), pending = [node.id]
+        while let id = pending.popLast() {
+            guard visited.insert(id).inserted, let current = nodesByID[id] else { continue }
+            result.append(id)
+            pending += current.childIDs.reversed()
+        }
+        return result
+    }
+
+    /// Mirrors `StaticAdvancedStyleOutputEmitter`: any positioning it writes
+    /// is relative to the page and must not move into a wrapper.
+    static func keepsOwnPositioning(_ node: DocumentNode) -> Bool {
+        guard let positioning = CanonicalPositioning.resolve(node) else { return false }
+        return positioning.origin == .authored || positioning.mode != .static || positioning.zIndex != 0
+            || [positioning.top, positioning.right, positioning.bottom, positioning.left].contains { $0 != nil }
+    }
+
+    /// Objects that stay outside every wrapper on a page without page flow.
+    static func pinnedNodeIDs(_ page: DocumentPage) -> Set<NodeID> {
+        guard !page.usesConnectedOutput else { return [] }
+        let nodesByID = Dictionary(page.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var pinned = Set(page.nodes.filter(keepsOwnPositioning).map(\.id))
+        var visited = Set<NodeID>()
+        var pending = Array(EventGraphOutput.overlayIDs(page))
+        while let id = pending.popLast() {
+            guard visited.insert(id).inserted, let node = nodesByID[id] else { continue }
+            pinned.insert(id)
+            pending += node.childIDs
+        }
+        return pinned
+    }
+
+    /// Containers that rules can't query on a page without page flow,
+    /// because something inside them stays outside wrappers.
+    static func unqueryableContainers(_ page: DocumentPage) -> Set<NodeID> {
+        guard !page.usesConnectedOutput, page.nodes.contains(where: CanonicalContainerQueries.hasRules) else { return [] }
+        let pinned = pinnedNodeIDs(page)
+        guard !pinned.isEmpty else { return [] }
+        let nodesByID = Dictionary(page.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var result = Set<NodeID>()
+        for id in pinned {
+            var parent = nodesByID[id]?.parent, steps = 0
+            while case .node(let ancestorID)? = parent, let ancestor = nodesByID[ancestorID], steps < nodesByID.count {
+                steps += 1
+                if CanonicalContainerQueries.containerName(of: ancestor) != nil { result.insert(ancestorID) }
+                parent = ancestor.parent
+            }
+        }
+        return result
+    }
+
+    /// The containers rules on `page` query (the shared walk,
+    /// `CanonicalContainerQueries.container(for:…)`) and each object's Show
+    /// rules. Empty for pages with page flow, which nest contents in HTML.
+    static func plan(_ page: DocumentPage) -> Plan {
+        guard !page.usesConnectedOutput, page.nodes.contains(where: CanonicalContainerQueries.hasRules) else { return Plan() }
+        let nodesByID = Dictionary(page.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let unqueryable = unqueryableContainers(page)
+        var plan = Plan()
+        for node in page.nodes where CanonicalContainerQueries.hasRules(node) {
+            guard let rules = try? CanonicalContainerQueries.rules(on: node) else { continue }
+            for rule in rules {
+                var ignored = Set<ContainerQueryFinding>()
+                // Without a desktop frame the container has no exported width;
+                // the canvas never matches its rules either.
+                guard let container = CanonicalContainerQueries.container(for: rule, of: node, nodesByID: nodesByID,
+                                                                          findings: &ignored, unqueryable: unqueryable),
+                      ResponsiveGeometryResolver.geometry(for: container, breakpoint: .desktop) != nil else { continue }
+                plan.containers.insert(container.id)
+                if hiddenValue(rule) == false {
+                    plan.shows[node.id, default: []].append(Query(container: container.id, condition: condition(rule)))
+                }
+            }
+        }
+        return plan
+    }
+
+    /// The `@container` heads under which `node`, hidden at `breakpoint` by
+    /// visibility settings, stays hidden: one list per reason (the object
+    /// itself or a container above it hidden there; the canvas hides an object
+    /// and everything inside it). A Show rule on that object reveals it when
+    /// it matches, so each reason holds only while none of its Show rules
+    /// match. nil when a reason has no Show rule, so the plain hide stays.
+    static func revealConditions(of node: DocumentNode, breakpoint: ResponsiveBreakpoint,
+                                 nodesByID: [NodeID: DocumentNode], shows: [NodeID: [Query]]) -> [[String]]? {
+        var reasons: [[String]] = []
+        var current: DocumentNode? = node
+        var steps = 0
+        while let object = current, steps <= nodesByID.count {
+            steps += 1
+            if !ResponsiveVisibilityResolver.isVisible(object, breakpoint: breakpoint) {
+                guard let queries = shows[object.id], !queries.isEmpty else { return nil }
+                reasons.append(queries.map { "@container \(uniqueName($0.container)) not (\($0.condition))" })
+            }
+            if case .node(let parentID) = object.parent { current = nodesByID[parentID] } else { current = nil }
+        }
+        return reasons.isEmpty ? nil : reasons
+    }
+
+    /// The containers the website hides or shows (ADR-0065) that hold the
+    /// wrapper of `container`, outermost first: hiding one hides the wrapper.
+    private static func visibilityGroups(holding container: NodeID, groups: Set<NodeID>,
+                                         nodesByID: [NodeID: DocumentNode]) -> [NodeID] {
+        var result: [NodeID] = groups.contains(container) ? [container] : []
+        var parent = nodesByID[container]?.parent, steps = 0
+        while case .node(let ancestorID)? = parent, let ancestor = nodesByID[ancestorID], steps < nodesByID.count {
+            steps += 1
+            if groups.contains(ancestorID) { result.insert(ancestorID, at: 0) }
+            parent = ancestor.parent
+        }
+        return result
+    }
+
+    /// Each wrapper's opening tag, by container (no authored text).
+    static func openingTags(_ page: DocumentPage) -> [NodeID: String] {
+        let containers = plan(page).containers
+        guard !containers.isEmpty else { return [:] }
+        let groups = (try? FlatContainerOutput.groups(page))?.visibility ?? []
+        let nodesByID = Dictionary(page.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var result: [NodeID: String] = [:]
+        for id in containers {
+            let within = visibilityGroups(holding: id, groups: groups, nodesByID: nodesByID).map(identifier)
+            result[id] = "<div data-siteforge-cq=\"\(identifier(id))\""
+                + (within.isEmpty ? "" : " data-siteforge-cq-within=\"\(within.joined(separator: " "))\"") + ">"
+        }
+        return result
+    }
+
+    /// Wrapper rules, one complete rule per line (ADR-0120). The width follows
+    /// the container's exported width at every breakpoint (its desktop width
+    /// or fluid width, then tablet and phone overrides, as
+    /// `StaticLayoutOutputEmitter` and `StaticFluidValueOutputEmitter` write
+    /// them) less its content inset. A container the website hides also hides
+    /// the wrappers holding its contents, which aren't its siblings.
+    static func css(pages: [DocumentPage], reusableStyles: CanonicalReusableStyleIndex?) -> [String] {
+        var lines: [String] = []
+        var seen = Set<NodeID>(), seenGroups = Set<NodeID>()
+        for page in pages where !page.usesConnectedOutput {
+            let containers = plan(page).containers
+            guard !containers.isEmpty else { continue }
+            let nodesByID = Dictionary(page.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let groups = (try? FlatContainerOutput.groups(page))?.visibility ?? []
+            var carried = Set<NodeID>()
+            for id in containers.sorted(by: { $0.description < $1.description }) {
+                carried.formUnion(visibilityGroups(holding: id, groups: groups, nodesByID: nodesByID))
+                // A list's first page holds every copy a later page uses (SF-1003).
+                guard seen.insert(id).inserted, let container = nodesByID[id],
+                      let name = CanonicalContainerQueries.containerName(of: container),
+                      let desktop = ResponsiveGeometryResolver.geometry(for: container, breakpoint: .desktop) else { continue }
+                let inset = CanonicalContainerQueries.contentInset(of: container, on: page, breakpoint: .desktop,
+                                                                   outputMode: .staticLayout,
+                                                                   reusableStyles: reusableStyles)
+                let selector = "[data-siteforge-cq=\"\(identifier(id))\"]"
+                let fluid = CanonicalFluidValueCodec.value(for: .width, node: container)
+                    .flatMap { StaticFluidValueOutputEmitter.expression(for: $0.0) }
+                let width = fluid.map { inset > 0 ? "max(0px, \($0) - \(number(inset))px)" : $0 }
+                    ?? "\(number(max(0, desktop.size.width - inset)))px"
+                lines.append("\(selector) { position:absolute; left:0; top:0; width:\(width); height:0; margin:0; padding:0; border:0; "
+                    + "container-type:inline-size; container-name:\(CanonicalContainerQueries.cssName(name)) \(uniqueName(id)); }")
+                for breakpoint in [ResponsiveBreakpoint.tablet, .mobile] {
+                    guard let media = breakpoint.cssMediaCondition,
+                          let property = container.insertionProperty(ResponsiveGeometryResolver.key(.width, breakpoint: breakpoint)),
+                          case .number(let override) = property.value, override.isFinite, override >= 1,
+                          abs(override) <= 1_000_000_000 else { continue }
+                    lines.append("@media \(media) { \(selector) { width:\(number(max(0, override - inset)))px; } }")
+                }
+            }
+            for group in carried.sorted(by: { $0.description < $1.description }) {
+                guard seenGroups.insert(group).inserted else { continue }
+                let name = identifier(group)
+                lines.append("[data-siteforge-node=\"\(name)\"][hidden] ~ [data-siteforge-cq-within~=\"\(name)\"] { display:none !important; }")
+            }
+        }
+        return lines
+    }
+
+    private static func number(_ value: Double) -> String {
+        let rounded = (value * 1_000).rounded() / 1_000
+        var output = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), rounded)
+        while output.contains(".") && output.last == "0" { output.removeLast() }
+        if output.last == "." { output.append("0") }
+        return output == "-0.0" ? "0.0" : output
+    }
+}
+
 enum StaticLayoutOutputEmitter {
-    static func emit(nodes: [DocumentNode]) -> (css: String, report: StaticLayoutOutputReport) {
+    /// `revealable` (lane V19): objects a container-query Show rule can
+    /// reveal. `StaticVisibilityOutputEmitter` hides them where they are
+    /// hidden, with a rule that holds only while that Show rule doesn't match,
+    /// so their layout rule keeps `display: block`.
+    static func emit(nodes: [DocumentNode], revealable: Set<NodeID> = []) -> (css: String, report: StaticLayoutOutputReport) {
         let ordered = nodes.sorted { $0.id.description < $1.id.description }
-        let base = ordered.compactMap(baseRule(for:))
-        let responsive = responsiveRules(nodes: ordered)
+        let base = ordered.compactMap { baseRule(for: $0, revealable: revealable) }
+        let responsive = responsiveRules(nodes: ordered, revealable: revealable)
         let fluid = StaticFluidValueOutputEmitter.emit(
             nodes: ordered, targets: [.width, .height, .padding, .gap])
         let css = ([base.joined(separator: "\n"), fluid, responsive.css].filter { !$0.isEmpty })
@@ -299,10 +882,11 @@ enum StaticLayoutOutputEmitter {
                            breakpoints: responsive.report.breakpoints))
     }
 
-    fileprivate static func responsiveRules(nodes: [DocumentNode]) -> (css: String, report: ResponsiveStaticOutputReport) {
+    fileprivate static func responsiveRules(nodes: [DocumentNode],
+                                            revealable: Set<NodeID> = []) -> (css: String, report: ResponsiveStaticOutputReport) {
         var output: [(ResponsiveBreakpoint, String)] = []
         for breakpoint in [ResponsiveBreakpoint.tablet, .mobile] {
-            let rules = nodes.compactMap { responsiveRule(for: $0, breakpoint: breakpoint) }
+            let rules = nodes.compactMap { responsiveRule(for: $0, breakpoint: breakpoint, revealable: revealable) }
             if !rules.isEmpty { output.append((breakpoint, rules.joined(separator: " "))) }
         }
         let css = output.map { breakpoint, rules in
@@ -312,12 +896,12 @@ enum StaticLayoutOutputEmitter {
         return (css, .init(appliedRuleCount: output.count, breakpoints: output.map(\.0)))
     }
 
-    private static func baseRule(for node: DocumentNode) -> String? {
+    private static func baseRule(for node: DocumentNode, revealable: Set<NodeID>) -> String? {
         guard let geometry = ResponsiveGeometryResolver.geometry(for: node, breakpoint: .desktop),
               isValid(geometry) else { return nil }
         var declarations = geometryDeclarations(geometry)
         if ResponsiveVisibilityResolver.supports(node),
-           !ResponsiveVisibilityResolver.isVisible(node, breakpoint: .desktop) {
+           !ResponsiveVisibilityResolver.isVisible(node, breakpoint: .desktop), !revealable.contains(node.id) {
             declarations.append("display: none;")
         } else {
             // Absolute static layout needs an explicit compatible box model;
@@ -327,7 +911,8 @@ enum StaticLayoutOutputEmitter {
         return "\(CanonicalCSSRule.selector(for: node.id)) { \(declarations.joined(separator: " ")) }"
     }
 
-    private static func responsiveRule(for node: DocumentNode, breakpoint: ResponsiveBreakpoint) -> String? {
+    private static func responsiveRule(for node: DocumentNode, breakpoint: ResponsiveBreakpoint,
+                                       revealable: Set<NodeID>) -> String? {
         var declarations: [String] = []
         for field in GeometryInspectorField.allCases {
             let key = ResponsiveGeometryResolver.key(field, breakpoint: breakpoint)
@@ -338,7 +923,7 @@ enum StaticLayoutOutputEmitter {
         if ResponsiveVisibilityResolver.supports(node),
            let property = node.insertionProperty(ResponsiveVisibilityResolver.key(breakpoint)),
            case .boolean(let visible) = property.value {
-            declarations.append(visible ? "display: block;" : "display: none;")
+            declarations.append(visible || revealable.contains(node.id) ? "display: block;" : "display: none;")
         }
         guard !declarations.isEmpty else { return nil }
         return "\(CanonicalCSSRule.selector(for: node.id)) { \(declarations.joined(separator: " ")) }"
@@ -937,6 +1522,12 @@ struct InsertionCommandRegistry: Sendable {
         guard !cancellation.isCancelled() else { throw InsertionError.cancelled }
         var node = makeNode(for: command)
         node.parent = .node(parentID)
+        // OD-018: inside supplied slot contents, the pointer/centre position
+        // (world) is stored slot-local.
+        if CanonicalComponentSlot.suppliedNodeIDs(in: page).contains(parentID) {
+            let offsets = CanonicalSlotGeometry.offsets(in: page, document: document)
+            if let offset = offsets[parentID] { node = CanonicalSlotGeometry.shifted(node, sign: -1, by: { _ in offset }) }
+        }
         if let flowRole {
             node.parent = .node(parentID)
             node.properties.append(property(node.id, CanonicalPageFlow.roleKey, .string(flowRole.rawValue), .defaulted))
@@ -1208,6 +1799,120 @@ enum ComponentResolutionError: Error, Equatable {
     case duplicateObject(NodeID)
 }
 
+/// OD-018: supplied slot contents are stored slot-local (offset from their
+/// slot container's origin). Editing paths that work in world coordinates
+/// (canvas pointer, drag destination, clipboard placement, transform display
+/// and snapping) convert at this one boundary; paths that only add a delta to
+/// stored values (move, resize) need no conversion.
+enum CanonicalSlotGeometry {
+    /// world = stored + offset, for every node whose stored geometry is local
+    /// to a slot on `page`. Nodes inside a supplied instance's own slot
+    /// contents get that instance's slot offset. Empty when nothing is supplied.
+    static func offsets(in page: DocumentPage, document: CanonicalDocument,
+                        breakpoint: ResponsiveBreakpoint = .desktop) -> [NodeID: WorldVector] {
+        // Called on every transform preview: one cheap scan when nothing is supplied.
+        guard page.nodes.contains(where: { $0.kind == .component && !$0.childIDs.isEmpty }) else { return [:] }
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        guard let projected = try? ComponentGraphResolver.resolvedPage(page, in: document, breakpoint: breakpoint) else { return [:] }
+        let frames = projected.resolvedStructuralGeometry(breakpoint: breakpoint)
+        let definitions = Dictionary(uniqueKeysWithValues: document.componentDefinitions.map { ($0.id, $0) })
+        var result: [NodeID: WorldVector] = [:]
+        // Parents precede children, so an outer instance assigns the offset
+        // of a supplied inner instance before that inner instance is visited.
+        for node in page.canonicalDepthFirstNodes() where node.kind == .component && !node.childIDs.isEmpty {
+            guard let definitionID = CanonicalComponentReference.definitionID(for: node),
+                  let definition = definitions[definitionID] else { continue }
+            let slots = Dictionary(uniqueKeysWithValues: CanonicalComponentSlot.properties(in: definition).map { ($0.id, $0) })
+            for (slotID, items) in CanonicalComponentSlot.suppliedRoots(of: node, nodesByID: byID) {
+                guard let slot = slots[slotID],
+                      let container = frames[ComponentGraphResolver.derivedID(slot.sourceNodeID, in: node)] else { continue }
+                // SF-0903-003: use the same expanded, sized slot as painting.
+                // Definition-sized offsets diverge when individual copies reflow.
+                let offset = WorldVector(dx: container.origin.x, dy: container.origin.y)
+                var pending = items.map(\.id)
+                while let id = pending.popLast() {
+                    guard result[id] == nil, let item = byID[id] else { continue }
+                    result[id] = offset
+                    if item.kind != .component { pending += item.childIDs }
+                }
+            }
+        }
+        return result
+    }
+
+    /// The world origin of `instance`'s slot `slot` (where slot-local (0, 0)
+    /// draws) at `breakpoint`; zero when the slot cannot be resolved.
+    static func slotOffset(instance: DocumentNode, slot: ComponentSlotPropertyID, page: DocumentPage,
+                           document: CanonicalDocument, breakpoint: ResponsiveBreakpoint = .desktop) -> WorldVector {
+        let zero = WorldVector(dx: 0, dy: 0)
+        guard let definitionID = CanonicalComponentReference.definitionID(for: instance),
+              let definition = document.componentDefinitions.first(where: { $0.id == definitionID }),
+              let exposed = CanonicalComponentSlot.properties(in: definition).first(where: { $0.id == slot }),
+              let projected = try? ComponentGraphResolver.resolvedPage(page, in: document, breakpoint: breakpoint),
+              let container = projected.resolvedStructuralGeometry(breakpoint: breakpoint)[
+                ComponentGraphResolver.derivedID(exposed.sourceNodeID, in: instance)] else { return zero }
+        return .init(dx: container.origin.x, dy: container.origin.y)
+    }
+
+    /// The same offsets at every breakpoint (desktop first).
+    static func offsetsByBreakpoint(in page: DocumentPage, document: CanonicalDocument)
+        -> [ResponsiveBreakpoint: [NodeID: WorldVector]] {
+        guard !CanonicalComponentSlot.suppliedNodeIDs(in: page).isEmpty else { return [:] }
+        return Dictionary(uniqueKeysWithValues: ResponsiveBreakpoint.allCases.map { ($0, offsets(in: page, document: document, breakpoint: $0)) })
+    }
+
+    /// Adds `sign` × the vector for each breakpoint to `node`'s stored x/y:
+    /// `layout.x/y` use desktop, responsive x/y overrides use their breakpoint.
+    static func shifted(_ node: DocumentNode, sign: Double,
+                        by vector: (ResponsiveBreakpoint) -> WorldVector) -> DocumentNode {
+        var copy = node
+        let desktop = vector(.desktop)
+        for field in [GeometryInspectorField.x, .y] {
+            guard let baseIndex = copy.properties.firstIndex(where: { $0.key.rawValue == field.propertyKey }),
+                  case .number(let base) = copy.properties[baseIndex].value else { continue }
+            let component: (WorldVector) -> Double = { field == .x ? $0.dx : $0.dy }
+            let shiftedBase = base + sign * component(desktop)
+            copy.properties[baseIndex].value = .number(shiftedBase)
+            for breakpoint in ResponsiveBreakpoint.allCases where breakpoint != .desktop {
+                let key = ResponsiveGeometryResolver.key(field, breakpoint: breakpoint)
+                let existing = copy.properties.firstIndex { $0.key.rawValue == key }
+                let original = node.insertionNumberProperty(key) ?? base
+                let shifted = original + sign * component(vector(breakpoint))
+                if let existing {
+                    copy.properties[existing].value = .number(shifted)
+                } else if shifted != shiftedBase {
+                    // An inherited coordinate needs an explicit override only
+                    // when the destination's breakpoint offset differs.
+                    copy.properties.append(.init(id: PropertyID(DocumentPage.deterministicUUID(
+                        namespace: node.id.rawValue, label: "slot-coordinate:" + key)),
+                        key: .init(rawValue: key), value: .number(shifted), origin: copy.properties[baseIndex].origin))
+                }
+            }
+        }
+        return copy
+    }
+
+    /// Commands that change stored x/y of `nodeID`'s subtree (stopping at
+    /// instance boundaries: an instance's own children are its slot contents)
+    /// by `delta` per breakpoint. Used when a move changes coordinate domain.
+    static func shiftCommands(subtreeOf nodeID: NodeID, in page: DocumentPage,
+                              delta: (ResponsiveBreakpoint) -> WorldVector) -> [DocumentCommand] {
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        var commands: [DocumentCommand] = []
+        var pending = [nodeID]
+        while let id = pending.popLast() {
+            guard let node = byID[id] else { continue }
+            let moved = shifted(node, sign: 1, by: delta)
+            let originals = Dictionary(uniqueKeysWithValues: node.properties.map { ($0.key, $0) })
+            for new in moved.properties where originals[new.key] != new {
+                commands.append(.setProperty(.init(pageID: page.id, nodeID: id, property: new)))
+            }
+            if node.kind != .component { pending += node.childIDs }
+        }
+        return commands
+    }
+}
+
 enum ComponentGraphResolver {
     /// Placement is scene input, not a responsive rewrite of the definition.
     /// Bound a new instance to the visible portion of its canonical parent.
@@ -1228,6 +1933,35 @@ enum ComponentGraphResolver {
     /// Detachment materializes every supported breakpoint, not just the
     /// current viewport. Instance-owned geometry keeps its original property
     /// identities; derived child coordinates become ordinary overrides.
+    /// OD-018: one level of `instance` with its own slot contents projected
+    /// (canonical identities, world geometry) at `breakpoint`.
+    private static func projected(_ instance: DocumentNode, definition: DocumentPage, page: DocumentPage,
+                                  geometry: InsertionGeometry, breakpoint: ResponsiveBreakpoint) -> [DocumentNode]? {
+        guard let level = expand(instance, definition: definition, pageID: page.id,
+                                 geometry: geometry, breakpoint: breakpoint) else { return nil }
+        if instance.childIDs.isEmpty {
+            // An explicit empty slot has no supplied children, but still
+            // needs projection to remove the definition's fallback content.
+            return projectSlots(level, instance: instance, definition: definition, source: [:])
+        }
+        let frames = page.resolvedStructuralGeometry(breakpoint: breakpoint)
+        let supplied = CanonicalComponentSlot.suppliedNodeIDs(in: page)
+        let source = slotLocalSource(page.nodes.filter { supplied.contains($0.id) }, frames: frames)
+        return projectSlots(level, instance: instance, definition: definition, source: source)
+    }
+
+    /// The nodes of the instance's own slot contents that detaching replaces
+    /// (its supplied subtrees, not the contents of supplied inner instances).
+    static func detachedSuppliedNodeIDs(_ instance: DocumentNode, page: DocumentPage) -> Set<NodeID> {
+        let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        var result = Set<NodeID>(), pending = instance.childIDs
+        while let id = pending.popLast() {
+            guard result.insert(id).inserted, let node = byID[id] else { continue }
+            if node.kind != .component { pending += node.childIDs }
+        }
+        return result
+    }
+
     static func detachedNodes(_ instance: DocumentNode, definition: DocumentPage,
                               page: DocumentPage) -> [DocumentNode]? {
         guard CanonicalComponentText.unresolvedOverrides(on: instance, definition: definition).isEmpty,
@@ -1238,13 +1972,18 @@ enum ComponentGraphResolver {
                 Set(CanonicalComponentMedia.properties(in: definition).map(\.id))),
               Set(CanonicalComponentAction.overrides(on: instance).keys).isSubset(of:
                 Set(CanonicalComponentAction.properties(in: definition).map(\.id))),
+              // OD-018: every slot state must still have its slot, or detaching
+              // would drop the kept contents. Resolve the conflict first.
+              Set(CanonicalComponentSlot.markers(on: instance).keys).isSubset(of:
+                Set(CanonicalComponentSlot.properties(in: definition).map(\.id))),
               let geometry = page.resolvedStructuralGeometry(breakpoint: .desktop)[instance.id],
-              var nodes = expand(instance, definition: definition, pageID: page.id,
-                                 geometry: geometry, breakpoint: .desktop) else { return nil }
+              var nodes = projected(instance, definition: definition, page: page,
+                                    geometry: geometry, breakpoint: .desktop) else { return nil }
         for breakpoint in ResponsiveBreakpoint.allCases where breakpoint != .desktop {
             guard let placement = page.resolvedStructuralGeometry(breakpoint: breakpoint)[instance.id],
-                  let resolved = expand(instance, definition: definition, pageID: page.id,
-                                        geometry: placement, breakpoint: breakpoint) else { return nil }
+                  let resolved = projected(instance, definition: definition, page: page,
+                                           geometry: placement, breakpoint: breakpoint),
+                  resolved.map(\.id) == nodes.map(\.id) else { return nil }
             for index in nodes.indices where nodes[index].id != instance.id {
                 for field in GeometryInspectorField.allCases {
                     guard let value = resolved[index].insertionProperty(field.propertyKey),
@@ -1275,11 +2014,17 @@ enum ComponentGraphResolver {
                             maximumNodes: Int = ResolvedGraphPolicy.maximumNodes,
                             checkpoint: () throws -> Void = {}) throws -> DocumentPage {
         let definitions = Dictionary(uniqueKeysWithValues: document.componentDefinitions.map { ($0.id, $0) })
+        // OD-034: the budget counts nested instances fully expanded. A cyclic
+        // graph (never valid, but possibly mid-repair in memory) expands one
+        // level only, so resolution always terminates.
+        let graph = CanonicalComponentGraph(definitions: document.componentDefinitions)
+        let expandsNested = graph.cycle == nil
         var count = 0
         for node in page.nodes {
             try checkpoint()
-            let size = CanonicalComponentReference.definitionID(for: node)
-                .flatMap { definitions[$0]?.nodes.count } ?? 1
+            let size = CanonicalComponentReference.definitionID(for: node).flatMap { id in
+                expandsNested ? graph.expandedObjectCount(of: id) : definitions[id]?.nodes.count
+            } ?? 1
             guard size <= maximumNodes - count else {
                 throw ComponentResolutionError.objectLimitExceeded(maximumNodes + 1)
             }
@@ -1289,14 +2034,24 @@ enum ComponentGraphResolver {
         var output = page
         output.nodes = []
         output.nodes.reserveCapacity(count)
-        var occupied = Set(page.nodes.map(\.id))
-        for instance in page.nodes {
+        // OD-018: an instance's own slot contents are projected into its slots
+        // by `expandNested`, so they are not emitted where they are stored.
+        // They keep their canonical identities (exactly one output each).
+        let supplied = CanonicalComponentSlot.suppliedNodeIDs(in: page)
+        let source = Self.slotLocalSource(page.nodes.filter { supplied.contains($0.id) }, frames: placement)
+        var occupied = Set(page.nodes.lazy.filter { !supplied.contains($0.id) }.map(\.id))
+        for instance in page.nodes where !supplied.contains(instance.id) {
             try checkpoint()
             guard let definitionID = CanonicalComponentReference.definitionID(for: instance),
                   let definition = definitions[definitionID], let geometry = placement[instance.id],
-                  let expanded = expand(instance, definition: definition, pageID: page.id,
-                                        geometry: geometry, breakpoint: breakpoint) else {
-                output.nodes.append(instance)
+                  let expanded = try expandNested(instance, definition: definition, definitions: definitions,
+                                                  pageID: page.id, geometry: geometry, breakpoint: breakpoint,
+                                                  expandsNested: expandsNested, source: source,
+                                                  checkpoint: checkpoint) else {
+                // An unresolved placeholder draws none of its stored contents.
+                var placeholder = instance
+                if placeholder.kind == .component { placeholder.childIDs = [] }
+                output.nodes.append(placeholder)
                 continue
             }
             for node in expanded where node.id != instance.id {
@@ -1308,11 +2063,174 @@ enum ComponentGraphResolver {
         return CanonicalPageChrome.resolvedLabels(in: output, document: document)
     }
 
-    static func expand(_ instance: DocumentNode, definition: DocumentPage, pageID: PageID,
+    /// OD-034: expands `instance` and then every instance it contains, level by
+    /// level, using the same single-level rule for each. An inner instance is
+    /// placed at the frame its outer definition gives it, keeps the values
+    /// authored on it inside that definition, and derives its objects'
+    /// identities from its own (already derived) identity, so every object is
+    /// unique and stable across reopen. An inner instance whose definition is
+    /// missing stays one unresolved placeholder, like a page instance.
+    /// Expansion stops at `CanonicalComponentGraph.maximumNestingDepth` levels.
+    ///
+    /// OD-018: `source` holds supplied slot contents that `instance` (and any
+    /// instance projected into it) may own, keyed by the identities their
+    /// owners' `childIDs` use, with slot-local, breakpoint-resolved geometry.
+    static func expandNested(_ instance: DocumentNode, definition: DocumentPage,
+                             definitions: [PageID: DocumentPage], pageID: PageID,
+                             geometry: InsertionGeometry, breakpoint: ResponsiveBreakpoint,
+                             expandsNested: Bool = true, depth: Int = 1,
+                             source: [NodeID: DocumentNode] = [:],
+                             checkpoint: () throws -> Void = {}) throws -> [DocumentNode]? {
+        guard var level = expand(instance, definition: definition, pageID: pageID,
+                                 geometry: geometry, breakpoint: breakpoint) else { return nil }
+        // Contents supplied to instances inside this definition travel to
+        // their own expansion; they are never drawn where they are stored.
+        var innerSource = source
+        let innerSupplied = Set(CanonicalComponentSlot.suppliedNodeIDs(in: definition).map {
+            Self.derivedID($0, in: instance)
+        })
+        if !innerSupplied.isEmpty {
+            for node in level where innerSupplied.contains(node.id) { innerSource[node.id] = node }
+            level.removeAll { innerSupplied.contains($0.id) }
+        }
+        level = projectSlots(level, instance: instance, definition: definition, source: source)
+        func placeholder(_ node: DocumentNode) -> DocumentNode {
+            var copy = node
+            copy.childIDs = []
+            return copy
+        }
+        guard expandsNested, depth < CanonicalComponentGraph.maximumNestingDepth,
+              level.contains(where: { $0.id != instance.id && $0.kind == .component }) else {
+            return level.map { $0.id != instance.id && $0.kind == .component ? placeholder($0) : $0 }
+        }
+        var output: [DocumentNode] = []
+        output.reserveCapacity(level.count)
+        for node in level {
+            try checkpoint()
+            guard node.id != instance.id, node.kind == .component else {
+                output.append(node)
+                continue
+            }
+            // A supplied instance is authored where it is stored, not inside
+            // this definition, so it starts its own nesting depth. Its stored
+            // tree is finite, so this always terminates.
+            let nextDepth = source[node.id] != nil ? 1 : depth + 1
+            guard let innerID = CanonicalComponentReference.definitionID(for: node),
+                  let inner = definitions[innerID], let placement = node.insertionGeometry,
+                  let nested = try expandNested(node, definition: inner, definitions: definitions,
+                                                pageID: pageID, geometry: placement, breakpoint: breakpoint,
+                                                expandsNested: true, depth: nextDepth, source: innerSource,
+                                                checkpoint: checkpoint) else {
+                output.append(placeholder(node))
+                continue
+            }
+            output += nested
+        }
+        return output
+    }
+
+    /// The identity `expand` gives definition node `source` inside `instance`.
+    static func derivedID(_ source: NodeID, in instance: DocumentNode) -> NodeID {
+        NodeID(DocumentPage.deterministicUUID(namespace: instance.id.rawValue, label: "component-child:" + source.description))
+    }
+
+    /// OD-018: supplied nodes with their breakpoint-resolved, slot-local frames
+    /// written into `layout.*` and responsive geometry removed (it is already
+    /// resolved), exactly as `expand` prepares definition nodes.
+    static func slotLocalSource(_ nodes: [DocumentNode], frames: [NodeID: InsertionGeometry]) -> [NodeID: DocumentNode] {
+        var result: [NodeID: DocumentNode] = [:]
+        result.reserveCapacity(nodes.count)
+        for var node in nodes {
+            if let frame = frames[node.id] {
+                let values = ["layout.x": frame.origin.x, "layout.y": frame.origin.y,
+                              "layout.width": frame.size.width, "layout.height": frame.size.height]
+                for index in node.properties.indices {
+                    if let value = values[node.properties[index].key.rawValue] { node.properties[index].value = .number(value) }
+                }
+            }
+            node.properties.removeAll { $0.key.rawValue.hasPrefix(ResponsiveGeometryResolver.namespace + ".") }
+            result[node.id] = node
+        }
+        return result
+    }
+
+    /// OD-018 / SF-0903-003: one level of slot projection. For each slot the
+    /// instance marks, the derived default contents are removed; for
+    /// "supplied", the instance's own top-level items (in order) and their
+    /// contents take their place, placed at the slot container's origin plus
+    /// their slot-local offsets. A supplied instance keeps its own stored
+    /// contents for its own expansion. Contents for a slot the definition no
+    /// longer exposes are not drawn (a conflict, see CanonicalComponentOverrides).
+    static func projectSlots(_ level: [DocumentNode], instance: DocumentNode, definition: DocumentPage,
+                             source: [NodeID: DocumentNode]) -> [DocumentNode] {
+        let markers = CanonicalComponentSlot.markers(on: instance)
+        guard !markers.isEmpty else { return level }
+        let slots = CanonicalComponentSlot.properties(in: definition)
+        guard !slots.isEmpty else { return level }
+        var nodes = level
+        let position = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($0.element.id, $0.offset) })
+        let roots = CanonicalComponentSlot.suppliedRoots(of: instance, nodesByID: source)
+        var removed = Set<NodeID>()
+        var inserted: [NodeID: [DocumentNode]] = [:]
+        for slot in slots {
+            guard let marker = markers[slot.id] else { continue }
+            let containerID = derivedID(slot.sourceNodeID, in: instance)
+            guard let at = position[containerID] else { continue }
+            var pending = nodes[at].childIDs
+            while let id = pending.popLast() {
+                guard removed.insert(id).inserted, let child = position[id] else { continue }
+                pending += nodes[child].childIDs
+            }
+            guard marker.value == .string(CanonicalComponentSlot.suppliedValue), let items = roots[slot.id] else {
+                nodes[at].childIDs = []
+                continue
+            }
+            let origin = nodes[at].insertionGeometry?.origin ?? WorldPoint(x: 0, y: 0)
+            let topLevel = Set(items.map(\.id))
+            var projected: [DocumentNode] = []
+            var stack = Array(items.map(\.id).reversed()), seen = Set<NodeID>()
+            while let id = stack.popLast() {
+                guard seen.insert(id).inserted, var node = source[id] else { continue }
+                // A supplied instance's own children are its slot contents.
+                if node.kind != .component { stack += node.childIDs.reversed() }
+                for index in node.properties.indices {
+                    switch node.properties[index].key.rawValue {
+                    case "layout.x":
+                        if case .number(let x) = node.properties[index].value { node.properties[index].value = .number(origin.x + x) }
+                    case "layout.y":
+                        if case .number(let y) = node.properties[index].value { node.properties[index].value = .number(origin.y + y) }
+                    default: break
+                    }
+                }
+                if topLevel.contains(id) {
+                    node.parent = .node(containerID)
+                    node.properties.removeAll { $0.key.rawValue == CanonicalComponentSlot.supplyKey }
+                }
+                projected.append(node)
+            }
+            nodes[at].childIDs = items.map(\.id)
+            inserted[containerID] = projected
+        }
+        var output: [DocumentNode] = []
+        output.reserveCapacity(nodes.count + inserted.values.reduce(0) { $0 + $1.count })
+        for node in nodes where !removed.contains(node.id) {
+            output.append(node)
+            if let projected = inserted[node.id] { output += projected }
+        }
+        return output
+    }
+
+    /// One level: the definition's own objects. Instances inside the
+    /// definition are returned as instance nodes (OD-034); `expandNested`
+    /// resolves them, and detachment deliberately keeps them linked.
+    static func expand(_ instance: DocumentNode, definition source: DocumentPage, pageID: PageID,
                        geometry: InsertionGeometry, breakpoint: ResponsiveBreakpoint) -> [DocumentNode]? {
+        // OD-033: the copy's variant is applied first, so geometry, text,
+        // visibility and appearance all come from the variant it shows. This
+        // is the one resolution point for canvas, Preview, export and detach.
+        let definition = CanonicalComponentVariants.resolvedDefinition(source, for: instance)
         guard definition.role == .componentDefinition,
-              let rootID = definition.rootNodeIDs.first,
-              !definition.nodes.contains(where: { $0.kind == .component }) else { return nil }
+              let rootID = definition.rootNodeIDs.first else { return nil }
         let frames = definition.resolvedStructuralGeometry(breakpoint: breakpoint)
         let textOverrides = CanonicalComponentText.overrides(on: instance)
         let visibilityOverrides = CanonicalComponentVisibility.overrides(on: instance)
@@ -1324,6 +2242,9 @@ enum ComponentGraphResolver {
             (node.id, node.id == rootID ? instance.id : NodeID(DocumentPage.deterministicUUID(
                 namespace: instance.id.rawValue, label: "component-child:" + node.id.description)))
         })
+        // OD-018: contents supplied to an instance inside this definition keep
+        // slot-local geometry; `expandNested` projects them into that instance.
+        let supplied = CanonicalComponentSlot.suppliedNodeIDs(in: definition)
         return definition.nodes.map { node in
             let id = ids[node.id]!
             let isRoot = node.id == rootID
@@ -1337,6 +2258,7 @@ enum ComponentGraphResolver {
                     && !$0.key.rawValue.hasPrefix(CanonicalComponentAction.namespace)
                     && !$0.key.rawValue.hasPrefix(CanonicalComponentSlot.namespace)
                     && !$0.key.rawValue.hasPrefix(CanonicalComponentOrganization.namespace)
+                    && !CanonicalComponentUsageNotes.owns($0)
                     && (visibilityBinding == nil || !$0.key.rawValue.hasPrefix(ResponsiveVisibilityResolver.namespace + "."))
             }.map { property in
                 NodeProperty(id: PropertyID(DocumentPage.deterministicUUID(namespace: id.rawValue,
@@ -1390,9 +2312,10 @@ enum ComponentGraphResolver {
                 }
             }
             if let frame = frames[node.id] {
+                let isSupplied = supplied.contains(node.id)
                 let values: [String: Double] = [
-                    "layout.x": isRoot ? geometry.origin.x : geometry.origin.x + frame.origin.x - rootGeometry.origin.x,
-                    "layout.y": isRoot ? geometry.origin.y : geometry.origin.y + frame.origin.y - rootGeometry.origin.y,
+                    "layout.x": isRoot ? geometry.origin.x : isSupplied ? frame.origin.x : geometry.origin.x + frame.origin.x - rootGeometry.origin.x,
+                    "layout.y": isRoot ? geometry.origin.y : isSupplied ? frame.origin.y : geometry.origin.y + frame.origin.y - rootGeometry.origin.y,
                     "layout.width": isRoot ? geometry.size.width : frame.size.width,
                     "layout.height": isRoot ? geometry.size.height : frame.size.height,
                 ]
@@ -1419,6 +2342,11 @@ enum ComponentGraphResolver {
                    case .string(let old) = properties[index].value,
                    let oldID = NodeID(uuidString: old), let mapped = ids[oldID] {
                     properties[index].value = .string(mapped.description)
+                }
+                if properties[index].key.rawValue == CanonicalEventGraph.interactionsKey {
+                    properties[index].value = CanonicalEventGraph.remappingTargets(properties[index].value, nodeMap: ids,
+                                                                                    pageMap: [definition.id: pageID],
+                                                                                    freshIdentity: false)
                 }
             }
             let parent: NodeParent = if isRoot { instance.parent }
@@ -1658,6 +2586,17 @@ enum ConnectedPageOutput {
     window.matchMedia('(width < 600px)').addEventListener('change',function(event){if(event.matches)return;document.querySelectorAll(selector+'[open]').forEach(function(menu){const focused=menu.contains(document.activeElement);close(menu,false);if(focused){const owner=menu.closest('.sf-page-navigation');const first=owner&&Array.from(owner.querySelectorAll('.sf-nav-inline a[href]')).find(function(link){return link.getClientRects().length>0;});if(first)first.focus();else document.body.focus();}});});
     }());
     """
+    /// Lane V14a: a hidden object's rule. The node attribute's extra
+    /// specificity wins over the compound `display` that text
+    /// (`…[data-siteforge-node]`) and controls (`…:is(a,button)`) take from
+    /// typography, and a desktop rule is limited to desktop widths: desktop
+    /// rules are otherwise unconditional, and this one would beat the plain
+    /// tablet or phone rule that shows the object again.
+    static func hiddenRule(_ selector: String, breakpoint: ResponsiveBreakpoint) -> String {
+        let rule = "\(selector)[data-siteforge-node] { display:none; }"
+        return breakpoint == .desktop ? "@media \(breakpoint.cssRangeCondition) { \(rule) }" : rule
+    }
+
     static func css(pages: [DocumentPage], colorTokens: [LocalColorToken] = []) -> String {
         var rules: [String] = []
         let availablePageIDs = Set(pages.filter { $0.role != .componentDefinition }.map(\.id))
@@ -1668,6 +2607,7 @@ enum ConnectedPageOutput {
                 continue
             }
             let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+            let navigationOwners = CanonicalPageChrome.navigationOwnersBySurface(in: page)
             let automaticNavigationIDs = Set(page.nodes.filter { !CanonicalPageChrome.isCustom($0) }
                 .compactMap { CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: $0) })
             for breakpoint in ResponsiveBreakpoint.allCases {
@@ -1683,7 +2623,7 @@ enum ConnectedPageOutput {
                         continue
                     }
                     guard snapshot.visibleIDs.contains(node.id) else {
-                        current.append("\(selector)\(node.kind == .text ? "[data-siteforge-node]" : "") { display:none; }")
+                        current.append(hiddenRule(selector, breakpoint: breakpoint))
                         continue
                     }
                     let frame = snapshot.frames[node.id]
@@ -1697,7 +2637,7 @@ enum ConnectedPageOutput {
                     guard let frame else {
                         // Retain semantic identity without creating layout
                         // space for a node the native renderer cannot paint.
-                        current.append("\(selector)\(node.kind == .text ? "[data-siteforge-node]" : "") { display:none; }")
+                        current.append(hiddenRule(selector, breakpoint: breakpoint))
                         continue
                     }
                     let parentID: NodeID? = { if case .node(let id) = node.parent { id } else { nil } }()
@@ -1790,7 +2730,8 @@ enum ConnectedPageOutput {
                     }
                     let compiled = order.compactMap { key in values[key].map { key + ":" + $0 } }.joined(separator: ";")
                     current.append("\(selector) { \(compiled); }")
-                    if let settings = CanonicalPageChrome.navigationSettings(for: node, page: page) {
+                    if let settings = CanonicalPageChrome.navigationSettings(for: node, page: page,
+                           ownersBySurface: navigationOwners) {
                         current += navigationMenuRules(surface: node, settings: settings, page: page,
                             breakpoint: breakpoint, availablePageIDs: availablePageIDs)
                         let links = node.childIDs.filter(snapshot.visibleIDs.contains).compactMap { byID[$0] }.filter(CanonicalPageFlow.isNavigationLink)
@@ -1884,6 +2825,7 @@ enum ConnectedPageOutput {
                                availablePageIDs: Set<PageID>? = nil) -> [String] {
         guard ConnectedFluidOutputPolicy.needsAdapter(page), ConnectedFluidOutputPolicy.failures(page).isEmpty else { return [] }
         let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
+        let navigationOwners = CanonicalPageChrome.navigationOwnersBySurface(in: page)
         let wrappers = ConnectedFluidOutputPolicy.wrapperIDs(page)
         let automaticNavigationIDs = Set(page.nodes.filter { !CanonicalPageChrome.isCustom($0) }
             .compactMap { CanonicalPageChrome.reference(CanonicalPageChrome.navigationKey, on: $0) })
@@ -1906,7 +2848,7 @@ enum ConnectedPageOutput {
             for node in page.canonicalDepthFirstNodes() where !CanonicalPageFlow.isNavigationLink(node) {
                 let selector = CanonicalCSSRule.selector(for: node.id)
                 guard snapshot.visibleIDs.contains(node.id), node.insertionGeometry != nil || page.rootNodeIDs.contains(node.id) else {
-                    rules.append("\(selector)\(node.kind == .text ? "[data-siteforge-node]" : "") { display:none; }"); continue
+                    rules.append(hiddenRule(selector, breakpoint: breakpoint)); continue
                 }
                 let parent: DocumentNode? = { if case .node(let id) = node.parent { return byID[id] }; return nil }()
                 let parentPolicy = parent.flatMap { snapshot.policies[$0.id] }
@@ -1997,7 +2939,8 @@ enum ConnectedPageOutput {
                     }
                     rules.append(".\(ConnectedFluidOutputPolicy.wrapperClass(node.id)) { \(box.joined(separator: ";")); }")
                 }
-                if let settings = CanonicalPageChrome.navigationSettings(for: node, page: page), snapshot.frames[node.id] != nil {
+                if let settings = CanonicalPageChrome.navigationSettings(for: node, page: page,
+                       ownersBySurface: navigationOwners), snapshot.frames[node.id] != nil {
                     rules += navigationMenuRules(surface: node, settings: settings, page: page,
                         breakpoint: breakpoint, availablePageIDs: availablePageIDs ?? Set([page.id]))
                     let links = CanonicalPageChrome.links(owner: settings, page: page).filter { snapshot.visibleIDs.contains($0.id) }
@@ -2465,6 +3408,7 @@ extension DocumentPage {
         let chromeOwners = Dictionary(nodes.compactMap { owner -> (NodeID, DocumentNode)? in
             CanonicalPageChrome.reference(CanonicalPageChrome.contentKey, on: owner).map { ($0, owner) }
         }, uniquingKeysWith: { first, _ in first })
+        let navigationOwners = CanonicalPageChrome.navigationOwnersBySurface(in: self)
         var result = Dictionary(uniqueKeysWithValues: nodes.compactMap { node in
             node.insertionGeometry.map {
                 let base = $0.frame
@@ -2604,7 +3548,8 @@ extension DocumentPage {
                 }
             case .text, .image, .button, .link, .component: break
             }
-            if let settings = CanonicalPageChrome.navigationSettings(for: parent, page: self),
+            if let settings = CanonicalPageChrome.navigationSettings(for: parent, page: self,
+                   ownersBySurface: navigationOwners),
                settings.id == parent.id || !CanonicalPageChrome.isCustom(settings) {
                 let links = children.filter(CanonicalPageFlow.isNavigationLink)
                 let inset = settings.id == parent.id ? CanonicalPageFlow.padding(parent, breakpoint: breakpoint, width: viewportWidth) : 0
@@ -2693,8 +3638,15 @@ struct InsertionSession: Equatable, Sendable {
 enum ResponsiveSizingLayout {
     struct Scope { let affected: Set<NodeID>; let descendants: Set<NodeID> }
     static func scope(page: DocumentPage, breakpoint: ResponsiveBreakpoint, width: Double?) -> Scope {
-        let automatic = page.nodes.filter { CanonicalSizingConstraints.effectiveMode(.width, node: $0, breakpoint: breakpoint, width: width) != .fixed
-            || CanonicalSizingConstraints.effectiveMode(.height, node: $0, breakpoint: breakpoint, width: width) != .fixed }
+        // OD-018: a component copy's stored children are its own slot
+        // contents, stored slot-local. They are laid out after projection
+        // (on the resolved page, in world terms), never in this pass, so they
+        // neither start nor join an automatic-sizing scope here.
+        let supplied = page.nodes.contains { $0.kind == .component && !$0.childIDs.isEmpty }
+            ? CanonicalComponentSlot.suppliedNodeIDs(in: page) : []
+        let automatic = page.nodes.filter { !supplied.contains($0.id) && (
+            CanonicalSizingConstraints.effectiveMode(.width, node: $0, breakpoint: breakpoint, width: width) != .fixed
+            || CanonicalSizingConstraints.effectiveMode(.height, node: $0, breakpoint: breakpoint, width: width) != .fixed) }
         guard !automatic.isEmpty else { return .init(affected: [], descendants: []) }
         let byID = Dictionary(uniqueKeysWithValues: page.nodes.map { ($0.id, $0) })
         var affected = Set<NodeID>(), descendants = Set<NodeID>()
@@ -2702,7 +3654,7 @@ enum ResponsiveSizingLayout {
             var pending = [node.id]
             while let id = pending.popLast() {
                 guard descendants.insert(id).inserted else { continue }
-                pending.append(contentsOf: byID[id]?.childIDs ?? [])
+                if byID[id]?.kind != .component { pending.append(contentsOf: byID[id]?.childIDs ?? []) }
             }
             var current: DocumentNode? = node
             while let item = current, affected.insert(item.id).inserted {
@@ -2733,7 +3685,10 @@ enum ResponsiveSizingLayout {
         let affected = scope.affected, descendants = scope.descendants
         var result = fixed
         func children(_ parent: DocumentNode) -> [DocumentNode] {
-            parent.childIDs.filter(visible.contains).compactMap { byID[$0] }.filter { result[$0.id] != nil }
+            // A copy's stored children are slot-local slot contents (OD-018):
+            // never placed, sized or shifted with the copy here.
+            guard parent.kind != .component else { return [] }
+            return parent.childIDs.filter(visible.contains).compactMap { byID[$0] }.filter { result[$0.id] != nil }
         }
         func policy(_ parent: DocumentNode) -> ResolvedContainerLayoutPolicy {
             .resolve(parent, children: children(parent), breakpoint: breakpoint, viewportWidth: width)

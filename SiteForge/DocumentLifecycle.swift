@@ -16,6 +16,9 @@ enum DocumentLifecycleFailure: Error, Equatable, LocalizedError, Sendable {
     case permissionDenied, staleSecurityScope, externalModification, conflict
     case malformedPackage, incompatiblePackage, malformedRecovery, ioFailure
     case unsafeFileMetadata, recoveryArtifactConflict, recoveryDeletionFailed
+    /// A save or autosave was refused because the project's page data exceeds
+    /// the package v1 member limit (ADR-0001/ADR-0012). Nothing was written.
+    case projectTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +33,7 @@ enum DocumentLifecycleFailure: Error, Equatable, LocalizedError, Sendable {
         case .recoveryArtifactConflict: "The recovery location contains an artifact SiteForge does not own. It was preserved; inspect the recovery folder and try again."
         case .recoveryDeletionFailed: "The recovery artifact could not be removed. It remains available; correct access and retry Discard."
         case .ioFailure: "The project could not be read or written. Check access and free space, then try again."
+        case .projectTooLarge: "This project is too large to save: a project file holds up to 8 MB and each page up to 4 MB. Nothing was written and the last saved version is unchanged. Remove pages or content you no longer need, or split a very large page, then save again."
         }
     }
 }
@@ -244,14 +248,110 @@ struct LoadedProject: Sendable {
     let fingerprint: PackageFingerprint
     let history: PersistedHistoryLoadResult
     let sourceURL: URL
+    /// SF-0309: set when the stored document uses an older schema.
+    var migration: DocumentMigrationCandidate? = nil
+    /// SF-0301-007 / SF-0206-007 (ADR-0140): how full the opened file is, so
+    /// the status bar can warn before the first save. Nil when not measured.
+    var capacity: ProjectFileCapacity? = nil
 }
 
 struct CompletedPackageWrite: Sendable {
     let fingerprint: PackageFingerprint
     let destinationURL: URL
+    /// What the committed file measures, for project-file capacity.
+    let measurement: ProjectPackageMeasurement
 }
 
-enum LifecycleBackendFault: Sendable { case none, permission, staleScope, io }
+/// How full the project file is, measured on every successful save or
+/// autosave. Two limits apply (OD-032, ADR-0030): the whole file
+/// (`ProjectPackageStore.maximumPackageBytes`) and each page, which is never
+/// split across package members (`maximumMemberBytes`). They are security
+/// boundaries (ADR-0012), so SiteForge warns before them rather than relaxing them.
+struct ProjectFileCapacity: Equatable, Sendable {
+    enum Level: String, Equatable, Sendable { case normal, nearLimit, exceeded }
+
+    /// Warn with this much room left: enough for ordinary editing to finish
+    /// and save while the user removes content.
+    static let warningFraction = ProjectPackageStore.pageMeasurementFraction
+    static var fileLimitBytes: Int { ProjectPackageStore.maximumPackageBytes }
+    /// A page member is a JSON array, so one page may use the member limit less its brackets.
+    static var pageLimitBytes: Int { ProjectPackageStore.maximumMemberBytes - 2 }
+
+    /// `nil` when a save was refused before the file could be written.
+    let fileBytes: Int?
+    /// The largest page, when it was measured (nil: no page is near its limit).
+    let largestPageBytes: Int?
+    let level: Level
+
+    init(fileBytes: Int, largestPageBytes: Int? = nil) {
+        self.fileBytes = fileBytes
+        self.largestPageBytes = largestPageBytes
+        let exceeded = fileBytes > Self.fileLimitBytes || (largestPageBytes ?? 0) > Self.pageLimitBytes
+        let fraction = Self.fraction(fileBytes: fileBytes, largestPageBytes: largestPageBytes)
+        level = exceeded ? .exceeded : (fraction >= Self.warningFraction ? .nearLimit : .normal)
+    }
+
+    init(_ measurement: ProjectPackageMeasurement) {
+        self.init(fileBytes: measurement.fileBytes, largestPageBytes: measurement.largestPageBytes)
+    }
+
+    private init(exceededWithoutMeasurement: Void) { fileBytes = nil; largestPageBytes = nil; level = .exceeded }
+    static let exceededLimit = ProjectFileCapacity(exceededWithoutMeasurement: ())
+
+    /// The file as it was opened (ADR-0140). Its pages are measured, as a save
+    /// measures them, only when the file is near one package member or larger,
+    /// so opening a small project does no extra work. The next save or
+    /// autosave measures what it writes and replaces this value.
+    static func opened(fileBytes: Int, document: CanonicalDocument) -> ProjectFileCapacity {
+        let measuresPages = Double(fileBytes) >= Double(ProjectPackageStore.maximumMemberBytes) * warningFraction
+        let largestPageBytes = measuresPages
+            ? try? ProjectPackageStore.largestEncodedPageSize(in: document)
+            : nil
+        return ProjectFileCapacity(fileBytes: fileBytes, largestPageBytes: largestPageBytes)
+    }
+
+    private static func fraction(fileBytes: Int, largestPageBytes: Int?) -> Double {
+        max(Double(fileBytes) / Double(fileLimitBytes), Double(largestPageBytes ?? 0) / Double(pageLimitBytes))
+    }
+
+    /// True when the largest page, not the whole file, is closest to its limit.
+    var isPageLimited: Bool {
+        guard let fileBytes, let largestPageBytes else { return false }
+        return Double(largestPageBytes) / Double(Self.pageLimitBytes) > Double(fileBytes) / Double(Self.fileLimitBytes)
+    }
+
+    /// Whole percent of the closer limit in use, when measured.
+    var percentUsed: Int? {
+        fileBytes.map { Int((Self.fraction(fileBytes: $0, largestPageBytes: largestPageBytes) * 100).rounded(.down)) }
+    }
+
+    /// Status-bar text, shown only when the project needs attention.
+    var statusText: String? {
+        switch level {
+        case .normal: nil
+        case .nearLimit: isPageLimited ? "Largest page \(percentUsed ?? 0)% full" : "Project file \(percentUsed ?? 0)% full"
+        case .exceeded: "Project too large to save"
+        }
+    }
+
+    var detail: String {
+        let used = isPageLimited
+            ? "The largest page uses \(percentUsed ?? 0)% of the 4 MB page limit."
+            : "This project uses \(percentUsed ?? 0)% of the 8 MB project-file limit."
+        switch level {
+        case .normal: return used
+        case .nearLimit:
+            return used + " Saving stops working above 100%. Remove pages or content you no longer need"
+                + (isPageLimited ? ", or move some of the largest page's content to another page." : ".")
+        case .exceeded:
+            return DocumentLifecycleFailure.projectTooLarge.localizedDescription
+        }
+    }
+}
+
+/// Test seams only. `migrationRefusal` stands in for a dry run that refuses
+/// an upgrade (SF-0309-004), which no valid fixture can trigger on purpose.
+enum LifecycleBackendFault: Sendable { case none, permission, staleScope, io, migrationRefusal(DocumentMigrationRefusal) }
 
 actor DocumentLifecycleBackend {
     private let store: ProjectPackageStore
@@ -262,6 +362,7 @@ actor DocumentLifecycleBackend {
     private let recoverySession: RecoverySessionEvidence
     private var fault: LifecycleBackendFault = .none
     private var delayNanoseconds: UInt64 = 0
+    private var lastMigrationRefusal: (operation: LifecycleOperationID, refusal: DocumentMigrationRefusal)?
 
     init(
         store: ProjectPackageStore = ProjectPackageStore(),
@@ -346,6 +447,10 @@ actor DocumentLifecycleBackend {
             let (sourceURL, read, package) = accessed
             try Task.checkCancellation()
             await progress?(.validatingCanonicalDocument)
+            let migration = try Self.migrationCandidate(for: read)
+            try Task.checkCancellation()
+            // Measured here, off the main actor, from the bytes just validated.
+            let capacity = ProjectFileCapacity.opened(fileBytes: read.file.bytes.count, document: read.package.document)
             try Task.checkCancellation()
             await progress?(.validatingHistory)
             let history = try await historyStore.load(from: package)
@@ -358,16 +463,42 @@ actor DocumentLifecycleBackend {
                 package: package,
                 fingerprint: read.file.fingerprint,
                 history: history,
-                sourceURL: sourceURL
+                sourceURL: sourceURL,
+                migration: migration,
+                capacity: capacity
             )
         } catch is CancellationError {
             await record(identity, nil, start, .cancelled, nil)
             throw CancellationError()
         } catch {
+            if let refusal = error as? DocumentMigrationRefusal { lastMigrationRefusal = (identity.id, refusal) }
             let failure = Self.map(error)
             await record(identity, nil, start, .failure, failure)
             throw failure
         }
+    }
+
+    /// SF-0309: a dry run for a package stored with an older document schema.
+    /// A refusal fails the open before adoption, so the file and the current
+    /// document stay unchanged. Current-schema packages skip the extra work.
+    /// SF-0309-004: the refusal behind a failed open, handed over once so the
+    /// controller can show the specific reason and its recovery step.
+    func takeMigrationRefusal(for operation: LifecycleOperationID) -> DocumentMigrationRefusal? {
+        guard let last = lastMigrationRefusal, last.operation == operation else { return nil }
+        lastMigrationRefusal = nil
+        return last.refusal
+    }
+
+    static func migrationCandidate(for read: ValidatedProjectPackageRead) throws -> DocumentMigrationCandidate? {
+        // The package parser already validated these exact bytes, including
+        // ordered page members. Current-schema reads need no second parse.
+        guard let stored = read.legacyDocumentData else { return nil }
+        let started = ContinuousClock.now
+        let report = try DocumentMigrations.dryRun(stored)
+        let elapsed = started.duration(to: .now).components
+        let nanoseconds = UInt64(max(0, elapsed.seconds)) * 1_000_000_000
+            + UInt64(max(0, elapsed.attoseconds / 1_000_000_000))
+        return DocumentMigrationCandidate(report: report, sourceDocument: stored, dryRunNanoseconds: nanoseconds)
     }
 
     func readRecovery(
@@ -461,13 +592,14 @@ actor DocumentLifecycleBackend {
                     from: packageWithHistory,
                     beside: coordinatedURL
                 )
-                let fingerprint = try await store.write(
+                let written = try await store.writeMeasured(
                     packageWithHistory,
                     to: coordinatedURL,
                     expected: replacementExpectation,
                     policy: policy
                 )
-                return CompletedPackageWrite(fingerprint: fingerprint, destinationURL: coordinatedURL)
+                return CompletedPackageWrite(fingerprint: written.fingerprint, destinationURL: coordinatedURL,
+                                             measurement: written.measurement)
             }
             await observer?.reached(.afterFilesystemWrite, operation: identity)
             await record(identity, package.projectID, start, .success, nil)
@@ -485,6 +617,12 @@ actor DocumentLifecycleBackend {
                 // distinguish a foreign artifact from malformed bytes without
                 // using that read as overwrite authorization.
                 failure = await classifyRecoveryWriteConflict(at: url, projectID: package.projectID)
+            } else if (error as? ProjectPackageError) == .oversizedInput {
+                // Every other member of a written package is bounded far below
+                // the package limits (history 512 KiB, resource index), so an
+                // oversized write is the document itself: report the size
+                // limit, not a validation fault.
+                failure = .projectTooLarge
             } else {
                 failure = Self.map(error)
             }
@@ -698,6 +836,7 @@ actor DocumentLifecycleBackend {
         case .permission: throw DocumentLifecycleFailure.permissionDenied
         case .staleScope: throw DocumentLifecycleFailure.staleSecurityScope
         case .io: throw DocumentLifecycleFailure.ioFailure
+        case .migrationRefusal(let refusal): throw refusal
         }
     }
 
@@ -721,6 +860,12 @@ actor DocumentLifecycleBackend {
             case .unsupportedPackageVersion, .unsupportedDocumentSchema, .incompatibleReaderVersion:
                 return .incompatiblePackage
             default: return .malformedPackage
+            }
+        }
+        if let error = error as? DocumentMigrationRefusal {
+            switch error {
+            case .newerSchema, .unsupportedSchema: return .incompatiblePackage
+            case .malformed, .lostContent, .unstableResult: return .malformedPackage
             }
         }
         return .ioFailure
@@ -783,6 +928,7 @@ extension DocumentLifecycleFailure {
         case .unsafeFileMetadata: "unsafe-file-metadata"
         case .recoveryArtifactConflict: "recovery-artifact-conflict"
         case .recoveryDeletionFailed: "recovery-deletion-failed"
+        case .projectTooLarge: "project-too-large"
         }
     }
 }
@@ -869,6 +1015,9 @@ private enum LifecycleReadOutcome: Sendable {
     case success(LoadedProject)
     case cancelled
     case failure(DocumentLifecycleFailure)
+    /// SF-0309-004: an upgrade the dry run refused; the failure is the
+    /// generic category, the refusal the reason shown to the user.
+    case refused(DocumentLifecycleFailure, DocumentMigrationRefusal)
 }
 
 private struct StableSavePresentation: Sendable {
@@ -895,6 +1044,26 @@ final class DocumentLifecycleController: ObservableObject {
     @Published private(set) var recoveryCandidate: RecoveryCandidate?
     @Published private(set) var historyNotice: String?
     @Published private(set) var fileActionNotice: String?
+    /// SF-0309: the dry-run report of the open project's upgrade (nil for a
+    /// current-schema project) and a one-line status for the status bar.
+    @Published private(set) var migrationReport: DocumentMigrationReport?
+    @Published private(set) var migrationNotice: String?
+    /// The snapshot keeping the original document, when one was kept, and
+    /// whether the upgrade details sheet is open (SF-0309-002/006).
+    @Published private(set) var migrationBackupID: ProjectSnapshotID?
+    @Published var isMigrationDetailsPresented = false
+    /// SF-0309-004: why the last open was refused. Cleared by a later
+    /// failure or a successful open.
+    @Published private(set) var migrationRefusal: DocumentMigrationRefusal?
+    /// The refusal and its recovery step, for the status bar and VoiceOver.
+    var migrationRefusalText: String? {
+        migrationRefusal.map { [$0.errorDescription, $0.recoverySuggestion].compactMap { $0 }.joined(separator: " ") }
+    }
+    private(set) var migrationDiagnostics = BoundedDiagnosticBuffer<DocumentMigrationDiagnosticRecord>()
+    var migrationDiagnosticRecords: [DocumentMigrationDiagnosticRecord] { migrationDiagnostics.snapshot() }
+    /// Measured on each successful save or autosave; `nil` until the first
+    /// write of the current project.
+    @Published private(set) var capacity: ProjectFileCapacity?
     @Published private(set) var pendingUnsavedChangesPrompt: UnsavedChangesPrompt?
     @Published private(set) var transitionFailure: DocumentLifecycleFailure?
     @Published var isRecoveryDetailsPresented = false
@@ -962,17 +1131,20 @@ final class DocumentLifecycleController: ObservableObject {
         observation = session.$document.dropFirst().sink { [weak self] document in
             self?.documentDidChange(document)
         }
+        session.commitGuard = { [weak self] old, new in
+            try self?.checkLibraryCopies(from: old, to: new)
+        }
     }
 
     var isModified: Bool { hasUnsavedChanges }
     var title: String { displayName + (isModified ? " — Edited" : "") }
     var statusText: String {
         switch phase {
-        case .clean: "Saved"
+        case .clean: fileURL == nil ? "Not saved yet" : "Saved"
         case .modified: "Modified"
         case .saving: "Saving…"
         case .autosaving: "Autosaving recovery…"
-        case .failed: failure?.localizedDescription ?? "Save failed"
+        case .failed: migrationRefusalText ?? failure?.localizedDescription ?? "Save failed"
         case .conflicted: failure?.localizedDescription ?? "File conflict"
         case .recovered: "Recovered — save to make durable"
         }
@@ -1031,6 +1203,305 @@ final class DocumentLifecycleController: ObservableObject {
         }
         return descriptor
     }
+
+    // MARK: Local named snapshots (OD-043, SF-1301, ADR-0038)
+
+    /// Snapshots are optional members of the in-memory project package, like
+    /// resource changes: they become durable with the next save or Save As.
+    private(set) var snapshotDiagnostics = BoundedDiagnosticBuffer<ProjectSnapshotDiagnosticRecord>()
+    var snapshotDiagnosticRecords: [ProjectSnapshotDiagnosticRecord] { snapshotDiagnostics.snapshot() }
+
+    func projectSnapshots() throws -> [ProjectSnapshotEntry] {
+        try ProjectSnapshots.list(in: project, documentID: session.document.id)
+    }
+
+    @discardableResult
+    func createProjectSnapshot(named name: String) throws -> ProjectSnapshotEntry {
+        try performSnapshotOperation(.create, snapshotID: nil) {
+            let created = try ProjectSnapshots.creating(named: name, from: session.document, in: project,
+                                                        at: ProjectTimestamp(date: clock.now()))
+            project = created.package
+            noteSnapshotsChanged()
+            return created.entry
+        }
+    }
+
+    func renameProjectSnapshot(_ id: ProjectSnapshotID, to name: String) throws {
+        try performSnapshotOperation(.rename, snapshotID: id) {
+            project = try ProjectSnapshots.renaming(id, to: name, documentID: session.document.id, in: project)
+            noteSnapshotsChanged()
+        }
+    }
+
+    func deleteProjectSnapshot(_ id: ProjectSnapshotID) throws {
+        try performSnapshotOperation(.delete, snapshotID: id) {
+            project = try ProjectSnapshots.deleting(id, documentID: session.document.id, in: project)
+            noteSnapshotsChanged()
+        }
+    }
+
+    /// Recovery action for damaged or foreign snapshot storage.
+    func deleteAllProjectSnapshots() throws {
+        try performSnapshotOperation(.deleteAll, snapshotID: nil) {
+            let cleared = ProjectSnapshots.removingAll(in: project)
+            guard cleared != project else { throw ProjectSnapshotError.notFound }
+            project = cleared
+            noteSnapshotsChanged()
+        }
+    }
+
+    /// Restores a snapshot as one new undoable transaction; the current head
+    /// is never deleted. With `keepingCurrentAs`, the current document is first
+    /// kept as a named snapshot; if either step fails, nothing changes.
+    func restoreProjectSnapshot(_ id: ProjectSnapshotID, keepingCurrentAs keepName: String? = nil) throws {
+        try performSnapshotOperation(.restore, snapshotID: id) {
+            let current = session.document
+            let snapshot = try ProjectSnapshots.document(for: id, documentID: current.id, in: project)
+            let command = try ProjectSnapshots.restoreCommand(
+                to: snapshot, from: current, resources: try? ProjectResourceIndex.decode(from: project))
+            let prior = project
+            if let keepName {
+                project = try ProjectSnapshots.creating(named: keepName, from: current, in: project,
+                                                        at: ProjectTimestamp(date: clock.now())).package
+            }
+            do {
+                try session.execute(command)
+            } catch {
+                project = prior
+                throw error
+            }
+            if keepName != nil { noteSnapshotsChanged() }
+        }
+    }
+
+    @discardableResult
+    private func performSnapshotOperation<Result>(
+        _ operation: ProjectSnapshotOperation,
+        snapshotID: ProjectSnapshotID?,
+        _ body: () throws -> Result
+    ) throws -> Result {
+        let started = ContinuousClock.now
+        func recordSnapshotDiagnostic(_ error: Error?) {
+            let elapsed = started.duration(to: .now)
+            let nanoseconds = UInt64(max(0, elapsed.components.seconds)) * 1_000_000_000
+                + UInt64(max(0, elapsed.components.attoseconds / 1_000_000_000))
+            snapshotDiagnostics.append(ProjectSnapshotDiagnosticRecord(
+                requirementID: "SF-1301-008",
+                operation: operation,
+                sanitizedSnapshotID: snapshotID.map {
+                    DiagnosticStableIdentifier.sanitize($0.description, domain: .projectPackage, kind: "snapshot")
+                },
+                durationNanoseconds: nanoseconds,
+                result: error == nil ? .success : .failure,
+                failureCategory: error.map { ($0 as? ProjectSnapshotError)?.diagnosticCategory ?? "command" }
+            ))
+        }
+        do {
+            guard activeSaveOperation == nil, activeReadOperation == nil, activeTransitionAttempt == nil,
+                  phase != .saving else {
+                throw ProjectSnapshotError.unavailable
+            }
+            let result = try body()
+            recordSnapshotDiagnostic(nil)
+            return result
+        } catch {
+            recordSnapshotDiagnostic(error)
+            throw error
+        }
+    }
+
+    // MARK: Shared component libraries (OD-046, SF-0906, ADR-0041)
+    // The library record is an optional package member, like snapshots; the
+    // copied definitions and tokens are ordinary document content changed by
+    // one command each, so Undo reverts an import or update.
+
+    private(set) var libraryDiagnostics = BoundedDiagnosticBuffer<ComponentLibraryDiagnosticRecord>()
+    var libraryDiagnosticRecords: [ComponentLibraryDiagnosticRecord] { libraryDiagnostics.snapshot() }
+    private var libraryGuardBypassed = false
+    private var libraryProtectionCache: (data: Data, pages: [PageID: String], tokens: [ColorTokenID: String])?
+
+    func componentLibraryIndex() throws -> ComponentLibraryIndex? {
+        try ComponentLibraries.index(in: project, documentID: session.document.id)
+    }
+
+    func componentLibraryRows() throws -> [ComponentLibraryRow] {
+        ComponentLibraries.rows(try componentLibraryIndex(), in: session.document)
+    }
+
+    /// Builds the library file, hands it to `write`, and only then records the
+    /// published version. A failed write changes nothing.
+    @discardableResult
+    func exportComponentLibrary(
+        named name: String,
+        version: ComponentLibraryVersion,
+        write: (Data) throws -> Void
+    ) throws -> ComponentLibraryFile {
+        try performLibraryOperation(.export, libraryID: nil) {
+            let result = try ComponentLibraries.exporting(named: name, version: version, from: session.document,
+                                                          in: project, at: ProjectTimestamp(date: clock.now()))
+            do { try write(result.data) }
+            catch { throw ComponentLibraryError.writeFailed }
+            project = result.package
+            noteSnapshotsChanged()
+            return result.file
+        }
+    }
+
+    /// Adds the library as a read-only copy in one undoable command.
+    @discardableResult
+    func importComponentLibrary(_ data: Data) throws -> ComponentLibraryImport {
+        try performLibraryOperation(.import, libraryID: nil) {
+            let (file, content) = try ComponentLibraries.reading(data)
+            let result = try ComponentLibraries.importing(file, content, into: session.document, package: project,
+                                                          at: ProjectTimestamp(date: clock.now()))
+            try session.execute(result.command)
+            project = result.package
+            noteSnapshotsChanged()
+            return result.record
+        }
+    }
+
+    func previewComponentLibraryUpdate(_ data: Data) throws -> ComponentLibraryUpdatePreview {
+        try performLibraryOperation(.previewUpdate, libraryID: nil) {
+            let (file, content) = try ComponentLibraries.reading(data)
+            return try ComponentLibraries.previewingUpdate(file, content, in: session.document, package: project)
+        }
+    }
+
+    /// Replaces the library's items with the file's version in one undoable
+    /// command (the only edit the read-only rule lets through).
+    func updateComponentLibrary(_ data: Data) throws {
+        try performLibraryOperation(.update, libraryID: nil) {
+            let (file, content) = try ComponentLibraries.reading(data)
+            let result = try ComponentLibraries.updating(file, content, in: session.document, package: project)
+            if let command = result.command {
+                libraryGuardBypassed = true
+                defer { libraryGuardBypassed = false }
+                try session.execute(command)
+            }
+            project = result.package
+            noteSnapshotsChanged()
+        }
+    }
+
+    /// The items stay as ordinary editable content and stop receiving updates.
+    func detachComponentLibrary(_ id: ComponentLibraryID) throws {
+        try performLibraryOperation(.detach, libraryID: id) {
+            project = try ComponentLibraries.detaching(id, documentID: session.document.id, in: project)
+            noteSnapshotsChanged()
+        }
+    }
+
+    /// Recovery action for damaged or foreign library records.
+    func removeAllComponentLibraryRecords() throws {
+        try performLibraryOperation(.removeAll, libraryID: nil) {
+            let cleared = ComponentLibraries.removingAll(in: project)
+            guard cleared != project else { throw ComponentLibraryError.notImported }
+            project = cleared
+            noteSnapshotsChanged()
+        }
+    }
+
+    /// Installed as the session's commit guard in `init`; reads the current
+    /// package, so it follows open, revert and Save As without re-installing.
+    private func checkLibraryCopies(from old: CanonicalDocument, to new: CanonicalDocument) throws {
+        guard !libraryGuardBypassed,
+              let member = project.optionalMembers.first(where: { $0.path == ComponentLibraryIndex.memberPath }) else {
+            return
+        }
+        let protection: (pages: [PageID: String], tokens: [ColorTokenID: String])
+        if let cache = libraryProtectionCache, cache.data == member.data {
+            protection = (cache.pages, cache.tokens)
+        } else {
+            protection = ComponentLibraries.protectedIdentifiers(
+                in: try? ComponentLibraries.index(in: project, documentID: old.id))
+            libraryProtectionCache = (member.data, protection.pages, protection.tokens)
+        }
+        if let violation = ComponentLibraries.readOnlyViolation(from: old, to: new, pages: protection.pages,
+                                                                tokens: protection.tokens) {
+            throw CommandExecutionError.disabled(violation.localizedDescription)
+        }
+    }
+
+    @discardableResult
+    private func performLibraryOperation<Result>(
+        _ operation: ComponentLibraryOperation,
+        libraryID: ComponentLibraryID?,
+        _ body: () throws -> Result
+    ) throws -> Result {
+        let started = ContinuousClock.now
+        func recordLibraryDiagnostic(_ error: Error?) {
+            let elapsed = started.duration(to: .now)
+            let nanoseconds = UInt64(max(0, elapsed.components.seconds)) * 1_000_000_000
+                + UInt64(max(0, elapsed.components.attoseconds / 1_000_000_000))
+            libraryDiagnostics.append(ComponentLibraryDiagnosticRecord(
+                requirementID: "SF-0906-008",
+                operation: operation,
+                sanitizedLibraryID: libraryID.map {
+                    DiagnosticStableIdentifier.sanitize($0.description, domain: .projectPackage, kind: "component-library")
+                },
+                durationNanoseconds: nanoseconds,
+                result: error == nil ? .success : .failure,
+                failureCategory: error.map { ($0 as? ComponentLibraryError)?.diagnosticCategory ?? "command" }
+            ))
+        }
+        do {
+            guard activeSaveOperation == nil, activeReadOperation == nil, activeTransitionAttempt == nil,
+                  phase != .saving else {
+                throw ComponentLibraryError.unavailable
+            }
+            let result = try body()
+            recordLibraryDiagnostic(nil)
+            return result
+        } catch {
+            recordLibraryDiagnostic(error)
+            throw error
+        }
+    }
+
+    /// SF-0309-004: keeps the stored original as a named snapshot before the
+    /// upgraded document can replace it on the next save. The snapshot lives in
+    /// the in-memory project until then, so closing without saving leaves the
+    /// file exactly as it was; after saving it is restorable from Snapshots.
+    private func adoptMigration(_ migration: DocumentMigrationCandidate?) {
+        migrationReport = migration?.report
+        migrationNotice = nil
+        migrationBackupID = nil
+        migrationRefusal = nil
+        isMigrationDetailsPresented = false
+        guard let migration, migration.report.needsMigration else { return }
+        let report = migration.report
+        migrationDiagnostics.append(DocumentMigrationDiagnosticRecord(
+            requirementID: "SF-0309-008", operation: .dryRun,
+            sourceSchemaVersion: report.sourceSchemaVersion, targetSchemaVersion: report.targetSchemaVersion,
+            durationNanoseconds: migration.dryRunNanoseconds, failureCategory: nil))
+        let started = ContinuousClock.now
+        var failureCategory: String?
+        do {
+            let backup = try ProjectSnapshots.creatingMigrationBackup(
+                of: migration.sourceDocument, schemaVersion: report.sourceSchemaVersion,
+                documentID: session.document.id, in: project, at: ProjectTimestamp(date: clock.now())
+            )
+            project = backup.package
+            migrationBackupID = backup.entry.id
+            migrationNotice = "Upgraded from schema \(report.sourceSchemaVersion); original kept as a snapshot"
+        } catch {
+            failureCategory = (error as? ProjectSnapshotError)?.diagnosticCategory ?? "backup"
+            migrationNotice = "Upgraded from schema \(report.sourceSchemaVersion); no backup kept, use Save As to keep the original"
+        }
+        let elapsed = started.duration(to: .now).components
+        let nanoseconds = UInt64(max(0, elapsed.seconds)) * 1_000_000_000
+            + UInt64(max(0, elapsed.attoseconds / 1_000_000_000))
+        migrationDiagnostics.append(DocumentMigrationDiagnosticRecord(
+            requirementID: "SF-0309-008", operation: .backup,
+            sourceSchemaVersion: report.sourceSchemaVersion, targetSchemaVersion: report.targetSchemaVersion,
+            durationNanoseconds: nanoseconds, failureCategory: failureCategory))
+    }
+
+    private func noteSnapshotsChanged() {
+        phase = .modified; failure = nil; hasUnsavedChanges = true
+    }
+
     var stateSnapshot: DocumentLifecycleStateSnapshot {
         DocumentLifecycleStateSnapshot(
             document: session.document,
@@ -1113,8 +1584,8 @@ final class DocumentLifecycleController: ObservableObject {
             do {
                 try establishNewDocument(document, resourceMembers: resourceMembers)
             } catch {
-                failure = .malformedPackage
-                phase = .failed
+                // Through setFailure, so an earlier upgrade refusal text is cleared.
+                setFailure(.malformedPackage)
                 finishTransitionAttempt(attempt)
                 return .failed(.malformedPackage)
             }
@@ -1137,9 +1608,11 @@ final class DocumentLifecycleController: ObservableObject {
         project = ProjectPackage(createdAt: now, document: document, optionalMembers: resourceMembers)
         currentRecoveryArtifact = nil
         candidateRecoveryArtifact = nil
-        fileURL = nil; durableFingerprint = nil; displayName = "Untitled"
+        fileURL = nil; durableFingerprint = nil; displayName = "Untitled"; capacity = nil
         failure = nil; recoveryCandidate = nil; phase = .clean; hasUnsavedChanges = false
         historyNotice = nil; transitionFailure = nil
+        migrationReport = nil; migrationNotice = nil; migrationBackupID = nil; migrationRefusal = nil
+        isMigrationDetailsPresented = false
     }
 
     @discardableResult
@@ -1211,6 +1684,7 @@ final class DocumentLifecycleController: ObservableObject {
             } catch is CancellationError {
                 return .cancelled
             } catch let error as DocumentLifecycleFailure {
+                if let refusal = await backend.takeMigrationRefusal(for: identity.id) { return .refused(error, refusal) }
                 return .failure(error)
             } catch {
                 return .failure(.ioFailure)
@@ -1274,6 +1748,8 @@ final class DocumentLifecycleController: ObservableObject {
             }
             observing = false
             project = loaded.package; fileURL = loaded.sourceURL; durableFingerprint = loaded.fingerprint
+            capacity = loaded.capacity
+            adoptMigration(loaded.migration)
             displayName = loaded.sourceURL.deletingPathExtension().lastPathComponent
             startPresentingDurableFile(loaded.sourceURL)
             failure = nil; phase = .clean; hasUnsavedChanges = false
@@ -1288,6 +1764,11 @@ final class DocumentLifecycleController: ObservableObject {
         case .failure(let error):
             guard transitionStillMatches(transitionAttempt) else { return .cancelled }
             setFailure(error)
+            return .failed(error)
+        case .refused(let error, let refusal):
+            guard transitionStillMatches(transitionAttempt) else { return .cancelled }
+            setFailure(error)
+            migrationRefusal = refusal
             return .failed(error)
         }
     }
@@ -1307,6 +1788,7 @@ final class DocumentLifecycleController: ObservableObject {
             catch let error as DocumentLifecycleFailure { setFailure(error); return false }
             catch { setFailure(.permissionDenied); return false }
         }
+        session.endCoalescing()
         let snapshot = session.document
         let historySnapshot = session.historySnapshot()
         let now = ProjectTimestamp(date: clock.now())
@@ -1383,6 +1865,7 @@ final class DocumentLifecycleController: ObservableObject {
             project = package
             fileURL = completed.destinationURL
             durableFingerprint = completed.fingerprint
+            capacity = ProjectFileCapacity(completed.measurement)
             displayName = completed.destinationURL.deletingPathExtension().lastPathComponent
             startPresentingDurableFile(completed.destinationURL)
             if session.document.revision == identity.revision {
@@ -1408,6 +1891,7 @@ final class DocumentLifecycleController: ObservableObject {
         } catch let error as DocumentLifecycleFailure {
             guard operationStillMatches(identity, requireRevision: true),
                   activeSaveOperation == identity else { return false }
+            if error == .projectTooLarge { capacity = .exceededLimit }
             setFailure(error)
             return false
         } catch {
@@ -1604,6 +2088,7 @@ final class DocumentLifecycleController: ObservableObject {
         observing = false
         project = candidate.package
         fileURL = candidate.durableURL
+        capacity = nil
         if candidate.durableURL == nil { durableFingerprint = nil; displayName = "Untitled" }
         // The re-read candidate is now the document actually hosted by this
         // scene. Promote its exact ownership proof to the current-project
@@ -1780,6 +2265,7 @@ final class DocumentLifecycleController: ObservableObject {
         guard operationStillMatches(identity, requireRevision: true),
               autosaveOperation == identity,
               !Task.isCancelled else { return }
+        session.endCoalescing()
         let snapshot = session.document
         let historySnapshot = session.historySnapshot()
         let package = ProjectPackage(projectID: project.projectID, createdAt: project.createdAt,
@@ -1805,12 +2291,16 @@ final class DocumentLifecycleController: ObservableObject {
             guard operationStillMatches(identity, requireRevision: true),
                   autosaveOperation == identity,
                   !Task.isCancelled else { return }
+            capacity = ProjectFileCapacity(completed.measurement)
             phase = .modified
         } catch is CancellationError {
             return
         } catch let error as DocumentLifecycleFailure {
             guard operationStillMatches(identity, requireRevision: true),
                   autosaveOperation == identity else { return }
+            // Recovery could not be written either, so crash recovery is not
+            // protecting the latest edits: say so with the same failure.
+            if error == .projectTooLarge { capacity = .exceededLimit }
             setFailure(error)
         } catch {
             guard operationStillMatches(identity, requireRevision: true),
@@ -2406,6 +2896,7 @@ final class DocumentLifecycleController: ObservableObject {
 
     private func setFailure(_ error: DocumentLifecycleFailure) {
         failure = error
+        migrationRefusal = nil
         phase = error == .externalModification || error == .conflict ? .conflicted : .failed
     }
 

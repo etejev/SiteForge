@@ -4,8 +4,26 @@ import Foundation
 // content-addressed resource readers, not a sample-specific renderer/model.
 enum BundledSiteTemplates {
     static let auroraID = TemplateID(UUID(uuidString: "02040000-0000-4000-8000-000000000201")!)
+    static func auroraCoverURL(in bundle: Bundle = .main) -> URL? {
+        auroraURL(in: bundle).map {
+            ProjectResourceStore.sidecarURL(for: $0)
+                .appendingPathComponent("e9f61a44eae3c9772c10632b89d31e44cf5c26c26627a52912b4bfcf6c1925fb.blob")
+        }
+    }
+
     static func auroraURL(in bundle: Bundle = .main) -> URL? {
         bundle.url(forResource: "Aurora", withExtension: "siteforge", subdirectory: "AuroraTemplate")
+    }
+
+    // SF-0204-002/004/005/006: Aurora Flow is a second ordinary packaged
+    // example in the same bundled folder, loaded by the same validating
+    // loader. Its bytes come from the reviewed showcase recipe and are copied
+    // into Samples only after native/browser acceptance. Until then the Start
+    // choice stays hidden rather than offering a card that cannot load.
+    static let auroraFlowID = TemplateID(UUID(uuidString: "02040000-0000-4000-8000-000000000222")!)
+
+    static func auroraFlowURL(in bundle: Bundle = .main) -> URL? {
+        bundle.url(forResource: "AuroraFlow", withExtension: "siteforge", subdirectory: "AuroraTemplate")
     }
 }
 
@@ -32,7 +50,10 @@ actor PackagedSiteTemplateLoader {
         let document = CanonicalDocument(creationKind: .template, templateID: templateID,
             pages: original.pages.map { page in var copy = page; copy.provenance = .template; return copy },
             guides: original.guides, imageAssets: original.imageAssets,
-            colorTokens: original.colorTokens, websiteMetadata: original.websiteMetadata)
+            colorTokens: original.colorTokens, websiteMetadata: original.websiteMetadata,
+            projectPreferences: original.projectPreferences, collections: original.collections,
+            fontAssets: original.fontAssets, localization: original.localization,
+            mediaAssets: original.mediaAssets)
         try document.validate()
         let package = try ProjectPackage(document: document,
             optionalMembers: source.optionalMembers.filter { $0.path == ProjectResourceIndex.packageMemberPath })
@@ -44,11 +65,23 @@ actor PackagedSiteTemplateLoader {
 
     private func originalResourcesAreIndexed(_ document: CanonicalDocument, index: ProjectResourceIndex?) -> Bool {
         let ids = Set(index?.resources.map(\.id) ?? [])
-        return document.imageAssets.allSatisfy { ids.contains($0.resourceID) }
+        // SF-0805 / SF-0803: project fonts and media are template files too.
+        return ProjectCreationResources.storedFiles(in: document).allSatisfy { ids.contains($0.resourceID) }
     }
 }
 
 enum ProjectCreationResources {
+    /// Every file the document keeps in the resource store, with the facts its
+    /// bytes must match: images, project fonts (SF-0805) and video, audio and
+    /// captions (SF-0803). A new project must never start without one of them.
+    static func storedFiles(in document: CanonicalDocument) -> [(resourceID: ResourceID, contentHash: String, byteCount: Int)] {
+        var files: [(resourceID: ResourceID, contentHash: String, byteCount: Int)] = []
+        for asset in document.imageAssets { files.append((asset.resourceID, asset.contentHash, asset.byteCount)) }
+        for font in document.fontAssets { files.append((font.resourceID, font.contentHash, font.byteCount)) }
+        for media in document.mediaAssets { files.append((media.resourceID, media.contentHash, media.byteCount)) }
+        return files
+    }
+
     /// Called on the loader/backend actor before a lifecycle boundary. History
     /// and unrelated optional members cannot enter a new creation baseline.
     static func validate(document: CanonicalDocument, members: [ProjectPackageMember]) throws {
@@ -59,13 +92,14 @@ enum ProjectCreationResources {
         let package = ProjectPackage(document: document, optionalMembers: members)
         guard let index = try ProjectResourceIndex.decode(from: package) else { throw ProjectResourceError.corruptIndex }
         let ids = Set(index.resources.map(\.id))
-        guard document.imageAssets.allSatisfy({ ids.contains($0.resourceID) }) else { throw ProjectResourceError.missingBlob }
+        let files = storedFiles(in: document)
+        guard files.allSatisfy({ ids.contains($0.resourceID) }) else { throw ProjectResourceError.missingBlob }
         let expectedPaths = Set(index.resources.map { ProjectResourceIndex.blobMemberPath(for: $0.sha256) })
             .union([ProjectResourceIndex.packageMemberPath])
         guard Set(members.map(\.path)) == expectedPaths else { throw ProjectResourceError.corruptIndex }
-        for asset in document.imageAssets {
-            guard let descriptor = index.resources.first(where: { $0.id == asset.resourceID }),
-                  descriptor.sha256 == asset.contentHash, descriptor.byteCount == asset.byteCount else {
+        for file in files {
+            guard let descriptor = index.resources.first(where: { $0.id == file.resourceID }),
+                  descriptor.sha256 == file.contentHash, descriptor.byteCount == file.byteCount else {
                 throw ProjectResourceError.corruptBlob
             }
         }

@@ -4,6 +4,17 @@
 - Date: 2026-07-19
 - Requirements: SF-0201-002, SF-0201-003, SF-0201-006, SF-0201-007, SF-0201-008; SF-1505-006, SF-1505-007, SF-1505-008; SF-1605-002, SF-1605-006, SF-1605-007, SF-1605-008
 
+## November 22 owner palette clarification
+
+The owner-selected macOS default grays replace fixed custom native chrome RGB
+values and the earlier black Testing/monitor palette. Semantic system roles,
+app appearance, native separators and opaque accessibility fallback remain the
+central policy. Authored website colors remain canonical project data. The
+independent owner-local progress helper receives presentation through its
+provisioned launch and scoped live appearance bridge, without global preference
+changes. Geometry and input ownership are unchanged.
+[Acceptance](../evidence/SF-NATIVE-UI-CONSISTENCY.md).
+
 ## Context
 
 SiteForge chrome must reveal appropriate content through native macOS translucency without turning appearance into scattered panel-specific styling. The same surfaces must remain readable and operable under Reduce Transparency, increased contrast, light/dark appearance, accent changes, inactive windows, minimum sizing, and large projects. Visual effects must not become an input layer over the canvas.
@@ -24,3 +35,11 @@ Appearance state is UI convenience state only and never enters the canonical doc
 - Material surfaces cannot intercept pointer events; hit testing remains with controls and canvas content.
 - The window remains responsible for native unified-toolbar rendering, restoration, resizing, and inactive appearance.
 - Future canvas content may extend behind chrome without changing the material contract.
+
+## November 15 native redesign
+
+The approved Start, workspace, and Settings use flat chrome colors from a
+shared light and dark palette. Increased Contrast strengthens the section
+rules and quiet text. The system keeps ownership of the title bar, focus,
+menus, and material where used. This visual decision follows the
+[approved redesign](../coordination/APPROVED_NATIVE_UI_REDESIGN.md).

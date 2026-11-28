@@ -5,6 +5,566 @@ SF-0507-003/004, SF-0606-002/003/004/006/007/008, SF-0806-006,
 SF-0901-006, SF-1203-003/006 and SF-1211-004. This is a diagnostic inventory,
 not complete milestone acceptance.
 
+## November 15 owner-local install
+
+The owner authorized updating the app on this Mac after every verified feature
+or fix. The November 15 green candidate was rechecked at source/test/tool diff
+SHA-256 `30b3e067046d0db0b97ce8cec151ed5ca708fe0e786b29c7bbf3daafaa970d25`.
+`scripts/package-owner-local-app.sh --install` exited 0 and installed
+`26.11.15` at `/Applications/SiteForge.app` under OD-026. Strict bundle
+signature verification passed. The installed source revision is
+`013393965a49f925d42fd5d8ba82497bdd83c79b`. The installed testing provision,
+bundle metadata, and installed-app source fingerprint algorithm all returned
+`5a0de15c37d98336cedc33129c540c6a62256fd2e2583456b7c42ceb2119496f`.
+
+## November 14 desktop closeout replay
+
+Initial focused bundle `focused-538593ee-0244-43a7-82f2-edd97b615173.xcresult`
+on fingerprint `a0b37eb809ea0dd9eb9985b4ab86e5044094e58532842e225591d57a71e0b458`
+recorded three passes and three failures. Both connected model regressions
+and the native spacing selector passed. The native height assertion failed
+after a drag anchored to the Header AX group. Targeting the actual bottom
+resize handle passed the exact connected native journey in 290.442s in
+`focused-85ed82b0-5f9a-44d1-aafe-418edc8f97a7.xcresult`. That bundle also
+contains two failing keyboard experiments and is an independent receipt.
+
+The Tab probe `focused-9bfcd319-2d78-425b-afb3-82e3f66250a3.xcresult`
+recorded full keyboard access, before/after SwiftUI `KeyViewProxy` ownership,
+and AppKit moving to `nextValidKeyView` while logical Pages focus remained.
+Removing the extra focus modifier and adopting the tab's focus on activation
+got through Pages → Layers and all direct Navigator tabs. The subsequent
+failure attachment records actual Quick Open focus. The harness now explicitly
+checks that shipping control in both directions. No Tab interception was
+added (SF-0203-006, SF-1505-006).
+
+The page editor probe identified SwiftUI's native field editor as key and
+sheet first responder and as AppKit's Select All target. The command registry
+now publishes the exact focused page-draft ID to invalidate menu availability.
+The command's native action and Escape assertions passed in 32.532s
+(SF-0203-006, SF-0303-006, SF-1503-006). The distinct bundle
+`focused-3358f308-264a-4dba-8c94-5d7f2d40346f.xcresult` preserves that pass
+and the two failures at Quick Open and Safari Footer pointer reachability.
+
+Safari's real Develop menu opened Responsive Design Mode. The browser
+attachments show the authored titles, exact 320px viewport, scale 1 and
+90px navigation widths. The first pointer failure was the Footer menu's
+hittability. The recording shows Safari's custom viewport was 320 × 75.
+Native wheel scrolling alone did not reach the Footer. The next replay
+sets the visible Height field before the original width and pointer checks.
+The ordinary comparison measured 855px at its sixth zoom step. The test
+now allows three more real native Zoom In steps, while retaining its exact
+320..<600 CSS width requirement. The matched-width title journey passed
+215.675s and Select All passed 32.327s in the independent eight-selector
+bundle `focused-67363b08-e6e5-4c3d-8247-3d76ef1afe62.xcresult`.
+
+The workspace test then exposed the genuine page management controls in
+native order. Those assertions are now explicit forward and backward.
+The next failing transition, Home → Not Found, had the same retained
+`KeyViewProxy` / unchanged logical Home signature
+(`focused-058e3b52-0eff-4c9d-b337-3468e99d373a.xcresult`); the page
+row uses the same native Button focus adjustment.
+
+The 480-point responsive height correction passed the strict automatic
+narrow-chrome journey (240.478s) with native Footer/Header pointer and focus
+assertions at 320/430 and exact measured widths at all three sizes, in
+`focused-62db5a95-7a78-4d14-9673-67550c6120f4.xcresult`.
+A later batch at fingerprint
+`009e0bf13d36d51458e8b041b17efa5eb1ce55c423e9832e01a793a2f0459ae6`
+passed four Safari methods in `focused-fdc34378-e97e-425f-9525-26e82414d4c4.xcresult`:
+Escape/pixel paint (289.160s), matched-width title (225.950s), measured
+browser companion (204.841s), and native Footer/browser companion (226.886s).
+The ordinary comparison still failed at Footer reachability: Docked
+browser inspection measured 570 × 133.333 CSS pixels, but the Footer summary
+began at y=211.0625. The next comparison isolates the preview tab and uses
+a narrower real ordinary window before normal zoom to retain enough height.
+
+Removing redundant focus modifiers from the standard viewport controls fixed
+the Compare stop. Native viewport operation passed in 23.601s. The exact
+forward traversal reached the last Inspector tab and Shift-Tab returned
+to its preceding tab, then the wrap to Pages failed
+(`focused-f8178505-c5fe-4788-a728-03e87fec097e.xcresult`).
+
+The wrap probe measured AppKit entering the Select tool's actual toolbar
+frame, followed by Frame. The keyboard journey now checks the real toolbar
+in both directions, using the existing test-only focus diagnostic to read
+the native key-view center where AppKit lacks a focused AX flag. The reverse
+path exposed Insert Text and Insert Frame in the genuinely empty canvas.
+The existing native canvas forward bridge now reaches those enabled buttons
+in order. The complete keyboard selector passed in 109.935s in
+`focused-b7dc488e-0570-4e48-98b7-25ba4ba6a3a4.xcresult`. No workspace-wide
+Tab interception was added.
+
+The ordinary/responsive comparison passed 413.679s in
+`focused-fa086b9c-e6e7-4de1-8a55-6ae654851e37.xcresult`. The fixture tab
+was isolated in its own verified Safari window. The harness scoped the
+Console and RDM fields to that window and set Width before Height to avoid
+the measured one-point height shift. All authored-artifact, exact viewport,
+pointer, Escape focus, and original pixel assertions passed.
+At CSS width 580, both ordinary regions changed 0/53,046 pixels and both
+responsive regions changed 0/33,600 pixels. Original screen captures and
+their pixel receipts remain in the result bundle and were exported to
+`siteforge-final-safari-screens-20261114` under the temporary directory.
+The full collector started on source/test/tool diff SHA-256
+`e4fd604fee8d093dedb88b1a86f1976b611c0239596695d3f9d731e6d14fbb25`
+at base `013393965a49f925d42fd5d8ba82497bdd83c79b`.
+Its bundle is `full-d8f8154c-63e8-45cc-98a7-fa8bae39efb2.xcresult`.
+Repository checks and build passed. The collector exited 65 on November 15.
+The result bundle accounts for all 1,060 methods: 890 core passes and 162 UI
+passes, five UI failures, three approved owner Dark Flow skips, and zero
+unrun methods. Both keyboard and both connected Header/Footer journeys
+passed, along with viewport operability, strict automatic narrow chrome,
+managed chrome title matching, and the same-artifact Safari comparison.
+
+The component property discovery journey lost foreground ownership at
+the search field. WindowServer showed the ChatGPT app receiving keyboard
+focus at 22:37:46 while the search control was still enabled and hittable.
+The generated Escape/paint journey and both narrow chrome companions
+missed 768 CSS pixels after native Responsive Design Mode input. The
+measured companion's retained receipt shows 767 after entering 768,
+then 769 for both Header and Footer after the one-step correction.
+The responsive layout review journey missed the post-Undo finding. Its
+failure attachment reports Text editing for both history controls.
+
+The unchanged native replay `focused-855274f1-96f1-430d-b3da-ce5c3b696934.xcresult`
+passed component property discovery in 97.822s and reproduced the
+responsive review failure at the same post-Undo finding in 88.836s.
+The follow-up sets the standalone Safari height before width and retains
+the height during a measured width correction. The measured companion
+passed all three exact widths in 444.454s in
+`focused-da6fcb3a-5c39-423d-8642-b6c02e7e3a7a.xcresult`. That bundle also
+records a failed responsive review precondition that expected Set Property.
+The exported width attachments confirm 320, 430, and 768 CSS pixels for
+both Header and Footer at scale 1, with 768 reached on the initial input.
+The responsive review now returns focus to the selected Layer after each
+sheet dismissal and verifies the Grouped Edit history label before issuing
+the original native Edit menu command. On follow-up fingerprint
+`30b3e067046d0db0b97ce8cec151ed5ca708fe0e786b29c7bbf3daafaa970d25`,
+`focused-932bd9ed-7120-49ec-9535-6a0e017fec5e.xcresult` passed the full
+responsive review journey in 102.710s.
+`focused-0fddaea2-817d-4f3a-8a4b-be7b6cf60d9d.xcresult` passed the three
+Safari failures on the same follow-up fingerprint: Escape state and paint
+in 820.173s, measured narrow chrome in 471.183s, and native Footer plus
+measured Safari in 497.224s.
+
+The fresh `./sf verify` on that fingerprint exited 0 on November 15 at
+07:21 Eastern. Repository checks and build passed. The terminal bundle
+`full-9c447088-76d3-4b97-b8be-3dbe106ad26f.xcresult` returned `Passed`:
+890 core passes, 167 UI passes, three approved owner Dark Flow skips,
+zero failures, and zero unrun. The bundle contains all 1,060 unique
+methods from the preceding candidate. Its 170 UI selectors match
+`scripts/ci-ui-timings.txt` exactly. Select All, bidirectional workspace
+traversal, both connected Header/Footer model and native journeys, all
+six Safari selectors, and all five previously failed selectors passed in
+this single run. The transcript is `siteforge-desktop-final-full-20261115.log`
+under the temporary directory. OD-031 remains open under SF-1605-008.
+
+Local result directory: `siteforge-desktop-closeout-20261114` in the
+temporary folder. OD-031 remains independently open.
+
+## November 14 keyboard source pass
+
+The six-selector Safari attempt was interrupted after SiteForge could not
+activate in the locked console. The partial bundle
+`focused-bc797522-b20b-4b79-9407-1cb2c353308c.xcresult` under
+`siteforge-keyboard-acceptance-20261114` records one application activation
+failure and an interrupted second method. No method reached Safari. The
+owner reports the developer setting enabled. Check Develop through the
+real menu once unlocked. No owned collector remained active on recheck.
+
+The Page Editor publishes name/route field focus at scene scope specifically
+for Edit → Select All validation. The action still uses the AppKit responder
+chain. The exact selector retains the enabled native menu and draft-replacement
+assertions and checks unchanged text on selection, existing Home identity
+after Escape, and absence of the canceled page. Runtime verification remains
+pending (SF-0203-006, SF-0303-006, SF-1503-006).
+
+Process-scoped Xcode 27.2 `build-for-testing` exited 0 on source/test/tool
+diff SHA-256 `d61a2c667861d2acbfd08711ce2c11de0bb14e476da7fba993fba56087f226c2`.
+The log is `siteforge-keyboard-source-build-20261114.log` in the local
+temporary directory. No tests or apps launched during the source pass.
+
+For `testKeyboardFocusTraversesWorkspaceForwardAndReverse` (SF-0203-006,
+SF-1505-006), the retained snapshot shows logical Pages focus, a native
+`KeyViewProxy`, and Tab pass-through in the key window. This does not
+identify which view AppKit selected or whether SwiftUI later replaced it.
+On the unlocked desktop, record the pre-event responder and
+`nextValidKeyView` / `previousValidKeyView` type and identifier, full keyboard
+access state, then the post-event responder and logical focus on the next
+main run-loop turn for that same window. At Select All validation, correlate
+field and scene focus, key/sheet responder class and AppKit's action target.
+The temporary probe snippets are retained outside the checkout. No Tab routing
+change was made.
+
+Pending on owner confirmation that the desktop is ready: replay
+`testKeyboardFocusTraversesWorkspaceForwardAndReverse` and
+`testNativeSelectAllInPageEditorReplacesDefaultDraftJourney`, then the six
+Safari selectors listed below. Once the focused outcomes qualify, run a
+stable full gate. OD-031 hosted evidence remains separate.
+
+## November 14 resumed acceptance
+
+Baseline `013393965a49f925d42fd5d8ba82497bdd83c79b` with source/test/tool
+diff SHA-256
+`f6c4eef2e8967860f42ac7b05f0cacf493f9430ad47774d598b4aff92d53bba6`.
+Use the same fingerprint command as below. Process-scoped Xcode 27.2
+(27B52) first-launch readiness returned 0 and the pinned runtime check
+passed. The desktop measured 1710 × 1107 points (1710 × 990 visible).
+The system accepted the XCTest Enable UI Automation request.
+
+The scanner now records an in-scope directory listing error as a redacted
+`unreadable-directory` finding (SF-1902-007/008). The synthetic EIO
+regression exited 1 with “Secret scanner treated a partial directory scan
+as clean” before the fix. After the fix the scanner test and complete
+repository scan passed, including exclusion pruning and nested detection.
+
+The first exact replay recorded 3 passes, 1 failure and 0 skips in
+`focused-7d52d05e-ec58-47eb-93b2-d28339e4f625.xcresult`. Safari loaded the
+committed Header title on start and refresh (36.646s); Page Background
+passed its tagged pixel sample (30.880s); the navigator passed its real
+destination checks (38.230s). The Inspector reached 1281 points within
+the original 1280 ±2 bound. A subsequent native edge drag stopped at
+1670 points when restoring the original 1710-point width. The harness
+now invokes the native Window > Fill command for that restoration
+(SF-0201-006/008). The original width assertion, real 1280-point drag,
+and compact minimum drag remain part of the journey.
+The corrected exact Inspector replay passed 1/1 with zero skips in
+458.080s, `focused-f6b00865-1d7c-433f-bb35-24366fc9b791.xcresult`.
+The corrected candidate diff SHA-256 is
+`07ec19f6240bec38b3fec44a56387991414c389118656db78be3eb3948ec12e9`.
+The focused result directories and transcripts are under the local
+temporary directory `siteforge-acceptance-resumed-20261114`.
+
+The full invocation `full-f21bdde4-e12c-4277-b696-190249c10c7d.xcresult`
+passed repository checks, the build, and all 888 core tests. The first
+failure was `testAutomaticNarrowChromeNativeAndMeasuredSafariMenuJourney`
+at the local Safari Develop prerequisite. The owner was asked to enable
+Safari Settings → Advanced → Show features for web developers. The existing
+hosted-only setup remains limited to disposable runners.
+
+The full invocation exited 65 and recorded all 1,058 expected methods:
+888/888 core passed, and UI recorded 158 passed, nine failed, and three
+approved skips out of 170. There were zero interrupted or unrun methods.
+The skips were `testOwnerDarkFlowNativeThemeAndFlow`,
+`testOwnerDarkFlowTransferSavedProjectToCurrentBuild`, and
+`testOwnerDarkFlowVisibleGradientControls`. Native Save As/reopen,
+image import, connected Header/Footer, Inspector, and basic Safari
+start/refresh passed.
+
+Six methods failed at the local Safari Develop prerequisite:
+
+- `testAutomaticNarrowChromeNativeAndMeasuredSafariMenuJourney`
+- `testGeneratedWebsiteMenuEscapePresentationContextComparison`
+- `testGeneratedWebsiteMenuEscapeStateAndPaintJourney`
+- `testManagedChromeTitleMatchedSafariWidthsAndOverflowJourney`
+- `testMeasuredSafariNarrowChromeBoundaryCompanion`
+- `testNarrowChromeFooterAndMeasuredSafariBoundaryCompanion`
+
+The other failures were `testKeyboardFocusTraversesWorkspaceForwardAndReverse`
+(Layers did not receive native Tab focus),
+`testNativeSelectAllInPageEditorReplacesDefaultDraftJourney` (Edit > Select
+All reported disabled), and `testPracticalImageReuseScopedReplacementAndTypographyJourney`
+(XCTest event synthesis timed out). The exported node inventory is
+`siteforge-acceptance-full-inventory-20261114.json` in the local temporary
+directory. The full transcript is `siteforge-acceptance-full-resumed-20261114.log`.
+
+Exact replay `focused-d65bfa8d-6bbc-43b4-a28c-17befe5dcd86.xcresult`
+exited 65 with one pass, two failures, and zero skips. The practical image
+reuse journey passed in 366.301s without changes. The keyboard traversal
+failure reproduced in 19.933s; the original AX attachment records
+logical Pages focus, native `KeyViewProxy` ownership and pass-through at
+the navigator Tab transition in the key window. The page-editor failure
+reproduced in 12.319s with the name field focused before opening Edit,
+then a disabled native Select All item. Neither failure has a verified
+root-cause repair. No further full gate was started.
+
+## November 14 local restoration
+
+Local `main` and recorded `origin/main` both resolve to
+`013393965a49f925d42fd5d8ba82497bdd83c79b`. Candidate source, test and tool
+diff fingerprint, SHA-256:
+`5b859b92a67db68ef587add071e3bdd0d6eaa2a79200f7894d208c2a9577351d`.
+Reproduce with
+`git diff --binary HEAD -- SiteForge Tests scripts sf .github SiteForge.xcodeproj | shasum -a 256`.
+The existing Inspector viewport and UI harness changes are included.
+
+Git status, object reads and diff checks completed. The generated
+`.build/owner-local/SiteForge.app` directory listing completed on this
+check. The original scanner exceeded an eight-second probe while using
+`Path.rglob`, which can descend into excluded trees before filtering.
+The repaired scanner passed its seeded traversal regression and completed
+the full repository scan. In-scope historical logs still take time to scan.
+
+macOS 27.2.1 (26B131), Xcode 27.2 (27B52), and pinned Python 3.9.6 with
+Pillow 11.3.0 were observed. Console ownership is present. Process-scoped
+Xcode first-launch readiness returned 69 both inside and outside the
+sandbox. See [OD-028](../OPEN_DECISIONS.md#od-028--complete-xcodes-required-system-components).
+The hosted accounting self-tests require Python 3.10 or newer for
+`zip(strict=True)`. The available pinned 3.9.6 runtime raised five setup
+errors for those tests. The shard selector command runs on that runtime.
+
+The sandboxed `./sf verify` exited 65. All repository checks passed.
+During the build, `sandbox-exec: sandbox_apply: Operation not permitted`
+preceded `swift-plugin-server` reporting a malformed response for
+`SwiftUIMacros.StateMacro`. No tests started and no XCTest bundle was
+created. Diagnostic log: `siteforge-local-builder-acceptance-20261114.log`
+in the local temporary directory.
+An approved build outside the workspace sandbox used fresh derived data
+and finished with `BUILD SUCCEEDED`, exit 0, on the same fingerprint.
+Its log is `siteforge-local-builder-build-20261114.log`. This isolates
+the sandboxed macro failure from the candidate source.
+The approved `build-for-testing` using the same derived data also exited
+0 with `TEST BUILD SUCCEEDED`. Its log is
+`siteforge-local-builder-test-build-20261114.log`. First-launch readiness
+still returned 69 on recheck. The expected local inventory of 888 non-UI
+and 170 UI methods remains unrun for this candidate.
+
+## OD-031 capped hosted execution — run 42866090110
+
+[Run 42866090110](https://github.com/etejev/SiteForge/actions/runs/42866090110),
+attempt 1 at `0133939`: GitHub canceled core and UI shard 2 before runner
+assignment (888 and 22 unrun selectors). The immutable UI shard 1 receipt
+records 19 passes and two failures. UI shard 3 records 18 passes, three
+failures and one exact approved owner-project skip. These are partial
+counts; UI shard 4 adds 18 passes and three failures, and UI shard 5 adds
+19 passes and two failures. Three 21-selector shards remain pending.
+
+- `testGeneratedWebsiteMenuEscapeStateAndPaintJourney`: Safari loaded the
+  authored page and its menu bar did not contain Develop. The hosted-only
+  precondition uses Safari's visible Advanced settings control, then
+  requires the actual Develop menu. Local preferences are not changed.
+- `testBrowserPreviewCommittedHeaderRefreshAndStopJourney`: Safari's native
+  address field pointed at the loopback preview, but its browser view still
+  reported `IsPageLoaded=false`; the later journey did load a separate
+  preview. This does not identify an HTTP or production defect. The
+  start/refresh assertion now attaches the existing bounded status-only
+  GET diagnostic on failure; the actual Safari title remains required.
+- `testGeneratedWebsiteMenuEscapePresentationContextComparison`: the
+  separately hosted Safari again reported `IsPageLoaded=false` at the
+  authored-title boundary. The same diagnostic now covers this companion.
+- `testAuroraRelatedPageReuseNativeCopyAndSafariJourney`: did not reach
+  Safari. The recording already shows Mobile/390 after the native menu
+  action while the retained popup predicate fails. Re-query the live AX
+  value; still require Mobile before Fit and the subsequent browser proof.
+- `testNativeSaveAsUpdatesLiveDocumentWindowTitleJourney`: Save As reached
+  Saved, published the title, and wrote the package. On reopen the pointer
+  wait expired; the failure screenshot and diagnostic show the requested
+  file selected with enabled, hittable Open by the time capture finished.
+  Reuse the exact-parent, exact-file and live Open readiness helper; retain
+  the last-window native command and reopened title/status/canvas checks.
+- `testAutomaticNarrowChromeNativeAndMeasuredSafariMenuJourney`: failed
+  at the authored-title wait with an untitled, unloaded Safari view.
+  The browser diagnostic now also covers this journey's real load assertion.
+- `testLocalImageAssetImportAuthoringUndoRedoAndReopenJourney` and
+  `testProductNavigatorProvidesTruthfulElementsAssetsAndComponentsDestinations`:
+  Assets was not a direct button in the compact strip. Use the same real
+  overflow-aware native navigator route as earlier in the Image journey;
+  the Assets content, import, and post-reopen assertions are unchanged.
+- `testMeasuredSafariNarrowChromeBoundaryCompanion`: also reached the
+  real loopback address with an unloaded Safari browser view; the shared
+  title diagnostic now covers this path without accepting an HTTP-only pass.
+- `testPageBackgroundEntryUsesSharedFillEditorAndTransparentHistory`: the
+  exact crop embeds the Apple Virtual profile. Its center/35% pixel is
+  `[34, 51, 68, 255]` when Core Graphics converts from the actual profile
+  to sRGB. `NSBitmapImageRep.colorAt` returned Generic RGB and converted
+  the same red byte to `0.175314`. Sample the same pixel using the tagged
+  image; preserve all three channel tolerances and also check opacity.
+  No production color or artboard geometry was changed.
+
+Safari setup follows [Apple's documented UI](https://developer.apple.com/documentation/safari-developer-tools/enabling-developer-features).
+No skip, timeout increase, or selector reduction was added.
+Local `build-for-testing`, all five receipt-accounting cases, and
+`SiteForgeTests/CanvasTextRenderingTests/testStructuralPageBackgroundPaintsExactPixelsWithoutCanvasObject`
+(1/1) passed. The exact retained PNG independently converts to the expected
+channels. No local UI or full suite was started.
+
+### Selector ledger for attempt 1
+
+The partition is reproducible from `scripts/ci-test-accounting.py selectors
+<shard>` at the baseline SHA. The retained summary lists every failure in
+shards 1, 3, 4 and 5. Its terminal counts account for every assigned selector
+in those jobs, so the remaining assigned methods in those shards are marked
+passed after applying the exact owner-only skip policy. Original per-job
+receipt JSON and result bundles were unavailable in the checked locations.
+Shards 6–8 require same-attempt receipts to distinguish passes, failures,
+skips, interruptions and unrun methods. The 888 core methods are all unrun
+because the core job did not acquire a runner. An attempt-specific core
+enumeration was unavailable.
+
+All methods below are in `SiteForgeUITests/SiteForgeLaunchTests`.
+
+| Shard | Method | Outcome |
+| --- | --- | --- |
+| 1 | `testAuroraPackagedSampleCreatesEditableFourPageWebsiteJourney` | Passed |
+| 1 | `testBrowserPreviewCommittedHeaderRefreshAndStopJourney` | Failed |
+| 1 | `testButtonLinkContentTargetsUndoRedoAndReopenJourney` | Passed |
+| 1 | `testColorTokenRowCenterSelectsItsOwnEditorAndBinding` | Passed |
+| 1 | `testConceptAlignedSettingsSidebarAndInheritedAccessibilityJourney` | Passed |
+| 1 | `testConnectedContainerFluidSpacingNavigationOverrideResetAndCancelJourney` | Passed |
+| 1 | `testConstrainedWindowPlacementPreservesNativeTitleBarMoveAcrossViewUpdates` | Passed |
+| 1 | `testContextualTypographyReturnTabEscapeAndColorTargetJourney` | Passed |
+| 1 | `testCopyHeaderFooterSheetAtPracticalMinimumKeepsMissingRolesTruthful` | Passed |
+| 1 | `testDesignInspectorMixedAndInapplicableSelectionJourney` | Passed |
+| 1 | `testFormattingReuseNativeAppearanceTextStyleAndAtomicUndoJourney` | Passed |
+| 1 | `testGeneratedWebsiteMenuEscapeStateAndPaintJourney` | Failed |
+| 1 | `testGeometryTransformPointerKeyboardNumericUndoRedoAndAccessibilityJourney` | Passed |
+| 1 | `testLayersParentAccessibilityTracksNativeNestingInsertionAndHistory` | Passed |
+| 1 | `testPagesSearchFiltersRoutesOpensFirstAndPreservesSelectionJourney` | Passed |
+| 1 | `testPracticalComponentNamedCreationDesignDraftAndReturnJourney` | Passed |
+| 1 | `testReduceMotionUsesStaticIndeterminateStatus` | Passed |
+| 1 | `testStarterSiteCreatesOrdinaryHomeAboutSemanticWorkspaceJourney` | Passed |
+| 1 | `testStructuralElementsNestThroughCatalogAndInsertMenuJourney` | Passed |
+| 1 | `testSupportSettingsGeneratesReviewableRedactedReportJourney` | Passed |
+| 1 | `testWelcomeGlobalSettingsDraftReviewCancelAndFixedGeometryJourney` | Passed |
+| 2 | `testBundledLegacyFixtureStagesExactBytesInOwnedTemporaryStorage` | Unrun |
+| 2 | `testCanvasSettingsGridDefaultAppliesOnlyToNewWorkspacesJourney` | Unrun |
+| 2 | `testComponentRetainedOverrideRecoveryConfirmationUndoAndReopenJourney` | Unrun |
+| 2 | `testCopyHeaderFooterToPagesIndependentAtomicUndoAndReopenJourney` | Unrun |
+| 2 | `testDarkEditorialEditorAndSharedInspectorVisualJourney` | Unrun |
+| 2 | `testGeneralAccessibilityMetadataInspectorUndoRedoJourney` | Unrun |
+| 2 | `testHeaderFooterInlineGapResponsiveResetAndDraftCancellationJourney` | Unrun |
+| 2 | `testInlinePlainTextEditingCommitCancelUndoRedoAndAccessibilityJourney` | Unrun |
+| 2 | `testInsertedFrameHasVisibleAuthoredSurfaceAndSeparateSelectionContext` | Unrun |
+| 2 | `testInspectorProvidesTruthfulUnavailableContentAndInteractionsDestinations` | Unrun |
+| 2 | `testLocalComponentsConstrainedMinimumOverflowAndCancellationJourney` | Unrun |
+| 2 | `testLocalPreviewFollowsAuthoredPageLinkWithBackForwardAndNoEditorMutation` | Unrun |
+| 2 | `testMixedFluidFallbacksAcceptExplicitRangeWithoutBorrowingPrimaryValuesJourney` | Unrun |
+| 2 | `testOwnerDarkFlowTransferSavedProjectToCurrentBuild` | Unrun |
+| 2 | `testPageRowIdentifiersAreTypedUniqueAndRoleIsSeparate` | Unrun |
+| 2 | `testPositioningReusableStyleAndInteractionStateAuthoringJourney` | Unrun |
+| 2 | `testPracticalImageReuseScopedReplacementAndTypographyJourney` | Unrun |
+| 2 | `testQuickOpenRecentLayersUseLiveSelectedNodeJourney` | Unrun |
+| 2 | `testRelatedPageReuseControlsAtPracticalMinimum` | Unrun |
+| 2 | `testResponsiveContainerLayoutAndBreakpointVisibilityJourney` | Unrun |
+| 2 | `testSupportedElementsShareSelectedRenderGeometryJourney` | Unrun |
+| 2 | `testTextForegroundNativeInspectorTokenAndInlineParityJourney` | Unrun |
+| 3 | `testAuroraRelatedPageReuseNativeCopyAndSafariJourney` | Failed |
+| 3 | `testCanvasIsolationFocusAndPresentationJourney` | Passed |
+| 3 | `testComponentOrganizationDependencyInspectionAndWhereUsedJourney` | Passed |
+| 3 | `testComponentSlotFallbackNativeAuthoringCancelHistoryAndReopenJourney` | Passed |
+| 3 | `testComponentsSearchAndQuickOpenRevealDefinitionJourney` | Passed |
+| 3 | `testCrashQualifiedRecoverySeparatesFirstCleanAndInterruptedLaunchJourney` | Passed |
+| 3 | `testDeterminateIndeterminateAndNonCancelableLoadingSurfaces` | Passed |
+| 3 | `testFixedSettingsSharesCardWidthTitlebarClearanceAndReopenGeometryJourney` | Passed |
+| 3 | `testFormFieldTemplateMenuParityInspectorAndHistoryJourney` | Passed |
+| 3 | `testFormattingCommandsRemainVisibleAcrossInspectorDestinationsWithoutToolsDisclosureJourney` | Passed |
+| 3 | `testGeneratedWebsiteMenuEscapePresentationContextComparison` | Failed |
+| 3 | `testLaunchLifecycleReadinessVocabularyIsExact` | Passed |
+| 3 | `testLocalComponentsCreateLinkEditDetachAndReopenJourney` | Passed |
+| 3 | `testNativeAssetOrganizationSearchFavoriteUndoAndReopenJourney` | Passed |
+| 3 | `testNativeCanvasRendererAdoptsAuthoredObjectsAndPreservesInput` | Passed |
+| 3 | `testNativeSaveAsUpdatesLiveDocumentWindowTitleJourney` | Failed |
+| 3 | `testOwnerDarkFlowVisibleGradientControls` | Approved skip |
+| 3 | `testPreviewPointerUsesRightAlignedTestWindow` | Passed |
+| 3 | `testQuickOpenRecentPagesPreserveIDsAndOpenThroughNativeJourney` | Passed |
+| 3 | `testSiteSettingsMetadataApplyCancelAndUndoJourney` | Passed |
+| 3 | `testToolbarCommandsExposeSelectedDisabledAndPreviewStates` | Passed |
+| 3 | `testWorldGridArtboardHierarchyVisualJourney` | Passed |
+| 4 | `testApplicationLaunchesCompleteNativeShellAtPracticalMinimumSize` | Passed |
+| 4 | `testApplicationSettingsGroupResetCancelRestoreAndRelaunchJourney` | Passed |
+| 4 | `testAutomaticNarrowChromeNativeAndMeasuredSafariMenuJourney` | Failed |
+| 4 | `testComponentPropertyDiscoveryNativeSearchClearTraversalAndContextJourney` | Passed |
+| 4 | `testComponentPropertyOrganizationNativeKeyboardCancelHistoryAndReopenJourney` | Passed |
+| 4 | `testConnectedFluidPreflightSafariExportCancelAndReopenJourney` | Passed |
+| 4 | `testContextualEssentialsEditLinkedButtonWithoutInspectorTabSwitchesJourney` | Passed |
+| 4 | `testCrossProjectComponentPastePreflightImportUndoRedoAccessibilityJourney` | Passed |
+| 4 | `testFrameTextInsertionCancellationUndoRedoAndSelectionJourney` | Passed |
+| 4 | `testLocalColorTokenBorderAndOuterShadowInspectorJourney` | Passed |
+| 4 | `testLocalImageAssetImportAuthoringUndoRedoAndReopenJourney` | Failed |
+| 4 | `testNativeSelectAllInPageEditorReplacesDefaultDraftJourney` | Passed |
+| 4 | `testPagesNavigatorExposesApprovedOrderLabelsSelectionAndArrowNavigation` | Passed |
+| 4 | `testProductNavigatorProvidesTruthfulElementsAssetsAndComponentsDestinations` | Failed |
+| 4 | `testProductionRecoveryDiscoverySupportsKeyboardRestoreAndDiscard` | Passed |
+| 4 | `testQuickOpenNewPageOpensNativeEditorAndPreservesCancelJourney` | Passed |
+| 4 | `testResponsiveBreakpointComparisonReviewsLiveSelectionWithoutMutationJourney` | Passed |
+| 4 | `testSemanticHTMLElementInspectorKeyboardResetAndPreviewJourney` | Passed |
+| 4 | `testStaticPageManagementRoutesHistoryAndReopenJourney` | Passed |
+| 4 | `testTransactionalClipboardDuplicateCutPasteUndoRedoAccessibilityJourney` | Passed |
+| 4 | `testUndoRedoToolbarPointerUsesRightAlignedTestWindow` | Passed |
+| 5 | `testAuthorizedRecentProjectReopensFromWelcomeWithoutPersistingPathJourney` | Passed |
+| 5 | `testComponentDefinitionRenamePropagatesToLinkedInstancesJourney` | Passed |
+| 5 | `testComponentVisibilityDefinitionInstanceResetAndReopenJourney` | Passed |
+| 5 | `testConnectedHeaderFooterNavigationMenuHeightUndoAndReopenJourney` | Passed |
+| 5 | `testConnectedNestedSectionContainerGeometryAndBreakpointJourney` | Passed |
+| 5 | `testCustomResponsiveViewportWidthEntryComparisonAndCancellationJourney` | Passed |
+| 5 | `testDesignInspectorNativeSaveCloseReopenPersistsFillAndOpacityJourney` | Passed |
+| 5 | `testElementsSearchFindsAndInsertsSupportedItemWithoutEnablingUnavailableJourney` | Passed |
+| 5 | `testFluidResponsiveValueAuthoringPreviewResetAndAccessibilityJourney` | Passed |
+| 5 | `testInitialLaunchOffersKeyboardFocusedNativeProjectActions` | Passed |
+| 5 | `testInlineTextStatusCommitAndCancelUseBottomAlignedPointerWindow` | Passed |
+| 5 | `testKeyboardFocusTraversesWorkspaceForwardAndReverse` | Passed |
+| 5 | `testMeasuredSafariNarrowChromeBoundaryCompanion` | Failed |
+| 5 | `testNativePointerPreviewAndFrameTextCommitFollowScreenCoordinates` | Passed |
+| 5 | `testNativePreviewHeaderPublicPointerBoundaryProbe` | Passed |
+| 5 | `testPageBackgroundEntryUsesSharedFillEditorAndTransparentHistory` | Failed |
+| 5 | `testQuickOpenMenuKeyboardPageLayerAndCancelJourney` | Passed |
+| 5 | `testSnappingRulersAuthoredGuidesSuppressionAndAccessibilityJourney` | Passed |
+| 5 | `testUnsavedTransitionDecisionIsNativeKeyboardAndAccessibilityOperable` | Passed |
+| 5 | `testWorkspaceChromeUsesNativeMaterialWithoutInterceptingCanvasInput` | Passed |
+| 5 | `testWorkspaceReadinessDoesNotDependOnPreviewPointerVisibility` | Passed |
+| 6 | `testApplicationAppearanceSettingsPreviewApplyCancelResetJourney` | Unknown (receipt unavailable) |
+| 6 | `testDesignInspectorOrderedFillLayersAccessibilityJourney` | Unknown (receipt unavailable) |
+| 6 | `testDesignInspectorTypographyInlineUndoRedoAccessibilityJourney` | Unknown (receipt unavailable) |
+| 6 | `testDividerHeaderNavigationFooterInsertThroughNativeMenuJourney` | Unknown (receipt unavailable) |
+| 6 | `testDocumentCommandsAndStatusAreKeyboardAndAccessibilityAvailable` | Unknown (receipt unavailable) |
+| 6 | `testFailureAndRecoveryExposeSpecificFullyKeyboardOperableActions` | Unknown (receipt unavailable) |
+| 6 | `testFormAccessibilityValidationAndContentInspectorJourney` | Unknown (receipt unavailable) |
+| 6 | `testFormInputTemplateInsertsOnlyIntoSelectedFormJourney` | Unknown (receipt unavailable) |
+| 6 | `testInspectorWorkflowSearchPinGeometryPasteUndoAndMixedJourney` | Unknown (receipt unavailable) |
+| 6 | `testInstalledFontPairChooserCancelAtomicUndoAndHeadingSemanticsJourney` | Unknown (receipt unavailable) |
+| 6 | `testLayersSearchFiltersSelectsAndRecoversWithoutChangingDocumentJourney` | Unknown (receipt unavailable) |
+| 6 | `testLayersTypeFilterKeepsSelectionAndRevealsSelectedNodeJourney` | Unknown (receipt unavailable) |
+| 6 | `testLocalPreviewRefreshesOnlyOnExplicitRequestJourney` | Unknown (receipt unavailable) |
+| 6 | `testNarrowChromeFooterAndMeasuredSafariBoundaryCompanion` | Unknown (receipt unavailable) |
+| 6 | `testNarrowDisplayPointerAlignmentPreservesWindowAndRevealsBothEdges` | Unknown (receipt unavailable) |
+| 6 | `testPagesSiteSetupPageIndexingResetAndCancelJourney` | Unknown (receipt unavailable) |
+| 6 | `testPracticalResponsiveSizingConversionWinnerResetAndDraftJourney` | Unknown (receipt unavailable) |
+| 6 | `testQuickOpenInsertActionsCreateOneObjectAndExposeImageRecoveryJourney` | Unknown (receipt unavailable) |
+| 6 | `testReusableStyleLinksInheritanceScopedUpdateAndNonePreservationJourney` | Unknown (receipt unavailable) |
+| 6 | `testSelectedReferencesLightSettingsPreviewAndRestoreVisualJourney` | Unknown (receipt unavailable) |
+| 6 | `testStructuralLayoutControlsRemainReachableAtPracticalMinimum` | Unknown (receipt unavailable) |
+| 7 | `testAuroraResponsiveContentConversionPreservesSelectionAndReflowsAcrossPresetsJourney` | Unknown (receipt unavailable) |
+| 7 | `testButtonLinkMixedAndIncompatibleContentJourney` | Unknown (receipt unavailable) |
+| 7 | `testComponentDirectPropertySourceRetainsDefinitionDraftAndExactInstanceJourney` | Unknown (receipt unavailable) |
+| 7 | `testComponentTextPropertiesTwoInstancesResetHistoryAndReopenJourney` | Unknown (receipt unavailable) |
+| 7 | `testHeadingTemplateElementsMenuTypographyAndHistoryJourney` | Unknown (receipt unavailable) |
+| 7 | `testInlineTextNativeSelectAllReplacesExactlyAndCancelPreservesIdentity` | Unknown (receipt unavailable) |
+| 7 | `testLargeFixtureScrollsAndRetainsMinimumLayoutResponsiveness` | Unknown (receipt unavailable) |
+| 7 | `testLaunchAndLoadingStatesRegressUnderOpaqueMaterialFallback` | Unknown (receipt unavailable) |
+| 7 | `testLayersContextualReorderShowsAccessiblePreviewAndUndoRedo` | Unknown (receipt unavailable) |
+| 7 | `testMinimumWorkspaceContainsViewportAndScrollableFillInspectorControls` | Unknown (receipt unavailable) |
+| 7 | `testNativePointerSamplesStayInsideVisibleArtboardAtNarrowWidths` | Unknown (receipt unavailable) |
+| 7 | `testNormalFiveDestinationRowsAndInspectorFieldStabilityJourney` | Unknown (receipt unavailable) |
+| 7 | `testPreviewAndCheckWebsiteFindingRepairUsesExistingEditorJourney` | Unknown (receipt unavailable) |
+| 7 | `testProductionLoaderOpensRealPackageAndRetriesMalformedBytesWithoutPreviewState` | Unknown (receipt unavailable) |
+| 7 | `testQuickOpenScopesPagesLayersActionsAndCancelJourney` | Unknown (receipt unavailable) |
+| 7 | `testQuickOpenViewActionsFitAndToggleGridWithoutDocumentMutationJourney` | Unknown (receipt unavailable) |
+| 7 | `testRelatedPageReuseNavigationActionAuditAndNativeReopenJourney` | Unknown (receipt unavailable) |
+| 7 | `testResponsiveBreakpointGeometryAuthoringUndoResetAndAccessibilityJourney` | Unknown (receipt unavailable) |
+| 7 | `testStableInspectorStripsFieldsDraftsAndComponentRecoveryAtNormalAndCompactWidthsJourney` | Unknown (receipt unavailable) |
+| 7 | `testStaticPageCompactProtectedRolesAndLiveLinkTargetJourney` | Unknown (receipt unavailable) |
+| 7 | `testWebsitePreviewBuildsAuthoredOutputAndOpensActualSafari` | Unknown (receipt unavailable) |
+| 8 | `testButtonLinkInternalTargetControlsAtPracticalMinimum` | Unknown (receipt unavailable) |
+| 8 | `testCanvasMarqueeDirectionalMultiSelectionJourney` | Unknown (receipt unavailable) |
+| 8 | `testComponentActionNativeInspectorDraftResetHistoryAndReopenJourney` | Unknown (receipt unavailable) |
+| 8 | `testDesignInspectorBorderRadiusShadowUndoRedoAccessibilityJourney` | Unknown (receipt unavailable) |
+| 8 | `testDesignInspectorBoxAppearanceControlsRemainReachableAtPracticalMinimum` | Unknown (receipt unavailable) |
+| 8 | `testDesignInspectorSolidFillOpacityKeyboardUndoRedoJourney` | Unknown (receipt unavailable) |
+| 8 | `testFluidTypographyScopeEffectiveValuesVisibilityResetAndCancelJourney` | Unknown (receipt unavailable) |
+| 8 | `testImageMixedFitAltDraftAndIndependentAssetReuseJourney` | Unknown (receipt unavailable) |
+| 8 | `testLocalColorTokenInspectorCreateBindAndUnbindJourney` | Unknown (receipt unavailable) |
+| 8 | `testManagedChromeTitleMatchedSafariWidthsAndOverflowJourney` | Unknown (receipt unavailable) |
+| 8 | `testNativeFillHugSizingModesPreserveIdentityUndoAndComputedGeometryJourney` | Unknown (receipt unavailable) |
+| 8 | `testNativeSizingConstraintsClampResetAndAccessibilityJourney` | Unknown (receipt unavailable) |
+| 8 | `testOpaqueHighContrastDarkAndInactiveMaterialStatesRemainOperable` | Unknown (receipt unavailable) |
+| 8 | `testOwnerDarkFlowNativeThemeAndFlow` | Unknown (receipt unavailable) |
+| 8 | `testOwnerLocalSettingsAndCenteredEmptyCanvasUseRealControlsJourney` | Unknown (receipt unavailable) |
+| 8 | `testResponsiveLayoutReviewJumpsToExactElementAndRefreshesAfterFixJourney` | Unknown (receipt unavailable) |
+| 8 | `testSelectionEmptySingleMultipleLayersKeyboardAndAccessibilityParity` | Unknown (receipt unavailable) |
+| 8 | `testSiteSettingsUnchangedApplyClosesWithoutHistoryJourney` | Unknown (receipt unavailable) |
+| 8 | `testStaticBuildDiagnosticsPreflightProfileCancelAndAccessibilityJourney` | Unknown (receipt unavailable) |
+| 8 | `testStructuralLayoutInspectorReflowsSectionStackAndGridJourney` | Unknown (receipt unavailable) |
+| 8 | `testViewportCommandsAreKeyboardAndAccessibilityOperable` | Unknown (receipt unavailable) |
+
 ## OD-031 sharded execution — run 42847939727
 
 [Run 42847939727](https://github.com/etejev/SiteForge/actions/runs/42847939727)
