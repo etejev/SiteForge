@@ -11874,9 +11874,10 @@ final class SiteForgeLaunchTests: XCTestCase {
         confirm.click()
         assertLiveHugHeight()
         for name in ["Desktop", "Tablet", "Mobile"] {
-            let preset = application.descendants(matching: .any)["canvas.viewport.preset"].firstMatch
+            let preset = application.popUpButtons["canvas.viewport.preset"]
             preset.click(); application.menuItems[name].click()
-            XCTAssertTrue(waitForLiveValue(in: application, identifier: "canvas.viewport.preset", containing: name))
+            // Synchronize on the native popup after AppKit finishes menu tracking.
+            XCTAssertTrue(waitForValue(preset, containing: name, timeout: 5))
             XCTAssertTrue(waitForWorkspaceReady(application))
             componentMenu("View", "Fit Document", in: application)
             assertLiveHugHeight()
