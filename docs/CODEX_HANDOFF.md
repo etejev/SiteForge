@@ -101,8 +101,19 @@ fixtures. Measure existing time and memory budgets without widening them.
 ### 06 — Implement transactional native style controls
 
 **State:** The native mixed and inapplicable fill journey and six-stop
-minimum-width Inspector passed in `20261127-223727-68efdf0a`. Start any
-further work from the shipped controls and retained requirements.
+minimum-width Inspector passed for the installed stabilization build in
+`20261127-223727-68efdf0a`. The follow-up implements one painted ramp for
+the active fill. Stop dots are direct Colors controls, drag uses one
+transaction, and the selected stop has compact exact inputs. Focused
+acceptance passed 3/3 in `20261127-234016-1b7181ad`; the exact-source
+full run `20261127-235410-4d147154` was stopped under the owner's
+failed-only instruction. The two corrected metadata cases passed in
+`20261128-002056-9a8e3287`. The four recorded native failures have passing
+receipts across `20261128-002320-2df2e3d1` and `20261128-004044-c93248cf`.
+Owner-local build `26.11.28` is installed. See
+[the queue](CODEX_QUEUE.md#done--one-gradient-ramp-per-fill) and
+[the styling evidence](evidence/SF-FAST-STYLE-AUTHORING.md#one-gradient-ramp-per-fill).
+The earlier failed-only gate applied to stabilization commit `0e61ec2`.
 
 Use SF-0506–SF-0511 and SF-0701–SF-0705. Trace the controls in
 `FastStyleControls.swift`, `WorkspaceShellView.swift` and the existing

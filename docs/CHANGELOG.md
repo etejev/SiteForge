@@ -1,5 +1,12 @@
 # SiteForge Development Changelog
 
+## Gradient ramp editing
+
+- Click a color dot on the active gradient to open macOS Colors, or drag it
+  to move the stop. The stop menu can reach stops that share a position.
+  Stop Details exposes exact position, hex, alpha, and stop order.
+  (SF-0508-002/005/006, SF-0702-002/005/006)
+
 ## November 27 — Native testing and editor repairs
 
 - Project preference actions stay visible while the form scrolls or a draft

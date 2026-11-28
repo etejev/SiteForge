@@ -1,5 +1,21 @@
 # SiteForge Implementation Status
 
+## Gradient ramp editing
+
+Owner-local build `26.11.28` delivers a single ramp for the active gradient fill, with native
+colored stop buttons, direct Colors ownership, live drag and selected-stop
+precision controls (SF-0508-002/005/006 and SF-0702-002/005/006).
+Focused native acceptance passed 3/3 in `20261127-234016-1b7181ad`.
+Repository and build checks passed. The owner stopped broad verification
+and authorized replay of recorded failures. The two corrected website
+metadata expectations passed in `20261128-002056-9a8e3287`.
+All four native failures passed across `20261128-002320-2df2e3d1` and
+`20261128-004044-c93248cf`. The installed app, harness and final replay
+match fingerprint
+`26604afb7f4792e979f543506539e3265db0dced0e68394a7ffd1ed8af1ee570`.
+The metadata escaping checks cover bounded SF-1207-003/004/006.
+[Verification and delivery evidence](evidence/SF-FAST-STYLE-AUTHORING.md#one-gradient-ramp-per-fill).
+
 ## November 27 — Focused stabilization verified
 
 The frozen run `20261127-092146-994865f2` recorded 14 regular failures and

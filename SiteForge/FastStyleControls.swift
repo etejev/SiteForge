@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Local drafts and native-panel ownership never become canonical document data.
@@ -11,6 +12,7 @@ struct DesignColorEditor: View {
     var hexLabel: String? = nil
     var committedHex: String? = nil
     var allowsAlpha = true
+    var compactDetails = false
     let edit: (CanonicalSolidColor) -> DesignStylePreviewEdit
     @State private var owner = UUID()
     @State private var hexDraft: String?
@@ -28,17 +30,19 @@ struct DesignColorEditor: View {
         let context = state.responsiveInspectorEditContext
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                NativeDesignColorWell(allowsAlpha: allowsAlpha, color: displayed, isEnabled: isEnabled,
-                    accessibilityValue: displayed.hexadecimalRGBA,
-                    accessibilityHint: "Open Colors. Changes preview live; close or leave the well to commit, Escape cancels.",
-                    accessibilityIdentifier: identifier, accessibilityLabel: label,
-                    onEnd: { finish() }, onCancel: { cancel() },
-                    onCommit: { next in
-                        hexDraft = nil; alphaDraft = nil
-                        update(next, context: context)
-                    })
-                    .frame(width: 34, height: 24)
-                    .id(state.geometryInspectorSelectionKey)
+                if !compactDetails {
+                    NativeDesignColorWell(allowsAlpha: allowsAlpha, color: displayed, isEnabled: isEnabled,
+                        accessibilityValue: displayed.hexadecimalRGBA,
+                        accessibilityHint: "Open Colors. Changes preview live; close or leave the well to commit, Escape cancels.",
+                        accessibilityIdentifier: identifier, accessibilityLabel: label,
+                        onEnd: { finish() }, onCancel: { cancel() },
+                        onCommit: { next in
+                            hexDraft = nil; alphaDraft = nil
+                            update(next, context: context)
+                        })
+                        .frame(width: 34, height: 24)
+                        .id(state.geometryInspectorSelectionKey)
+                }
                 TextField("#RRGGBB", text: Binding(get: { hexText }, set: { text in
                     guard text != hexText else { return }
                     hexDraft = text
@@ -55,13 +59,15 @@ struct DesignColorEditor: View {
             }
             if allowsAlpha { HStack(spacing: 6) {
                 Text("Alpha").font(.caption).foregroundStyle(.secondary)
-                DesignStyleSlider(value: displayed.alpha * 100, maximum: 100, isEnabled: isEnabled,
-                    label: label + " alpha", identifier: identifier + ".alphaSlider", context: context,
-                    begin: { validation == nil },
-                    preview: { value in update(.init(red: displayed.red, green: displayed.green,
-                        blue: displayed.blue, alpha: value / 100), context: context) },
-                    finish: { finish() }, cancel: { cancel() })
-                    .frame(minWidth: 50)
+                if !compactDetails {
+                    DesignStyleSlider(value: displayed.alpha * 100, maximum: 100, isEnabled: isEnabled,
+                        label: label + " alpha", identifier: identifier + ".alphaSlider", context: context,
+                        begin: { validation == nil },
+                        preview: { value in update(.init(red: displayed.red, green: displayed.green,
+                            blue: displayed.blue, alpha: value / 100), context: context) },
+                        finish: { finish() }, cancel: { cancel() })
+                        .frame(minWidth: 50)
+                }
                 TextField("Alpha", text: Binding(get: { alphaText }, set: { text in
                     guard text != alphaText else { return }
                     alphaDraft = text
@@ -121,7 +127,7 @@ struct DesignColorEditor: View {
 /// The active layer is editor selection, not an extra authored fill.
 struct FastFillInspectorView: View {
     @ObservedObject var state: WorkspaceShellState
-    @State private var activeID: FillLayerID?
+    @Binding var activeID: FillLayerID?
     private var layers: [CanonicalFillLayer] { state.designInspectorFillLayers() }
     private var active: CanonicalFillLayer? {
         layers.first { $0.id == activeID } ?? layers.last(where: \.isEnabled) ?? layers.last
@@ -177,6 +183,7 @@ struct FastFillInspectorView: View {
                             .id("quick-fill-" + active.id.description)
                     } else {
                         GradientRampEditor(state: state, layer: active)
+                            .id(active.id)
                     }
                     HStack {
                         Text(active.isEnabled ? "Editing active fill" : "Active fill disabled")
@@ -225,83 +232,106 @@ struct GradientRampEditor: View {
     @ObservedObject var state: WorkspaceShellState
     let layer: CanonicalFillLayer
     @State private var selectedID: GradientStopID?
-    @State private var draggedPosition: Double?
-    @State private var dragOwner = UUID()
-    @State private var dragging = false
-    @State private var dragCancelled = false
-    @State private var dragContext: ResponsiveInspectorEditContext?
-    private var stop: CanonicalGradientStop? { layer.stops.first { $0.id == selectedID } ?? layer.stops.first }
+    @State private var detailsShown = false
+    @State private var colorRequest: UUID?
+
+    private var stop: CanonicalGradientStop? {
+        layer.stops.first { $0.id == selectedID } ?? layer.stops.first
+    }
     private var prefix: String { "inspector.design.ramp." + layer.id.description }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            GeometryReader { geometry in
-                let width = max(1, geometry.size.width - 12)
-                ZStack(alignment: .topLeading) {
-                    Rectangle().fill(.quaternary).frame(height: 22)
-                    NativeGradientRamp(stops: layer.stops.map { candidate in
-                        .init(id: candidate.id, position: candidate.id == selectedID ? draggedPosition ?? candidate.position : candidate.position, color: candidate.color)
-                    }).frame(height: 22)
-                    ForEach(layer.stops, id: \.id) { candidate in
-                        let position = candidate.id == selectedID ? draggedPosition ?? candidate.position : candidate.position
-                        Button { if state.prepareForWorkspaceAction(.context) { selectedID = candidate.id } } label: {
-                            Image(systemName: "diamond.fill")
-                                .foregroundStyle(candidate.id == stop?.id ? Color.accentColor : Color.primary)
-                                .background(Circle().fill(Color(nsColor: .controlBackgroundColor)))
-                                .frame(width: 18, height: 20)
-                        }.buttonStyle(.plain)
-                        .offset(x: position * width - 3, y: 17)
-                        .accessibilityLabel("Gradient stop \(layer.stops.firstIndex(where: { $0.id == candidate.id })! + 1)")
-                        .accessibilityValue(String(format: "%.1f percent", position * 100))
-                        .accessibilityIdentifier(prefix + ".stop." + candidate.id.description)
-                        .simultaneousGesture(DragGesture(minimumDistance: 2).onChanged { value in
-                            if !dragging { dragging = true; dragCancelled = false; dragContext = state.responsiveInspectorEditContext }
-                            guard !dragCancelled else { return }
-                            selectedID = candidate.id
-                            let next = min(1, max(0, candidate.position + value.translation.width / width))
-                            if state.previewDesignStyle(.fill(.setStop(layer.id, candidate.id, position: next, color: candidate.color)), owner: dragOwner, expectedContext: dragContext) { draggedPosition = next }
-                        }.onEnded { _ in
-                            if !dragCancelled { _ = state.finishDesignStylePreview(owner: dragOwner) }
-                            draggedPosition = nil; dragContext = nil; dragging = false; dragCancelled = false
-                        })
-                    }
-                }.padding(.horizontal, 6)
-            }.frame(height: 40).accessibilityElement(children: .contain).accessibilityLabel("Gradient ramp")
-            if let stop {
-                DesignColorEditor(state: state, color: stop.color, isEnabled: layer.isEnabled,
-                    label: "Selected gradient stop", identifier: prefix + ".color",
-                    edit: { .fill(.setStop(layer.id, stop.id, position: stop.position, color: $0)) })
-                    .id(prefix + stop.id.description)
-                HStack {
-                    Text("Position").font(.caption)
-                    GradientNumberField(state: state, value: stop.position * 100, label: "Selected stop position", identifier: prefix + ".position", percentage: true) { value in
-                        state.commitDesignFillLayer(.setStop(layer.id, stop.id, position: value / 100, color: stop.color), operation: "gradient stop position", provenance: .keyboard)
-                    }
-                    Text("%").font(.caption)
-                    Spacer(minLength: 0)
-                    Button("Add Stop") { if let newStop = GradientAuthoringInsertion.stop(in: layer) {
-                        selectedID = newStop.id
-                        _ = state.commitDesignFillLayer(.addStop(layer.id, newStop, at: layer.stops.count), operation: "add gradient stop")
-                    }}.accessibilityIdentifier(prefix + ".addStop")
-                }
+            NativeGradientRamp(state: state, layer: layer, selectedID: stop?.id, prefix: prefix, colorRequest: colorRequest) {
+                selectedID = $0
             }
-            HStack {
+            .frame(height: 40)
+            if let stop {
+                HStack(spacing: 6) {
+                    Picker("Gradient stop", selection: Binding(
+                        get: { stop.id },
+                        set: { next in
+                            if state.prepareForWorkspaceAction(.context) { selectedID = next }
+                        }
+                    )) {
+                        ForEach(Array(layer.stops.enumerated()), id: \.element.id) { index, candidate in
+                            Text("Stop \(index + 1) · \(DesignStyleNumberText.string(candidate.position * 100))%")
+                                .tag(candidate.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .accessibilityIdentifier(prefix + ".selection")
+                    Button { colorRequest = UUID() } label: { Image(systemName: "paintpalette") }
+                        .accessibilityLabel("Choose Selected Stop Color")
+                        .accessibilityIdentifier(prefix + ".chooseColor")
+                    Spacer(minLength: 0)
+                    Button { addStop() } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("Add Stop")
+                        .accessibilityIdentifier(prefix + ".addStop")
+                        .disabled(GradientAuthoringInsertion.stop(in: layer) == nil)
+                    Button {
+                        _ = state.commitDesignFillLayer(.removeStop(layer.id, stop.id), operation: "remove gradient stop")
+                    } label: { Image(systemName: "minus") }
+                        .accessibilityLabel("Remove selected stop")
+                        .accessibilityIdentifier(prefix + ".removeStop")
+                        .disabled(layer.stops.count <= 2)
+                        .help(layer.stops.count <= 2 ? "Keep at least two stops." : "Remove the selected stop.")
+                }
+                .controlSize(.small)
+                DisclosureGroup("Stop Details", isExpanded: $detailsShown) {
+                    stopDetails(stop).id(stop.id)
+                }
+                .disclosureGroupStyle(SiteForgeInspectorDisclosureStyle(identifier: prefix + ".details"))
+            }
+            HStack(spacing: 6) {
                 Text("Direction").font(.caption)
-                Image(systemName: "arrow.right").rotationEffect(.degrees(layer.normalizedAngleDegrees ?? 0))
-                    .frame(width: 24, height: 24).accessibilityHidden(true)
-                GradientNumberField(state: state, value: layer.normalizedAngleDegrees ?? 0, label: "Gradient direction", identifier: prefix + ".angle", percentage: false) { value in
+                GradientNumberField(state: state, value: layer.normalizedAngleDegrees ?? 0, label: "Gradient direction",
+                                    identifier: prefix + ".angle", percentage: false) { value in
                     state.commitDesignFillLayer(.setGradientAngle(layer.id, value), operation: "gradient direction", provenance: .keyboard)
                 }
                 Text("°").font(.caption)
             }
         }
         .disabled(!layer.isEnabled)
-        .onExitCommand { cancelDrag() }
-        .onDisappear { cancelDrag() }
-        .onChange(of: state.responsiveInspectorEditContext) { _, _ in cancelDrag() }
     }
-    private func cancelDrag() {
-        state.cancelDesignStylePreview(owner: dragOwner); draggedPosition = nil; dragContext = nil
-        if dragging { dragCancelled = true }
+
+    private func addStop() {
+        guard let stop = GradientAuthoringInsertion.stop(in: layer),
+              state.commitDesignFillLayer(.addStop(layer.id, stop, at: layer.stops.count),
+                                          operation: "add gradient stop") else { return }
+        selectedID = stop.id
+    }
+
+    private func stopDetails(_ stop: CanonicalGradientStop) -> some View {
+        let index = layer.stops.firstIndex { $0.id == stop.id } ?? 0
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Position").font(.caption)
+                GradientNumberField(state: state, value: stop.position * 100, label: "Selected stop position",
+                                    identifier: prefix + ".position", percentage: true) { value in
+                    state.commitDesignFillLayer(.setStop(layer.id, stop.id, position: value / 100, color: stop.color),
+                                               operation: "gradient stop position", provenance: .keyboard)
+                }
+                Text("%").font(.caption)
+            }
+            DesignColorEditor(state: state, color: stop.color, isEnabled: layer.isEnabled,
+                label: "Selected gradient stop", identifier: prefix + ".color", compactDetails: true,
+                edit: { .fill(.setStop(layer.id, stop.id, position: stop.position, color: $0)) })
+            HStack {
+                Button("Move Earlier") { reorder(stop, to: index - 1) }
+                    .disabled(index == 0)
+                    .accessibilityIdentifier(prefix + ".earlier")
+                Button("Move Later") { reorder(stop, to: index + 1) }
+                    .disabled(index == layer.stops.count - 1)
+                    .accessibilityIdentifier(prefix + ".later")
+            }
+            .controlSize(.small)
+            .help("Stop order controls which color comes first at a shared position.")
+        }
+    }
+
+    private func reorder(_ stop: CanonicalGradientStop, to index: Int) {
+        _ = state.commitDesignFillLayer(.reorderStop(layer.id, stop.id, to: index), operation: "reorder gradient stop")
     }
 }
 
@@ -452,33 +482,335 @@ private final class NativeGradientFunction: Sendable {
 }
 
 private struct NativeGradientRamp: NSViewRepresentable {
-    let stops: [CanonicalGradientStop]
-    func makeNSView(context: Context) -> NativeGradientRampView { NativeGradientRampView() }
+    let state: WorkspaceShellState
+    let layer: CanonicalFillLayer
+    let selectedID: GradientStopID?
+    let prefix: String
+    let colorRequest: UUID?
+    let select: (GradientStopID) -> Void
+
+    func makeNSView(context: Context) -> NativeGradientRampView { NativeGradientRampView(frame: .zero) }
+
     func updateNSView(_ view: NativeGradientRampView, context: Context) {
-        view.fill = .init(id: view.layerID, kind: .linearGradient, isEnabled: true, rgba: nil, angleDegrees: 0,
-            stops: stops.map { .init(id: $0.id.rawValue, position: $0.position,
-                rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha]) })
-        view.needsDisplay = true
+        view.update(state: state, layer: layer, selectedID: selectedID, prefix: prefix, select: select)
+        view.handleColorRequest(colorRequest)
+    }
+
+    static func dismantleNSView(_ view: NativeGradientRampView, coordinator: ()) {
+        view.tearDown()
     }
 }
 
+/// The mouse and Colors panel share one live edit, bound to the original
+/// stop identity and document context for the duration of the interaction.
 private final class NativeGradientRampView: NSView {
-    let layerID = UUID()
-    var fill: CanvasAuthoredFillLayer?
+    private struct Edit {
+        let owner = UUID()
+        let stop: CanonicalGradientStop
+        let context: ResponsiveInspectorEditContext
+        var preview: CanonicalGradientStop?
+    }
+    private struct Pointer {
+        let stopID: GradientStopID
+        let start: CGPoint
+        let trackWidth: CGFloat
+        var moved = false
+    }
+    private weak var state: WorkspaceShellState?
+    private var fillLayer: CanonicalFillLayer?
+    private var selectedID: GradientStopID?
+    private var buttons: [GradientStopID: NativeGradientStopButton] = [:]
+    private var prefix = ""
+    private var select: ((GradientStopID) -> Void)?
+    private var pointer: Pointer?
+    private var edit: Edit?
+    private var handledColorRequest: UUID?
+    private var subscriptions: Set<AnyCancellable> = []
+    private let well = AccessibleDesignColorWell(frame: .zero)
+    private lazy var panelCoordinator = NativeDesignColorWell.Coordinator { [weak self] color in
+        guard let self, let edit = self.edit else { return }
+        self.preview(position: edit.stop.position, color: color)
+    }
+    private var track: CGRect { CGRect(x: 12, y: 6, width: max(1, bounds.width - 24), height: 21) }
     override var isFlipped: Bool { true }
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
-        context.saveGState(); defer { context.restoreGState() }
-        context.addPath(CGPath(roundedRect: bounds, cornerWidth: 4, cornerHeight: 4, transform: nil)); context.clip()
-        NSColor.controlBackgroundColor.setFill(); bounds.fill()
-        NSColor.quaternaryLabelColor.setFill()
-        for y in stride(from: 0.0, to: bounds.height, by: 6) {
-            for x in stride(from: 0.0, to: bounds.width, by: 6) where (Int(x / 6) + Int(y / 6)).isMultiple(of: 2) {
-                NSRect(x: x, y: y, width: 6, height: 6).fill()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        well.supportsAlpha = true
+        well.setAccessibilityElement(false)
+        well.target = panelCoordinator
+        well.action = #selector(NativeDesignColorWell.Coordinator.colorChanged(_:))
+        panelCoordinator.onEnd = { [weak self] in self?.finish() }
+        panelCoordinator.onCancel = { [weak self] in self?.cancelEdit() }
+        addSubview(well)
+        panelCoordinator.attach(well)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    func update(state: WorkspaceShellState, layer: CanonicalFillLayer, selectedID: GradientStopID?,
+                prefix: String, select: @escaping (GradientStopID) -> Void) {
+        if let edit, edit.context != state.responsiveInspectorEditContext || self.fillLayer?.id != layer.id ||
+            selectedID != edit.stop.id || !layer.isEnabled {
+            cancelInteraction()
+        }
+        if self.state !== state {
+            subscriptions.removeAll()
+            state.editCommitRequests.sink { [weak self] request in
+                guard request.isAccepted, let self, let edit = self.edit else { return }
+                if request.action == .context {
+                    self.cancelInteraction()
+                } else if request.requiresCleanEditors, edit.preview != nil {
+                    request.reject()
+                } else {
+                    self.finish()
+                    self.panelCoordinator.cancelPanelInteraction()
+                }
+            }.store(in: &subscriptions)
+            state.designStyleCancellation.sink { [weak self] in self?.cancelInteraction() }
+                .store(in: &subscriptions)
+        }
+        self.state = state; self.fillLayer = layer; self.selectedID = selectedID
+        self.prefix = prefix; self.select = select
+        let ids = Set(layer.stops.map(\.id))
+        for id in Array(buttons.keys) where !ids.contains(id) {
+            buttons.removeValue(forKey: id)?.removeFromSuperview()
+        }
+        for stop in layer.stops where buttons[stop.id] == nil {
+            let button = NativeGradientStopButton(id: stop.id, ramp: self)
+            buttons[stop.id] = button
+            addSubview(button)
+        }
+        refresh()
+    }
+
+    private var presentedStops: [CanonicalGradientStop] {
+        (fillLayer?.stops ?? []).map { stop in edit?.preview?.id == stop.id ? edit?.preview ?? stop : stop }
+    }
+
+    private func refresh() {
+        let stops = presentedStops
+        for (index, stop) in stops.enumerated() {
+            guard let button = buttons[stop.id] else { continue }
+            button.isEnabled = fillLayer?.isEnabled == true
+            button.stopColor = stop.color
+            button.isSelectedStop = selectedID == stop.id
+            button.setAccessibilityIdentifier(prefix + ".stop." + stop.id.description)
+            button.setAccessibilityLabel("Gradient stop \(index + 1)")
+            button.setAccessibilityHelp("Press to open Colors. Drag to reposition. Use the stop menu to choose overlapping stops.")
+            button.details = "\(DesignStyleNumberText.string(stop.position * 100)) percent, \(stop.color.hexadecimalRGBA)" +
+                (button.isSelectedStop ? ", selected" : "")
+            button.needsDisplay = true
+        }
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        fillLayer?.stops.compactMap { buttons[$0.id] }
+    }
+
+    override func layout() {
+        super.layout()
+        // Keep the authored X coordinate even for hard stops. The stop
+        // menu can reach every identity when more than two share a position.
+        for (position, stops) in Dictionary(grouping: presentedStops, by: \.position) {
+            let bottom = stops.first { $0.id == selectedID }?.id ?? stops[0].id
+            for stop in stops {
+                let centerY = stop.id == bottom ? track.maxY : track.maxY - 14
+                buttons[stop.id]?.frame = CGRect(x: track.minX + position * track.width - 11,
+                                                 y: centerY - 11, width: 22, height: 22)
             }
         }
-        if let fill { NativeAuthoredFillPainter.draw(fill, in: bounds, context: context) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let layer = fillLayer, let context = NSGraphicsContext.current?.cgContext else { return }
+        let rect = track
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.addPath(CGPath(roundedRect: rect, cornerWidth: 4, cornerHeight: 4, transform: nil))
+        context.clip()
+        NSColor.controlBackgroundColor.setFill()
+        rect.fill()
+        NSColor.quaternaryLabelColor.setFill()
+        for y in stride(from: 0.0, to: rect.height, by: 6) {
+            for x in stride(from: 0.0, to: rect.width, by: 6) where (Int(x / 6) + Int(y / 6)).isMultiple(of: 2) {
+                NSRect(x: rect.minX + x, y: rect.minY + y, width: 6, height: 6).fill()
+            }
+        }
+        let fill = CanvasAuthoredFillLayer(id: layer.id.rawValue, kind: .linearGradient, isEnabled: true,
+            rgba: nil, angleDegrees: 0, stops: presentedStops.map { .init(id: $0.id.rawValue, position: $0.position,
+                rgba: [$0.color.red, $0.color.green, $0.color.blue, $0.color.alpha]) })
+        NativeAuthoredFillPainter.draw(fill, in: rect, context: context)
+    }
+
+    func beginPointer(_ event: NSEvent, stopID: GradientStopID) {
+        cancelInteraction()
+        pointer = Pointer(stopID: stopID, start: convert(event.locationInWindow, from: nil), trackWidth: track.width)
+    }
+
+    func movePointer(_ event: NSEvent) {
+        guard var tracking = pointer else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let delta = point.x - tracking.start.x
+        if !tracking.moved {
+            guard hypot(delta, point.y - tracking.start.y) >= 3 else { return }
+            tracking.moved = true
+            pointer = tracking
+            guard begin(tracking.stopID) else { return }
+        }
+        guard let edit else { return }
+        preview(position: min(1, max(0, edit.stop.position + delta / tracking.trackWidth)), color: edit.stop.color)
+    }
+
+    func endPointer() {
+        guard let tracking = pointer else { return }
+        pointer = nil
+        if tracking.moved { finish() }
+        else { openColors(for: tracking.stopID) }
+    }
+
+    func handleColorRequest(_ request: UUID?) {
+        guard let request, handledColorRequest != request else { return }
+        handledColorRequest = request
+        guard let selectedID, let context = state?.responsiveInspectorEditContext else { return }
+        // Wait until the SwiftUI update finishes before opening the AppKit panel.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil, self.handledColorRequest == request,
+                  self.selectedID == selectedID, self.state?.responsiveInspectorEditContext == context else { return }
+            self.openColors(for: selectedID)
+        }
+    }
+
+    func openColors(for id: GradientStopID) {
+        cancelInteraction()
+        guard begin(id), let edit else { return }
+        let color = edit.stop.color
+        panelCoordinator.isSynchronizing = true
+        well.color = NSColor(srgbRed: color.red, green: color.green, blue: color.blue, alpha: color.alpha)
+        _ = well.accessibilityPerformPress()
+        panelCoordinator.isSynchronizing = false
+    }
+
+    private func begin(_ id: GradientStopID) -> Bool {
+        guard let state, fillLayer?.isEnabled == true,
+              let stop = fillLayer?.stops.first(where: { $0.id == id }) else { return false }
+        let context = state.responsiveInspectorEditContext
+        guard state.prepareForWorkspaceAction(.context), state.responsiveInspectorEditContext == context else { return false }
+        edit = Edit(stop: stop, context: context)
+        selectedID = id
+        select?(id)
+        refresh()
+        return true
+    }
+
+    private func preview(position: Double, color: CanonicalSolidColor) {
+        guard var edit, let layer = fillLayer, let state, state.responsiveInspectorEditContext == edit.context else { return }
+        let stop = CanonicalGradientStop(id: edit.stop.id, position: position, color: color)
+        if stop == edit.stop {
+            state.cancelDesignStylePreview(owner: edit.owner)
+            edit.preview = nil
+        } else {
+            guard state.previewDesignStyle(.fill(.setStop(layer.id, stop.id, position: position, color: color)),
+                                           owner: edit.owner, expectedContext: edit.context) else { return }
+            edit.preview = stop
+        }
+        self.edit = edit
+        refresh()
+    }
+
+    private func finish() {
+        guard let edit else { return }
+        self.edit = nil
+        _ = state?.finishDesignStylePreview(owner: edit.owner)
+        refresh()
+    }
+
+    private func cancelEdit() {
+        guard let edit else { return }
+        self.edit = nil
+        state?.cancelDesignStylePreview(owner: edit.owner)
+        refresh()
+    }
+
+    func cancelInteraction() {
+        pointer = nil
+        panelCoordinator.cancelPanelInteraction()
+        cancelEdit()
+    }
+
+    func tearDown() {
+        cancelInteraction()
+        panelCoordinator.detach()
+        subscriptions.removeAll()
+        handledColorRequest = nil
+    }
+}
+
+private final class NativeGradientStopButton: NSButton {
+    let stopID: GradientStopID
+    private weak var ramp: NativeGradientRampView?
+    var stopColor = CanonicalSolidColor.legacySurface
+    var details = ""
+    var isSelectedStop = false
+
+    init(id: GradientStopID, ramp: NativeGradientRampView) {
+        stopID = id
+        self.ramp = ramp
+        super.init(frame: .zero)
+        isBordered = false
+        focusRingType = .none
+        target = self
+        action = #selector(open)
+    }
+
+    required init?(coder: NSCoder) { nil }
+    override var acceptsFirstResponder: Bool { isEnabled }
+    override func accessibilityValue() -> Any? { details }
+
+    override func becomeFirstResponder() -> Bool {
+        defer { needsDisplay = true }
+        return super.becomeFirstResponder()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        defer { needsDisplay = true }
+        return super.resignFirstResponder()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        window?.makeFirstResponder(self)
+        ramp?.beginPointer(event, stopID: stopID)
+    }
+    override func mouseDragged(with event: NSEvent) { ramp?.movePointer(event) }
+    override func mouseUp(with event: NSEvent) { ramp?.endPointer() }
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 36, 49, 76: open()
+        case 53: ramp?.cancelInteraction()
+        default: super.keyDown(with: event)
+        }
+    }
+    @objc private func open() {
+        if isEnabled { ramp?.openColors(for: stopID) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let focus = window?.firstResponder === self
+        let outer = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
+        (focus ? NSColor.keyboardFocusIndicatorColor : isSelectedStop ? NSColor.controlAccentColor : NSColor.black).setFill()
+        outer.fill()
+        let separator = NSBezierPath(ovalIn: bounds.insetBy(dx: 3, dy: 3))
+        NSColor.white.setFill()
+        separator.fill()
+        let color = NSColor(srgbRed: stopColor.red, green: stopColor.green, blue: stopColor.blue, alpha: stopColor.alpha)
+        let inner = NSBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4))
+        NSColor.controlBackgroundColor.setFill()
+        inner.fill()
+        (isEnabled ? color : color.withAlphaComponent(stopColor.alpha * 0.5)).setFill()
+        inner.fill()
     }
 }
 

@@ -1,5 +1,36 @@
 # Codex Work Queue
 
+## DONE — One gradient ramp per fill
+
+SF-0508-002/005/006 and SF-0702-002/005/006. Replace the gradient fill's
+separate persistent control rows with one colored ramp and a draggable color
+dot at each stop. Clicking or keyboard-activating a dot opens its color
+picker. Keep precise position, hex, alpha and direction in compact detail
+controls. Reuse stable stop IDs and the existing preview, cancel and commit
+paths. Verify endpoints and overlapping stops, color selection, add/remove,
+drag cancellation, undo/redo and native reachability at 1,100 points. Reuse
+the existing painted ramp and verify the gradient still renders consistently
+in the canvas and Preview. Refresh the owner-local app after verification.
+Plan: keep the active layer's painted ramp as the editor, route its native
+stop buttons through one Colors panel owner, and move exact inputs and stop
+ordering into the selected stop's details. Replay the native style and
+minimum-width journeys before the full pre-commit gate.
+Focused native acceptance passed 3/3 in `20261127-234016-1b7181ad`.
+Full Verification `20261127-235410-4d147154` passed repository and
+build checks. Regular testing finished 1,148/1,150 with two legacy
+website metadata assertions expecting the old escape output. The
+181-case UI stage was interrupted at the owner's request after 15
+outcomes. The owner authorized a separate test-only correction for
+SF-1207-003/004/006 and exact failed-selector replays, superseding the
+full gate for this delivery. Plan: update the three stale escaped HTML
+expectations, replay both failed regular methods and all four failed UI
+methods, inspect retained results, then install and use GitHub Desktop
+for the two commits and push. Both regular failures passed in
+`20261128-002056-9a8e3287`. Three UI failures passed in
+`20261128-002320-2df2e3d1`, and the corrected Aurora case passed in
+`20261128-004044-c93248cf`. SiteForge `26.11.28` is installed with
+strictly verified app and helper signatures and the replay fingerprint. [Evidence](evidence/SF-FAST-STYLE-AUTHORING.md#one-gradient-ramp-per-fill).
+
 ## IN PROGRESS — Stabilize the current candidate
 
 This is the active queue. The older queue and prompt batches below are

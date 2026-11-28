@@ -289,7 +289,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         }
         let angles = application.textFields.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
-            "inspector.design.layers.", ".angle"))
+            "inspector.design.ramp.", ".angle"))
         if angles.count == 0 {
             let deletes = application.buttons.matching(NSPredicate(
                 format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
@@ -303,54 +303,23 @@ final class SiteForgeLaunchTests: XCTestCase {
         let angle = angles.firstMatch
         replaceStructuralLayoutField(angle, with: "45", in: application)
         let prefix = angle.identifier.replacingOccurrences(of: ".angle", with: "")
-        let positions = application.textFields.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", prefix + ".stop.", ".position"))
-        if positions.count == 2 {
+        let stops = gradientStopButtons(prefix, in: application)
+        if stops.count == 2 {
             revealStructuralLayoutControl(application.buttons[prefix + ".addStop"], in: application).click()
         }
-        XCTAssertEqual(positions.count, 3)
-        let wells = application.colorWells.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", prefix + ".stop.", ".color"))
-        XCTAssertEqual(wells.count, 3)
-        let panel = application.windows.matching(NSPredicate(format: "title == %@", "Colors")).firstMatch
-        let stopIdentifiers = wells.allElementsBoundByIndex.map(\.identifier)
-        for identifier in stopIdentifiers {
-            let stopPrefix = String(identifier.dropLast(".color".count))
-            let position = application.textFields[stopPrefix + ".position"].value as? String ?? ""
-            let color: String
-            switch position {
-            case "0": color = "160D2B"
-            case "50": color = "6A36C8"
-            case "100": color = "C52E53"
-            default: XCTFail("Unexpected authored stop position: \(position)"); return
-            }
-            revealStructuralLayoutControl(application.colorWells[identifier], in: application).click()
-            XCTAssertTrue(panel.waitForExistence(timeout: 3))
-            panel.buttons["Color Sliders"].click()
-            if (panel.popUpButtons.firstMatch.value as? String) != "RGB Sliders" {
-                panel.popUpButtons.firstMatch.click()
-                application.menuItems["RGB Sliders"].click()
-            }
-            let colors = XCTAttachment(string: panel.debugDescription)
-            colors.name = "Dark Flow standard RGB Colors panel controls"; colors.lifetime = .keepAlways; add(colors)
-            let hexadecimal = panel.textFields.matching(NSPredicate(format: "value MATCHES %@", "[0-9A-Fa-f]{6}")).firstMatch
-            XCTAssertTrue(hexadecimal.waitForExistence(timeout: 3), panel.debugDescription)
-            replaceText(in: hexadecimal, with: color, application: application)
-            hexadecimal.typeKey(.return, modifierFlags: [])
+        XCTAssertEqual(stops.count, 3)
+        for (position, color) in [(0, "160D2B"), (50, "6A36C8"), (100, "C52E53")] {
+            let stop = stops.matching(NSPredicate(format: "value BEGINSWITH %@", "\(position) percent,")).firstMatch
+            let panel = try openGradientStopColors(stop, in: application)
+            try editNativeGradientStopHex(color, in: panel, application: application)
             let picker = XCTAttachment(screenshot: panel.screenshot())
             picker.name = "Dark Flow native gradient stop \(position) color"; picker.lifetime = .keepAlways; add(picker)
             panel.buttons["_XCUI:CloseWindow"].click()
             application.activate()
-            XCTAssertTrue(waitForValue(application.colorWells[identifier], containing: "#\(color)FF"))
+            XCTAssertTrue(waitForValue(stop, containing: "#\(color)FF"))
         }
-        // Preserve each real stop identity while ordering its authored rows.
-        let middle = positions.allElementsBoundByIndex.first { ($0.value as? String) == "50" }
-        let middleID = try XCTUnwrap(middle?.identifier)
-        let middleUp = application.buttons[middleID.replacingOccurrences(of: ".position", with: ".up")]
-        if (positions.element(boundBy: 1).value as? String) != "50" {
-            revealStructuralLayoutControl(middleUp, in: application).click()
-        }
-        XCTAssertEqual(positions.element(boundBy: 1).value as? String, "50")
+        XCTAssertEqual(stops.allElementsBoundByIndex.map { ($0.value as? String)?.components(separatedBy: " ").first },
+                       ["0", "50", "100"])
         saveDocumentIfModified(in: application)
         attachWindowScreenshot(application, named: "Dark Flow authored three-stop plum purple ruby gradient")
     }
@@ -3157,28 +3126,77 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(angle.waitForExistence(timeout: 5))
         let prefix = angle.identifier.replacingOccurrences(of: ".angle", with: "")
         replaceStructuralLayoutField(field(prefix + ".angle"), with: "45", in: application)
-        replaceStructuralLayoutField(field(prefix + ".color.hex"), with: "#F04020FF", in: application)
-        XCTAssertTrue(waitForValue(application.textFields[prefix + ".color.hex"], containing: "#F04020FF"))
+        let handles = gradientStopButtons(prefix, in: application)
+        XCTAssertEqual(handles.count, 2)
+        let first = application.buttons[handles.element(boundBy: 0).identifier]
+        let endpoint = application.buttons[handles.element(boundBy: 1).identifier]
+        let firstID = first.identifier
+        let originalFirst = try XCTUnwrap((first.value as? String)?.split(separator: ", ").dropFirst().first)
+        let originalEndpoint = try XCTUnwrap((endpoint.value as? String)?.split(separator: ", ").dropFirst().first)
+        let firstPanel = try openGradientStopColors(first, in: application)
+        try editNativeGradientStopHex("F04020", in: firstPanel, application: application)
+        XCTAssertTrue(waitForValue(first, containing: "#F04020CC"), "The dot must show the new RGB and preserve the original alpha during preview: \(first.value ?? "missing")")
+        firstPanel.buttons["_XCUI:CloseWindow"].click()
+        application.activate()
+        XCTAssertTrue(waitForValue(first, containing: "#F04020CC"))
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(first, containing: String(originalFirst)))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(first, containing: "#F04020CC"))
+
+        let panel = try openGradientStopColors(endpoint, in: application)
+        try editNativeGradientStopHex("10FF20", in: panel, application: application)
+        XCTAssertTrue(waitForValue(endpoint, containing: "#10FF20CC"))
+        panel.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitForNonexistence(panel, timeout: 5))
+        XCTAssertTrue(waitForValue(endpoint, containing: String(originalEndpoint)))
+        XCTAssertTrue(waitForValue(first, containing: "#F04020CC"))
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(first, containing: String(originalFirst)), "Escape leaves the previous color as the next Undo")
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(first, containing: "#F04020CC"))
+
+        revealStructuralLayoutControl(application.disclosureTriangles[prefix + ".details"], in: application).click()
+        XCTAssertTrue(waitForDisclosureExpanded(application.disclosureTriangles[prefix + ".details"]))
+        replaceStructuralLayoutField(field(prefix + ".color.hex"), with: "#2040F0FF", in: application)
+        XCTAssertTrue(waitForValue(endpoint, containing: "#2040F0FF"))
+        let addStop = application.buttons[prefix + ".addStop"]
+        revealStructuralLayoutControl(addStop, in: application).click()
+        XCTAssertEqual(handles.count, 3)
+        let position = application.textFields[prefix + ".position"]
+        XCTAssertTrue(waitForValue(position, containing: "50"))
+        let handle = try XCTUnwrap(handles.allElementsBoundByIndex.first { ($0.value as? String ?? "").hasPrefix("50 percent,") })
+        let handleID = handle.identifier
+        let cleanHandle = revealStructuralLayoutControl(application.buttons[handleID], in: application)
+        let dragStart = cleanHandle.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5))
+        dragStart.click(forDuration: 0.2, thenDragTo: dragStart.withOffset(.init(dx: 24, dy: 0)))
+        let movedPosition = try XCTUnwrap(position.value as? String)
+        XCTAssertGreaterThan(try XCTUnwrap(Double(movedPosition)), 50)
+        XCTAssertFalse(panel.exists, "A completed drag must not open Colors")
+        application.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(waitForValue(position, containing: "50"))
+        application.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForValue(position, containing: movedPosition))
+        replaceStructuralLayoutField(field(prefix + ".position"), with: "35", in: application)
+        XCTAssertTrue(waitForValue(application.buttons[handleID], containing: "35 percent,"))
+        replaceStructuralLayoutField(field(prefix + ".position"), with: "0", in: application)
+        XCTAssertTrue(waitForValue(application.buttons[handleID], containing: "0 percent,"))
+        let stopMenu = application.popUpButtons[prefix + ".selection"]
+        revealStructuralLayoutControl(stopMenu, in: application).click()
+        application.menuItems["Stop 1 · 0%"].click()
+        XCTAssertTrue(waitForValue(first, containing: "selected"))
+        let chooseColor = application.buttons[prefix + ".chooseColor"]
+        revealStructuralLayoutControl(chooseColor, in: application).click()
+        XCTAssertTrue(panel.waitForExistence(timeout: 5), "The menu and Choose Color also reach coincident stops")
+        panel.buttons["_XCUI:CloseWindow"].click()
+        application.activate()
+        revealStructuralLayoutControl(stopMenu, in: application).click()
+        application.menuItems["Stop 3 · 0%"].click()
+        XCTAssertTrue(waitForValue(application.buttons[handleID], containing: "selected"))
+        replaceStructuralLayoutField(field(prefix + ".position"), with: "35", in: application)
+        XCTAssertTrue(waitForValue(application.buttons[handleID], containing: "35 percent,"))
         let rampTree = XCTAttachment(string: redactedAccessibilityHierarchy(for: application))
         rampTree.name = "FAST-STYLE real gradient ramp accessibility"; rampTree.lifetime = .keepAlways; add(rampTree)
-        let handles = application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", prefix + ".stop."))
-        XCTAssertEqual(handles.count, 2)
-        let endpoint = handles.element(boundBy: 1)
-        _ = revealStructuralLayoutControl(endpoint, in: application); endpoint.click()
-        replaceStructuralLayoutField(field(prefix + ".color.hex"), with: "#2040F0FF", in: application)
-        let addStop = application.buttons[prefix + ".addStop"]
-        _ = revealStructuralLayoutControl(addStop, in: application); addStop.click()
-        XCTAssertEqual(handles.count, 3)
-        XCTAssertTrue(waitForValue(application.textFields[prefix + ".position"], containing: "50"))
-        let middle = handles.allElementsBoundByIndex.first { ($0.value as? String ?? "").contains("50") }
-        let handle = try XCTUnwrap(middle)
-        let before = application.textFields[prefix + ".position"].value as? String
-        let target = handle.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5)).withOffset(.init(dx: 24, dy: 0))
-        handle.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5)).click(forDuration: 0.2, thenDragTo: target)
-        XCTAssertNotEqual(application.textFields[prefix + ".position"].value as? String, before)
-        application.typeKey("z", modifierFlags: .command)
-        XCTAssertTrue(waitForValue(application.textFields[prefix + ".position"], containing: "50"))
-        replaceStructuralLayoutField(field(prefix + ".position"), with: "35", in: application)
         attachWindowScreenshot(application, named: "FAST-STYLE pass 1 native three-stop gradient and ramp")
         componentMenu("Preview", "Canvas Device Preview", in: application)
         XCTAssertTrue(application.buttons["preview.done"].waitForExistence(timeout: 5))
@@ -3210,8 +3228,9 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(reopened.waitForExistence(timeout: 5)); reopened.click()
         selectInspectorTab("Design", identifier: "design", in: application)
         XCTAssertTrue(waitForValue(application.textFields[prefix + ".angle"], containing: "45"))
-        XCTAssertEqual(application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", prefix + ".stop.")).count, 3)
-        XCTAssertTrue(waitForValue(application.textFields[prefix + ".color.hex"], containing: "#F04020FF"))
+        XCTAssertEqual(gradientStopButtons(prefix, in: application).count, 3)
+        XCTAssertTrue(waitForValue(application.buttons[firstID], containing: "#F04020CC"))
+        XCTAssertTrue(waitForValue(application.buttons[handleID], containing: "35 percent,"))
         attachWindowScreenshot(application, named: "FAST-STYLE saved gradient reopened from canonical package")
     }
 
@@ -4033,50 +4052,44 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(addSolid.isHittable && addGradient.isHittable)
         addGradient.click()
         let angle = application.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", "inspector.design.layers.", ".angle"))
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", "inspector.design.ramp.", ".angle"))
             .firstMatch
         XCTAssertTrue(angle.waitForExistence(timeout: 5))
-        XCTAssertEqual(angle.label, "Linear gradient angle")
-        replaceText(in: angle, with: "90", application: application)
-        angle.typeKey(.return, modifierFlags: [])
+        XCTAssertEqual(angle.label, "Gradient direction")
+        replaceStructuralLayoutField(angle, with: "90", in: application)
         XCTAssertTrue(waitForValue(angle, containing: "90"))
 
         let gradientPrefix = angle.identifier.replacingOccurrences(of: ".angle", with: "")
-        let stopColorWells = application.colorWells.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND identifier CONTAINS %@ AND identifier ENDSWITH %@",
-            "\(gradientPrefix).stop.", ".stop.", ".color"
-        ))
-        XCTAssertEqual(stopColorWells.count, 2)
+        let layerPrefix = gradientPrefix.replacingOccurrences(of: "inspector.design.ramp.", with: "inspector.design.layers.")
+        let stops = gradientStopButtons(gradientPrefix, in: application)
+        XCTAssertEqual(stops.count, 2)
         let inspectorScroll = application.descendants(matching: .any)["inspector.selection.scroll"]
         XCTAssertTrue(inspectorScroll.waitForExistence(timeout: 3))
         func reveal(_ element: XCUIElement) -> Bool {
             let live = revealStructuralLayoutControl(element, in: application)
             return live.exists && live.isEnabled && live.isHittable
         }
-        // A normal-height hosted display truthfully requires scrolling the
-        // Design Inspector once a gradient exposes both stop editors. Prove
-        // every real color well is reachable and pointer-operable through
-        // that production scroll surface instead of assuming a tall display.
-        let stopColorWellIdentifiers = stopColorWells.allElementsBoundByIndex.map(\.identifier)
-        for identifier in stopColorWellIdentifiers {
-            let stopColorWell = application.colorWells[identifier]
-            XCTAssertTrue(reveal(stopColorWell))
+        for id in stops.allElementsBoundByIndex.map(\.identifier) {
+            let panel = try openGradientStopColors(application.buttons[id], in: application)
+            panel.buttons["_XCUI:CloseWindow"].click()
+            application.activate()
         }
-        let stopUpButtons = application.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
-            "\(gradientPrefix).stop.", ".up"
-        ))
-        let stopDownButtons = application.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
-            "\(gradientPrefix).stop.", ".down"
-        ))
-        XCTAssertEqual(stopUpButtons.count, 2)
-        XCTAssertEqual(stopDownButtons.count, 2)
-        XCTAssertFalse(stopUpButtons.element(boundBy: 0).isEnabled)
-        XCTAssertTrue(stopDownButtons.element(boundBy: 0).isEnabled)
-        let firstStopDown = stopDownButtons.element(boundBy: 0)
-        XCTAssertTrue(reveal(firstStopDown))
-        firstStopDown.click()
+        let first = try XCTUnwrap(stops.allElementsBoundByIndex.first)
+        let id = first.identifier
+        let panel = try openGradientStopColors(first, in: application)
+        panel.buttons["_XCUI:CloseWindow"].click()
+        application.activate()
+        let details = application.disclosureTriangles[gradientPrefix + ".details"]
+        revealStructuralLayoutControl(details, in: application).click()
+        XCTAssertTrue(waitForDisclosureExpanded(details))
+        let earlier = application.buttons[gradientPrefix + ".earlier"]
+        let later = application.buttons[gradientPrefix + ".later"]
+        XCTAssertFalse(earlier.isEnabled)
+        XCTAssertTrue(reveal(later))
+        later.click()
+        XCTAssertEqual(application.buttons[id].label, "Gradient stop 2")
+        XCTAssertFalse(later.isEnabled)
+        XCTAssertTrue(earlier.isEnabled)
 
         let enabled = application.checkBoxes.matching(NSPredicate(format: "identifier CONTAINS %@", ".enabled"))
             .allElementsBoundByIndex.last ?? application.checkBoxes.firstMatch
@@ -4084,7 +4097,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(enabled.isEnabled)
         XCTAssertTrue(reveal(enabled))
         enabled.click()
-        let deleteIdentifier = angle.identifier.replacingOccurrences(of: ".angle", with: ".delete")
+        let deleteIdentifier = layerPrefix + ".delete"
         let delete = revealStructuralLayoutControl(application.buttons[deleteIdentifier], in: application)
         XCTAssertTrue(delete.exists && waitForHittable(delete, in: application))
         delete.click()
@@ -7156,55 +7169,40 @@ final class SiteForgeLaunchTests: XCTestCase {
         XCTAssertTrue(waitForHittable(addGradient, in: application))
         assertElement(addGradient, isContainedIn: inspectorScroll)
         addGradient.click()
-        // The quick ramp and the layer list share the model but have separate
-        // controls. The six stop rows and their actions belong to the list.
         let angle = application.textFields
             .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
-                                  "inspector.design.layers.", ".angle"))
+                                  "inspector.design.ramp.", ".angle"))
             .firstMatch
         XCTAssertTrue(angle.waitForExistence(timeout: 5))
         let gradientPrefix = angle.identifier.replacingOccurrences(of: ".angle", with: "")
-        let addStopIdentifier = "\(gradientPrefix).addStop"
         for _ in 0..<4 {
-            let addStop = revealStructuralLayoutControl(application.buttons[addStopIdentifier], in: application)
+            let addStop = revealStructuralLayoutControl(application.buttons[gradientPrefix + ".addStop"], in: application)
             XCTAssertTrue(waitForHittable(addStop, in: application))
             addStop.click()
         }
-
-        let removeStops = application.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
-            "\(gradientPrefix).stop.", ".remove"
-        ))
-        XCTAssertEqual(removeStops.count, 6)
-        let lastRemove = removeStops.element(boundBy: 5)
-        for _ in 0..<8 {
-            if lastRemove.isHittable { break }
-            inspectorScroll.scroll(byDeltaX: 0, deltaY: -180)
+        let stops = gradientStopButtons(gradientPrefix, in: application)
+        XCTAssertEqual(stops.count, 6)
+        for id in stops.allElementsBoundByIndex.map(\.identifier) {
+            let dot = revealStructuralLayoutControl(application.buttons[id], in: application)
+            XCTAssertTrue(waitForHittable(dot, in: application))
+            assertElement(dot, isContainedIn: inspectorScroll)
         }
-        XCTAssertTrue(waitForHittable(lastRemove, in: application))
-        let lastStopPrefix = lastRemove.identifier.replacingOccurrences(of: ".remove", with: "")
-        let lastRow = application.descendants(matching: .any)["\(lastStopPrefix).row"]
-        XCTAssertTrue(lastRow.waitForExistence(timeout: 3))
-        // A hittable remove button can still belong to a partly clipped row.
-        // Reveal the complete compound row before asserting every subcontrol.
-        for _ in 0..<8 {
-            if inspectorScroll.frame.insetBy(dx: -1, dy: -1).contains(lastRow.frame) { break }
-            if lastRow.frame.maxY > inspectorScroll.frame.maxY {
-                inspectorScroll.scroll(byDeltaX: 0, deltaY: -100)
-            } else if lastRow.frame.minY < inspectorScroll.frame.minY {
-                inspectorScroll.scroll(byDeltaX: 0, deltaY: 100)
-            } else { break }
+        let details = application.disclosureTriangles[gradientPrefix + ".details"]
+        revealStructuralLayoutControl(details, in: application).click()
+        XCTAssertTrue(waitForDisclosureExpanded(details))
+        for (suffix, type) in [
+            (".position", XCUIElement.ElementType.textField), (".color.hex", .textField),
+            (".color.alpha", .textField), (".earlier", .button), (".removeStop", .button),
+        ] {
+            let control = revealStructuralLayoutControl(
+                application.descendants(matching: type)[gradientPrefix + suffix], in: application)
+            assertElement(control, isContainedIn: inspectorScroll, suffix)
         }
-        assertElement(lastRow, isContainedIn: inspectorScroll)
-        let stopLabel = application.staticTexts["Stop 6"]
-        XCTAssertTrue(stopLabel.exists)
-        XCTAssertLessThanOrEqual(stopLabel.frame.height, 20, "The standard caption must remain on one readable line.")
-        assertElement(stopLabel, isContainedIn: lastRow)
-        for suffix in [".position", ".color", ".up", ".down", ".remove"] {
-            let control = application.descendants(matching: .any)["\(lastStopPrefix)\(suffix)"]
-            XCTAssertTrue(control.exists, suffix)
-            assertElement(control, isContainedIn: lastRow, suffix)
-        }
+        let hex = application.textFields[gradientPrefix + ".color.hex"]
+        replaceStructuralLayoutField(hex, with: "#F04697D9", in: application)
+        XCTAssertTrue(waitForValue(hex, containing: "#F04697D9"))
+        revealStructuralLayoutControl(details, in: application).click()
+        _ = revealStructuralLayoutControl(stops.firstMatch, in: application)
         attachWindowScreenshot(application, named: "minimum viewport and scrollable fill Inspector")
     }
 
@@ -12478,6 +12476,32 @@ final class SiteForgeLaunchTests: XCTestCase {
         ) == .completed
     }
 
+    private func gradientStopButtons(_ prefix: String, in application: XCUIApplication) -> XCUIElementQuery {
+        application.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", prefix + ".stop."))
+    }
+
+    private func openGradientStopColors(_ dot: XCUIElement, in application: XCUIApplication) throws -> XCUIElement {
+        let panel = application.windows.matching(NSPredicate(format: "title == %@", "Colors")).firstMatch
+        let live = revealStructuralLayoutControl(dot, in: application)
+        live.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(panel.waitForExistence(timeout: 5), "Clicking the stop must directly open macOS Colors")
+        return try XCTUnwrap(panel.exists ? panel : nil)
+    }
+
+    private func editNativeGradientStopHex(_ hex: String, in panel: XCUIElement, application: XCUIApplication) throws {
+        panel.buttons["Color Sliders"].click()
+        let sliders = panel.popUpButtons.firstMatch
+        if (sliders.value as? String) != "RGB Sliders" {
+            sliders.click()
+            application.menuItems["RGB Sliders"].click()
+        }
+        let field = panel.textFields.matching(NSPredicate(format: "value MATCHES %@", "[0-9A-Fa-f]{6}")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3), panel.debugDescription)
+        let existing = try XCTUnwrap(field.exists ? field : nil)
+        replaceText(in: existing, with: hex, application: application)
+        existing.typeKey(.return, modifierFlags: [])
+    }
+
     private func waitForDisclosureExpanded(_ element: XCUIElement) -> Bool {
         let predicate = NSPredicate { object, _ in
             guard let control = object as? XCUIElement, control.exists else { return false }
@@ -13399,7 +13423,7 @@ final class SiteForgeLaunchTests: XCTestCase {
         saveDocumentIfModified(in: application)
         selectInspectorTab("Design", identifier: "design", in: application)
         let angles = application.textFields.matching(NSPredicate(format:
-            "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", "inspector.design.layers.", ".angle"))
+            "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", "inspector.design.ramp.", ".angle"))
         XCTAssertEqual(angles.count, 1)
         let angleID = angles.firstMatch.identifier
         application.typeKey("w", modifierFlags: .command)
@@ -13415,14 +13439,14 @@ final class SiteForgeLaunchTests: XCTestCase {
         selectInspectorTab("Design", identifier: "design", in: application)
         XCTAssertTrue(application.textFields[angleID].exists)
         XCTAssertEqual(application.textFields[angleID].value as? String, "45")
-        let prefix = angleID.replacingOccurrences(of: ".angle", with: ".stop.")
-        let positions = application.textFields.matching(NSPredicate(format:
-            "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", prefix, ".position"))
-        XCTAssertEqual(positions.allElementsBoundByIndex.map { $0.value as? String }, ["0", "50", "100"])
-        let wells = application.colorWells.matching(NSPredicate(format:
-            "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", prefix, ".color"))
-        XCTAssertEqual(wells.allElementsBoundByIndex.map { $0.value as? String }, ["#160D2BFF", "#6A36C8FF", "#C52E53FF"])
-        _ = revealStructuralLayoutControl(positions.element(boundBy: 2), in: application)
+        let prefix = angleID.replacingOccurrences(of: ".angle", with: "")
+        let stops = gradientStopButtons(prefix, in: application)
+        XCTAssertEqual(stops.count, 3)
+        for (position, color) in [(0, "#160D2BFF"), (50, "#6A36C8FF"), (100, "#C52E53FF")] {
+            let stop = stops.matching(NSPredicate(format: "value BEGINSWITH %@", "\(position) percent,")).firstMatch
+            XCTAssertTrue(waitForValue(stop, containing: color))
+            _ = revealStructuralLayoutControl(stop, in: application)
+        }
         attachWindowScreenshot(application, named: "Dark Flow reopened editable three-stop native gradient")
         application.buttons["toolbar.preview"].click()
         let link = application.staticTexts["preview.website.url"]

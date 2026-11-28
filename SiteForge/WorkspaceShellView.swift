@@ -11090,6 +11090,7 @@ private struct FormattingTransferControls: View {
 
 private struct DesignInspectorFieldsView: View {
     @ObservedObject var state: WorkspaceShellState
+    @State private var activeFillID: FillLayerID?
     @FocusState private var hexFocused: Bool
     @FocusState private var opacityFocused: Bool
     @FocusState private var borderWidthFocused: Bool
@@ -11211,7 +11212,7 @@ private struct DesignInspectorFieldsView: View {
             let fill = state.designInspectorFillValue()
             let fillIsApplicable = state.canEditDesignSolidFill
             let fillIsEditable = fillIsApplicable && !state.hasBoundColorTokenSelection
-            FastFillInspectorView(state: state)
+            FastFillInspectorView(state: state, activeID: $activeFillID)
                 .id(state.documentSession.document.id.description + (state.effectiveSelectedPageID?.description ?? "") + state.selectionState.orderedIDs.map(\.description).joined())
             if !state.isInspectingPageBackground {
                 VStack(alignment: .leading, spacing: SiteForgeVisualSystem.controlInset) { boxStyleControls }
@@ -11288,7 +11289,7 @@ private struct DesignInspectorFieldsView: View {
             }
             imageFillControls
             if !usesTextColorContext { colorTokenControls.modifier(SiteForgeInspectorSectionSurface()) }
-            FillLayerListInspectorView(state: state)
+            FillLayerListInspectorView(state: state, activeFillID: $activeFillID)
                 .disabled(state.hasBoundColorTokenSelection)
             if !state.isInspectingPageBackground {
             AdvancedStyleInspectorView(state: state).modifier(SiteForgeInspectorSectionSurface())
@@ -12783,12 +12784,7 @@ struct NativeDesignColorWell: NSViewRepresentable {
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self, weak well] event in
                 guard let well, well.isActive, event.keyCode == 53,
                       NSApp.keyWindow === NSColorPanel.shared else { return event }
-                self?.onCancel?()
-                self?.stopPanelVisibilityMonitor()
-                well.onPanelDeactivated = nil
-                well.deactivate()
-                NSColorPanel.shared.orderOut(nil)
-                self?.attachDeactivation(well)
+                self?.cancelPanelInteraction()
                 return nil
             }
             attachDeactivation(well)
@@ -12823,6 +12819,16 @@ struct NativeDesignColorWell: NSViewRepresentable {
             RunLoop.main.add(timer, forMode: .common)
         }
         private func stopPanelVisibilityMonitor() { panelVisibilityTimer?.invalidate(); panelVisibilityTimer = nil }
+
+        func cancelPanelInteraction() {
+            guard let well = attachedWell, well.isActive else { return }
+            onCancel?()
+            stopPanelVisibilityMonitor()
+            well.onPanelDeactivated = nil
+            well.deactivate()
+            NSColorPanel.shared.orderOut(nil)
+            attachDeactivation(well)
+        }
 
         func detach() {
             stopPanelVisibilityMonitor(); attachedWell?.onPanelActivated = nil; attachedWell = nil

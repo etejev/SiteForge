@@ -5,6 +5,94 @@ Bounded SF-0506-001–008, SF-0508-001–008, SF-0701-001–008;
 SF-0305/SF-0306 history/persistence and SF-1204-003/004 output where exercised.
 No module completion or final delivery is claimed yet.
 
+## One gradient ramp per fill
+
+Bounded SF-0508-002/005/006 and SF-0702-002/005/006. The existing native
+paint path supplies the active-layer ramp. Stop dots use the existing
+Colors coordinator and command registry. One pointer gesture or Colors
+interaction owns one stable stop ID and one history transaction. The
+layer list keeps stacking, visibility, and deletion. Stop Details contains
+exact position, hex, alpha, and hard-stop order. Selection and Colors
+remain reachable through the stop menu when handles overlap.
+
+The native style, six-stop minimum-width, and ordered-fill journeys now
+exercise the shared ramp. The first three-case native run
+`20261127-233007-e12da30c` opened Colors through both endpoint dots and
+reported the changed RGB live. Its three assertions used the wrong
+disclosure role or expected the seeded translucent stops to become opaque.
+The replay uses the observed disclosure triangle and checks that choosing
+RGB preserves the seeded alpha. The corrected native replay
+`20261127-234016-1b7181ad` runs on fingerprint
+`2a2e6f6157ab6b2e79a29d64db94834cb74657801dea67b562b02afbbec24b6c`.
+All three cases passed. Ordered fill layers exercised both endpoints and
+selected-stop reordering. The fast-style journey exercised live RGB with
+alpha preservation, Color panel Escape and exact history, drag without
+opening Colors, coincident stop selection, exact placement, reopen,
+native Preview and Safari. The minimum-width journey exercised six dots
+and complete control frames in the 1,100-point window. The retained
+captures are under `.codex-loop/fast-style/gradient-ramp`, including
+`compact-six-stop-ramp.png`, `three-stop-ramp.png`, `native-preview.png`,
+and `safari-preview.png`. Inspection confirmed centered dots and a
+visible selected ring. At the minimum width, the collapsed stop menu
+shortens its label; the complete position is available in the dot's
+accessibility value and Stop Details.
+
+Full Verification started from native Testing as
+`20261127-235410-4d147154` with no explicit selectors, on the same source
+and harness fingerprint. The frozen source is the `source` directory next
+to the ignored test-candidate app recorded in
+`.codex-loop/review-integrity/gradient-ramp-test-app.txt`. Keep it frozen
+until the collector completes. Installation and the requested GitHub
+Desktop commit and push await the passing full receipt.
+
+Repository and build stages passed. Regular testing finished at 1,148
+passed and two failed out of 1,150. The failing selectors are
+`PersistedHistoryTests/testSiteSetupRouteRenamePreservesPageMetadataAndLinkIntentInOutput`
+and `PersistedHistoryTests/testWebsiteMetadataOutputUsesEscapedResolvedPageValues`.
+The first failure is at line 73, and the second at lines 3102–3103.
+The earlier stabilization switched `StaticSEOEmitter` to
+`SafeHTMLEmitter.escape` for consistent escaping. These assertions still
+expect an unescaped closing angle bracket where that emitter writes
+`&gt;`. The gradient change edits neither file. See `code.log` and
+`code-tests.json` in the full report for the original outcomes. Stabilization receipt
+`20261127-223727-68efdf0a` is for the previous controls.
+
+The Browser Preview failure recording at 00:14 Eastern shows the macOS
+Privacy & Security banner over the trailing Preview button. The collector
+paused after 11 completed UI cases and released the desktop. The visible
+SiteForge notification was closed through Notification Center. The same
+run resumed with 170 unresolved methods. The first segment, including its
+failures, remains in the receipt. The extracted frame is
+`.codex-loop/fast-style/gradient-ramp/full-browser-preview-failure.png`.
+
+The owner stopped the full run after 15 of 181 native outcomes
+(11 passed, four failed) and authorized the SF-1207-003/004/006 test-only
+correction. The full report's `failed-selectors.json` names all six
+recorded failures. The HTML assertions now expect the shared escape
+output. The two regular cases passed in `20261128-002056-9a8e3287`.
+The four-case UI replay `20261128-002320-2df2e3d1` passed three
+and retained one Aurora viewport synchronization timeout. The isolated
+retry `20261128-003518-f1000ac8` reproduced it. Both logs show the requested
+Tablet value immediately after the assertion expired. The failed method
+now waits on the native popup itself after AppKit menu tracking, with a
+bounded five-second synchronization window. Preset, selection, geometry,
+undo and redo assertions still run through the shipping controls.
+Those three completed replays used fingerprint
+`93e223bcfd7fa58ecb0f80185b3e034eb230b62620c3f04cae179da0e4746de4`.
+
+
+The corrected Aurora test passed in `20261128-004044-c93248cf` with
+one selected and one passed. Every recorded failure from the stopped
+full run has a passing replay, and no new full run was started. The only
+source differences between these replay receipts are the corrected test
+expectations and the scoped popup synchronization.
+
+Owner-local build `26.11.28`, installed at 05:45:49 UTC on November 28,
+matches final replay, checkout and Testing harness fingerprint
+`26604afb7f4792e979f543506539e3265db0dced0e68394a7ffd1ed8af1ee570`.
+Strict app and helper signature verification passed. The installed
+harness script bytes match the checkout.
+
 ## Baseline, November 22
 
 Installed verified starting source is
